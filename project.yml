@@ -1,6 +1,6 @@
 name: Dictator
 options:
-  bundleIdPrefix: net.robgough
+  bundleIdPrefix: app.dictator
   deploymentTarget:
     macOS: "15.0"
   createIntermediateGroups: true
@@ -96,7 +96,7 @@ targets:
         com.apple.security.automation.apple-events: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
+        PRODUCT_BUNDLE_IDENTIFIER: app.dictator.Dictator
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
@@ -104,11 +104,12 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
-        # Pinned so every build (Xcode UI and xcodebuild CLI) uses the same
-        # Personal Team identity. Without this, xcodegen would wipe the team you
-        # set in the Xcode UI on every regeneration, forcing the build back to
-        # ad-hoc — which is exactly what makes TCC re-prompt every clean build.
-        DEVELOPMENT_TEAM: 5Z5EG95CQL
+        # Resolved from the DICTATOR_TEAM_ID environment variable at xcodegen-generate
+        # time. Leave empty for a stock ad-hoc build, or `export DICTATOR_TEAM_ID=...`
+        # in your shell to pin your Apple Personal Team. Pinning the team keeps macOS
+        # TCC (Mic / Accessibility) grants stable across rebuilds; ad-hoc builds get
+        # re-prompted each time. See README → "Build" for details.
+        DEVELOPMENT_TEAM: ${DICTATOR_TEAM_ID}
         # CODE_SIGN_IDENTITY intentionally left to Xcode/your team.
         # If no team is set, Xcode falls back to ad-hoc ("-"), and macOS TCC will
         # revoke Mic / Accessibility on every rebuild because the signature changes.

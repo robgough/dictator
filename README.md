@@ -9,11 +9,22 @@ Apple Silicon only. Built and tested on macOS 26.
 ```bash
 # One-time:
 brew install xcodegen
+
+# Optional but recommended — pin your Apple Personal Team so macOS TCC keeps
+# Mic / Accessibility grants stable across rebuilds. Find your 10-char team ID
+# in Xcode → Settings → Accounts → your Apple ID. Add to your shell init too.
+export DICTATOR_TEAM_ID=YOUR10CHARID
+
 xcodegen generate
 
 # Open in Xcode and Run (⌘R):
 open Dictator.xcodeproj
 ```
+
+Without `DICTATOR_TEAM_ID` set, the app still builds — Xcode falls back to ad-hoc
+signing. The trade-off: you'll be re-prompted for Microphone and Accessibility
+permission after every Clean Build Folder, because TCC can't anchor the grants
+to a stable identity.
 
 Xcode resolves three SPM packages on first build:
 
