@@ -1,0 +1,127 @@
+name: Dictator
+options:
+  bundleIdPrefix: net.robgough
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  schemePathPrefix: ""
+
+schemes:
+  Dictator:
+    build:
+      targets:
+        Dictator: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
+packages:
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    minVersion: 0.18.0
+    maxVersion: 0.19.0
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 2.2.0
+  # Pinned to the last commit that uses swift-transformers 1.1.x, so it
+  # resolves alongside WhisperKit 0.18 (which caps swift-transformers at <1.2).
+  MLXSwiftExamples:
+    url: https://github.com/ml-explore/mlx-swift-examples
+    revision: eb76c5b7f0cc335103bbabb0c3e1c37f8ff5d482
+
+targets:
+  Dictator:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Dictator
+    postBuildScripts:
+      - script: |
+          # Install a stable copy of the built .app at ~/Applications. macOS TCC
+          # keys permissions by signed identity AND launch path; the DerivedData
+          # path changes after every Clean Build Folder, so grants for Mic +
+          # Accessibility were getting invalidated each rebuild. After this runs,
+          # launch ~/Applications/Dictator.app and the grants persist.
+          set -e
+          mkdir -p "$HOME/Applications"
+          DEST="$HOME/Applications/${PRODUCT_NAME}.app"
+          rm -rf "$DEST"
+          # `ditto` preserves bundle metadata. `cp -R` doesn't.
+          ditto "$BUILT_PRODUCTS_DIR/${PRODUCT_NAME}.app" "$DEST"
+
+          # This post-build script runs BEFORE the final CodeSign phase, so the
+          # ditto'd copy is unsigned. Re-sign it with the same identity Xcode is
+          # about to use. EXPANDED_CODE_SIGN_IDENTITY is the resolved cert (a
+          # SHA-1) and EXPANDED_CODE_SIGN_IDENTITY_NAME is the human-readable
+          # display name — either works with `codesign --sign`. If signing isn't
+          # configured (no team), this still copies but stays ad-hoc, in which
+          # case TCC permissions can't be made stable anyway.
+          IDENT="${EXPANDED_CODE_SIGN_IDENTITY:-${EXPANDED_CODE_SIGN_IDENTITY_NAME:-}}"
+          if [ -n "$IDENT" ] && [ "$IDENT" != "-" ]; then
+              ENT_FLAG=""
+              if [ -n "${CODE_SIGN_ENTITLEMENTS:-}" ] && [ -f "$CODE_SIGN_ENTITLEMENTS" ]; then
+                  ENT_FLAG="--entitlements $CODE_SIGN_ENTITLEMENTS"
+              fi
+              codesign --force --deep --options runtime --sign "$IDENT" $ENT_FLAG "$DEST" 2>&1 \
+                  && echo "Installed and signed: $DEST ($IDENT)"
+          else
+              codesign --force --deep --sign - "$DEST"
+              echo "Installed (ad-hoc): $DEST"
+          fi
+        name: "Install to ~/Applications"
+        basedOnDependencyAnalysis: false
+    info:
+      path: Sources/Dictator/Info.plist
+      properties:
+        LSUIElement: true
+        LSMinimumSystemVersion: "15.0"
+        CFBundleName: Dictator
+        CFBundleDisplayName: Dictator
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
+        NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app."
+    entitlements:
+      path: Sources/Dictator/Dictator.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.device.audio-input: true
+        com.apple.security.automation.apple-events: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        # Pinned so every build (Xcode UI and xcodebuild CLI) uses the same
+        # Personal Team identity. Without this, xcodegen would wipe the team you
+        # set in the Xcode UI on every regeneration, forcing the build back to
+        # ad-hoc — which is exactly what makes TCC re-prompt every clean build.
+        DEVELOPMENT_TEAM: 5Z5EG95CQL
+        # CODE_SIGN_IDENTITY intentionally left to Xcode/your team.
+        # If no team is set, Xcode falls back to ad-hoc ("-"), and macOS TCC will
+        # revoke Mic / Accessibility on every rebuild because the signature changes.
+        # Open Signing & Capabilities in Xcode and pick your Personal Team to fix this.
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    dependencies:
+      - package: WhisperKit
+        product: WhisperKit
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+      - package: MLXSwiftExamples
+        product: MLXLLM
+      - package: MLXSwiftExamples
+        product: MLXLMCommon

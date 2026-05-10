@@ -1,0 +1,138 @@
+import SwiftUI
+
+struct HUDView: View {
+    @Environment(AppState.self) private var state
+    @State private var deviceManager = AudioDeviceManager.shared
+
+    var body: some View {
+        content
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // SwiftUI's `.thinMaterial` clips correctly against the rounded shape,
+            // unlike a wrapped NSVisualEffectView which rasterises into the layer
+            // before the clip is applied. macOS picks up the rounded alpha and
+            // draws a window shadow that follows the pill outline.
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+            )
+            .animation(.snappy(duration: 0.25), value: stateKey)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch state.pipeline.state {
+        case .idle:
+            EmptyView()
+        case .recording(let level):
+            HStack(spacing: 16) {
+                RecordingDot()
+                Waveform(level: level)
+                    .frame(maxWidth: .infinity)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("Listening")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text(deviceManager.activeInputDeviceName())
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: 160, alignment: .trailing)
+            }
+        case .transcribing:
+            StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .blue)
+        case .formatting:
+            StatusRow(icon: "sparkles", title: "Formatting", accent: .purple)
+        case .fixingGrammar:
+            StatusRow(icon: "text.badge.checkmark", title: "Tidying grammar", accent: .pink)
+        case .restructuring:
+            StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .teal)
+        case .done(let text, let pasted, let note):
+            HStack(spacing: 14) {
+                Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, pasted ? Color.accentColor : .orange)
+                    .font(.system(size: 22, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(text)
+                        .font(.system(size: 14, weight: .regular, design: .rounded))
+                        .lineLimit(note == nil ? 2 : 1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(.primary)
+                    if let note {
+                        Text(note)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.orange)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .failed(let message):
+            HStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.system(size: 22))
+                Text(message)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var stateKey: String {
+        switch state.pipeline.state {
+        case .idle: "idle"
+        case .recording: "recording"
+        case .transcribing: "transcribing"
+        case .formatting: "formatting"
+        case .fixingGrammar: "fixingGrammar"
+        case .restructuring: "restructuring"
+        case .done: "done"
+        case .failed: "failed"
+        }
+    }
+}
+
+private struct StatusRow: View {
+    let icon: String
+    let title: String
+    let accent: Color
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(accent)
+                .font(.system(size: 22, weight: .semibold))
+                .scaleEffect(pulse ? 1.08 : 0.96)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+            Spacer()
+            ProgressView()
+                .controlSize(.small)
+        }
+        .onAppear { pulse = true }
+    }
+}
+
+private struct RecordingDot: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .fill(Color.red)
+            .frame(width: 10, height: 10)
+            .shadow(color: .red.opacity(0.6), radius: on ? 10 : 2)
+            .opacity(on ? 1 : 0.6)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
+            .onAppear { on = true }
+    }
+}
