@@ -7,18 +7,20 @@ Apple Silicon only. Built and tested on macOS 26.
 ## Build
 
 ```bash
-# One-time:
 brew install xcodegen
 
-# Optional but recommended — pin your Apple Personal Team so macOS TCC keeps
-# Mic / Accessibility grants stable across rebuilds. Find your 10-char team ID
-# in Xcode → Settings → Accounts → your Apple ID. Add to your shell init too.
-export DICTATOR_TEAM_ID=YOUR10CHARID
+# Copy the env template and fill in your 10-char Apple Personal Team ID.
+# (Find it in Xcode → Settings → Accounts → your Apple ID, or via `codesign -dv`
+# on any Mac app you've signed.) `.env` is gitignored.
+cp .env.example .env
+$EDITOR .env
 
-xcodegen generate
+# Regenerate the Xcode project. `./gen` is a wrapper that sources `.env` first
+# so xcodegen sees DICTATOR_TEAM_ID; calling `xcodegen generate` directly works
+# too, but only if you've exported the variable in your shell.
+./gen
 
-# Open in Xcode and Run (⌘R):
-open Dictator.xcodeproj
+open Dictator.xcodeproj   # then ⌘R
 ```
 
 Without `DICTATOR_TEAM_ID` set, the app still builds — Xcode falls back to ad-hoc

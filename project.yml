@@ -1,6 +1,6 @@
 name: Dictator
 options:
-  bundleIdPrefix: app.dictator
+  bundleIdPrefix: net.robgough
   deploymentTarget:
     macOS: "15.0"
   createIntermediateGroups: true
@@ -96,7 +96,7 @@ targets:
         com.apple.security.automation.apple-events: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.dictator.Dictator
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Regenerate the Xcode project from project.yml.
+#
+# Loads variables from a .env file in this directory (if present) so xcodegen
+# can resolve ${DICTATOR_TEAM_ID} and any other env-driven setting. Without
+# this, xcodegen sees those vars as empty and falls back to ad-hoc signing.
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+fi
+
+if [ -z "${DICTATOR_TEAM_ID:-}" ]; then
+    echo "⚠️  DICTATOR_TEAM_ID not set — the build will use ad-hoc signing." >&2
+    echo "    macOS TCC grants (Mic / Accessibility) will be revoked on every Clean Build." >&2
+    echo "    Add DICTATOR_TEAM_ID=YOUR10CHARID to a .env file in this directory to fix that." >&2
+    echo "" >&2
+fi
+
+exec xcodegen generate "$@"

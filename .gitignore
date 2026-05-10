@@ -25,3 +25,7 @@ Dictator.xcodeproj/
 *.swo
 .idea/
 .vscode/
+
+# Local env (DICTATOR_TEAM_ID etc.) — never committed. Use .env.example
+# as a template.
+.env
