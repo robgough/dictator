@@ -852,6 +852,7 @@ private struct PromptPane: View {
     }
 
     var body: some View {
+        @Bindable var s = state
         VStack(alignment: .leading, spacing: 10) {
             Picker("", selection: $selected) {
                 ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
@@ -859,81 +860,195 @@ private struct PromptPane: View {
             .pickerStyle(.segmented)
 
             switch selected {
-            case .formatting: formattingEditor
-            case .grammar:    grammarEditor
-            case .structure:  structuralEditor
-            case .assistant:  assistantEditor
+            case .formatting:
+                PromptCustomiser(
+                    description: "Punctuation, emojis, capitalisation. Runs on every dictation.",
+                    builtin: DictatorSettings.builtinFormattingPrompt,
+                    addendum: $s.settings.formattingPromptAddendum,
+                    override: $s.settings.formattingPromptOverride
+                ) { state.save() }
+            case .grammar:
+                PromptCustomiser(
+                    description: "Fixes obvious grammar errors after pass 1. Runs only when **Tidy grammar** is enabled. Result is discarded if too many words change.",
+                    builtin: DictatorSettings.builtinGrammarPrompt,
+                    addendum: $s.settings.grammarPromptAddendum,
+                    override: $s.settings.grammarPromptOverride
+                ) { state.save() }
+            case .structure:
+                PromptCustomiser(
+                    description: "Adds paragraph breaks and bullet lists. Runs only when **Restructure long dictations** is enabled and the transcript is long enough. Word changes are rejected automatically.",
+                    builtin: DictatorSettings.builtinStructuralPrompt,
+                    addendum: $s.settings.structuralPromptAddendum,
+                    override: $s.settings.structuralPromptOverride
+                ) { state.save() }
+            case .assistant:
+                PromptCustomiser(
+                    description: "Used when you trigger the Assistant hotkey. The model classifies its own reply as REPLACE (paste at the cursor) or DRAFT (clipboard only).",
+                    builtin: DictatorSettings.builtinAssistantPrompt,
+                    addendum: $s.settings.assistantPromptAddendum,
+                    override: $s.settings.assistantPromptOverride
+                ) { state.save() }
             }
         }
     }
+}
 
-    private var assistantEditor: some View {
-        @Bindable var s = state
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Used when you trigger the Assistant hotkey on selected text. The model decides whether to REPLACE the selection or DRAFT a new piece of text to the clipboard.")
-                .font(.callout)
+/// Per-prompt editor. Two modes:
+/// - Addendum mode (default): edit a small "Additional instructions" field that
+///   gets appended under the built-in at send time.
+/// - Override mode: the built-in is replaced entirely with the user's text. A
+///   prominent warning explains the risks; a toggle at the bottom flips between
+///   modes. The built-in itself lives behind a "View built-in prompt" button
+///   that opens a sheet (it's reference material, not edit surface).
+private struct PromptCustomiser: View {
+    let description: String
+    let builtin: String
+    @Binding var addendum: String
+    @Binding var override: String?
+    let onChange: () -> Void
+
+    @State private var showBuiltinSheet = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(.init(description))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if override == nil {
+                    addendumEditor
+                } else {
+                    overrideEditor
+                }
+
+                Divider()
+
+                HStack(spacing: 16) {
+                    Toggle(isOn: Binding(
+                        get: { override != nil },
+                        set: { isOn in
+                            // Seed override with the current built-in on toggle-on, so the
+                            // user has something to modify rather than a blank canvas. On
+                            // toggle-off we discard the override entirely — the addendum
+                            // takes back over.
+                            override = isOn ? builtin : nil
+                            onChange()
+                        }
+                    )) {
+                        Text("Replace built-in prompt entirely")
+                            .font(.subheadline)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    Spacer()
+                    Button {
+                        showBuiltinSheet = true
+                    } label: {
+                        Label("View built-in prompt", systemImage: "doc.text")
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .sheet(isPresented: $showBuiltinSheet) {
+            BuiltinPromptSheet(prompt: builtin, isPresented: $showBuiltinSheet)
+        }
+    }
+
+    private var addendumEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Additional instructions (optional)")
+                .font(.subheadline.weight(.medium))
+            Text("Appended under the built-in prompt. Use for small personal tweaks — e.g. \"always use British spelling\" or \"never include em-dashes\".")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-            promptEditor(text: $s.settings.assistantSystemPrompt) {
-                s.settings.assistantSystemPrompt = DictatorSettings.defaultAssistantPrompt
-                state.save()
+            TextEditor(text: $addendum)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+                .frame(height: 220)
+                .onChange(of: addendum) { _, _ in onChange() }
+            if !addendum.isEmpty {
+                HStack {
+                    Button("Clear") {
+                        addendum = ""
+                        onChange()
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                }
             }
-            .onChange(of: s.settings.assistantSystemPrompt) { _, _ in state.save() }
         }
     }
 
-    private var formattingEditor: some View {
-        @Bindable var s = state
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Punctuation, emojis, capitalisation. Runs on every dictation.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            promptEditor(text: $s.settings.systemPrompt) {
-                s.settings.systemPrompt = DictatorSettings.defaultPrompt
-                state.save()
+    private var overrideEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Substantive warning: not just "this won't update", but explicit about the
+            // failure modes the built-in is engineered to prevent.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Custom override active")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                Text("The built-in prompt contains carefully-tuned rules that prevent common model failures — answering questions instead of transcribing them, leaking conversational preambles, output drifting away from your input. If your custom prompt is missing those rules, you may get **incorrect or unexpected responses**.")
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                Text("Future updates to the built-in are often pushed to fix newly-discovered failures. Those won't apply while this override is on.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .onChange(of: s.settings.systemPrompt) { _, _ in state.save() }
-        }
-    }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.4)))
 
-    private var grammarEditor: some View {
-        @Bindable var s = state
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Fixes obvious grammar errors after pass 1. Runs only when **Tidy grammar** is enabled. Result is discarded if too many words change.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            promptEditor(text: $s.settings.grammarPrompt) {
-                s.settings.grammarPrompt = DictatorSettings.defaultGrammarPrompt
-                state.save()
-            }
-            .onChange(of: s.settings.grammarPrompt) { _, _ in state.save() }
-        }
-    }
-
-    private var structuralEditor: some View {
-        @Bindable var s = state
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Adds paragraph breaks and bullet lists. Runs only when **Restructure long dictations** is enabled and the transcript is long enough. Word changes are rejected automatically.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            promptEditor(text: $s.settings.structuralPrompt) {
-                s.settings.structuralPrompt = DictatorSettings.defaultStructuralPrompt
-                state.save()
-            }
-            .onChange(of: s.settings.structuralPrompt) { _, _ in state.save() }
-        }
-    }
-
-    @ViewBuilder
-    private func promptEditor(text: Binding<String>, reset: @escaping () -> Void) -> some View {
-        TextEditor(text: text)
+            Text("Custom prompt (replaces built-in)")
+                .font(.subheadline.weight(.medium))
+            TextEditor(text: Binding(
+                get: { override ?? "" },
+                set: { newValue in
+                    override = newValue
+                    onChange()
+                }
+            ))
             .font(.system(size: 12, design: .monospaced))
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
-            .frame(minHeight: 260)
-        HStack {
-            Button("Reset to default", action: reset)
-            Spacer()
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.4)))
+            .frame(height: 360)
         }
+    }
+}
+
+private struct BuiltinPromptSheet: View {
+    let prompt: String
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Built-in prompt")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                Text(prompt)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+        }
+        .frame(width: 720, height: 520)
     }
 }

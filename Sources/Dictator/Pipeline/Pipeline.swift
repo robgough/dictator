@@ -164,7 +164,7 @@ final class Pipeline {
                 formatted = try await llm.format(
                     text: trimmed,
                     modelID: settings.llmModelID,
-                    systemPrompt: settings.systemPrompt
+                    systemPrompt: settings.effectiveFormattingPrompt
                 )
             } catch {
                 // Fallback: ship raw transcript if LLM fails
@@ -218,7 +218,7 @@ final class Pipeline {
             let tidied = try await llm.tidyGrammar(
                 text: formatted,
                 modelID: settings.llmModelID,
-                systemPrompt: settings.grammarPrompt
+                systemPrompt: settings.effectiveGrammarPrompt
             )
             // Empty output usually means the model echoed the wrapping and the
             // post-processor collapsed it to nothing. Treat as failure.
@@ -247,7 +247,7 @@ final class Pipeline {
             let restructured = try await llm.restructure(
                 text: formatted,
                 modelID: settings.llmModelID,
-                systemPrompt: settings.structuralPrompt
+                systemPrompt: settings.effectiveStructuralPrompt
             )
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
@@ -474,7 +474,7 @@ final class Pipeline {
                 selection: selection,
                 instruction: instruction,
                 modelID: settings.llmModelID,
-                systemPrompt: settings.assistantSystemPrompt
+                systemPrompt: settings.effectiveAssistantPrompt
             )
         } catch {
             inFlightAssistant = nil

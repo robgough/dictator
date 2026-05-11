@@ -3,101 +3,166 @@ import Foundation
 struct DictatorSettings: Codable, Equatable {
     var whisperModelID: String
     var llmModelID: String
-    var systemPrompt: String
     var pasteAutomatically: Bool
     var playSounds: Bool
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
     var structuralPassEnabled: Bool
-    var structuralPrompt: String
     var structuralPassMinWords: Int
     var grammarPassEnabled: Bool
-    var grammarPrompt: String
     var grammarPassMaxEditFraction: Double
     var vocabulary: [VocabularyEntry]
     var assistantTriggerMode: TriggerMode
-    var assistantSystemPrompt: String
+
+    // Prompt customisation model:
+    // - The "built-in" prompts (DictatorSettings.builtinXxxPrompt) are the source of
+    //   truth and ship with the app. Users can't edit them.
+    // - `xxxPromptAddendum` is small extra text that gets appended under a clearly-
+    //   labelled header. Use for personal tweaks like "always use British spelling".
+    //   Empty means "no addendum — just use the built-in".
+    // - `xxxPromptOverride` is an escape hatch. When non-nil, the built-in is
+    //   replaced entirely with the user's text (addendum is ignored). Settings UI
+    //   shows a warning that built-in updates won't apply.
+    var formattingPromptAddendum: String
+    var formattingPromptOverride: String?
+    var grammarPromptAddendum: String
+    var grammarPromptOverride: String?
+    var structuralPromptAddendum: String
+    var structuralPromptOverride: String?
+    var assistantPromptAddendum: String
+    var assistantPromptOverride: String?
 
     static let defaults = DictatorSettings(
         whisperModelID: ModelCatalog.defaultWhisper.id,
         llmModelID: ModelCatalog.defaultLLM.id,
-        systemPrompt: DictatorSettings.defaultPrompt,
         pasteAutomatically: true,
         playSounds: true,
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
         structuralPassEnabled: true,
-        structuralPrompt: DictatorSettings.defaultStructuralPrompt,
         structuralPassMinWords: 30,
         grammarPassEnabled: false,
-        grammarPrompt: DictatorSettings.defaultGrammarPrompt,
         grammarPassMaxEditFraction: 0.15,
         vocabulary: [],
         assistantTriggerMode: .rightOption,
-        assistantSystemPrompt: DictatorSettings.defaultAssistantPrompt
+        formattingPromptAddendum: "",
+        formattingPromptOverride: nil,
+        grammarPromptAddendum: "",
+        grammarPromptOverride: nil,
+        structuralPromptAddendum: "",
+        structuralPromptOverride: nil,
+        assistantPromptAddendum: "",
+        assistantPromptOverride: nil
     )
 
     init(
         whisperModelID: String,
         llmModelID: String,
-        systemPrompt: String,
         pasteAutomatically: Bool,
         playSounds: Bool,
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
         structuralPassEnabled: Bool,
-        structuralPrompt: String,
         structuralPassMinWords: Int,
         grammarPassEnabled: Bool,
-        grammarPrompt: String,
         grammarPassMaxEditFraction: Double,
         vocabulary: [VocabularyEntry],
         assistantTriggerMode: TriggerMode,
-        assistantSystemPrompt: String
+        formattingPromptAddendum: String,
+        formattingPromptOverride: String?,
+        grammarPromptAddendum: String,
+        grammarPromptOverride: String?,
+        structuralPromptAddendum: String,
+        structuralPromptOverride: String?,
+        assistantPromptAddendum: String,
+        assistantPromptOverride: String?
     ) {
         self.whisperModelID = whisperModelID
         self.llmModelID = llmModelID
-        self.systemPrompt = systemPrompt
         self.pasteAutomatically = pasteAutomatically
         self.playSounds = playSounds
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
         self.structuralPassEnabled = structuralPassEnabled
-        self.structuralPrompt = structuralPrompt
         self.structuralPassMinWords = structuralPassMinWords
         self.grammarPassEnabled = grammarPassEnabled
-        self.grammarPrompt = grammarPrompt
         self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
         self.vocabulary = vocabulary
         self.assistantTriggerMode = assistantTriggerMode
-        self.assistantSystemPrompt = assistantSystemPrompt
+        self.formattingPromptAddendum = formattingPromptAddendum
+        self.formattingPromptOverride = formattingPromptOverride
+        self.grammarPromptAddendum = grammarPromptAddendum
+        self.grammarPromptOverride = grammarPromptOverride
+        self.structuralPromptAddendum = structuralPromptAddendum
+        self.structuralPromptOverride = structuralPromptOverride
+        self.assistantPromptAddendum = assistantPromptAddendum
+        self.assistantPromptOverride = assistantPromptOverride
     }
 
     init(from decoder: Decoder) throws {
         // Backwards-compatible decode: any field missing from older persisted JSON
-        // falls back to the corresponding default, so an older install doesn't blow away
-        // the user's settings just because we added a field.
+        // falls back to the corresponding default. The pre-v2 prompt fields
+        // (`systemPrompt`, `grammarPrompt`, `structuralPrompt`, `assistantSystemPrompt`)
+        // are intentionally ignored — they're replaced by the addendum + override model.
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = DictatorSettings.defaults
         self.whisperModelID     = try c.decodeIfPresent(String.self,      forKey: .whisperModelID)     ?? d.whisperModelID
         self.llmModelID         = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
-        self.systemPrompt       = try c.decodeIfPresent(String.self,      forKey: .systemPrompt)       ?? d.systemPrompt
         self.pasteAutomatically     = try c.decodeIfPresent(Bool.self,        forKey: .pasteAutomatically)     ?? d.pasteAutomatically
         self.playSounds             = try c.decodeIfPresent(Bool.self,        forKey: .playSounds)             ?? d.playSounds
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
         self.structuralPassEnabled  = try c.decodeIfPresent(Bool.self,        forKey: .structuralPassEnabled)  ?? d.structuralPassEnabled
-        self.structuralPrompt       = try c.decodeIfPresent(String.self,      forKey: .structuralPrompt)       ?? d.structuralPrompt
         self.structuralPassMinWords = try c.decodeIfPresent(Int.self,         forKey: .structuralPassMinWords) ?? d.structuralPassMinWords
         self.grammarPassEnabled     = try c.decodeIfPresent(Bool.self,        forKey: .grammarPassEnabled)     ?? d.grammarPassEnabled
-        self.grammarPrompt          = try c.decodeIfPresent(String.self,      forKey: .grammarPrompt)          ?? d.grammarPrompt
         self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self,  forKey: .grammarPassMaxEditFraction) ?? d.grammarPassMaxEditFraction
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
-        self.assistantSystemPrompt  = try c.decodeIfPresent(String.self,      forKey: .assistantSystemPrompt) ?? d.assistantSystemPrompt
+        self.formattingPromptAddendum = try c.decodeIfPresent(String.self, forKey: .formattingPromptAddendum) ?? d.formattingPromptAddendum
+        self.formattingPromptOverride = try c.decodeIfPresent(String.self, forKey: .formattingPromptOverride) ?? d.formattingPromptOverride
+        self.grammarPromptAddendum    = try c.decodeIfPresent(String.self, forKey: .grammarPromptAddendum)    ?? d.grammarPromptAddendum
+        self.grammarPromptOverride    = try c.decodeIfPresent(String.self, forKey: .grammarPromptOverride)    ?? d.grammarPromptOverride
+        self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? d.structuralPromptAddendum
+        self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride) ?? d.structuralPromptOverride
+        self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
+        self.assistantPromptOverride  = try c.decodeIfPresent(String.self, forKey: .assistantPromptOverride)  ?? d.assistantPromptOverride
     }
 
-    static let defaultPrompt = """
+    // MARK: - Effective prompts (built-in + addendum, or override)
+
+    var effectiveFormattingPrompt: String {
+        Self.combine(builtin: Self.builtinFormattingPrompt,
+                     override: formattingPromptOverride,
+                     addendum: formattingPromptAddendum)
+    }
+    var effectiveGrammarPrompt: String {
+        Self.combine(builtin: Self.builtinGrammarPrompt,
+                     override: grammarPromptOverride,
+                     addendum: grammarPromptAddendum)
+    }
+    var effectiveStructuralPrompt: String {
+        Self.combine(builtin: Self.builtinStructuralPrompt,
+                     override: structuralPromptOverride,
+                     addendum: structuralPromptAddendum)
+    }
+    var effectiveAssistantPrompt: String {
+        Self.combine(builtin: Self.builtinAssistantPrompt,
+                     override: assistantPromptOverride,
+                     addendum: assistantPromptAddendum)
+    }
+
+    /// When `override` is set (even if empty), it replaces the built-in wholesale —
+    /// the addendum is ignored because the user has opted out of the curated prompt.
+    /// Otherwise we append the user's addendum under a labelled header so the model
+    /// treats it as instructions, not as part of the schema or examples above.
+    private static func combine(builtin: String, override: String?, addendum: String) -> String {
+        if let override { return override }
+        let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return builtin }
+        return builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
+    }
+
+    static let builtinFormattingPrompt = """
     You are a strict, deterministic dictation formatter.
 
     CRITICAL RULES:
@@ -138,7 +203,7 @@ struct DictatorSettings: Codable, Equatable {
     "why is the formatter sometimes returning empty question mark" → Why is the formatter sometimes returning empty?
     """
 
-    static let defaultStructuralPrompt = """
+    static let builtinStructuralPrompt = """
     You are a STRUCTURAL formatter. The user's message is already-punctuated text wrapped in `<<<` and `>>>`. Your ONLY job is to add visual structure — paragraph breaks, line breaks, bullet lists, numbered lists — so it reads more clearly. Never include `<<<` or `>>>` in your reply.
 
     You may NEVER change a single word. EVERY WORD in the input MUST appear in the output, in the same order, with the same spelling. You may ONLY insert/adjust:
@@ -178,7 +243,7 @@ struct DictatorSettings: Codable, Equatable {
     Separately, I want to flag that the budget is tight and we should revisit it next week.
     """
 
-    static let defaultGrammarPrompt = """
+    static let builtinGrammarPrompt = """
     You are a GRAMMAR TIDYING pass for dictation. The user's message is already-punctuated text wrapped in `<<<` and `>>>`. Your job is to fix only OBVIOUS grammar errors while preserving meaning, tone, and the user's words. Never include `<<<` or `>>>` in your reply.
 
     Permitted edits (do these ONLY when the error is unambiguous):
@@ -211,21 +276,28 @@ struct DictatorSettings: Codable, Equatable {
     "me and him goes to the meeting" → He and I go to the meeting.
     """
 
-    static let defaultAssistantPrompt = """
+    static let builtinAssistantPrompt = """
     You are an assistant. The user gives you a short spoken instruction and OPTIONALLY a piece of text they had selected in another app. Some requests reference the selection ("rewrite this", "draft a reply to this"); others are standalone generation requests with no selection ("make me a list of 10 names").
 
     You MUST classify your reply into one of two modes and emit the mode marker as the VERY FIRST LINE, then a blank line, then the output text. Nothing else.
 
     Modes:
-    - MODE: REPLACE — the output is pasted directly at the user's cursor. Use when they want the result inserted in-place: transforming the selection ("rewrite this", "bulletify these"), or generating content to drop into the document they're writing ("put a list of ten ideas here", "insert a short summary").
-    - MODE: DRAFT — the output goes to the clipboard only; the user pastes it themselves elsewhere. Use when the result is meant to live in a *different* place than where they are now: drafting an email reply, writing notes about the selection, answering a question they're asking you, summarising for separate use.
+    - MODE: REPLACE — the output is pasted directly at the user's cursor. Use when they want the result inserted in-place: transforming the selection ("rewrite this", "bulletify these"), or generating content to drop into the document they're writing ("put a list of ten ideas here", "give me 100 emojis", "I need a tagline", "can I have five names").
+    - MODE: DRAFT — the output goes to the clipboard only; the user pastes it themselves elsewhere. Use when the result is a *standalone communication piece* (an email, a reply, a message) the user will paste into a different app, or when they're asking a conversational question and want the answer to read, not to insert.
 
-    How to decide:
-    - Phrases like "rewrite", "fix this", "reformat", "make this", "turn this into", "rephrase", "translate", "shorten", "expand", "change", "tidy", "put X here", "insert", "give me Y here" → REPLACE.
-    - Phrases like "draft a reply", "write me an email", "compose", "respond to", "summarise this for me", "extract action items", "answer", "tell me", "what is" → DRAFT.
-    - If selection is empty AND the instruction implies inserting at the cursor ("put", "insert", "give me … here", "make me a list"), prefer REPLACE.
-    - If selection is empty AND the instruction is conversational or asks a question, prefer DRAFT.
-    - When genuinely ambiguous, choose DRAFT (it's non-destructive — the user can still paste manually).
+    Decision rules — apply IN THIS ORDER:
+
+    1. If a SELECTION is provided AND the instruction asks to transform it ("rewrite", "fix this", "reformat", "make this", "turn this into", "rephrase", "translate", "shorten", "expand", "bulletify", "tidy") → REPLACE.
+
+    2. If a SELECTION is provided AND the instruction asks for *new* output that references the selection ("draft a reply to this", "summarise this", "extract action points from this", "what does this mean") → DRAFT. The new output goes elsewhere, not over the selection.
+
+    3. If NO SELECTION and the instruction asks for *content to drop into the document* — a list, a paragraph, names, ideas, emojis, a tagline, a poem, code, options, etc. — → REPLACE. The user is holding the assistant hotkey with their cursor positioned somewhere; they want the content inserted. Phrases that strongly signal this: "give me", "can I have", "I need", "make me", "generate", "write me a [list/paragraph/tagline/poem/etc]", "put", "insert", "produce".
+
+    4. If NO SELECTION and the instruction is a STANDALONE COMMUNICATION the user will paste into another app — "draft an email about X", "compose a reply to Bob", "write a message saying…" → DRAFT.
+
+    5. If NO SELECTION and the instruction is CONVERSATIONAL or a question to you ("what's the capital of France?", "explain X", "tell me about Y", "how do I…") → DRAFT.
+
+    6. When genuinely ambiguous, choose DRAFT (it's non-destructive — the user can still paste manually).
 
     Output rules:
     - Line 1: exactly `MODE: REPLACE` or `MODE: DRAFT`.
@@ -299,11 +371,48 @@ struct DictatorSettings: Codable, Equatable {
     - Lexa
 
     SELECTION: (none)
+    INSTRUCTION: "give me 100 emojis"
+    →
+    MODE: REPLACE
+
+    🔥💀😂🎉✨🚀🌈🎈🍕☕️🌙⭐️🐱🐶🌸🍎🍔🍻🎵🎸 …
+
+    SELECTION: (none)
+    INSTRUCTION: "can I have five tagline options for a stealth-mode AI startup"
+    →
+    MODE: REPLACE
+
+    - Quietly intelligent.
+    - The mind, between the lines.
+    - Smart enough to wait.
+    - AI, without the announcement.
+    - We'll let the work speak.
+
+    SELECTION: (none)
+    INSTRUCTION: "I need a short paragraph about why dictation beats typing for thinking out loud"
+    →
+    MODE: REPLACE
+
+    Typing is a bottleneck on raw thought; you edit before you've finished forming the idea. Dictation lets the half-formed shape land on the page first, where you can actually see it — and then revise. The thought arrives at speech speed, not finger speed, and the early friction that flattens good ideas just isn't there.
+
+    SELECTION: (none)
     INSTRUCTION: "what's the capital of France?"
     →
     MODE: DRAFT
 
     Paris.
+
+    SELECTION: (none)
+    INSTRUCTION: "draft an email to Bob asking when the report is due"
+    →
+    MODE: DRAFT
+
+    Hi Bob,
+
+    Quick one — when's the report due? Want to make sure I leave enough time to pull it together.
+
+    Thanks,
+    Rob
 
     SELECTION: "the meeting covered: budget overruns, hiring plan slipping, and the Q3 roadmap"
     INSTRUCTION: "pull out three action points"
@@ -315,7 +424,10 @@ struct DictatorSettings: Codable, Equatable {
     - Confirm and circulate the Q3 roadmap.
     """
 
-    private static let key = "DictatorSettings.v1"
+    // Bumped from v1 → v2 when we moved from full-edit prompt fields to the
+    // built-in + addendum + override model. Old v1 data is orphaned on disk,
+    // which is fine — there are no users yet.
+    private static let key = "DictatorSettings.v2"
 
     static func load() -> DictatorSettings {
         var settings: DictatorSettings
