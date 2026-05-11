@@ -97,6 +97,14 @@ final class LLMService {
             s = String(s[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        // Backstop: the model occasionally echoes a stray `<<<` or `>>>` mid- or
+        // end-of-output that the prefix strip above missed. These are never
+        // legitimate transcript content, so remove them unconditionally and
+        // tidy up any whitespace they leave behind.
+        s = s.replacingOccurrences(of: "<<<", with: "")
+        s = s.replacingOccurrences(of: ">>>", with: "")
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+
         // Strip a leading "Output:" / "OUTPUT:" / "Formatted:" label.
         for label in ["Output:", "OUTPUT:", "output:", "Formatted:", "FORMATTED:"] {
             if s.hasPrefix(label) {
