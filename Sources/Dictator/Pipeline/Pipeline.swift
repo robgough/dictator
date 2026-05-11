@@ -158,6 +158,15 @@ final class Pipeline {
             // flash a "Formatting…" frame that never does anything.
             formatted = trimmed
             inFlight.formatted = nil
+        } else if Self.looksLikeQuestion(trimmed) {
+            // Question-shaped input is the highest-risk failure mode for Pass 1 — it's
+            // where the formatter is tempted to answer the user instead of transcribing
+            // them. Modern Whisper already capitalises and punctuates well (including
+            // adding "?"), so skipping Pass 1 here costs only minor punctuation polish
+            // while sidestepping the whole class of failure. The Grammar and Structure
+            // passes still run; their word-sequence validators catch any drift.
+            formatted = trimmed
+            inFlight.formatted = nil
         } else {
             state = .formatting
             do {
@@ -185,7 +194,7 @@ final class Pipeline {
                 // a one-line note in the HUD so the user knows what happened.
                 formatted = trimmed
                 inFlight.formatted = nil
-                pendingNote = "LLM answered the question; used raw transcript."
+                pendingNote = "Pass 1 (Formatter) answered the question instead of transcribing it. Used the raw Whisper transcript instead."
             } else {
                 inFlight.formatted = formatted
             }
@@ -338,7 +347,41 @@ final class Pipeline {
         }
     }
 
+    /// Heuristic for question-shaped input. When true we bypass the formatter pass
+    /// to avoid the "model answers instead of transcribes" failure. Triggers on a
+    /// trailing "?" (the strongest signal — Whisper already gave us one) or a
+    /// classic interrogative first word ("why", "how", "what", ...). False positives
+    /// just lose minor punctuation polish; we trust Whisper's already-capitalised,
+    /// already-punctuated output.
+    static func looksLikeQuestion(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.hasSuffix("?") { return true }
+        let firstWord = trimmed.lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .first
+            .map(String.init) ?? ""
+        return questionStarters.contains(firstWord)
+    }
+
+    private static let questionStarters: Set<String> = [
+        "why", "how", "what", "who", "when", "where", "which"
+    ]
+
+    /// Ensures the delivered text ends with a single trailing whitespace so that
+    /// continuing to type (or starting another dictation right after) doesn't glue
+    /// the next character onto the end of this chunk. No-op if the text already
+    /// ends in whitespace (e.g. a structural pass that ended with a newline).
+    static func withTrailingSpace(_ s: String) -> String {
+        guard let last = s.last, !last.isWhitespace else { return s }
+        return s + " "
+    }
+
     private func finish(text: String, warning: String?) async {
+        // Trailing space so the next dictation/keystroke doesn't glue itself to this
+        // chunk. Particularly important when piping dictation straight into chat apps
+        // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
+        let text = Self.withTrailingSpace(text)
         lastResult = text
         var pasted = false
         var note: String? = warning
@@ -494,6 +537,9 @@ final class Pipeline {
     }
 
     private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool) async {
+        // Trailing space so the next keystroke doesn't glue itself to this chunk —
+        // same reasoning as `finish()`.
+        let text = Self.withTrailingSpace(text)
         lastResult = text
         var pasted = false
         var note: String
