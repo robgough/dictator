@@ -474,6 +474,15 @@ private struct GeneralPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
+            Section("Your name") {
+                TextField("e.g. Rob Gough", text: $s.settings.userName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { state.save() }
+                    .onChange(of: s.settings.userName) { _, _ in state.save() }
+                Text("Used to bias transcription toward the correct spelling of your name, and so the assistant signs drafts as you (emails, replies, messages). Leave blank if you'd rather not set one.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Section("Dictation hotkey") {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
                     ForEach(TriggerMode.allCases.filter { mode in

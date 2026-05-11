@@ -13,6 +13,11 @@ struct DictatorSettings: Codable, Equatable {
     var grammarPassMaxEditFraction: Double
     var vocabulary: [VocabularyEntry]
     var assistantTriggerMode: TriggerMode
+    /// The user's preferred name. Used to (a) bias Whisper toward the correct
+    /// spelling when they say it, and (b) tell the LLM who's writing so
+    /// Assistant Mode drafts emails / messages / sign-offs with their name.
+    /// Empty string means "not set" — no name biasing is applied.
+    var userName: String
 
     // Prompt customisation model:
     // - The "built-in" prompts (DictatorSettings.builtinXxxPrompt) are the source of
@@ -45,6 +50,7 @@ struct DictatorSettings: Codable, Equatable {
         grammarPassMaxEditFraction: 0.15,
         vocabulary: [],
         assistantTriggerMode: .rightOption,
+        userName: "",
         formattingPromptAddendum: "",
         formattingPromptOverride: nil,
         grammarPromptAddendum: "",
@@ -68,6 +74,7 @@ struct DictatorSettings: Codable, Equatable {
         grammarPassMaxEditFraction: Double,
         vocabulary: [VocabularyEntry],
         assistantTriggerMode: TriggerMode,
+        userName: String,
         formattingPromptAddendum: String,
         formattingPromptOverride: String?,
         grammarPromptAddendum: String,
@@ -89,6 +96,7 @@ struct DictatorSettings: Codable, Equatable {
         self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
         self.vocabulary = vocabulary
         self.assistantTriggerMode = assistantTriggerMode
+        self.userName = userName
         self.formattingPromptAddendum = formattingPromptAddendum
         self.formattingPromptOverride = formattingPromptOverride
         self.grammarPromptAddendum = grammarPromptAddendum
@@ -118,6 +126,7 @@ struct DictatorSettings: Codable, Equatable {
         self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self,  forKey: .grammarPassMaxEditFraction) ?? d.grammarPassMaxEditFraction
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
+        self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
         self.formattingPromptAddendum = try c.decodeIfPresent(String.self, forKey: .formattingPromptAddendum) ?? d.formattingPromptAddendum
         self.formattingPromptOverride = try c.decodeIfPresent(String.self, forKey: .formattingPromptOverride) ?? d.formattingPromptOverride
         self.grammarPromptAddendum    = try c.decodeIfPresent(String.self, forKey: .grammarPromptAddendum)    ?? d.grammarPromptAddendum
@@ -146,9 +155,97 @@ struct DictatorSettings: Codable, Equatable {
                      addendum: structuralPromptAddendum)
     }
     var effectiveAssistantPrompt: String {
-        Self.combine(builtin: Self.builtinAssistantPrompt,
-                     override: assistantPromptOverride,
-                     addendum: assistantPromptAddendum)
+        // Assistant Mode drafts emails, replies, messages — it's the one pass
+        // where the LLM actually needs to know who's writing. We do TWO things:
+        //   1. Substitute `{{USER_NAME}}` in the built-in example signatures
+        //      so the few-shot examples carry the user's actual name (or no
+        //      signature at all when no name is configured). Small models
+        //      copy the shape they see in examples far more reliably than
+        //      they obey abstract rules.
+        //   2. Prepend a USER CONTEXT block with explicit "no placeholders"
+        //      language. The combination of substituted examples + the rule
+        //      is what stops "[Your Name]" leaking into drafts.
+        let base = Self.combine(builtin: Self.builtinAssistantPrompt,
+                                override: assistantPromptOverride,
+                                addendum: assistantPromptAddendum)
+        let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let substituted: String
+        if trimmed.isEmpty {
+            // No name configured. Strip the example signature line entirely so
+            // the model sees a plain "Thanks," closing in the few-shot.
+            substituted = base.replacingOccurrences(of: "\n    {{USER_NAME}}", with: "")
+                              .replacingOccurrences(of: "\n{{USER_NAME}}", with: "")
+                              .replacingOccurrences(of: "{{USER_NAME}}", with: "")
+        } else {
+            substituted = base.replacingOccurrences(of: "{{USER_NAME}}", with: trimmed)
+        }
+
+        guard let ctx = userContextBlock else { return substituted }
+        return ctx + "\n\n" + substituted
+    }
+
+    /// Short preamble that pins the user's name in the LLM's context. nil when
+    /// no name is configured — caller still substitutes the empty template
+    /// so example signatures collapse, but no positive instruction is prepended.
+    var userContextBlock: String? {
+        let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return """
+        USER CONTEXT
+        The user's name is \(trimmed). When you draft an email, reply, or message \
+        as the user, sign off with exactly "\(trimmed)" — never write a placeholder \
+        like "[Your Name]", "[Name]", "[Your name]", "[your name]", or any bracketed \
+        stand-in. When you refer to the user by name, use this exact spelling. Do \
+        not invent other names for the user.
+        """
+    }
+
+    /// Optional Whisper-side bias text. Whisper's `prompt` is conditioning that
+    /// looks to the decoder like the *previous segment of transcribed audio*, so
+    /// it has to read as natural prior text — a wordlist or glossary makes the
+    /// decoder emit a no-speech segment instead. We compose a short sentence
+    /// that mentions the user's name and any custom-vocabulary terms in passing.
+    /// nil when there's nothing to bias on.
+    ///
+    /// Soft cap: ~12 vocabulary terms (60ish tokens). Whisper's prompt window is
+    /// 224 tokens including specials, and the bias signal is dilute past a
+    /// dozen-ish terms anyway — the dictionary post-pass still catches the rest.
+    var whisperPromptHint: String? {
+        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var terms: [String] = []
+        for entry in vocabulary {
+            let r = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !r.isEmpty { terms.append(r) }
+        }
+        // De-dupe terms while preserving order.
+        var seen = Set<String>()
+        let dedupTerms = terms.filter { seen.insert($0.lowercased()).inserted }
+        let cappedTerms = Array(dedupTerms.prefix(12))
+
+        switch (trimmedName.isEmpty, cappedTerms.isEmpty) {
+        case (true, true):
+            return nil
+        case (false, true):
+            return "This is \(trimmedName) speaking."
+        case (true, false):
+            return "In this transcript we mention \(joinTerms(cappedTerms))."
+        case (false, false):
+            return "This is \(trimmedName) speaking, and the transcript mentions \(joinTerms(cappedTerms))."
+        }
+    }
+
+    /// Oxford-comma join for the prompt sentence — reads more like prior
+    /// transcribed text than a comma-separated wordlist.
+    private func joinTerms(_ terms: [String]) -> String {
+        switch terms.count {
+        case 0: return ""
+        case 1: return terms[0]
+        case 2: return "\(terms[0]) and \(terms[1])"
+        default:
+            let head = terms.dropLast().joined(separator: ", ")
+            return "\(head), and \(terms.last!)"
+        }
     }
 
     /// When `override` is set (even if empty), it replaces the built-in wholesale —
@@ -345,7 +442,7 @@ struct DictatorSettings: Codable, Equatable {
     Yes — I'll have the report over to you by Thursday.
 
     Thanks,
-    Rob
+    {{USER_NAME}}
 
     SELECTION: "we need to ship it before tuesday or the launch slips"
     INSTRUCTION: "make this more formal"
@@ -412,7 +509,7 @@ struct DictatorSettings: Codable, Equatable {
     Quick one — when's the report due? Want to make sure I leave enough time to pull it together.
 
     Thanks,
-    Rob
+    {{USER_NAME}}
 
     SELECTION: "the meeting covered: budget overruns, hiring plan slipping, and the Q3 roadmap"
     INSTRUCTION: "pull out three action points"
