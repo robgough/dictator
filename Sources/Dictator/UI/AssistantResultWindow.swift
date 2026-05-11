@@ -215,6 +215,13 @@ private struct AssistantResultView: View {
             }
             Button("Done", action: onClose)
                 .keyboardShortcut(.defaultAction)
+            // Hidden twin so Escape also closes the window. SwiftUI Buttons
+            // can only carry one keyboardShortcut each, hence the pair.
+            Button("", action: onClose)
+                .keyboardShortcut(.cancelAction)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
     }
 
