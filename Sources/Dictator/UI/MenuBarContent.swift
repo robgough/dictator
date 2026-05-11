@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import KeyboardShortcuts
 
 struct MenuBarContent: View {
     @Environment(AppState.self) private var state
@@ -73,18 +74,46 @@ struct MenuBarContent: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "mic.and.signal.meter.fill")
+            Image(systemName: "waveform")
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Color.accentColor)
                 .font(.system(size: 22, weight: .semibold))
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Dictator")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                Text("Hold the hotkey to dictate")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    HotkeyHint(
+                        label: "Dictate",
+                        keys: Self.hotkeyDisplay(name: .toggleDictation, mode: state.settings.triggerMode)
+                    )
+                    HotkeyHint(
+                        label: "Assistant",
+                        keys: Self.hotkeyDisplay(name: .toggleAssistant, mode: state.settings.assistantTriggerMode)
+                    )
+                }
             }
             Spacer()
+        }
+    }
+
+    /// Compact human-readable form of a hotkey for the menu-bar header.
+    /// For keyboard combinations we ask KeyboardShortcuts for the current
+    /// `Shortcut`'s description (e.g. "⌥⌘D"). For modifier-only triggers we
+    /// render side + symbol (e.g. "Right ⌥") since the binder distinguishes
+    /// left/right by virtual key code.
+    private static func hotkeyDisplay(name: KeyboardShortcuts.Name, mode: TriggerMode) -> String {
+        switch mode {
+        case .keyboardShortcut:
+            return KeyboardShortcuts.getShortcut(for: name)?.description ?? "Not set"
+        case .leftOption:    return "Left ⌥"
+        case .rightOption:   return "Right ⌥"
+        case .leftCommand:   return "Left ⌘"
+        case .rightCommand:  return "Right ⌘"
+        case .leftControl:   return "Left ⌃"
+        case .rightControl:  return "Right ⌃"
+        case .leftShift:     return "Left ⇧"
+        case .rightShift:    return "Right ⇧"
+        case .fn:            return "fn"
         }
     }
 
@@ -245,5 +274,27 @@ private struct RecentRow: View {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+private struct HotkeyHint: View {
+    let label: String
+    let keys: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(keys)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.15))
+                )
+        }
     }
 }

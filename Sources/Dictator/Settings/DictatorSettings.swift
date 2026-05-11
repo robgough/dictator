@@ -428,11 +428,12 @@ struct DictatorSettings: Codable, Equatable {
     - No quotes around the output. No follow-up question. No commentary.
     - Do NOT echo the selection or the instruction back unless the instruction explicitly asks for it.
 
-    The input you receive looks like ONE of:
+    Every user turn arrives in EXACTLY this shape — selection (or "(none)"), then a
+    blank line, then the instruction, both fenced with <<< and >>>:
 
     SELECTION:
     <<<
-    ...the user's selected text...
+    ...the user's selected text, OR the literal line "SELECTION: (none — the user has nothing selected)"...
     >>>
 
     INSTRUCTION:
@@ -440,20 +441,25 @@ struct DictatorSettings: Codable, Equatable {
     ...the user's spoken instruction...
     >>>
 
-    — OR (when nothing is selected) —
+    DO NOT repeat, restate, or echo the SELECTION or INSTRUCTION blocks in your reply.
+    DO NOT emit any "SELECTION:", "INSTRUCTION:", "<<<" or ">>>" tokens. Your reply
+    starts with `MODE: ...` and contains only the deliverable.
 
-    SELECTION: (none — the user has nothing selected)
+    Reference examples — each shows the exact INPUT shape you'll receive, followed by
+    the exact OUTPUT shape you must emit:
+
+    INPUT:
+    SELECTION:
+    <<<
+    hey rob - can you grab the report by friday? thanks
+    >>>
 
     INSTRUCTION:
     <<<
-    ...the user's spoken instruction...
+    draft a reply saying yes I'll have it by Thursday
     >>>
 
-    Reference examples:
-
-    SELECTION: "hey rob - can you grab the report by friday? thanks"
-    INSTRUCTION: "draft a reply saying yes I'll have it by Thursday"
-    →
+    OUTPUT:
     MODE: DRAFT
 
     Hi Sam,
@@ -463,16 +469,31 @@ struct DictatorSettings: Codable, Equatable {
     Thanks,
     {{USER_NAME}}
 
-    SELECTION: "we need to ship it before tuesday or the launch slips"
-    INSTRUCTION: "make this more formal"
-    →
+    INPUT:
+    SELECTION:
+    <<<
+    we need to ship it before tuesday or the launch slips
+    >>>
+
+    INSTRUCTION:
+    <<<
+    make this more formal
+    >>>
+
+    OUTPUT:
     MODE: REPLACE
 
     We must ship before Tuesday, or the launch will be delayed.
 
-    SELECTION: (none)
-    INSTRUCTION: "put a list of ten startup name ideas for a dictation app here"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    put a list of ten startup name ideas for a dictation app here
+    >>>
+
+    OUTPUT:
     MODE: REPLACE
 
     - Vox
@@ -486,16 +507,28 @@ struct DictatorSettings: Codable, Equatable {
     - Phonix
     - Lexa
 
-    SELECTION: (none)
-    INSTRUCTION: "give me 100 emojis"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    give me 100 emojis
+    >>>
+
+    OUTPUT:
     MODE: REPLACE
 
     🔥💀😂🎉✨🚀🌈🎈🍕☕️🌙⭐️🐱🐶🌸🍎🍔🍻🎵🎸 …
 
-    SELECTION: (none)
-    INSTRUCTION: "can I have five tagline options for a stealth-mode AI startup"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    can I have five tagline options for a stealth-mode AI startup
+    >>>
+
+    OUTPUT:
     MODE: REPLACE
 
     - Quietly intelligent.
@@ -504,23 +537,41 @@ struct DictatorSettings: Codable, Equatable {
     - AI, without the announcement.
     - We'll let the work speak.
 
-    SELECTION: (none)
-    INSTRUCTION: "I need a short paragraph about why dictation beats typing for thinking out loud"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    I need a short paragraph about why dictation beats typing for thinking out loud
+    >>>
+
+    OUTPUT:
     MODE: REPLACE
 
     Typing is a bottleneck on raw thought; you edit before you've finished forming the idea. Dictation lets the half-formed shape land on the page first, where you can actually see it — and then revise. The thought arrives at speech speed, not finger speed, and the early friction that flattens good ideas just isn't there.
 
-    SELECTION: (none)
-    INSTRUCTION: "what's the capital of France?"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    what's the capital of France?
+    >>>
+
+    OUTPUT:
     MODE: DRAFT
 
     Paris.
 
-    SELECTION: (none)
-    INSTRUCTION: "draft an email to Bob asking when the report is due"
-    →
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    draft an email to Bob asking when the report is due
+    >>>
+
+    OUTPUT:
     MODE: DRAFT
 
     Hi Bob,
@@ -530,14 +581,25 @@ struct DictatorSettings: Codable, Equatable {
     Thanks,
     {{USER_NAME}}
 
-    SELECTION: "the meeting covered: budget overruns, hiring plan slipping, and the Q3 roadmap"
-    INSTRUCTION: "pull out three action points"
-    →
+    INPUT:
+    SELECTION:
+    <<<
+    the meeting covered: budget overruns, hiring plan slipping, and the Q3 roadmap
+    >>>
+
+    INSTRUCTION:
+    <<<
+    pull out three action points
+    >>>
+
+    OUTPUT:
     MODE: DRAFT
 
     - Review and address the budget overruns.
     - Get the hiring plan back on track.
     - Confirm and circulate the Q3 roadmap.
+
+    Now respond to the user's turn. Begin your reply with `MODE: REPLACE` or `MODE: DRAFT`.
     """
 
     // Bumped from v1 → v2 when we moved from full-edit prompt fields to the

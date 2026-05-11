@@ -19,9 +19,254 @@ struct SettingsView: View {
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
             HistoryPane()
                 .tabItem { Label("History", systemImage: "clock") }
+            AboutPane()
+                .tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding(20)
         .environment(state)
+    }
+}
+
+private struct AboutPane: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                AboutHeader()
+                AboutAuthor()
+                AboutWarranty()
+                AboutCredits()
+            }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct AboutHeader: View {
+    private var version: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (short, build) {
+        case let (s?, b?) where s != b: return "Version \(s) (\(b))"
+        case let (s?, _): return "Version \(s)"
+        default: return ""
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .frame(width: 56, height: 56)
+                Image(systemName: "waveform")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 26, weight: .semibold))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Dictator")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                Text("Local-first dictation for macOS. All speech and language models run on-device.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !version.isEmpty {
+                    Text(version)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                        .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct AboutAuthor: View {
+    var body: some View {
+        AboutSection(title: "Author") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Dictator is made by **Rob Gough** — an independent developer building small, well-considered native apps. Dictator started as a personal tool: a hotkey-driven dictation flow that never leaves the machine, with enough taste applied between the microphone and the cursor that the result feels written rather than transcribed.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 14) {
+                    Link(destination: URL(string: "https://robgough.net")!) {
+                        Label("robgough.net", systemImage: "globe")
+                    }
+                    Link(destination: URL(string: "mailto:hello@robgough.net")!) {
+                        Label("hello@robgough.net", systemImage: "envelope")
+                    }
+                }
+                .font(.callout)
+            }
+        }
+    }
+}
+
+private struct AboutWarranty: View {
+    var body: some View {
+        AboutSection(title: "Warranty & liability") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Nothing in this notice excludes or limits our liability for death or personal injury caused by negligence, for fraud or fraudulent misrepresentation, or for any other liability that cannot be excluded or limited under applicable law. We accept that liability in full.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Subject to the paragraph above, Dictator is provided **\"as is\"**, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, accuracy of transcription, and non-infringement. To the maximum extent permitted by law, the authors and contributors are not liable for any claim, damages, lost data, lost time, or other liability — whether in contract, tort, or otherwise — arising from or in connection with Dictator or its use.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Dictator transcribes and processes audio entirely on your Mac. No recordings, transcripts, or telemetry are transmitted to the author or any third party by this app.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct AboutCredits: View {
+    private struct Credit: Identifiable {
+        let id = UUID()
+        let name: String
+        let author: String
+        let role: String
+        let license: String
+        let url: String
+    }
+
+    private let credits: [Credit] = [
+        Credit(
+            name: "WhisperKit",
+            author: "Argmax, Inc.",
+            role: "On-device Whisper speech-to-text",
+            license: "MIT",
+            url: "https://github.com/argmaxinc/WhisperKit"
+        ),
+        Credit(
+            name: "FluidAudio",
+            author: "FluidInference",
+            role: "Parakeet TDT speech-to-text on the Apple Neural Engine",
+            license: "Apache 2.0",
+            url: "https://github.com/FluidInference/FluidAudio"
+        ),
+        Credit(
+            name: "MLX Swift Examples",
+            author: "Apple / mlx-explore",
+            role: "MLX LLM runtime for the formatting, grammar, and structural passes",
+            license: "MIT",
+            url: "https://github.com/ml-explore/mlx-swift-examples"
+        ),
+        Credit(
+            name: "MLX Swift",
+            author: "Apple",
+            role: "Tensor and array framework backing the LLM runtime",
+            license: "MIT",
+            url: "https://github.com/ml-explore/mlx-swift"
+        ),
+        Credit(
+            name: "swift-transformers",
+            author: "Hugging Face",
+            role: "Tokenisers and model loading for the MLX pipeline",
+            license: "Apache 2.0",
+            url: "https://github.com/huggingface/swift-transformers"
+        ),
+        Credit(
+            name: "KeyboardShortcuts",
+            author: "Sindre Sorhus",
+            role: "Global hotkey capture and recorder UI",
+            license: "MIT",
+            url: "https://github.com/sindresorhus/KeyboardShortcuts"
+        ),
+        Credit(
+            name: "Whisper",
+            author: "OpenAI",
+            role: "Underlying speech-recognition model (weights downloaded on demand)",
+            license: "MIT",
+            url: "https://github.com/openai/whisper"
+        ),
+        Credit(
+            name: "Parakeet TDT",
+            author: "NVIDIA",
+            role: "Underlying speech-recognition model (weights downloaded on demand)",
+            license: "CC-BY-4.0",
+            url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3"
+        ),
+    ]
+
+    var body: some View {
+        AboutSection(title: "Built with") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Dictator stands on the work of a number of open-source projects. Thank you to their authors and maintainers.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 2)
+                VStack(spacing: 6) {
+                    ForEach(credits) { credit in
+                        CreditRow(credit: credit)
+                    }
+                }
+            }
+        }
+    }
+
+    private struct CreditRow: View {
+        let credit: Credit
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "shippingbox.fill")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 13))
+                    .frame(width: 16, alignment: .center)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Link(credit.name, destination: URL(string: credit.url)!)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(credit.author)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Text(credit.license)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule().fill(Color.secondary.opacity(0.12))
+                            )
+                    }
+                    Text(credit.role)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+}
+
+private struct AboutSection<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

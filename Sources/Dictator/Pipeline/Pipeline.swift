@@ -17,9 +17,9 @@ enum PipelineState: Equatable {
 
     var iconName: String {
         switch self {
-        case .idle: "mic"
+        case .idle: "waveform"
         case .capturingSelection: "selection.pin.in.out"
-        case .recording: "waveform"
+        case .recording: "waveform.badge.mic"
         case .transcribing: "waveform.badge.magnifyingglass"
         case .formatting: "sparkles"
         case .fixingGrammar: "text.badge.checkmark"
