@@ -664,60 +664,75 @@ private struct ModelsPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
-            Section("Speech-to-text (WhisperKit)") {
-                Picker("Model", selection: $s.settings.whisperModelID) {
-                    ForEach(ModelCatalog.whisperModels) { m in
-                        Text(modelMenuLabel(name: m.displayName, sizeMB: m.approxSizeMB, state: manager.whisperStates[m.id] ?? .unknown))
-                            .tag(m.id)
-                    }
-                }
-                .onChange(of: s.settings.whisperModelID) { _, _ in state.save() }
-
-                if let model = ModelCatalog.whisper(id: s.settings.whisperModelID) {
-                    ModelStatusRow(
+            Section {
+                ForEach(ModelCatalog.whisperModels) { model in
+                    ModelRow(
                         name: model.displayName,
                         note: model.note,
                         sizeMB: model.approxSizeMB,
                         state: manager.whisperStates[model.id] ?? .unknown,
+                        isActive: s.settings.whisperModelID == model.id,
+                        select: {
+                            s.settings.whisperModelID = model.id
+                            state.save()
+                        },
                         download: {
-                            Task { await manager.downloadWhisper(model.id, using: TranscriptionServiceHolder.shared) }
+                            manager.downloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelWhisperDownload(model.id)
                         },
                         remove: {
                             manager.removeWhisper(model.id, using: TranscriptionServiceHolder.shared)
                         }
                     )
                 }
+            } header: {
+                Text("Speech-to-text (WhisperKit)")
+            } footer: {
+                Text("Pick the model that runs when you dictate. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            Section("Formatting LLM (MLX)") {
-                Picker("Model", selection: $s.settings.llmModelID) {
-                    Text("None — use raw Whisper transcript").tag(ModelCatalog.noneLLMID)
-                    Divider()
-                    ForEach(ModelCatalog.llmModels) { m in
-                        Text(modelMenuLabel(name: m.displayName, sizeMB: m.approxSizeMB, state: manager.llmStates[m.id] ?? .unknown))
-                            .tag(m.id)
-                    }
-                }
-                .onChange(of: s.settings.llmModelID) { _, _ in state.save() }
 
-                if s.settings.llmModelID == ModelCatalog.noneLLMID {
-                    Text("All three LLM passes are disabled. Whisper output flows directly through dictionary substitutions to the focused app.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else if let model = ModelCatalog.llm(id: s.settings.llmModelID) {
-                    ModelStatusRow(
+            Section {
+                NoneLLMRow(
+                    isActive: s.settings.llmModelID == ModelCatalog.noneLLMID,
+                    select: {
+                        s.settings.llmModelID = ModelCatalog.noneLLMID
+                        state.save()
+                    }
+                )
+                ForEach(ModelCatalog.llmModels) { model in
+                    ModelRow(
                         name: model.displayName,
                         note: model.note,
                         sizeMB: model.approxSizeMB,
                         state: manager.llmStates[model.id] ?? .unknown,
+                        isActive: s.settings.llmModelID == model.id,
+                        select: {
+                            s.settings.llmModelID = model.id
+                            state.save()
+                        },
                         download: {
-                            Task { await manager.downloadLLM(model.id, using: LLMServiceHolder.shared) }
+                            manager.downloadLLM(model.id, using: LLMServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelLLMDownload(model.id)
                         },
                         remove: {
                             manager.removeLLM(model.id, using: LLMServiceHolder.shared)
                         }
                     )
                 }
+            } header: {
+                Text("Formatting LLM (MLX)")
+            } footer: {
+                Text("Used for the formatting, grammar, and structural passes after Whisper transcribes — and for Assistant Mode. Pick **None** to skip LLM passes and ship Whisper's raw transcript.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
+
             Section {
                 Button("Reveal Models in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([ModelStorage.root()])
@@ -729,21 +744,6 @@ private struct ModelsPane: View {
     }
 }
 
-/// Picker item label: "Llama 3.2 3B (4-bit) · 1.9 GB · Installed".
-/// Compact so the closed picker button stays readable, but rich enough that the
-/// user can see size and install state without opening the status row.
-fileprivate func modelMenuLabel(name: String, sizeMB: Int, state: ModelDownloadState) -> String {
-    let size = formatModelSize(sizeMB)
-    let suffix: String
-    switch state {
-    case .ready:                       suffix = " · Installed"
-    case .downloading(let p):          suffix = " · Downloading \(Int(p * 100))%"
-    case .failed:                      suffix = " · Failed"
-    case .notDownloaded, .unknown:     suffix = " · Not downloaded"
-    }
-    return "\(name) · \(size)\(suffix)"
-}
-
 fileprivate func formatModelSize(_ mb: Int) -> String {
     if mb >= 1000 {
         return String(format: "%.1f GB", Double(mb) / 1000.0)
@@ -751,27 +751,55 @@ fileprivate func formatModelSize(_ mb: Int) -> String {
     return "\(mb) MB"
 }
 
-private struct ModelStatusRow: View {
+/// One row per model in the catalog. Left side: radio + name + size + note +
+/// per-state inline status. Right side: state-dependent action (Download /
+/// Cancel / Remove). The whole row's leading area is tappable to set this
+/// model as the active choice.
+private struct ModelRow: View {
     let name: String
     let note: String
     let sizeMB: Int
     let state: ModelDownloadState
+    let isActive: Bool
+    let select: () -> Void
     let download: () -> Void
+    let cancel: () -> Void
     let remove: () -> Void
 
     @State private var confirmingRemoval = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).fontWeight(.medium)
-                Text("\(note) · ~\(formatModelSize(sizeMB))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Button(action: select) {
+                HStack(alignment: .center, spacing: 10) {
+                    Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                        .font(.system(size: 16))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(name).fontWeight(isActive ? .semibold : .regular)
+                            if isActive {
+                                Text("Active")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Color.accentColor, in: Capsule())
+                            }
+                        }
+                        Text("\(note) · ~\(formatModelSize(sizeMB))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
-            Spacer()
-            statusView
+            .buttonStyle(.plain)
+
+            actionView
         }
+        .padding(.vertical, 2)
         .confirmationDialog(
             "Remove \(name)?",
             isPresented: $confirmingRemoval,
@@ -784,31 +812,59 @@ private struct ModelStatusRow: View {
         }
     }
 
-    @ViewBuilder private var statusView: some View {
+    @ViewBuilder private var actionView: some View {
         switch state {
         case .ready:
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Label("Installed", systemImage: "checkmark.seal.fill")
+                    .labelStyle(.iconOnly)
                     .foregroundStyle(.green)
                 TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Remove this model from disk")
             }
             .font(.callout)
         case .notDownloaded, .unknown:
             Button("Download", action: download)
-                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+        case .partial(let p):
+            HStack(spacing: 8) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    ProgressView(value: p)
+                        .frame(width: 110)
+                        .tint(.orange)
+                    Text("Paused · \(Int(p * 100))%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Button("Resume", action: download)
+                    .controlSize(.small)
+                    .help("Continue downloading from where it stopped")
+                TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Discard partial download")
+                    .font(.callout)
+            }
         case .downloading(let p):
-            VStack(alignment: .trailing, spacing: 4) {
-                ProgressView(value: p)
-                    .frame(width: 130)
-                Text("\(Int(p * 100))%")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    ProgressView(value: p)
+                        .frame(width: 110)
+                    Text("\(Int(p * 100))%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Button(action: cancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
             }
         case .failed(let msg):
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("Failed").foregroundStyle(.red).font(.caption)
-                HStack(spacing: 10) {
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text("Failed").foregroundStyle(.red).font(.caption)
                     Button("Retry", action: download)
                         .controlSize(.small)
                     TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Remove any partial files from disk")
@@ -817,6 +873,43 @@ private struct ModelStatusRow: View {
                 Text(msg).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
         }
+    }
+}
+
+/// Special "None" pseudo-model for the LLM section — selectable but has no
+/// download/remove affordances since there's nothing to download.
+private struct NoneLLMRow: View {
+    let isActive: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                    .font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("None").fontWeight(isActive ? .semibold : .regular)
+                        if isActive {
+                            Text("Active")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor, in: Capsule())
+                        }
+                    }
+                    Text("Ship Whisper's raw transcript — no formatting, grammar, structural, or assistant passes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
     }
 }
 
