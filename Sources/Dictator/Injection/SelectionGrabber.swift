@@ -40,9 +40,16 @@ enum SelectionGrabber {
         defer { restore(priorSnapshot, to: pasteboard) }
 
         guard pasteboard.changeCount != priorChangeCount,
-              let copied = pasteboard.string(forType: .string),
-              !copied.isEmpty
+              let copied = pasteboard.string(forType: .string)
         else {
+            return nil
+        }
+        // Some apps tick the pasteboard changeCount on ⌘C even when the user
+        // had nothing meaningful selected (e.g. browsers occasionally drop the
+        // current URL onto the clipboard). Treat whitespace-only — and empty
+        // — as "no selection" so we don't downstream-classify these as a
+        // real selection and trigger REPLACE-mode paste against it.
+        guard !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
         return copied

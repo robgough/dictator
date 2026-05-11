@@ -779,6 +779,18 @@ final class Pipeline {
 
         switch mode {
         case .replace:
+            // Only synthesise ⌘V if the focused element is actually an editable
+            // text input. Otherwise the paste would land somewhere unintended —
+            // a URL bar, a search box on a web page the user wasn't typing
+            // into, or simply nowhere at all. Fall back to DRAFT-style
+            // clipboard + window so the user can read and place it themselves.
+            if !TextInjector.focusedElementIsEditableText() {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                pasted = false
+                note = "No text input focused — copied to clipboard"
+                break
+            }
             // Paste-replace the still-selected text, or insert at the cursor if
             // there was no selection. TextInjector handles both — synthetic ⌘V
             // overwrites a selection if one exists, or just inserts otherwise.

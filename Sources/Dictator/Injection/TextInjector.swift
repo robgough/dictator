@@ -52,6 +52,44 @@ final class TextInjector {
         AXIsProcessTrusted()
     }
 
+    /// Whether the system-wide focused UI element is an editable text input.
+    /// Used by the assistant pipeline to decide whether a `MODE: REPLACE` reply
+    /// should actually paste (text input focused) or fall back to DRAFT-style
+    /// clipboard-only delivery (nothing useful to paste into — e.g. a browser
+    /// viewing a page with no input focused).
+    static func focusedElementIsEditableText() -> Bool {
+        guard hasAccessibilityPermission() else { return false }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        guard err == .success, let focused = focusedRef else { return false }
+        let element = focused as! AXUIElement
+
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String
+
+        let editableRoles: Set<String> = [
+            kAXTextFieldRole as String,
+            kAXTextAreaRole as String,
+            kAXComboBoxRole as String,
+        ]
+        if let role, editableRoles.contains(role) { return true }
+
+        // Some apps expose search fields / web inputs via a subrole rather than
+        // a distinct role — fall through to the subrole check before giving up.
+        var subroleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef)
+        if let subrole = subroleRef as? String {
+            let editableSubroles: Set<String> = [
+                kAXSearchFieldSubrole as String,
+                kAXSecureTextFieldSubrole as String,
+            ]
+            if editableSubroles.contains(subrole) { return true }
+        }
+        return false
+    }
+
     private static func requestAccessibilityPrompt() {
         // `kAXTrustedCheckOptionPrompt` is a CFString global that Swift 6 treats as
         // non-Sendable. Its underlying value is documented as "AXTrustedCheckOptionPrompt".
