@@ -3,18 +3,21 @@ import SwiftUI
 
 /// Multi-turn result window for Assistant Mode. Reads its content from
 /// `ConversationHistory.shared` by id, so updates from Pipeline propagate
-/// automatically via @Observable. The window stays around between turns
-/// (continuation triggers — visible window OR matching selection — fire the
-/// next assistant call as a follow-up). Closing the window doesn't end the
-/// conversation; the "New conversation" button does.
+/// automatically via @Observable. While the window is open, the next
+/// assistant hotkey continues the displayed conversation; closing the
+/// window (X, Done button, or programmatic close) ends the conversation —
+/// the next call starts fresh. After a REPLACE turn the window never
+/// opens; in that case, continuation falls back to selection-overlap with
+/// the previous reply (Pipeline.shouldContinueConversation).
 @MainActor
-final class AssistantResultController {
+final class AssistantResultController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var displayedConversationID: UUID?
 
-    /// Called when the user clicks "New conversation". AppState wires this
-    /// to `pipeline.endActiveConversation()`.
-    var onNewConversationRequested: (() -> Void)?
+    /// Called when the user closes the window (X or Done). AppState wires
+    /// this to `pipeline.endActiveConversation()` so the next assistant
+    /// call starts fresh.
+    var onWindowClosed: (() -> Void)?
 
     /// Called when the user reopens a conversation from the menu bar so the
     /// pipeline can switch its active conversation to match what's on screen.
@@ -47,11 +50,7 @@ final class AssistantResultController {
         let root = AssistantResultView(
             conversationID: id,
             onCopy: { [weak self] text in self?.copyToClipboard(text) },
-            onClose: { [weak self] in self?.close() },
-            onNewConversation: { [weak self] in
-                self?.onNewConversationRequested?()
-                self?.close()
-            }
+            onClose: { [weak self] in self?.requestClose() }
         )
         window.contentViewController = NSHostingController(rootView: root)
         window.title = "Assistant"
@@ -63,8 +62,12 @@ final class AssistantResultController {
         onConversationDisplayed?(id)
     }
 
-    private func close() {
-        window?.orderOut(nil)
+    /// Programmatic close, used by the Done button. Routes through the
+    /// window's close path so the NSWindowDelegate hook fires uniformly
+    /// regardless of whether the user closed via the title bar or the
+    /// button.
+    private func requestClose() {
+        window?.performClose(nil)
     }
 
     private func copyToClipboard(_ text: String) {
@@ -83,8 +86,22 @@ final class AssistantResultController {
         w.isReleasedWhenClosed = false
         w.level = .floating
         w.minSize = NSSize(width: 560, height: 400)
+        w.delegate = self
         window = w
         return w
+    }
+
+    // MARK: - NSWindowDelegate
+
+    /// Fired for both the title-bar X and `performClose`. Clears active
+    /// conversation in the pipeline so the next hotkey press starts fresh.
+    /// `windowWillClose` doesn't fire on plain `orderOut`, so this is
+    /// specifically the user-initiated close path.
+    nonisolated func windowWillClose(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            displayedConversationID = nil
+            onWindowClosed?()
+        }
     }
 }
 
@@ -92,7 +109,6 @@ private struct AssistantResultView: View {
     let conversationID: UUID
     let onCopy: (String) -> Void
     let onClose: () -> Void
-    let onNewConversation: () -> Void
 
     @State private var history = ConversationHistory.shared
     @State private var copyFeedback = false
@@ -183,11 +199,10 @@ private struct AssistantResultView: View {
             Image(systemName: "doc.on.clipboard.fill")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 11))
-            Text("Latest reply is on your clipboard — \u{2318}V to paste anywhere")
+            Text("Latest reply is on your clipboard — \u{2318}V to paste anywhere. Closing ends the conversation.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("New conversation", action: onNewConversation)
             if let last = conversation.turns.last {
                 Button(copyFeedback ? "Copied" : "Copy latest") {
                     onCopy(last.reply)

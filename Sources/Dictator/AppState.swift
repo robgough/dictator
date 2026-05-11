@@ -31,7 +31,7 @@ final class AppState {
         pipeline.resultWindowConversationID = { [weak self] in
             self?.assistantResultWindow.currentConversationID
         }
-        assistantResultWindow.onNewConversationRequested = { [weak self] in
+        assistantResultWindow.onWindowClosed = { [weak self] in
             self?.pipeline.endActiveConversation()
         }
         assistantResultWindow.onConversationDisplayed = { [weak self] id in
