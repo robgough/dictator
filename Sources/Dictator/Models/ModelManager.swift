@@ -81,4 +81,40 @@ final class ModelManager {
             llmStates[id] = .failed(error.localizedDescription)
         }
     }
+
+    // MARK: - Deletion
+
+    /// Unload (if loaded) and remove a Whisper model's on-disk files. Returns
+    /// whether the directory was found and removed.
+    @discardableResult
+    func removeWhisper(_ id: String, using service: TranscriptionService) -> Bool {
+        service.unload(modelID: id)
+        let dir = ModelStorage.whisperRoot()
+            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/\(id)", isDirectory: true)
+        let removed = removeDirectory(at: dir)
+        whisperStates[id] = .notDownloaded
+        return removed
+    }
+
+    /// Unload (if loaded) and remove an LLM model's on-disk files.
+    @discardableResult
+    func removeLLM(_ id: String, using service: LLMService) -> Bool {
+        service.unload(modelID: id)
+        let dir = ModelStorage.llmRoot()
+            .appendingPathComponent("models/\(id)", isDirectory: true)
+        let removed = removeDirectory(at: dir)
+        llmStates[id] = .notDownloaded
+        return removed
+    }
+
+    private func removeDirectory(at url: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return false }
+        do {
+            try fm.removeItem(at: url)
+            return true
+        } catch {
+            return false
+        }
+    }
 }

@@ -40,7 +40,7 @@ final class AppState {
         if manager.whisperStates[whisperID] == .ready {
             Task { try? await TranscriptionServiceHolder.shared.ensureLoaded(modelID: whisperID) }
         }
-        if manager.llmStates[llmID] == .ready {
+        if llmID != ModelCatalog.noneLLMID, manager.llmStates[llmID] == .ready {
             Task { try? await LLMServiceHolder.shared.ensureLoaded(modelID: llmID) }
         }
     }

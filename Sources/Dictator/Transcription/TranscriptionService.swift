@@ -42,6 +42,15 @@ final class TranscriptionService {
         currentModelID = modelID
     }
 
+    /// Drop the in-memory WhisperKit pipeline. Called before deleting the
+    /// model files from disk so we don't tear them out from under a live
+    /// pipeline that's still mmap'ed against them.
+    func unload(modelID: String) {
+        guard currentModelID == modelID else { return }
+        pipe = nil
+        currentModelID = nil
+    }
+
     func transcribe(samples: [Float], modelID: String) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let pipe else {

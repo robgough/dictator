@@ -9,11 +9,22 @@ enum AudioDeviceEnumerator {
         let now = Date()
         return ids.compactMap { id -> AudioDevice? in
             guard hasInputStreams(deviceID: id) else { return nil }
+            // CoreAudio creates a fresh private aggregate (name `CADefaultDeviceAggregate-…`)
+            // every time anything reads from the system default input. Skip them — they're
+            // implementation detail, not user-facing hardware.
+            if isPrivateAggregateDevice(deviceID: id) { return nil }
             guard let uid = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal) else { return nil }
             let name = stringProperty(deviceID: id, selector: kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal) ?? "Unknown"
             let manufacturer = stringProperty(deviceID: id, selector: kAudioObjectPropertyManufacturer, scope: kAudioObjectPropertyScopeGlobal)
             return AudioDevice(uid: uid, name: name, manufacturer: manufacturer, lastSeen: now)
         }
+    }
+
+    /// Recognises a saved device that looks like a CoreAudio private aggregate by name.
+    /// Used to sweep stale entries out of persisted `knownDevices` from before the
+    /// enumerator-level filter existed.
+    static func looksLikePrivateAggregate(name: String, uid: String) -> Bool {
+        name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("CADefaultDeviceAggregate")
     }
 
     /// Resolves a `kAudioDevicePropertyDeviceUID` string to its current `AudioDeviceID`.
@@ -130,6 +141,40 @@ enum AudioDeviceEnumerator {
         var ids = [AudioDeviceID](repeating: 0, count: count)
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids)
         return status == noErr ? ids : []
+    }
+
+    /// Detects CoreAudio's transient `CADefaultDeviceAggregate-…` shim devices that
+    /// wrap whatever the current default input is. They have aggregate transport type
+    /// and the private flag set; the name-prefix check is a belt-and-braces fallback
+    /// in case `kAudioAggregateDevicePropertyIsPrivate` isn't reachable on this device.
+    private static func isPrivateAggregateDevice(deviceID: AudioDeviceID) -> Bool {
+        var transport: UInt32 = 0
+        var transportSize = UInt32(MemoryLayout<UInt32>.size)
+        var transportAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let transportStatus = AudioObjectGetPropertyData(deviceID, &transportAddr, 0, nil, &transportSize, &transport)
+        guard transportStatus == noErr, transport == kAudioDeviceTransportTypeAggregate else { return false }
+
+        // 'priv' — kAudioAggregateDevicePropertyIsPrivate. Hardcoded because the
+        // Swift CoreAudio module doesn't surface every aggregate-only selector.
+        let isPrivateSelector: AudioObjectPropertySelector = 0x70726976
+        var isPrivate: UInt32 = 0
+        var pSize = UInt32(MemoryLayout<UInt32>.size)
+        var pAddr = AudioObjectPropertyAddress(
+            mSelector: isPrivateSelector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        if AudioObjectGetPropertyData(deviceID, &pAddr, 0, nil, &pSize, &isPrivate) == noErr, isPrivate != 0 {
+            return true
+        }
+
+        // Fallback: any aggregate whose name starts with the CoreAudio internal prefix.
+        let name = stringProperty(deviceID: deviceID, selector: kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal) ?? ""
+        return name.hasPrefix("CADefaultDeviceAggregate")
     }
 
     private static func hasInputStreams(deviceID: AudioDeviceID) -> Bool {

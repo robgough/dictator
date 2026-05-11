@@ -101,7 +101,13 @@ final class AudioDeviceManager {
             let data = UserDefaults.standard.data(forKey: Self.storageKey),
             let decoded = try? JSONDecoder().decode([AudioDevice].self, from: data)
         else { return }
-        knownDevices = decoded
+        // Earlier versions persisted CoreAudio's transient private-aggregate shims
+        // (one new UID per session). Sweep them out so the user sees a clean list.
+        let cleaned = decoded.filter { !AudioDeviceEnumerator.looksLikePrivateAggregate(name: $0.name, uid: $0.uid) }
+        knownDevices = cleaned
+        if cleaned.count != decoded.count {
+            persist()
+        }
     }
 
     private func persist() {

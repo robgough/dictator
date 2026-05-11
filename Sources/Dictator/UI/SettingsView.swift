@@ -301,51 +301,107 @@ private struct InputPane: View {
     @State private var manager = AudioDeviceManager.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "mic.fill")
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Currently using")
+        VStack(alignment: .leading, spacing: 16) {
+            ActiveDeviceCard(manager: manager)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Priority order")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    let connectedCount = manager.knownDevices.filter { manager.isConnected($0.uid) }.count
+                    Text("\(connectedCount) of \(manager.knownDevices.count) connected")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(manager.activeInputDeviceName())
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
                 }
-                Spacer()
-                Button {
-                    manager.refresh()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .controlSize(.small)
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
-
-            Text("Drag to set priority. The top-most **connected** device is used.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            List {
-                ForEach(manager.knownDevices) { device in
-                    DeviceRow(device: device, connected: manager.isConnected(device.uid)) {
-                        manager.forget(uid: device.uid)
-                    }
-                }
-                .onMove { source, destination in
-                    manager.move(from: source, to: destination)
-                }
-            }
-            .listStyle(.bordered)
-            .frame(minHeight: 220)
-
-            if manager.knownDevices.isEmpty {
-                Text("No input devices seen yet. Plug one in and click Refresh.")
-                    .font(.callout)
+                Text("Drag to reorder. Dictator uses the top-most **connected** device.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if manager.knownDevices.isEmpty {
+                    ContentUnavailableView(
+                        "No input devices yet",
+                        systemImage: "mic.slash",
+                        description: Text("Plug in a microphone, then click Refresh.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 220)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 1)
+                    )
+                } else {
+                    List {
+                        ForEach(manager.knownDevices) { device in
+                            DeviceRow(device: device, connected: manager.isConnected(device.uid)) {
+                                manager.forget(uid: device.uid)
+                            }
+                            .listRowSeparator(.visible)
+                        }
+                        .onMove { source, destination in
+                            manager.move(from: source, to: destination)
+                        }
+                    }
+                    .listStyle(.inset(alternatesRowBackgrounds: false))
+                    .frame(minHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+                    )
+                }
             }
         }
+    }
+}
+
+private struct ActiveDeviceCard: View {
+    let manager: AudioDeviceManager
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .frame(width: 44, height: 44)
+                Image(systemName: "waveform")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ACTIVE INPUT")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.secondary)
+                Text(manager.activeInputDeviceName())
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer()
+            Button {
+                manager.refresh()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor).opacity(0.7))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
     }
 }
 
@@ -354,17 +410,19 @@ private struct DeviceRow: View {
     let connected: Bool
     let forget: () -> Void
 
+    @State private var hovering = false
+
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(connected ? Color.green : Color.gray.opacity(0.4))
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 12) {
+            StatusDot(connected: connected)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
                     .font(.system(size: 13, weight: .medium))
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     if let manufacturer = device.manufacturer, !manufacturer.isEmpty, manufacturer != "Apple" {
                         Text(manufacturer)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
                     }
                     Text(connected ? "Connected" : "Last seen \(Self.relative(device.lastSeen))")
                 }
@@ -372,21 +430,41 @@ private struct DeviceRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(role: .destructive) {
+            Button {
                 forget()
             } label: {
-                Image(systemName: "trash")
+                Image(systemName: "minus.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(hovering ? Color.red.opacity(0.85) : .secondary)
+                    .font(.system(size: 16))
             }
             .buttonStyle(.borderless)
             .help("Forget this device")
+            .onHover { hovering = $0 }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
     }
 
     private static func relative(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+private struct StatusDot: View {
+    let connected: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(connected ? Color.green.opacity(0.18) : Color.secondary.opacity(0.12))
+                .frame(width: 20, height: 20)
+            Circle()
+                .fill(connected ? Color.green : Color.secondary.opacity(0.6))
+                .frame(width: 8, height: 8)
+        }
+        .accessibilityLabel(connected ? "Connected" : "Disconnected")
     }
 }
 
@@ -437,39 +515,49 @@ private struct GeneralPane: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
+                let llmDisabled = s.settings.llmModelID == ModelCatalog.noneLLMID
+
                 Toggle("Tidy grammar (third pass)", isOn: $s.settings.grammarPassEnabled)
                     .onChange(of: s.settings.grammarPassEnabled) { _, _ in state.save() }
-                HStack {
-                    Text("Discard if more than")
-                    Spacer()
-                    Stepper(value: $s.settings.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
+                    .disabled(llmDisabled)
+                Stepper(value: $s.settings.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
+                    HStack {
+                        Text("Discard if more than")
+                        Spacer()
                         Text("\(Int(s.settings.grammarPassMaxEditFraction * 100))% of words change")
-                            .font(.callout)
                             .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
-                    .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
                 }
-                .disabled(!s.settings.grammarPassEnabled)
+                .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
+                .disabled(!s.settings.grammarPassEnabled || llmDisabled)
                 Text("Fixes obvious grammar errors (contractions, agreement, duplicate words). The pass is rejected if too many words change.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
                 Toggle("Restructure long dictations into paragraphs / lists", isOn: $s.settings.structuralPassEnabled)
                     .onChange(of: s.settings.structuralPassEnabled) { _, _ in state.save() }
-                HStack {
-                    Text("Trigger when transcript reaches")
-                    Spacer()
-                    Stepper(value: $s.settings.structuralPassMinWords, in: 10...200, step: 5) {
+                    .disabled(llmDisabled)
+                Stepper(value: $s.settings.structuralPassMinWords, in: 10...200, step: 5) {
+                    HStack {
+                        Text("Trigger when transcript reaches")
+                        Spacer()
                         Text("\(s.settings.structuralPassMinWords) words")
-                            .font(.callout)
                             .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
-                    .onChange(of: s.settings.structuralPassMinWords) { _, _ in state.save() }
                 }
-                .disabled(!s.settings.structuralPassEnabled)
+                .onChange(of: s.settings.structuralPassMinWords) { _, _ in state.save() }
+                .disabled(!s.settings.structuralPassEnabled || llmDisabled)
                 Text("Adds paragraph breaks and bullet lists for longer dictations. The pass is rejected if it changes any of your words.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+
+                if llmDisabled {
+                    Text("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section("Permissions") {
                 AccessibilityStatusRow()
@@ -538,7 +626,8 @@ private struct ModelsPane: View {
             Section("Speech-to-text (WhisperKit)") {
                 Picker("Model", selection: $s.settings.whisperModelID) {
                     ForEach(ModelCatalog.whisperModels) { m in
-                        Text(m.displayName).tag(m.id)
+                        Text(modelMenuLabel(name: m.displayName, sizeMB: m.approxSizeMB, state: manager.whisperStates[m.id] ?? .unknown))
+                            .tag(m.id)
                     }
                 }
                 .onChange(of: s.settings.whisperModelID) { _, _ in state.save() }
@@ -551,19 +640,29 @@ private struct ModelsPane: View {
                         state: manager.whisperStates[model.id] ?? .unknown,
                         download: {
                             Task { await manager.downloadWhisper(model.id, using: TranscriptionServiceHolder.shared) }
+                        },
+                        remove: {
+                            manager.removeWhisper(model.id, using: TranscriptionServiceHolder.shared)
                         }
                     )
                 }
             }
             Section("Formatting LLM (MLX)") {
                 Picker("Model", selection: $s.settings.llmModelID) {
+                    Text("None — use raw Whisper transcript").tag(ModelCatalog.noneLLMID)
+                    Divider()
                     ForEach(ModelCatalog.llmModels) { m in
-                        Text(m.displayName).tag(m.id)
+                        Text(modelMenuLabel(name: m.displayName, sizeMB: m.approxSizeMB, state: manager.llmStates[m.id] ?? .unknown))
+                            .tag(m.id)
                     }
                 }
                 .onChange(of: s.settings.llmModelID) { _, _ in state.save() }
 
-                if let model = ModelCatalog.llm(id: s.settings.llmModelID) {
+                if s.settings.llmModelID == ModelCatalog.noneLLMID {
+                    Text("All three LLM passes are disabled. Whisper output flows directly through dictionary substitutions to the focused app.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else if let model = ModelCatalog.llm(id: s.settings.llmModelID) {
                     ModelStatusRow(
                         name: model.displayName,
                         note: model.note,
@@ -571,6 +670,9 @@ private struct ModelsPane: View {
                         state: manager.llmStates[model.id] ?? .unknown,
                         download: {
                             Task { await manager.downloadLLM(model.id, using: LLMServiceHolder.shared) }
+                        },
+                        remove: {
+                            manager.removeLLM(model.id, using: LLMServiceHolder.shared)
                         }
                     )
                 }
@@ -586,33 +688,78 @@ private struct ModelsPane: View {
     }
 }
 
+/// Picker item label: "Llama 3.2 3B (4-bit) · 1.9 GB · Installed".
+/// Compact so the closed picker button stays readable, but rich enough that the
+/// user can see size and install state without opening the status row.
+fileprivate func modelMenuLabel(name: String, sizeMB: Int, state: ModelDownloadState) -> String {
+    let size = formatModelSize(sizeMB)
+    let suffix: String
+    switch state {
+    case .ready:                       suffix = " · Installed"
+    case .downloading(let p):          suffix = " · Downloading \(Int(p * 100))%"
+    case .failed:                      suffix = " · Failed"
+    case .notDownloaded, .unknown:     suffix = " · Not downloaded"
+    }
+    return "\(name) · \(size)\(suffix)"
+}
+
+fileprivate func formatModelSize(_ mb: Int) -> String {
+    if mb >= 1000 {
+        return String(format: "%.1f GB", Double(mb) / 1000.0)
+    }
+    return "\(mb) MB"
+}
+
 private struct ModelStatusRow: View {
     let name: String
     let note: String
     let sizeMB: Int
     let state: ModelDownloadState
     let download: () -> Void
+    let remove: () -> Void
+
+    @State private var confirmingRemoval = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).fontWeight(.medium)
-                Text("\(note) · ~\(sizeMB) MB")
+                Text("\(note) · ~\(formatModelSize(sizeMB))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             statusView
         }
+        .confirmationDialog(
+            "Remove \(name)?",
+            isPresented: $confirmingRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive, action: remove)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the model files from disk (~\(formatModelSize(sizeMB))). You can re-download it any time.")
+        }
     }
 
     @ViewBuilder private var statusView: some View {
         switch state {
         case .ready:
-            Label("Installed", systemImage: "checkmark.seal.fill")
-                .labelStyle(.titleAndIcon)
-                .foregroundStyle(.green)
-                .font(.callout)
+            HStack(spacing: 8) {
+                Label("Installed", systemImage: "checkmark.seal.fill")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.green)
+                    .font(.callout)
+                Button(role: .destructive) {
+                    confirmingRemoval = true
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove this model from disk")
+            }
         case .notDownloaded, .unknown:
             Button("Download", action: download)
                 .buttonStyle(.borderedProminent)
@@ -628,8 +775,18 @@ private struct ModelStatusRow: View {
         case .failed(let msg):
             VStack(alignment: .trailing, spacing: 4) {
                 Text("Failed").foregroundStyle(.red).font(.caption)
-                Button("Retry", action: download)
-                    .controlSize(.small)
+                HStack(spacing: 6) {
+                    Button("Retry", action: download)
+                        .controlSize(.small)
+                    Button(role: .destructive) {
+                        confirmingRemoval = true
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove any partial files from disk")
+                }
                 Text(msg).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
         }

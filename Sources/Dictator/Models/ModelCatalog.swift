@@ -15,6 +15,12 @@ struct LLMModel: Identifiable, Hashable, Sendable {
 }
 
 enum ModelCatalog {
+    /// Sentinel `llmModelID` that disables all LLM passes — the raw Whisper
+    /// transcript is shipped straight through the dictionary substitution and
+    /// out to the focused app. Useful on low-memory machines or when modern
+    /// Whisper output is already good enough.
+    static let noneLLMID = "none"
+
     static let whisperModels: [WhisperModel] = [
         .init(id: "openai_whisper-tiny.en", displayName: "Whisper Tiny (English)", approxSizeMB: 75, note: "Fastest, lowest accuracy"),
         .init(id: "openai_whisper-base.en", displayName: "Whisper Base (English)", approxSizeMB: 140, note: "Good balance for short utterances"),

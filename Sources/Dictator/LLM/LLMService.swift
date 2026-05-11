@@ -27,6 +27,15 @@ final class LLMService {
         currentModelID = modelID
     }
 
+    /// Drop the in-memory MLX container. Called before deleting the model
+    /// files from disk so we don't tear them out from under a live container
+    /// that has them mmap'ed.
+    func unload(modelID: String) {
+        guard currentModelID == modelID else { return }
+        container = nil
+        currentModelID = nil
+    }
+
     /// Optional grammar tidying pass. Allowed to make small grammar fixes; the caller
     /// validates by word-level edit distance and discards the result if it drifts too far.
     func tidyGrammar(text: String, modelID: String, systemPrompt: String) async throws -> String {
@@ -59,12 +68,14 @@ final class LLMService {
                 .user(userText)
             ])
             let lmInput = try await ctx.processor.prepare(input: userInput)
-            // Tight output cap: input tokens + 32. A correctly-formatted version is
-            // almost always close to the input length; allowing 2x gives the model
-            // room to write a chat-style answer for question-shaped dictations. This
-            // physically forbids that.
+            // Tight output cap. A correctly-formatted version is almost always
+            // close to the input length; anything substantially longer is the
+            // model writing a chat-style answer for question-shaped dictations.
+            // Cap = 1.25x input tokens + a small headroom (room for punctuation /
+            // emoji expansion). The floor of 24 keeps single-word dictations from
+            // being silently truncated.
             let approxInputTokens = max(8, text.count / 4)
-            let maxTokens = min(768, approxInputTokens + 32)
+            let maxTokens = min(768, max(24, Int(Double(approxInputTokens) * 1.25) + 8))
             let params = GenerateParameters(maxTokens: maxTokens, temperature: 0.0, topP: 1.0)
             let result = try MLXLMCommon.generate(
                 input: lmInput,

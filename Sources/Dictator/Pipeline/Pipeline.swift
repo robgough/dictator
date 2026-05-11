@@ -135,27 +135,44 @@ final class Pipeline {
         inFlight.raw = trimmed
         guard !trimmed.isEmpty else { state = .idle; return }
 
-        state = .formatting
         var formatted: String
-        do {
-            formatted = try await llm.format(
-                text: trimmed,
-                modelID: settings.llmModelID,
-                systemPrompt: settings.systemPrompt
-            )
-        } catch {
-            // Fallback: ship raw transcript if LLM fails
-            await finish(text: trimmed, warning: "LLM failed: \(error.localizedDescription)")
-            return
-        }
-        // Pass 1 produced nothing — fall back to the raw transcript silently. Modern
-        // Whisper already produces capitalised, punctuated text, so the user normally
-        // can't tell the difference between LLM-formatted and Whisper-raw output.
-        if formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if settings.llmModelID == ModelCatalog.noneLLMID {
+            // User opted out of LLM formatting — ship Whisper's raw transcript through
+            // the dictionary pass and out. Skips state .formatting so the HUD doesn't
+            // flash a "Formatting…" frame that never does anything.
             formatted = trimmed
             inFlight.formatted = nil
         } else {
-            inFlight.formatted = formatted
+            state = .formatting
+            do {
+                formatted = try await llm.format(
+                    text: trimmed,
+                    modelID: settings.llmModelID,
+                    systemPrompt: settings.systemPrompt
+                )
+            } catch {
+                // Fallback: ship raw transcript if LLM fails
+                await finish(text: trimmed, warning: "LLM failed: \(error.localizedDescription)")
+                return
+            }
+            // Pass 1 produced nothing — fall back to the raw transcript silently. Modern
+            // Whisper already produces capitalised, punctuated text, so the user normally
+            // can't tell the difference between LLM-formatted and Whisper-raw output.
+            if formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                formatted = trimmed
+                inFlight.formatted = nil
+            } else if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
+                // Model drifted into "helpful assistant" mode and answered the user
+                // instead of transcribing them. Detected by checking that input
+                // anchor words actually survive in the output. Fall back to Whisper's
+                // raw transcript — already capitalised and punctuated — and surface
+                // a one-line note in the HUD so the user knows what happened.
+                formatted = trimmed
+                inFlight.formatted = nil
+                pendingNote = "LLM answered the question; used raw transcript."
+            } else {
+                inFlight.formatted = formatted
+            }
         }
 
         // User dictionary: deterministic case-insensitive whole-word substitutions
@@ -179,6 +196,7 @@ final class Pipeline {
 
     private func maybeFixGrammar(formatted: String) async -> String {
         guard settings.grammarPassEnabled else { return formatted }
+        guard settings.llmModelID != ModelCatalog.noneLLMID else { return formatted }
         state = .fixingGrammar
         do {
             let tidied = try await llm.tidyGrammar(
@@ -204,6 +222,7 @@ final class Pipeline {
 
     private func maybeRestructure(formatted: String) async -> String {
         guard settings.structuralPassEnabled else { return formatted }
+        guard settings.llmModelID != ModelCatalog.noneLLMID else { return formatted }
         let wordCount = Self.wordSequence(formatted).count
         guard wordCount >= settings.structuralPassMinWords else { return formatted }
 
@@ -259,6 +278,32 @@ final class Pipeline {
         s.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
+    }
+
+    /// Detects the common failure where Pass 1 answers the user's question
+    /// instead of transcribing it. We compute "anchor words" — content-bearing
+    /// words from the input, excluding short stopwords and our spoken-punctuation
+    /// trigger vocabulary — and require ≥60% to appear in the output. Inputs with
+    /// fewer than 3 anchors are too short to discriminate (e.g. "fire emoji"
+    /// expands to "🔥" with zero anchor survival), so we trust the formatter.
+    static func passOnePreservesContent(raw: String, formatted: String) -> Bool {
+        let anchors = anchorWords(raw)
+        guard anchors.count >= 3 else { return true }
+        let outputWords = Set(wordSequence(formatted))
+        let hits = anchors.filter { outputWords.contains($0) }
+        return Double(hits.count) / Double(anchors.count) >= 0.6
+    }
+
+    private static let passOneTriggerWords: Set<String> = [
+        "comma", "period", "stop", "question", "mark", "exclamation", "point",
+        "colon", "semicolon", "paren", "parens", "dash", "quote", "quotes",
+        "emoji", "line", "newline", "paragraph", "open", "close"
+    ]
+
+    private static func anchorWords(_ s: String) -> [String] {
+        wordSequence(s).filter { word in
+            word.count >= 4 && !passOneTriggerWords.contains(word)
+        }
     }
 
     private func finish(text: String, warning: String?) async {
