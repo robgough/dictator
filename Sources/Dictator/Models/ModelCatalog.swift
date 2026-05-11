@@ -14,6 +14,16 @@ struct LLMModel: Identifiable, Hashable, Sendable {
     let note: String
 }
 
+/// Catalogue entry for a Parakeet ASR variant. The `id` is also FluidAudio's
+/// repo folder name (mirrors `AsrModelVersion.repo.folderName`), so it doubles
+/// as the on-disk subdirectory under `ModelStorage.parakeetRoot()`.
+struct ParakeetModel: Identifiable, Hashable, Sendable {
+    let id: String          // e.g. "parakeet-tdt-0.6b-v3"
+    let displayName: String
+    let approxSizeMB: Int
+    let note: String
+}
+
 enum ModelCatalog {
     /// Sentinel `llmModelID` that disables all LLM passes — the raw Whisper
     /// transcript is shipped straight through the dictionary substitution and
@@ -28,6 +38,11 @@ enum ModelCatalog {
         .init(id: "openai_whisper-large-v3-v20240930_turbo", displayName: "Whisper Large v3 Turbo", approxSizeMB: 1550, note: "Best quality, multilingual"),
     ]
 
+    static let parakeetModels: [ParakeetModel] = [
+        .init(id: "parakeet-tdt-0.6b-v3", displayName: "Parakeet TDT v3", approxSizeMB: 475, note: "Multilingual — 25 European languages. ~60–70× realtime on Apple Silicon."),
+        .init(id: "parakeet-tdt-0.6b-v2", displayName: "Parakeet TDT v2", approxSizeMB: 475, note: "English-only, slightly better English WER than v3."),
+    ]
+
     static let llmModels: [LLMModel] = [
         .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", displayName: "Llama 3.2 1B (4-bit)", approxSizeMB: 760, note: "Snappy, decent formatting"),
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, note: "Recommended"),
@@ -35,9 +50,11 @@ enum ModelCatalog {
         .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, note: "Higher quality, slower"),
     ]
 
-    static let defaultWhisper = whisperModels[2]   // small.en
-    static let defaultLLM     = llmModels[1]        // Llama 3.2 3B
+    static let defaultWhisper  = whisperModels[2]   // small.en
+    static let defaultParakeet = parakeetModels[0]  // v3 (multilingual)
+    static let defaultLLM      = llmModels[1]       // Llama 3.2 3B
 
     static func whisper(id: String) -> WhisperModel? { whisperModels.first { $0.id == id } }
+    static func parakeet(id: String) -> ParakeetModel? { parakeetModels.first { $0.id == id } }
     static func llm(id: String) -> LLMModel? { llmModels.first { $0.id == id } }
 }

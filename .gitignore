@@ -3,6 +3,7 @@
 
 # Xcode build / user state
 DerivedData/
+.derivedData/
 build/
 *.xcuserstate
 *.xcuserdatad/
@@ -29,3 +30,6 @@ Dictator.xcodeproj/
 # Local env (DICTATOR_TEAM_ID etc.) — never committed. Use .env.example
 # as a template.
 .env
+
+# Throwaway scratch directories (one-off spikes, reference snippets).
+scratch/

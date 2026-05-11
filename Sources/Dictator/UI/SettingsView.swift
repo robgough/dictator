@@ -660,10 +660,70 @@ private struct AccessibilityStatusRow: View {
 private struct ModelsPane: View {
     @Environment(AppState.self) private var state
     @State private var manager = ModelManager.shared
+    @State private var transcription = TranscriptionServiceHolder.shared
+    @State private var parakeet = ParakeetServiceHolder.shared
+    @State private var llm = LLMServiceHolder.shared
+    /// Set when the user tries to switch to an engine that has no installed
+    /// models. We refuse the switch (keeps `settings.transcriptionEngine`
+    /// pointing at a usable engine) and pop an alert directing them to the
+    /// matching section's Download button.
+    @State private var engineSwitchBlocked: TranscriptionEngine? = nil
+
+    private func hasReadyModel(in engine: TranscriptionEngine) -> Bool {
+        switch engine {
+        case .whisper:
+            return ModelCatalog.whisperModels.contains { manager.whisperStates[$0.id] == .ready }
+        case .parakeet:
+            return ModelCatalog.parakeetModels.contains { manager.parakeetStates[$0.id] == .ready }
+        }
+    }
 
     var body: some View {
         @Bindable var s = state
         Form {
+            // Engine picker. Lives above the model lists because flipping
+            // engines is a more frequent action than picking a different
+            // variant within an engine — and the visual ordering matches
+            // the runtime ordering of "engine → which model in that engine".
+            Section {
+                Picker("Engine", selection: Binding(
+                    get: { s.settings.transcriptionEngine },
+                    set: { newValue in
+                        // Refuse the switch when no model is downloaded in
+                        // the target engine — otherwise the next dictation
+                        // would silently auto-download a multi-GB model.
+                        guard hasReadyModel(in: newValue) else {
+                            engineSwitchBlocked = newValue
+                            return
+                        }
+                        s.settings.transcriptionEngine = newValue
+                        state.save()
+                    }
+                )) {
+                    Text("Whisper (WhisperKit)").tag(TranscriptionEngine.whisper)
+                    Text("Parakeet (FluidAudio)").tag(TranscriptionEngine.parakeet)
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Transcription engine")
+            } footer: {
+                Text("**Whisper** is mature and slower; broad language support, well-tested. **Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster on Apple Silicon and slightly smaller on disk. Parakeet v3 covers 25 European languages; v2 is English-only with marginally better English accuracy.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .alert(
+                "No \(engineSwitchBlocked == .parakeet ? "Parakeet" : "Whisper") models installed",
+                isPresented: Binding(
+                    get: { engineSwitchBlocked != nil },
+                    set: { if !$0 { engineSwitchBlocked = nil } }
+                ),
+                presenting: engineSwitchBlocked
+            ) { _ in
+                Button("OK", role: .cancel) { engineSwitchBlocked = nil }
+            } message: { engine in
+                Text("Download a \(engine == .parakeet ? "Parakeet" : "Whisper") model from the section below before switching engines.")
+            }
+
             Section {
                 ForEach(ModelCatalog.whisperModels) { model in
                     ModelRow(
@@ -671,9 +731,12 @@ private struct ModelsPane: View {
                         note: model.note,
                         sizeMB: model.approxSizeMB,
                         state: manager.whisperStates[model.id] ?? .unknown,
-                        isActive: s.settings.whisperModelID == model.id,
+                        isActive: s.settings.transcriptionEngine == .whisper && s.settings.whisperModelID == model.id,
+                        isLoaded: transcription.currentModelID == model.id,
+                        isVerifying: manager.verifyingWhisper.contains(model.id),
                         select: {
                             s.settings.whisperModelID = model.id
+                            s.settings.transcriptionEngine = .whisper
                             state.save()
                         },
                         download: {
@@ -682,15 +745,61 @@ private struct ModelsPane: View {
                         cancel: {
                             manager.cancelWhisperDownload(model.id)
                         },
+                        verify: {
+                            Task { await manager.verifyWhisper(model.id, using: TranscriptionServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
+                        },
                         remove: {
                             manager.removeWhisper(model.id, using: TranscriptionServiceHolder.shared)
                         }
                     )
                 }
             } header: {
-                Text("Speech-to-text (WhisperKit)")
+                Text("Whisper models")
             } footer: {
-                Text("Pick the model that runs when you dictate. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below.")
+                Text("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                ForEach(ModelCatalog.parakeetModels) { model in
+                    ModelRow(
+                        name: model.displayName,
+                        note: model.note,
+                        sizeMB: model.approxSizeMB,
+                        state: manager.parakeetStates[model.id] ?? .unknown,
+                        isActive: s.settings.transcriptionEngine == .parakeet && s.settings.parakeetModelID == model.id,
+                        isLoaded: parakeet.currentModelID == model.id,
+                        isVerifying: manager.verifyingParakeet.contains(model.id),
+                        select: {
+                            s.settings.parakeetModelID = model.id
+                            s.settings.transcriptionEngine = .parakeet
+                            state.save()
+                        },
+                        download: {
+                            manager.downloadParakeet(model.id, using: ParakeetServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelParakeetDownload(model.id)
+                        },
+                        verify: {
+                            Task { await manager.verifyParakeet(model.id, using: ParakeetServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadParakeet(model.id, using: ParakeetServiceHolder.shared)
+                        },
+                        remove: {
+                            manager.removeParakeet(model.id, using: ParakeetServiceHolder.shared)
+                        }
+                    )
+                }
+            } header: {
+                Text("Parakeet models")
+            } footer: {
+                Text("Parakeet runs on the Apple Neural Engine — much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Resumable downloads aren't supported (a cancelled download is discarded and re-fetched fresh next time).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -710,6 +819,8 @@ private struct ModelsPane: View {
                         sizeMB: model.approxSizeMB,
                         state: manager.llmStates[model.id] ?? .unknown,
                         isActive: s.settings.llmModelID == model.id,
+                        isLoaded: llm.currentModelID == model.id,
+                        isVerifying: manager.verifyingLLM.contains(model.id),
                         select: {
                             s.settings.llmModelID = model.id
                             state.save()
@@ -719,6 +830,12 @@ private struct ModelsPane: View {
                         },
                         cancel: {
                             manager.cancelLLMDownload(model.id)
+                        },
+                        verify: {
+                            Task { await manager.verifyLLM(model.id, using: LLMServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadLLM(model.id, using: LLMServiceHolder.shared)
                         },
                         remove: {
                             manager.removeLLM(model.id, using: LLMServiceHolder.shared)
@@ -761,12 +878,25 @@ private struct ModelRow: View {
     let sizeMB: Int
     let state: ModelDownloadState
     let isActive: Bool
+    let isLoaded: Bool
+    let isVerifying: Bool
     let select: () -> Void
     let download: () -> Void
     let cancel: () -> Void
+    let verify: () -> Void
+    let unload: () -> Void
     let remove: () -> Void
 
     @State private var confirmingRemoval = false
+
+    /// Only `.ready` rows can be made active — clicking a not-yet-downloaded
+    /// row used to silently kick off a multi-GB download on the next hotkey
+    /// press, which is a terrible "what just happened" moment. Force the user
+    /// through Download → wait → become active so the cost is explicit.
+    private var canSelect: Bool {
+        if case .ready = state { return true }
+        return false
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -786,6 +916,14 @@ private struct ModelRow: View {
                                     .padding(.vertical, 1)
                                     .background(Color.accentColor, in: Capsule())
                             }
+                            if isLoaded {
+                                Text("Loaded")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Color.green, in: Capsule())
+                            }
                         }
                         Text("\(note) · ~\(formatModelSize(sizeMB))")
                             .font(.caption)
@@ -794,8 +932,11 @@ private struct ModelRow: View {
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
+                .opacity(canSelect ? 1 : 0.55)
             }
             .buttonStyle(.plain)
+            .disabled(!canSelect)
+            .help(canSelect ? "" : "Download this model to make it active.")
 
             actionView
         }
@@ -819,6 +960,17 @@ private struct ModelRow: View {
                 Label("Installed", systemImage: "checkmark.seal.fill")
                     .labelStyle(.iconOnly)
                     .foregroundStyle(.green)
+                if isVerifying {
+                    ProgressView().controlSize(.mini)
+                } else if isLoaded {
+                    Button("Unload", action: unload)
+                        .controlSize(.small)
+                        .help("Drop this model from memory (files stay on disk)")
+                } else {
+                    Button("Verify", action: verify)
+                        .controlSize(.small)
+                        .help("Load into memory to confirm the download is intact")
+                }
                 TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Remove this model from disk")
             }
             .font(.callout)

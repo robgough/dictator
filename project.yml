@@ -35,6 +35,12 @@ packages:
   MLXSwiftExamples:
     url: https://github.com/ml-explore/mlx-swift-examples
     revision: eb76c5b7f0cc335103bbabb0c3e1c37f8ff5d482
+  # FluidAudio backs the Parakeet TDT v3 transcription engine — CoreML models
+  # that run on the Apple Neural Engine. Zero dep overlap with WhisperKit /
+  # MLX, so no version-pinning conflicts.
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    from: 0.14.5
 
 targets:
   Dictator:
@@ -126,3 +132,5 @@ targets:
         product: MLXLLM
       - package: MLXSwiftExamples
         product: MLXLMCommon
+      - package: FluidAudio
+        product: FluidAudio

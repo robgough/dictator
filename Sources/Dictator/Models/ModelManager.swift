@@ -21,12 +21,20 @@ final class ModelManager {
     static let shared = ModelManager()
 
     private(set) var whisperStates: [String: ModelDownloadState] = [:]
+    private(set) var parakeetStates: [String: ModelDownloadState] = [:]
     private(set) var llmStates: [String: ModelDownloadState] = [:]
+
+    /// IDs currently mid-verify. Drives a small inline spinner next to the
+    /// Verify button — purely for UX, not used for any logic.
+    private(set) var verifyingWhisper: Set<String> = []
+    private(set) var verifyingParakeet: Set<String> = []
+    private(set) var verifyingLLM: Set<String> = []
 
     // Per-model in-flight download Tasks. Tracked so the user can cancel a
     // download from the Settings UI; also dedupes accidental double-taps on
     // the Download button.
     private var whisperTasks: [String: Task<Void, Never>] = [:]
+    private var parakeetTasks: [String: Task<Void, Never>] = [:]
     private var llmTasks: [String: Task<Void, Never>] = [:]
 
     private init() {
@@ -36,6 +44,9 @@ final class ModelManager {
     func refreshCachedStates() {
         for m in ModelCatalog.whisperModels {
             whisperStates[m.id] = diskState(forWhisper: m.id, expectedMB: m.approxSizeMB)
+        }
+        for m in ModelCatalog.parakeetModels {
+            parakeetStates[m.id] = diskState(forParakeet: m.id)
         }
         for m in ModelCatalog.llmModels {
             llmStates[m.id] = diskState(forLLM: m.id, expectedMB: m.approxSizeMB)
@@ -60,6 +71,17 @@ final class ModelManager {
             .appendingPathComponent("models/argmaxinc/whisperkit-coreml/.cache/huggingface/download/\(id)", isDirectory: true)
         return diskState(snapshot: snapshot, metadata: metadata, expectedMB: expectedMB,
                          snapshotReadyIf: { contents in contents.contains { $0.hasSuffix(".mlmodelc") } })
+    }
+
+    /// Parakeet disk-state probe. FluidAudio writes each model file atomically
+    /// (write to temp, rename to final) under `<parakeetRoot>/<id>/`, with no
+    /// per-file `.incomplete` markers. So unlike Hub-backed downloads we can't
+    /// distinguish `.partial` from `.notDownloaded` — a half-finished download
+    /// shows as "missing files" and FluidAudio will simply refetch them on
+    /// next run. The trade-off is acceptable: the user only sees `.ready` or
+    /// `.notDownloaded`, never a stale "Resume — 42%" hint that misleads.
+    private func diskState(forParakeet id: String) -> ModelDownloadState {
+        ParakeetService.modelsExist(id: id) ? .ready : .notDownloaded
     }
 
     private func diskState(forLLM id: String, expectedMB: Int) -> ModelDownloadState {
@@ -148,6 +170,40 @@ final class ModelManager {
         }
     }
 
+    /// Fire-and-forget Parakeet download. Mirrors the Whisper variant.
+    func downloadParakeet(_ id: String, using service: ParakeetService) {
+        guard parakeetTasks[id] == nil else { return }
+        parakeetStates[id] = .downloading(0)
+        parakeetTasks[id] = Task { [weak self] in
+            do {
+                try await service.download(modelID: id) { [weak self] progress in
+                    guard let self else { return }
+                    if case .downloading = self.parakeetStates[id] {
+                        self.parakeetStates[id] = .downloading(progress)
+                    }
+                }
+                guard let self else { return }
+                if Task.isCancelled {
+                    // FluidAudio doesn't leave resumable partials behind — recompute
+                    // the on-disk state to either .ready (download finished before
+                    // cancel reached it) or .notDownloaded.
+                    self.parakeetStates[id] = self.diskState(forParakeet: id)
+                } else {
+                    self.parakeetStates[id] = .ready
+                }
+            } catch is CancellationError {
+                self?.parakeetStates[id] = self?.diskState(forParakeet: id) ?? .notDownloaded
+            } catch {
+                if Task.isCancelled {
+                    self?.parakeetStates[id] = self?.diskState(forParakeet: id) ?? .notDownloaded
+                } else {
+                    self?.parakeetStates[id] = .failed(error.localizedDescription)
+                }
+            }
+            self?.parakeetTasks[id] = nil
+        }
+    }
+
     /// Fire-and-forget download. Stores the Task so the user can cancel from
     /// Settings. No-ops if a download for this model is already in flight.
     func downloadLLM(_ id: String, using service: LLMService) {
@@ -208,6 +264,69 @@ final class ModelManager {
         }
     }
 
+    func cancelParakeetDownload(_ id: String) {
+        parakeetTasks[id]?.cancel()
+        parakeetTasks[id] = nil
+        parakeetStates[id] = diskState(forParakeet: id)
+    }
+
+    // MARK: - Verify (load into memory + report failure to disk state)
+
+    /// Attempt to load the model into memory to confirm the on-disk files are
+    /// actually usable. Catches load failures — most often "corrupt download
+    /// on a flaky connection" — and flips the row's disk state to .failed
+    /// with the error message so the user can Remove + redownload instead of
+    /// being stuck with a model that says Installed but doesn't work.
+    func verifyWhisper(_ id: String, using service: TranscriptionService) async {
+        verifyingWhisper.insert(id)
+        defer { verifyingWhisper.remove(id) }
+        do {
+            try await service.ensureLoaded(modelID: id)
+            // ensureLoaded succeeded — the model is genuinely usable. The
+            // service's currentModelID now reflects that (observable), and
+            // we leave whisperStates as .ready.
+        } catch {
+            whisperStates[id] = .failed("Verification failed: \(error.localizedDescription)")
+        }
+    }
+
+    func verifyLLM(_ id: String, using service: LLMService) async {
+        verifyingLLM.insert(id)
+        defer { verifyingLLM.remove(id) }
+        do {
+            try await service.ensureLoaded(modelID: id, progress: nil)
+        } catch {
+            llmStates[id] = .failed("Verification failed: \(error.localizedDescription)")
+        }
+    }
+
+    func verifyParakeet(_ id: String, using service: ParakeetService) async {
+        verifyingParakeet.insert(id)
+        defer { verifyingParakeet.remove(id) }
+        do {
+            try await service.ensureLoaded(modelID: id)
+        } catch {
+            parakeetStates[id] = .failed("Verification failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Unload (drop from memory, leave files on disk)
+
+    /// Free a Whisper model from memory without touching the on-disk files.
+    /// Use to reclaim RAM when switching between models without committing
+    /// to a redownload.
+    func unloadWhisper(_ id: String, using service: TranscriptionService) {
+        service.unload(modelID: id)
+    }
+
+    func unloadLLM(_ id: String, using service: LLMService) {
+        service.unload(modelID: id)
+    }
+
+    func unloadParakeet(_ id: String, using service: ParakeetService) {
+        service.unload(modelID: id)
+    }
+
     // MARK: - Deletion
 
     /// Unload (if loaded) and remove a Whisper model's on-disk files. Returns
@@ -225,6 +344,19 @@ final class ModelManager {
         let removed = removeDirectory(at: snapshot)
         _ = removeDirectory(at: metadata)
         whisperStates[id] = .notDownloaded
+        return removed
+    }
+
+    /// Unload (if loaded) and remove a Parakeet model's on-disk files. The
+    /// model's storage subdirectory `<parakeetRoot>/<id>/` holds everything
+    /// FluidAudio cares about for that variant (weights, vocab, compiled
+    /// mlmodelc bundles), so one rm wipes the slate cleanly.
+    @discardableResult
+    func removeParakeet(_ id: String, using service: ParakeetService) -> Bool {
+        service.unload(modelID: id)
+        let dir = ParakeetService.storageURL(forID: id)
+        let removed = removeDirectory(at: dir)
+        parakeetStates[id] = .notDownloaded
         return removed
     }
 

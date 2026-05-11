@@ -20,4 +20,10 @@ enum ModelStorage {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    static func parakeetRoot() -> URL {
+        let dir = root().appendingPathComponent("parakeet", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 }

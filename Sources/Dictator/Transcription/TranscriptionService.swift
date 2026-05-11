@@ -2,9 +2,15 @@ import Foundation
 @preconcurrency import WhisperKit
 
 @MainActor
-final class TranscriptionService {
-    private var currentModelID: String?
-    private var pipe: WhisperKit?
+@Observable
+final class TranscriptionService: ASREngine {
+    /// The ID of the model currently held in memory (nil when nothing is loaded).
+    /// Exposed read-only so the Settings UI can show a "Loaded" badge.
+    private(set) var currentModelID: String?
+    /// True while `ensureLoaded` is running. Drives a spinner on the Verify
+    /// button so the user sees that the load is in progress, not stalled.
+    private(set) var isLoading: Bool = false
+    @ObservationIgnored private var pipe: WhisperKit?
 
     /// Downloads the model files (no load) and reports real per-file progress.
     /// Use this from the Settings "Download" button.
@@ -26,6 +32,8 @@ final class TranscriptionService {
         if currentModelID == modelID, pipe != nil { return }
         pipe = nil
         currentModelID = nil
+        isLoading = true
+        defer { isLoading = false }
 
         let config = WhisperKitConfig(
             model: modelID,
@@ -49,6 +57,15 @@ final class TranscriptionService {
         guard currentModelID == modelID else { return }
         pipe = nil
         currentModelID = nil
+    }
+
+    /// ASREngine conformance. Defaults `prompt` to nil so callers going through
+    /// the protocol don't need to know about WhisperKit's biasing knob. The
+    /// 3-arg form below stays available on the concrete type if biasing is
+    /// ever revived (see `whisper_prompt_biasing.md` memory note for why we
+    /// parked it).
+    func transcribe(samples: [Float], modelID: String) async throws -> String {
+        try await transcribe(samples: samples, modelID: modelID, prompt: nil)
     }
 
     func transcribe(samples: [Float], modelID: String, prompt: String? = nil) async throws -> String {

@@ -12,3 +12,8 @@ enum TranscriptionServiceHolder {
 enum LLMServiceHolder {
     static let shared = LLMService()
 }
+
+@MainActor
+enum ParakeetServiceHolder {
+    static let shared = ParakeetService()
+}

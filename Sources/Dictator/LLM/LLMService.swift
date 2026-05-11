@@ -14,14 +14,21 @@ struct AssistantResult: Sendable {
 }
 
 @MainActor
+@Observable
 final class LLMService {
-    private var currentModelID: String?
-    private var container: ModelContainer?
+    /// The ID of the model currently held in memory (nil when nothing is loaded).
+    /// Exposed read-only so the Settings UI can show a "Loaded" badge.
+    private(set) var currentModelID: String?
+    /// True while `ensureLoaded` is running.
+    private(set) var isLoading: Bool = false
+    @ObservationIgnored private var container: ModelContainer?
 
     func ensureLoaded(modelID: String, progress: (@Sendable @MainActor (Double) -> Void)? = nil) async throws {
         if currentModelID == modelID, container != nil { return }
         container = nil
         currentModelID = nil
+        isLoading = true
+        defer { isLoading = false }
 
         let hub = HubApi(downloadBase: ModelStorage.llmRoot())
         let configuration = ModelConfiguration(id: modelID)

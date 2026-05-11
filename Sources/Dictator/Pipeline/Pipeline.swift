@@ -87,9 +87,23 @@ final class Pipeline {
 
     private var settings: DictatorSettings
     private let recorder = AudioRecorder()
-    private let transcription = TranscriptionServiceHolder.shared
+    private let whisper = TranscriptionServiceHolder.shared
+    private let parakeet = ParakeetServiceHolder.shared
     private let llm = LLMServiceHolder.shared
     private let injector = TextInjector()
+
+    /// Resolves the currently-selected engine to the concrete service plus
+    /// the model ID it should run with. Both call sites in the pipeline
+    /// (dictation and assistant) go through here so a single switch carries
+    /// the engine choice everywhere.
+    private var activeASR: (engine: any ASREngine, modelID: String) {
+        switch settings.transcriptionEngine {
+        case .whisper:
+            return (whisper, settings.whisperModelID)
+        case .parakeet:
+            return (parakeet, settings.parakeetModelID)
+        }
+    }
 
     private var doneFader: Task<Void, Never>?
 
@@ -200,10 +214,12 @@ final class Pipeline {
             // attempts at biasing Whisper via promptTokens (a wordlist and a
             // natural-sentence form) both pushed the decoder into no-speech
             // rejection on real audio. The TranscriptionService still accepts
-            // `prompt:` so we can revisit with a different strategy — likely
-            // a runtime-detected previous segment, or a much shorter hint —
-            // without re-plumbing.
-            raw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
+            // `prompt:` (preserved on the concrete class only, not the
+            // ASREngine protocol) so we can revisit with a different strategy
+            // — likely a runtime-detected previous segment, or a much shorter
+            // hint — without re-plumbing.
+            let asr = activeASR
+            raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             if Task.isCancelled { return }
             fail("Transcribe: \(error.localizedDescription)")
@@ -646,7 +662,8 @@ final class Pipeline {
         state = .transcribing
         let instructionRaw: String
         do {
-            instructionRaw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
+            let asr = activeASR
+            instructionRaw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             if Task.isCancelled { return }
             inFlightAssistant = nil

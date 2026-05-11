@@ -1,7 +1,18 @@
 import Foundation
 
+/// Which speech-to-text engine the pipeline uses. Each engine has its own
+/// model picker in Settings → Models; switching here is the cheap "pick the
+/// faster / different-language engine" lever without affecting LLM or paste
+/// behaviour.
+enum TranscriptionEngine: String, Codable, Sendable, Hashable, CaseIterable {
+    case whisper   // WhisperKit CoreML (Argmax)
+    case parakeet  // Parakeet TDT via FluidAudio CoreML (Apple Neural Engine)
+}
+
 struct DictatorSettings: Codable, Equatable {
+    var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
+    var parakeetModelID: String
     var llmModelID: String
     var pasteAutomatically: Bool
     var playSounds: Bool
@@ -38,7 +49,9 @@ struct DictatorSettings: Codable, Equatable {
     var assistantPromptOverride: String?
 
     static let defaults = DictatorSettings(
+        transcriptionEngine: .whisper,
         whisperModelID: ModelCatalog.defaultWhisper.id,
+        parakeetModelID: ModelCatalog.defaultParakeet.id,
         llmModelID: ModelCatalog.defaultLLM.id,
         pasteAutomatically: true,
         playSounds: true,
@@ -62,7 +75,9 @@ struct DictatorSettings: Codable, Equatable {
     )
 
     init(
+        transcriptionEngine: TranscriptionEngine,
         whisperModelID: String,
+        parakeetModelID: String,
         llmModelID: String,
         pasteAutomatically: Bool,
         playSounds: Bool,
@@ -84,7 +99,9 @@ struct DictatorSettings: Codable, Equatable {
         assistantPromptAddendum: String,
         assistantPromptOverride: String?
     ) {
+        self.transcriptionEngine = transcriptionEngine
         self.whisperModelID = whisperModelID
+        self.parakeetModelID = parakeetModelID
         self.llmModelID = llmModelID
         self.pasteAutomatically = pasteAutomatically
         self.playSounds = playSounds
@@ -114,7 +131,9 @@ struct DictatorSettings: Codable, Equatable {
         // are intentionally ignored — they're replaced by the addendum + override model.
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = DictatorSettings.defaults
+        self.transcriptionEngine = try c.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? d.transcriptionEngine
         self.whisperModelID     = try c.decodeIfPresent(String.self,      forKey: .whisperModelID)     ?? d.whisperModelID
+        self.parakeetModelID    = try c.decodeIfPresent(String.self,      forKey: .parakeetModelID)    ?? d.parakeetModelID
         self.llmModelID         = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
         self.pasteAutomatically     = try c.decodeIfPresent(Bool.self,        forKey: .pasteAutomatically)     ?? d.pasteAutomatically
         self.playSounds             = try c.decodeIfPresent(Bool.self,        forKey: .playSounds)             ?? d.playSounds

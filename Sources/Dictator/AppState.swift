@@ -62,17 +62,26 @@ final class AppState {
         assistantResultWindow.showConversation(id: id, surface: true)
     }
 
-    /// Warm both Whisper and the LLM in the background so the first hotkey press
-    /// doesn't pay for model load. Only models that are already on disk are loaded —
-    /// we don't silently kick off a multi-GB download at launch.
+    /// Warm the active transcription engine + the LLM in the background so the
+    /// first hotkey press doesn't pay for model load. Only models that are
+    /// already on disk are loaded — we don't silently kick off a multi-GB
+    /// download at launch.
     func preloadModels() {
-        let whisperID = settings.whisperModelID
         let llmID = settings.llmModelID
         let manager = ModelManager.shared
         manager.refreshCachedStates()
 
-        if manager.whisperStates[whisperID] == .ready {
-            Task { try? await TranscriptionServiceHolder.shared.ensureLoaded(modelID: whisperID) }
+        switch settings.transcriptionEngine {
+        case .whisper:
+            let id = settings.whisperModelID
+            if manager.whisperStates[id] == .ready {
+                Task { try? await TranscriptionServiceHolder.shared.ensureLoaded(modelID: id) }
+            }
+        case .parakeet:
+            let id = settings.parakeetModelID
+            if manager.parakeetStates[id] == .ready {
+                Task { try? await ParakeetServiceHolder.shared.ensureLoaded(modelID: id) }
+            }
         }
         if llmID != ModelCatalog.noneLLMID, manager.llmStates[llmID] == .ready {
             Task { try? await LLMServiceHolder.shared.ensureLoaded(modelID: llmID) }
