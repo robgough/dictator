@@ -455,22 +455,6 @@ struct DictatorSettings: Codable, Equatable {
     INPUT:
     SELECTION:
     <<<
-    hey rob - can you grab the report by friday? thanks
-    >>>
-
-    INSTRUCTION:
-    <<<
-    draft a reply saying yes I'll have it by Thursday
-    >>>
-
-    OUTPUT:
-    MODE: DRAFT
-
-    Yep — I'll have it over to you by Thursday.
-
-    INPUT:
-    SELECTION:
-    <<<
     we need to ship it before tuesday or the launch slips
     >>>
 
@@ -483,6 +467,22 @@ struct DictatorSettings: Codable, Equatable {
     MODE: REPLACE
 
     We must ship before Tuesday, or the launch will be delayed.
+
+    INPUT:
+    SELECTION:
+    <<<
+    are you around tomorrow for a quick chat about the deck?
+    >>>
+
+    INSTRUCTION:
+    <<<
+    say yes anytime after lunch
+    >>>
+
+    OUTPUT:
+    MODE: DRAFT
+
+    Yeah — anything after 1 works for me.
 
     INPUT:
     SELECTION: (none — the user has nothing selected)
@@ -598,7 +598,9 @@ struct DictatorSettings: Codable, Equatable {
     - Get the hiring plan back on track.
     - Confirm and circulate the Q3 roadmap.
 
-    Now respond to the user's turn. Begin your reply with `MODE: REPLACE` or `MODE: DRAFT`.
+    Now respond to the user's turn. Your reply must start with `MODE: REPLACE` or `MODE: DRAFT`. \
+    Do NOT copy or restate the INSTRUCTION text. Do NOT copy the SELECTION text unless you are \
+    transforming it. The reply is the deliverable the user asked for — not a repeat of what they said.
     """
 
     // Bumped from v1 → v2 when we moved from full-edit prompt fields to the
