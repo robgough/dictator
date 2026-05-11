@@ -3,7 +3,7 @@ import Hub
 import MLXLLM
 import MLXLMCommon
 
-enum AssistantMode: String, Sendable {
+enum AssistantMode: String, Sendable, Codable, Hashable {
     case replace
     case draft
 }
@@ -120,37 +120,49 @@ final class LLMService {
     /// output). When the classifier marker is missing or malformed, we default to
     /// .draft — non-destructive. Selection may be nil (user had nothing selected
     /// and wants something generated, e.g. "make me a list of 10 things here").
-    func assist(selection: String?, instruction: String, modelID: String, systemPrompt: String) async throws -> AssistantResult {
+    ///
+    /// `priorTurns` carries the conversation history when this is a follow-up turn.
+    /// `summary`, if non-nil, is a compacted stand-in for earlier turns that no
+    /// longer fit in the context window — rendered as a single "[Earlier
+    /// conversation summary]" user-role block before the verbatim turns.
+    func assist(
+        selection: String?,
+        instruction: String,
+        modelID: String,
+        systemPrompt: String,
+        priorTurns: [ConversationTurn] = [],
+        summary: String? = nil
+    ) async throws -> AssistantResult {
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
         }
 
-        let selectionBlock: String
-        if let selection, !selection.isEmpty {
-            selectionBlock = """
-            SELECTION:
-            <<<
-            \(selection)
-            >>>
-            """
-        } else {
-            selectionBlock = "SELECTION: (none — the user has nothing selected)"
-        }
-        let userText = """
-        \(selectionBlock)
-
-        INSTRUCTION:
-        <<<
-        \(instruction)
-        >>>
-        """
+        let currentUserText = Self.renderAssistantUserMessage(selection: selection, instruction: instruction)
 
         let raw = try await container.perform { (ctx: ModelContext) -> String in
-            let userInput = UserInput(chat: [
-                .system(systemPrompt),
-                .user(userText)
-            ])
+            var messages: [Chat.Message] = [.system(systemPrompt)]
+
+            if let summary, !summary.isEmpty {
+                messages.append(.user("""
+                [Earlier conversation summary — older turns have been compacted to fit context]
+                <<<
+                \(summary)
+                >>>
+                """))
+            }
+
+            for turn in priorTurns {
+                messages.append(.user(Self.renderAssistantUserMessage(selection: turn.selection, instruction: turn.instruction)))
+                // Re-include the MODE: marker so the model keeps emitting it on the
+                // next turn — without it, follow-up replies often drop the marker
+                // and we lose REPLACE intent (parseAssistant falls back to .draft).
+                messages.append(.assistant("MODE: \(turn.mode.rawValue.uppercased())\n\(turn.reply)"))
+            }
+
+            messages.append(.user(currentUserText))
+
+            let userInput = UserInput(chat: messages)
             let lmInput = try await ctx.processor.prepare(input: userInput)
             // Assistant Mode is free-form generation — the user's instruction governs
             // length ("give me 100 emojis", "draft a long email"). The cap here is
@@ -170,6 +182,102 @@ final class LLMService {
         }
 
         return Self.parseAssistant(raw)
+    }
+
+    /// Compacts a slice of conversation turns plus any pre-existing summary
+    /// into a single short paragraph that preserves the load-bearing context
+    /// (user intent, decisions, names, drafted content) the model needs to
+    /// keep continuity. Failure throws — the caller surfaces a "conversation
+    /// too long" message rather than silently dropping context.
+    func summariseConversation(turns: [ConversationTurn], priorSummary: String?, modelID: String) async throws -> String {
+        try await ensureLoaded(modelID: modelID)
+        guard let container else {
+            throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
+        }
+
+        let rendered = turns.map { turn -> String in
+            let sel = turn.selection.flatMap { $0.isEmpty ? nil : $0 }
+            let selLine = sel.map { "Selection: \($0)" } ?? "Selection: (none)"
+            return """
+            ---
+            User: \(turn.instruction)
+            \(selLine)
+            Assistant (MODE: \(turn.mode.rawValue.uppercased())):
+            \(turn.reply)
+            """
+        }.joined(separator: "\n")
+
+        let priorBlock: String
+        if let priorSummary, !priorSummary.isEmpty {
+            priorBlock = """
+            Previous summary so far:
+            <<<
+            \(priorSummary)
+            >>>
+
+            """
+        } else {
+            priorBlock = ""
+        }
+
+        let userText = """
+        \(priorBlock)Conversation turns to compact:
+        <<<
+        \(rendered)
+        >>>
+        """
+
+        let system = """
+        You are compacting an Assistant Mode conversation so the model can keep \
+        following along after older turns have been trimmed. Write a single tight \
+        summary (under 200 words). Preserve the user's intent, any names, decisions, \
+        drafted text, and outstanding asks. Drop pleasantries and meta. Do NOT add \
+        commentary, framing, headers, or preambles — return only the summary text.
+        """
+
+        let raw = try await container.perform { (ctx: ModelContext) -> String in
+            let userInput = UserInput(chat: [
+                .system(system),
+                .user(userText)
+            ])
+            let lmInput = try await ctx.processor.prepare(input: userInput)
+            let params = GenerateParameters(maxTokens: 512, temperature: 0.2, topP: 0.95)
+            let result = try MLXLMCommon.generate(
+                input: lmInput,
+                parameters: params,
+                context: ctx,
+                didGenerate: { (_: [Int]) in .more }
+            )
+            return result.output
+        }
+
+        let cleaned = Self.clean(raw)
+        guard !cleaned.isEmpty else {
+            throw NSError(domain: "Dictator", code: 3, userInfo: [NSLocalizedDescriptionKey: "Summariser returned no text"])
+        }
+        return cleaned
+    }
+
+    nonisolated private static func renderAssistantUserMessage(selection: String?, instruction: String) -> String {
+        let selectionBlock: String
+        if let selection, !selection.isEmpty {
+            selectionBlock = """
+            SELECTION:
+            <<<
+            \(selection)
+            >>>
+            """
+        } else {
+            selectionBlock = "SELECTION: (none — the user has nothing selected)"
+        }
+        return """
+        \(selectionBlock)
+
+        INSTRUCTION:
+        <<<
+        \(instruction)
+        >>>
+        """
     }
 
     /// Strips the `MODE: REPLACE`/`MODE: DRAFT` first-line marker the assistant prompt

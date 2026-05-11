@@ -28,9 +28,10 @@ struct HUDView: View {
         case .capturingSelection:
             StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .indigo)
         case .recording(let level, let isAssistant):
+            let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
             HStack(spacing: 16) {
                 if isAssistant {
-                    Image(systemName: "wand.and.stars")
+                    Image(systemName: isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars")
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(Color.indigo)
                         .font(.system(size: 18, weight: .semibold))
@@ -40,16 +41,18 @@ struct HUDView: View {
                 Waveform(level: level, tint: isAssistant ? .indigo : .accentColor)
                     .frame(maxWidth: .infinity)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(isAssistant ? "Assistant" : "Listening")
+                    Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(isAssistant ? Color.indigo : .primary)
-                    Text(isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName())
+                    Text(isContinuation
+                         ? "Continuing the conversation"
+                         : (isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName()))
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .frame(maxWidth: 160, alignment: .trailing)
+                .frame(maxWidth: 180, alignment: .trailing)
             }
         case .transcribing:
             StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .blue)
@@ -61,6 +64,8 @@ struct HUDView: View {
             StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .teal)
         case .assisting:
             StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .indigo)
+        case .compacting:
+            StatusRow(icon: "archivebox", title: "Summarising earlier turns", accent: .indigo)
         case .done(let text, let pasted, let note):
             HStack(spacing: 14) {
                 Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
@@ -106,6 +111,7 @@ struct HUDView: View {
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"
         case .assisting: "assisting"
+        case .compacting: "compacting"
         case .done: "done"
         case .failed: "failed"
         }

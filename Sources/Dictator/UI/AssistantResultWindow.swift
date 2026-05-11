@@ -1,30 +1,66 @@
 import AppKit
 import SwiftUI
 
-/// Pops up a readable window with the assistant's output whenever the result
-/// lands on the clipboard rather than getting pasted in place — either because
-/// the user asked for a draft (DRAFT mode) or because pasting failed and we
-/// fell back to copy-only. The clipboard is already populated by the time this
-/// shows, so the window is purely a "you can read this right now" affordance.
+/// Multi-turn result window for Assistant Mode. Reads its content from
+/// `ConversationHistory.shared` by id, so updates from Pipeline propagate
+/// automatically via @Observable. The window stays around between turns
+/// (continuation triggers — visible window OR matching selection — fire the
+/// next assistant call as a follow-up). Closing the window doesn't end the
+/// conversation; the "New conversation" button does.
 @MainActor
 final class AssistantResultController {
     private var window: NSWindow?
+    private var displayedConversationID: UUID?
 
-    func show(text: String, instruction: String) {
+    /// Called when the user clicks "New conversation". AppState wires this
+    /// to `pipeline.endActiveConversation()`.
+    var onNewConversationRequested: (() -> Void)?
+
+    /// Called when the user reopens a conversation from the menu bar so the
+    /// pipeline can switch its active conversation to match what's on screen.
+    var onConversationDisplayed: ((UUID) -> Void)?
+
+    /// True while the window is on-screen. Pipeline asks this when deciding
+    /// whether the next assistant call is a continuation.
+    var isWindowVisible: Bool {
+        window?.isVisible ?? false
+    }
+
+    /// Conversation id currently displayed *and* visible. Used by Pipeline's
+    /// continuation check. Returns nil when the window is hidden so a closed
+    /// window doesn't lock the next call into the wrong conversation.
+    var currentConversationID: UUID? {
+        guard isWindowVisible else { return nil }
+        return displayedConversationID
+    }
+
+    /// Update the window to show a given conversation. `surface` true brings
+    /// it to the front (DRAFT mode, paste-fallback, or menu-bar reopen).
+    /// `surface` false only re-renders if the window is already visible —
+    /// used for REPLACE turns that happen while the user is following along.
+    func showConversation(id: UUID, surface: Bool) {
+        displayedConversationID = id
+        let alreadyVisible = window?.isVisible ?? false
+        guard surface || alreadyVisible else { return }
+
         let window = ensureWindow()
         let root = AssistantResultView(
-            text: text,
-            instruction: instruction,
-            onCopy: { [weak self] in self?.copyToClipboard(text) },
-            onClose: { [weak self] in self?.close() }
+            conversationID: id,
+            onCopy: { [weak self] text in self?.copyToClipboard(text) },
+            onClose: { [weak self] in self?.close() },
+            onNewConversation: { [weak self] in
+                self?.onNewConversationRequested?()
+                self?.close()
+            }
         )
         window.contentViewController = NSHostingController(rootView: root)
-        window.title = "Assistant Result"
+        window.title = "Assistant"
         if !window.isVisible {
             window.center()
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        onConversationDisplayed?(id)
     }
 
     private func close() {
@@ -53,62 +89,226 @@ final class AssistantResultController {
 }
 
 private struct AssistantResultView: View {
-    let text: String
-    let instruction: String
-    let onCopy: () -> Void
+    let conversationID: UUID
+    let onCopy: (String) -> Void
     let onClose: () -> Void
+    let onNewConversation: () -> Void
+
+    @State private var history = ConversationHistory.shared
     @State private var copyFeedback = false
+
+    private var conversation: Conversation? {
+        history.conversation(id: conversationID)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !instruction.isEmpty {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "wand.and.stars")
-                        .foregroundStyle(.indigo)
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("\u{201C}\(instruction)\u{201D}")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            header
+            if let conversation {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if let comp = conversation.compaction {
+                                CompactionNote(summary: comp.summary)
+                            }
+                            ForEach(Array(visibleTurns(in: conversation).enumerated()), id: \.element.id) { _, turn in
+                                TurnRow(turn: turn)
+                                    .id(turn.id)
+                            }
+                        }
+                        .padding(14)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(nsColor: .textBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+                    .onChange(of: conversation.turns.last?.id) { _, newID in
+                        if let newID {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(newID, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onAppear {
+                        if let lastID = conversation.turns.last?.id {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                    }
                 }
-            }
-            ScrollView {
-                Text(text)
-                    .textSelection(.enabled)
-                    .font(.system(size: 13))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(nsColor: .textBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-            )
-            HStack(spacing: 8) {
-                Image(systemName: "doc.on.clipboard.fill")
+                if conversation.isApproachingContextLimit {
+                    ApproachingLimitChip()
+                }
+                footer(conversation: conversation)
+            } else {
+                Text("Conversation no longer available.")
                     .foregroundStyle(.secondary)
-                    .font(.system(size: 11))
-                Text("Already on your clipboard — \u{2318}V to paste anywhere")
-                    .font(.system(size: 11))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 560, minHeight: 400)
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if let conversation {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .foregroundStyle(.indigo)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(turnCountLabel(conversation))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("Speak the assistant hotkey again to continue")
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(copyFeedback ? "Copied" : "Copy again") {
-                    onCopy()
+            }
+        }
+    }
+
+    private func turnCountLabel(_ c: Conversation) -> String {
+        c.turns.count == 1 ? "1 turn" : "\(c.turns.count) turns"
+    }
+
+    @ViewBuilder
+    private func footer(conversation: Conversation) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.on.clipboard.fill")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+            Text("Latest reply is on your clipboard — \u{2318}V to paste anywhere")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("New conversation", action: onNewConversation)
+            if let last = conversation.turns.last {
+                Button(copyFeedback ? "Copied" : "Copy latest") {
+                    onCopy(last.reply)
                     copyFeedback = true
                     Task {
                         try? await Task.sleep(for: .seconds(1))
                         copyFeedback = false
                     }
                 }
-                Button("Done", action: onClose)
-                    .keyboardShortcut(.defaultAction)
+            }
+            Button("Done", action: onClose)
+                .keyboardShortcut(.defaultAction)
+        }
+    }
+
+    /// The window shows every turn — including ones that have been compacted
+    /// away from the LLM payload. The user told us to keep what's on screen
+    /// honest: "we want it to be clear what has gone on throughout the
+    /// conversation". The CompactionNote at the top signals that older turns
+    /// no longer count toward the model's context.
+    private func visibleTurns(in c: Conversation) -> [ConversationTurn] {
+        c.turns
+    }
+}
+
+private struct TurnRow: View {
+    let turn: ConversationTurn
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(.indigo)
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 14)
+                Text("\u{201C}\(turn.instruction)\u{201D}")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let selection = turn.selection, !selection.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "selection.pin.in.out")
+                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 14)
+                    Text(selection)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            Text(turn.reply)
+                .font(.system(size: 13))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 20)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct CompactionNote: View {
+    let summary: String
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "archivebox")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Earlier turns summarised to fit context")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(expanded ? "Hide summary" : "Show summary") {
+                    expanded.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+            }
+            if expanded {
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
             }
         }
-        .padding(20)
-        .frame(minWidth: 560, minHeight: 400)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+}
+
+private struct ApproachingLimitChip: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 11, weight: .semibold))
+            Text("Approaching context limit — older turns will be summarised next")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.orange)
+            Spacer()
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.orange.opacity(0.12))
+        )
     }
 }

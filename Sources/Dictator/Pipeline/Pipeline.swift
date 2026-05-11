@@ -11,6 +11,7 @@ enum PipelineState: Equatable {
     case fixingGrammar
     case restructuring
     case assisting
+    case compacting
     case done(text: String, pasted: Bool, note: String?)
     case failed(String)
 
@@ -24,6 +25,7 @@ enum PipelineState: Equatable {
         case .fixingGrammar: "text.badge.checkmark"
         case .restructuring: "list.bullet.indent"
         case .assisting: "wand.and.stars"
+        case .compacting: "archivebox"
         case .done: "checkmark.circle.fill"
         case .failed: "exclamationmark.triangle"
         }
@@ -43,12 +45,33 @@ final class Pipeline {
     private(set) var state: PipelineState = .idle
     private(set) var lastResult: String = ""
 
-    /// Fired when an Assistant Mode result lands on the clipboard rather than
-    /// being pasted in place — either because the user dictated a draft (DRAFT
-    /// mode) or because the paste path failed and we fell back to copy. The
-    /// host wires this to the result window so the user can read the output
-    /// immediately without having to find a document to paste into.
-    var onAssistantResultCopied: ((_ text: String, _ instruction: String) -> Void)?
+    /// Fired after every successful Assistant Mode turn so the host can show
+    /// (or refresh) the result window. `surfaceWindow` is true when the
+    /// result wasn't pasted in place — either DRAFT mode or a paste-fallback
+    /// to copy — and the user therefore needs the window to actually read
+    /// the output. When false, the host should only refresh the window if
+    /// it's already visible (e.g. user is following along a REPLACE thread
+    /// they've kept open).
+    var onAssistantTurnCompleted: ((_ conversation: Conversation, _ surfaceWindow: Bool) -> Void)?
+
+    /// Set by AppState — asks the host whether the result window is currently
+    /// on-screen, and what conversation id it's displaying. Pipeline uses
+    /// these to decide whether a new assistant invocation is a continuation
+    /// of the active conversation. Kept as closures so Pipeline doesn't
+    /// import UI types.
+    var resultWindowIsVisible: (() -> Bool)?
+    var resultWindowConversationID: (() -> UUID?)?
+
+    /// The conversation that will be continued on the next assistant call,
+    /// if continuation triggers fire. Set after every successful turn and
+    /// cleared by the result window's "New conversation" button.
+    private(set) var activeConversation: Conversation?
+
+    /// Whether the *currently in-flight* assistant invocation is a follow-up
+    /// to the active conversation. Set when recording starts so the HUD can
+    /// show "Following up" instead of "Speak your instruction". Read by the
+    /// HUD view during `.recording(isAssistant: true)`.
+    private(set) var nextAssistantIsContinuation: Bool = false
 
     private var settings: DictatorSettings
     private let recorder = AudioRecorder()
@@ -75,8 +98,11 @@ final class Pipeline {
     /// release-of-hotkey event to the assistant path instead of the dictation path,
     /// and to carry the captured selection from press → release → LLM. `selection`
     /// is nil if the user had nothing selected — a valid case ("put a list here").
+    /// `continuesConversation` is decided at press time (so the HUD can show
+    /// "Following up") and frozen for the rest of the in-flight turn.
     private struct InFlightAssistant {
         var selection: String?
+        var continuesConversation: Bool
     }
     private var inFlightAssistant: InFlightAssistant?
 
@@ -470,7 +496,9 @@ final class Pipeline {
                 // list of ten ideas here please").
                 let selection = try await SelectionGrabber.grab()
                 try recorder.start()
-                inFlightAssistant = InFlightAssistant(selection: selection)
+                let continues = self.shouldContinueConversation(selection: selection)
+                self.nextAssistantIsContinuation = continues
+                inFlightAssistant = InFlightAssistant(selection: selection, continuesConversation: continues)
                 state = .recording(level: 0, isAssistant: true)
                 if settings.playSounds { SoundEffects.shared.playStart() }
             } catch SelectionGrabber.GrabError.noAccessibility {
@@ -479,6 +507,51 @@ final class Pipeline {
                 fail("Assistant: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Decides whether the next assistant invocation should be a follow-up
+    /// against `activeConversation`. Two paths in:
+    ///
+    /// 1. The result window is currently visible AND is displaying the active
+    ///    conversation. The user is clearly continuing the on-screen thread.
+    /// 2. The user has a selection that overlaps the active conversation's
+    ///    last reply (i.e. they've kept the previous output selected in their
+    ///    editor and triggered Assistant again). Forgiving substring match —
+    ///    accommodates light editing on either side.
+    ///
+    /// Anything else → fresh conversation.
+    private func shouldContinueConversation(selection: String?) -> Bool {
+        guard let active = activeConversation else { return false }
+        if resultWindowIsVisible?() == true, resultWindowConversationID?() == active.id {
+            return true
+        }
+        guard let selection, let lastReply = active.lastReply else { return false }
+        return Self.selectionMatchesReply(selection: selection, reply: lastReply)
+    }
+
+    /// Forgiving overlap check: trimmed selection contained in the last reply,
+    /// or vice versa. The 8-character minimum keeps tiny selections ("yes",
+    /// "ok") from accidentally triggering continuation against a long reply
+    /// that happens to contain them.
+    static func selectionMatchesReply(selection: String, reply: String) -> Bool {
+        let trimSel = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimRep = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimSel.count >= 8 else { return false }
+        return trimRep.contains(trimSel) || trimSel.contains(trimRep)
+    }
+
+    /// Called by the result window's "New conversation" button. Clears the
+    /// follow-up state so the next assistant call starts fresh.
+    func endActiveConversation() {
+        activeConversation = nil
+        nextAssistantIsContinuation = false
+    }
+
+    /// Called when the user reopens a past conversation from the menu bar.
+    /// The next assistant call will continue it (subject to the usual
+    /// window-visible / selection-match triggers).
+    func setActiveConversation(_ conversation: Conversation) {
+        activeConversation = conversation
     }
 
     /// Entry point for the Assistant Mode hotkey release. If the press succeeded in
@@ -501,20 +574,79 @@ final class Pipeline {
     }
 
     private func runAssistantPipeline(samples: [Float], selection: String?) async {
+        let inflight = inFlightAssistant
+        let continues = inflight?.continuesConversation ?? false
+
         state = .transcribing
         let instructionRaw: String
         do {
             instructionRaw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
         } catch {
             inFlightAssistant = nil
+            nextAssistantIsContinuation = false
             fail("Transcribe: \(error.localizedDescription)")
             return
         }
         let instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else {
             inFlightAssistant = nil
+            nextAssistantIsContinuation = false
             state = .idle
             return
+        }
+
+        // Resolve prior context for this turn. If continuing, take the verbatim
+        // tail (turns after the compaction cutoff) plus the existing summary.
+        // Otherwise we send nothing — a fresh conversation.
+        var priorTurns: [ConversationTurn] = []
+        var summary: String? = nil
+        if continues, let active = activeConversation {
+            if let comp = active.compaction {
+                priorTurns = Array(active.turns.dropFirst(comp.upThroughTurnIndex + 1))
+                summary = comp.summary
+            } else {
+                priorTurns = active.turns
+                summary = nil
+            }
+        }
+
+        // Pre-call compaction. Estimate input tokens; if over budget, summarise
+        // the oldest turns (always keeping at least the last 2 verbatim). On
+        // summariser failure we surface a hard "conversation too long" error
+        // rather than silently dropping context — the user said that's the
+        // right call.
+        var pendingCompactionIndex: Int? = nil
+        let estimate = ConversationContextBudget.estimateInputTokens(
+            priorTurns: priorTurns, summary: summary,
+            selection: selection, instruction: instruction
+        )
+        if estimate > ConversationContextBudget.totalInputTokens {
+            guard priorTurns.count > 2, let active = activeConversation else {
+                inFlightAssistant = nil
+                nextAssistantIsContinuation = false
+                fail("This conversation is too long. Start a new one.")
+                return
+            }
+            let toSummarise = Array(priorTurns.prefix(priorTurns.count - 2))
+            let keep = Array(priorTurns.suffix(2))
+            state = .compacting
+            do {
+                let newSummary = try await llm.summariseConversation(
+                    turns: toSummarise,
+                    priorSummary: summary,
+                    modelID: settings.llmModelID
+                )
+                summary = newSummary
+                priorTurns = keep
+                // Index of the last summarised turn within the *full* turn list.
+                // active.turns.count - keep.count - 1 = the last index now compacted.
+                pendingCompactionIndex = active.turns.count - keep.count - 1
+            } catch {
+                inFlightAssistant = nil
+                nextAssistantIsContinuation = false
+                fail("This conversation is too long. Start a new one.")
+                return
+            }
         }
 
         state = .assisting
@@ -524,10 +656,13 @@ final class Pipeline {
                 selection: selection,
                 instruction: instruction,
                 modelID: settings.llmModelID,
-                systemPrompt: settings.effectiveAssistantPrompt
+                systemPrompt: settings.effectiveAssistantPrompt,
+                priorTurns: priorTurns,
+                summary: summary
             )
         } catch {
             inFlightAssistant = nil
+            nextAssistantIsContinuation = false
             fail("Assistant: \(error.localizedDescription)")
             return
         }
@@ -535,15 +670,47 @@ final class Pipeline {
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             inFlightAssistant = nil
+            nextAssistantIsContinuation = false
             fail("Assistant returned no output.")
             return
         }
 
-        await deliverAssistant(text: text, mode: result.mode, hadSelection: selection != nil, instruction: instruction)
+        // Build the new turn and fold it into the conversation. New
+        // conversations are appended to history; follow-ups update in place.
+        let newTurn = ConversationTurn(
+            id: UUID(),
+            timestamp: Date(),
+            instruction: instruction,
+            selection: selection,
+            mode: result.mode,
+            reply: text
+        )
+        let updatedConversation: Conversation
+        if continues, var active = activeConversation {
+            if let idx = pendingCompactionIndex {
+                active.compaction = ConversationCompaction(summary: summary ?? "", upThroughTurnIndex: idx)
+            }
+            active.append(newTurn)
+            updatedConversation = active
+            ConversationHistory.shared.update(active)
+        } else {
+            let fresh = Conversation.new(firstTurn: newTurn)
+            updatedConversation = fresh
+            ConversationHistory.shared.append(fresh)
+        }
+        activeConversation = updatedConversation
+
+        await deliverAssistant(
+            text: text,
+            mode: result.mode,
+            hadSelection: selection != nil,
+            conversation: updatedConversation
+        )
         inFlightAssistant = nil
+        nextAssistantIsContinuation = false
     }
 
-    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, instruction: String) async {
+    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
         // same reasoning as `finish()`.
         let text = Self.withTrailingSpace(text)
@@ -573,12 +740,11 @@ final class Pipeline {
             note = "Copied — ⌘V to paste"
         }
 
-        // Whenever the result is on the clipboard rather than pasted, open the
-        // readable result window so the user doesn't have to hunt down a
-        // document just to see what the assistant produced.
-        if !pasted {
-            onAssistantResultCopied?(text, instruction)
-        }
+        // Always notify the host that a turn finished. When the result is on
+        // the clipboard rather than pasted, the host surfaces the window so
+        // the user can read it; otherwise it only refreshes the window if
+        // it's already open (e.g. a multi-turn REPLACE thread).
+        onAssistantTurnCompleted?(conversation, !pasted)
 
         state = .done(text: text, pasted: pasted, note: note)
         if settings.playSounds { SoundEffects.shared.playDone() }

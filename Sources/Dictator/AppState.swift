@@ -22,8 +22,24 @@ final class AppState {
 
     func bootstrap() {
         AudioDeviceManager.shared.bootstrap()
-        pipeline.onAssistantResultCopied = { [weak self] text, instruction in
-            self?.assistantResultWindow.show(text: text, instruction: instruction)
+        pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
+            self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)
+        }
+        pipeline.resultWindowIsVisible = { [weak self] in
+            self?.assistantResultWindow.isWindowVisible ?? false
+        }
+        pipeline.resultWindowConversationID = { [weak self] in
+            self?.assistantResultWindow.currentConversationID
+        }
+        assistantResultWindow.onNewConversationRequested = { [weak self] in
+            self?.pipeline.endActiveConversation()
+        }
+        assistantResultWindow.onConversationDisplayed = { [weak self] id in
+            // When the user reopens a past conversation from the menu bar,
+            // make it the active one so the next assistant call continues it.
+            if let convo = ConversationHistory.shared.conversation(id: id) {
+                self?.pipeline.setActiveConversation(convo)
+            }
         }
         dictationHotkey.bind(
             mode: settings.triggerMode,
@@ -38,6 +54,12 @@ final class AppState {
         if settings.preloadModelsOnLaunch {
             preloadModels()
         }
+    }
+
+    /// Opens a past conversation in the result window. Called from the menu
+    /// bar's recent-conversations list.
+    func openConversation(id: UUID) {
+        assistantResultWindow.showConversation(id: id, surface: true)
     }
 
     /// Warm both Whisper and the LLM in the background so the first hotkey press
