@@ -109,17 +109,27 @@ targets:
         SWIFT_STRICT_CONCURRENCY: minimal
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
-        # Resolved from the DICTATOR_TEAM_ID environment variable at xcodegen-generate
-        # time. Leave empty for a stock ad-hoc build, or `export DICTATOR_TEAM_ID=...`
-        # in your shell to pin your Apple Personal Team. Pinning the team keeps macOS
-        # TCC (Mic / Accessibility) grants stable across rebuilds; ad-hoc builds get
-        # re-prompted each time. See README → "Build" for details.
+        # macOS TCC keys Mic / Accessibility grants by *signed identity*, so an
+        # unstable signature (ad-hoc) makes the OS forget you every rebuild.
+        # Three env vars together pin the signature to your Apple Development
+        # cert:
+        #   - DICTATOR_TEAM_ID            : your Apple Personal Team ID
+        #   - DICTATOR_CODE_SIGN_IDENTITY : the SHA-1 of your installed cert
+        #                                   (`security find-identity -v -p codesigning`)
+        #   - DICTATOR_CODE_SIGN_STYLE    : "Manual" — automatic style requires
+        #                                   GUI provisioning from Xcode which
+        #                                   doesn't play well with CLI builds.
+        # When ANY of the three are unset, you get ad-hoc signing — works for a
+        # one-off build, but TCC will revoke grants on every rebuild because
+        # the ad-hoc signature changes. Bake all three into your shell profile
+        # (e.g. ~/.zprofile) for stable grants. See README → "Build" for details.
         DEVELOPMENT_TEAM: ${DICTATOR_TEAM_ID}
-        # CODE_SIGN_IDENTITY intentionally left to Xcode/your team.
-        # If no team is set, Xcode falls back to ad-hoc ("-"), and macOS TCC will
-        # revoke Mic / Accessibility on every rebuild because the signature changes.
-        # Open Signing & Capabilities in Xcode and pick your Personal Team to fix this.
+        CODE_SIGN_IDENTITY: ${DICTATOR_CODE_SIGN_IDENTITY}
+        CODE_SIGN_STYLE: ${DICTATOR_CODE_SIGN_STYLE}
+        # Manual signing needs an explicit (possibly empty) profile specifier
+        # so xcodebuild doesn't try to fetch a provisioning profile. Sandbox is
+        # disabled in our entitlements, so no profile is required.
+        PROVISIONING_PROFILE_SPECIFIER: ""
         GENERATE_INFOPLIST_FILE: NO
         DEAD_CODE_STRIPPING: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
