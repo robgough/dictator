@@ -39,14 +39,14 @@ final class AssistantResultController {
     private func ensureWindow() -> NSWindow {
         if let window { return window }
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         w.isReleasedWhenClosed = false
         w.level = .floating
-        w.minSize = NSSize(width: 420, height: 280)
+        w.minSize = NSSize(width: 560, height: 400)
         window = w
         return w
     }
@@ -109,6 +109,6 @@ private struct AssistantResultView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 420, minHeight: 280)
+        .frame(minWidth: 560, minHeight: 400)
     }
 }
