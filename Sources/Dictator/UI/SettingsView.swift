@@ -721,7 +721,7 @@ private struct ModelStatusRow: View {
     @State private var confirmingRemoval = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).fontWeight(.medium)
                 Text("\(note) · ~\(formatModelSize(sizeMB))")
@@ -746,20 +746,12 @@ private struct ModelStatusRow: View {
     @ViewBuilder private var statusView: some View {
         switch state {
         case .ready:
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Label("Installed", systemImage: "checkmark.seal.fill")
-                    .labelStyle(.titleAndIcon)
                     .foregroundStyle(.green)
-                    .font(.callout)
-                Button(role: .destructive) {
-                    confirmingRemoval = true
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .help("Remove this model from disk")
+                TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Remove this model from disk")
             }
+            .font(.callout)
         case .notDownloaded, .unknown:
             Button("Download", action: download)
                 .buttonStyle(.borderedProminent)
@@ -775,21 +767,43 @@ private struct ModelStatusRow: View {
         case .failed(let msg):
             VStack(alignment: .trailing, spacing: 4) {
                 Text("Failed").foregroundStyle(.red).font(.caption)
-                HStack(spacing: 6) {
+                HStack(spacing: 10) {
                     Button("Retry", action: download)
                         .controlSize(.small)
-                    Button(role: .destructive) {
-                        confirmingRemoval = true
-                    } label: {
-                        Label("Remove", systemImage: "trash")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Remove any partial files from disk")
+                    TrashTapGlyph(action: { confirmingRemoval = true }, tooltip: "Remove any partial files from disk")
+                        .font(.callout)
                 }
                 Text(msg).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
         }
+    }
+}
+
+/// Trash icon rendered as a *text glyph* (`Text(Image(...))`) rather than a
+/// standalone `Image`. Text-glyph SF Symbols inherit the surrounding text's
+/// baseline metrics, so when this sits next to a `Label("…", systemImage: …)`
+/// the trash lines up with the label's icon and text on the same baseline —
+/// which standalone `Image` views can't guarantee because they use image
+/// metrics with per-glyph bounding boxes that differ between symbols.
+private struct TrashTapGlyph: View {
+    let action: () -> Void
+    let tooltip: String
+    @State private var hovering = false
+
+    var body: some View {
+        Text(Image(systemName: "trash"))
+            .foregroundStyle(hovering ? Color.red.opacity(0.85) : .secondary)
+            .contentShape(Rectangle())
+            .onTapGesture { action() }
+            .onHover { hovering in
+                self.hovering = hovering
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .help(tooltip)
     }
 }
 
