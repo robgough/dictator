@@ -25,16 +25,25 @@ struct HUDView: View {
         switch state.pipeline.state {
         case .idle:
             EmptyView()
-        case .recording(let level):
+        case .capturingSelection:
+            StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .indigo)
+        case .recording(let level, let isAssistant):
             HStack(spacing: 16) {
-                RecordingDot()
-                Waveform(level: level)
+                if isAssistant {
+                    Image(systemName: "wand.and.stars")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Color.indigo)
+                        .font(.system(size: 18, weight: .semibold))
+                } else {
+                    RecordingDot()
+                }
+                Waveform(level: level, tint: isAssistant ? .indigo : .accentColor)
                     .frame(maxWidth: .infinity)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("Listening")
+                    Text(isAssistant ? "Assistant" : "Listening")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary)
-                    Text(deviceManager.activeInputDeviceName())
+                        .foregroundStyle(isAssistant ? Color.indigo : .primary)
+                    Text(isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName())
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -50,6 +59,8 @@ struct HUDView: View {
             StatusRow(icon: "text.badge.checkmark", title: "Tidying grammar", accent: .pink)
         case .restructuring:
             StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .teal)
+        case .assisting:
+            StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .indigo)
         case .done(let text, let pasted, let note):
             HStack(spacing: 14) {
                 Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
@@ -88,11 +99,13 @@ struct HUDView: View {
     private var stateKey: String {
         switch state.pipeline.state {
         case .idle: "idle"
+        case .capturingSelection: "capturingSelection"
         case .recording: "recording"
         case .transcribing: "transcribing"
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"
+        case .assisting: "assisting"
         case .done: "done"
         case .failed: "failed"
         }
@@ -128,9 +141,9 @@ private struct RecordingDot: View {
     @State private var on = false
     var body: some View {
         Circle()
-            .fill(Color.red)
+            .fill(Color.accentColor)
             .frame(width: 10, height: 10)
-            .shadow(color: .red.opacity(0.6), radius: on ? 10 : 2)
+            .shadow(color: .accentColor.opacity(0.6), radius: on ? 10 : 2)
             .opacity(on ? 1 : 0.6)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }

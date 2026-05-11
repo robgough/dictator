@@ -10,6 +10,9 @@ final class AppState {
     var settings: DictatorSettings
     let pipeline: Pipeline
 
+    private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
+    private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
+
     private init() {
         let settings = DictatorSettings.load()
         self.settings = settings
@@ -18,10 +21,15 @@ final class AppState {
 
     func bootstrap() {
         AudioDeviceManager.shared.bootstrap()
-        HotkeyBinder.shared.bind(
+        dictationHotkey.bind(
             mode: settings.triggerMode,
             onPress: { [weak self] in self?.pipeline.startRecording() },
             onRelease: { [weak self] in self?.pipeline.finishRecording() }
+        )
+        assistantHotkey.bind(
+            mode: settings.assistantTriggerMode,
+            onPress: { [weak self] in self?.pipeline.startAssistant() },
+            onRelease: { [weak self] in self?.pipeline.finishAssistant() }
         )
         if settings.preloadModelsOnLaunch {
             preloadModels()
@@ -48,6 +56,16 @@ final class AppState {
     func save() {
         settings.persist()
         pipeline.settingsChanged(settings)
-        HotkeyBinder.shared.setMode(settings.triggerMode)
+        dictationHotkey.setMode(settings.triggerMode)
+        assistantHotkey.setMode(settings.assistantTriggerMode)
+    }
+
+    /// Used by the Settings UI's "Reset" button next to the keyboard-shortcut recorder.
+    func resetDictationKeyboardShortcut() {
+        dictationHotkey.resetKeyboardShortcutToDefault()
+    }
+
+    func resetAssistantKeyboardShortcut() {
+        assistantHotkey.resetKeyboardShortcutToDefault()
     }
 }

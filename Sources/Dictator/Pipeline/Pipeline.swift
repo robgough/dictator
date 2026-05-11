@@ -4,22 +4,26 @@ import AppKit
 
 enum PipelineState: Equatable {
     case idle
-    case recording(level: Float)
+    case capturingSelection
+    case recording(level: Float, isAssistant: Bool)
     case transcribing
     case formatting
     case fixingGrammar
     case restructuring
+    case assisting
     case done(text: String, pasted: Bool, note: String?)
     case failed(String)
 
     var iconName: String {
         switch self {
         case .idle: "mic"
+        case .capturingSelection: "selection.pin.in.out"
         case .recording: "waveform"
         case .transcribing: "waveform.badge.magnifyingglass"
         case .formatting: "sparkles"
         case .fixingGrammar: "text.badge.checkmark"
         case .restructuring: "list.bullet.indent"
+        case .assisting: "wand.and.stars"
         case .done: "checkmark.circle.fill"
         case .failed: "exclamationmark.triangle"
         }
@@ -60,12 +64,21 @@ final class Pipeline {
     }
     private var inFlight = InFlight()
 
+    /// Non-nil while an Assistant Mode dictation is in progress. Used to route the
+    /// release-of-hotkey event to the assistant path instead of the dictation path,
+    /// and to carry the captured selection from press → release → LLM. `selection`
+    /// is nil if the user had nothing selected — a valid case ("put a list here").
+    private struct InFlightAssistant {
+        var selection: String?
+    }
+    private var inFlightAssistant: InFlightAssistant?
+
     init(settings: DictatorSettings) {
         self.settings = settings
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
-            if case .recording = state {
-                state = .recording(level: level)
+            if case .recording(_, let isAssistant) = state {
+                state = .recording(level: level, isAssistant: isAssistant)
             }
         }
         recorder.onUnexpectedStop = { [weak self] message in
@@ -104,7 +117,7 @@ final class Pipeline {
         guard case .idle = state else { return }
         do {
             try recorder.start()
-            state = .recording(level: 0)
+            state = .recording(level: 0, isAssistant: false)
             if settings.playSounds { SoundEffects.shared.playStart() }
         } catch {
             fail("Mic error: \(error.localizedDescription)")
@@ -112,6 +125,9 @@ final class Pipeline {
     }
 
     func finishRecording() {
+        // If we're recording for Assistant Mode, ignore — the assistant hotkey's
+        // release handler owns this recording session.
+        guard inFlightAssistant == nil else { return }
         guard case .recording = state else { return }
         let samples = recorder.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
@@ -280,17 +296,33 @@ final class Pipeline {
             .map(String.init)
     }
 
-    /// Detects the common failure where Pass 1 answers the user's question
-    /// instead of transcribing it. We compute "anchor words" — content-bearing
-    /// words from the input, excluding short stopwords and our spoken-punctuation
-    /// trigger vocabulary — and require ≥60% to appear in the output. Inputs with
-    /// fewer than 3 anchors are too short to discriminate (e.g. "fire emoji"
-    /// expands to "🔥" with zero anchor survival), so we trust the formatter.
+    /// Detects the common failure where Pass 1 answers the user's question instead
+    /// of transcribing it. Two checks, both must pass:
+    ///
+    /// 1. **Length**: the formatter never *adds* content words. If the output is
+    ///    materially longer than the input (more than +3 words and more than 1.15× the
+    ///    input word count), the model elaborated — almost always because it answered
+    ///    the question. This catches the failure mode the anchor check is blind to:
+    ///    answers that quote the question back ("The formatter returns empty
+    ///    because…") still hit all the anchors but expand the output.
+    ///
+    /// 2. **Anchors**: ≥60% of the input's content words (≥4 chars, not in our spoken-
+    ///    punctuation trigger vocabulary) must survive in the output. Short inputs
+    ///    (<3 anchors) skip this — too few signals to discriminate cleanly (e.g.
+    ///    "fire emoji" → "🔥" has zero anchor survival but is correct).
     static func passOnePreservesContent(raw: String, formatted: String) -> Bool {
+        let rawWords = wordSequence(raw)
+        let fmtWords = wordSequence(formatted)
+
+        // Length check. Allow small additions (contractions split, etc.) but reject
+        // anything that visibly expands — that's the model writing an answer.
+        let maxAllowed = max(rawWords.count + 3, Int(ceil(Double(rawWords.count) * 1.15)))
+        if fmtWords.count > maxAllowed { return false }
+
         let anchors = anchorWords(raw)
         guard anchors.count >= 3 else { return true }
-        let outputWords = Set(wordSequence(formatted))
-        let hits = anchors.filter { outputWords.contains($0) }
+        let outputSet = Set(fmtWords)
+        let hits = anchors.filter { outputSet.contains($0) }
         return Double(hits.count) / Double(anchors.count) >= 0.6
     }
 
@@ -355,6 +387,145 @@ final class Pipeline {
         state = .failed(message)
         doneFader = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.state = .idle
+        }
+    }
+
+    // MARK: - Assistant Mode
+
+    /// Entry point for the Assistant Mode hotkey press. Grabs the current selection
+    /// (synchronously enough that the user holding the hotkey still feels responsive),
+    /// then starts the recorder so the user can dictate their instruction.
+    func startAssistant() {
+        switch state {
+        case .done, .failed:
+            doneFader?.cancel()
+            doneFader = nil
+            state = .idle
+        default:
+            break
+        }
+        guard case .idle = state else { return }
+        guard settings.llmModelID != ModelCatalog.noneLLMID else {
+            fail("Assistant Mode needs an LLM. Pick one in Settings → Models.")
+            return
+        }
+        state = .capturingSelection
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                // Selection is optional — Assistant Mode also handles "insert here"
+                // style requests where the user has no selection (e.g. "make me a
+                // list of ten ideas here please").
+                let selection = try await SelectionGrabber.grab()
+                try recorder.start()
+                inFlightAssistant = InFlightAssistant(selection: selection)
+                state = .recording(level: 0, isAssistant: true)
+                if settings.playSounds { SoundEffects.shared.playStart() }
+            } catch SelectionGrabber.GrabError.noAccessibility {
+                fail("Accessibility permission required for Assistant Mode.")
+            } catch {
+                fail("Assistant: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Entry point for the Assistant Mode hotkey release. If the press succeeded in
+    /// grabbing a selection and starting the recorder, this runs Whisper on the
+    /// dictated instruction and then calls the assistant LLM.
+    func finishAssistant() {
+        guard let inflight = inFlightAssistant else {
+            // Press path failed (no selection, no AX permission, etc.) — release is a no-op.
+            return
+        }
+        guard case .recording = state else { return }
+        let samples = recorder.stop()
+        if settings.playSounds { SoundEffects.shared.playStop() }
+        guard samples.count > 8_000 else {
+            inFlightAssistant = nil
+            state = .idle
+            return
+        }
+        Task { await runAssistantPipeline(samples: samples, selection: inflight.selection) }
+    }
+
+    private func runAssistantPipeline(samples: [Float], selection: String?) async {
+        state = .transcribing
+        let instructionRaw: String
+        do {
+            instructionRaw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
+        } catch {
+            inFlightAssistant = nil
+            fail("Transcribe: \(error.localizedDescription)")
+            return
+        }
+        let instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else {
+            inFlightAssistant = nil
+            state = .idle
+            return
+        }
+
+        state = .assisting
+        let result: AssistantResult
+        do {
+            result = try await llm.assist(
+                selection: selection,
+                instruction: instruction,
+                modelID: settings.llmModelID,
+                systemPrompt: settings.assistantSystemPrompt
+            )
+        } catch {
+            inFlightAssistant = nil
+            fail("Assistant: \(error.localizedDescription)")
+            return
+        }
+
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            inFlightAssistant = nil
+            fail("Assistant returned no output.")
+            return
+        }
+
+        await deliverAssistant(text: text, mode: result.mode, hadSelection: selection != nil)
+        inFlightAssistant = nil
+    }
+
+    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool) async {
+        lastResult = text
+        var pasted = false
+        var note: String
+
+        switch mode {
+        case .replace:
+            // Paste-replace the still-selected text, or insert at the cursor if
+            // there was no selection. TextInjector handles both — synthetic ⌘V
+            // overwrites a selection if one exists, or just inserts otherwise.
+            switch injector.deliver(text: text) {
+            case .pasted:
+                pasted = true
+                note = hadSelection ? "Replaced selection" : "Inserted"
+            case .copiedOnly(let reason):
+                pasted = false
+                note = reason
+            }
+        case .draft:
+            // Draft mode: never paste — just leave the result on the clipboard so
+            // the user pastes it wherever they actually want it.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            pasted = false
+            note = "Copied — ⌘V to paste"
+        }
+
+        state = .done(text: text, pasted: pasted, note: note)
+        if settings.playSounds { SoundEffects.shared.playDone() }
+        // Assistant outputs are often longer than dictation transcripts — give the
+        // user time to actually read what just landed before the HUD fades.
+        doneFader = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(3500))
             guard !Task.isCancelled else { return }
             self?.state = .idle
         }

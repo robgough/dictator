@@ -4,18 +4,25 @@ import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
     static let toggleDictation = Self("toggleDictation", default: .init(.d, modifiers: [.option, .command]))
+    static let toggleAssistant = Self("toggleAssistant", default: .init(.a, modifiers: [.option, .command]))
 }
 
+/// One binder = one hotkey "channel" (e.g. dictation, or assistant). Each instance owns
+/// its own ModifierKeyMonitor and a single KeyboardShortcuts.Name so two binders can
+/// listen simultaneously without stepping on each other's monitors.
 @MainActor
 final class HotkeyBinder {
-    static let shared = HotkeyBinder()
-    private init() {}
+    let shortcutName: KeyboardShortcuts.Name
 
     private var onPress: (() -> Void)?
     private var onRelease: (() -> Void)?
     private var currentMode: TriggerMode = .keyboardShortcut
 
     private let modifierMonitor = ModifierKeyMonitor()
+
+    init(shortcutName: KeyboardShortcuts.Name) {
+        self.shortcutName = shortcutName
+    }
 
     func bind(mode: TriggerMode,
               onPress: @escaping () -> Void,
@@ -33,21 +40,21 @@ final class HotkeyBinder {
         apply(mode: mode)
     }
 
-    /// Restore the default keyboard combination shortcut (⌥⌘D).
+    /// Restore the default keyboard combination for this binder's shortcut.
     func resetKeyboardShortcutToDefault() {
-        KeyboardShortcuts.reset(.toggleDictation)
+        KeyboardShortcuts.reset(shortcutName)
     }
 
     private func apply(mode: TriggerMode) {
         // Tear everything down before re-attaching the new mode.
-        KeyboardShortcuts.removeHandler(for: .toggleDictation)
+        KeyboardShortcuts.removeHandler(for: shortcutName)
         modifierMonitor.stop()
         currentMode = mode
 
         switch mode {
         case .keyboardShortcut:
-            if let onPress { KeyboardShortcuts.onKeyDown(for: .toggleDictation, action: onPress) }
-            if let onRelease { KeyboardShortcuts.onKeyUp(for: .toggleDictation, action: onRelease) }
+            if let onPress { KeyboardShortcuts.onKeyDown(for: shortcutName, action: onPress) }
+            if let onRelease { KeyboardShortcuts.onKeyUp(for: shortcutName, action: onRelease) }
 
         default:
             guard

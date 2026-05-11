@@ -3,6 +3,7 @@ import SwiftUI
 /// Live, decay-smoothed bar meter driven by RMS level updates.
 struct Waveform: View {
     let level: Float
+    var tint: Color = .accentColor
     @State private var bars: [Double] = Array(repeating: 0.05, count: barCount)
     private static let barCount = 28
 
@@ -19,7 +20,7 @@ struct Waveform: View {
                 let rect = CGRect(x: x, y: midY - h / 2, width: barWidth, height: h)
                 let shape = Path(roundedRect: rect, cornerRadius: barWidth / 2)
                 let alpha = 0.55 + value * 0.45
-                ctx.fill(shape, with: .color(.accentColor.opacity(alpha)))
+                ctx.fill(shape, with: .color(tint.opacity(alpha)))
             }
         }
         .frame(height: 36)

@@ -99,11 +99,13 @@ struct MenuBarContent: View {
     private var statusText: String {
         switch state.pipeline.state {
         case .idle: "Idle"
-        case .recording: "Listening…"
+        case .capturingSelection: "Reading selection…"
+        case .recording(_, let isAssistant): isAssistant ? "Listening for instruction…" : "Listening…"
         case .transcribing: "Transcribing…"
         case .formatting: "Formatting…"
         case .fixingGrammar: "Tidying grammar…"
         case .restructuring: "Structuring…"
+        case .assisting: "Thinking…"
         case .done(_, let pasted, _): pasted ? "Pasted" : "Copied to clipboard"
         case .failed(let m): m
         }

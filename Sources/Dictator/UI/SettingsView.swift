@@ -474,9 +474,15 @@ private struct GeneralPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
-            Section("Hotkey") {
+            Section("Dictation hotkey") {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
-                    ForEach(TriggerMode.allCases) { mode in
+                    ForEach(TriggerMode.allCases.filter { mode in
+                        // Hide whatever the assistant trigger is currently using so
+                        // the two hotkeys can't collide on the same physical key.
+                        // `.keyboardShortcut` is exempt — different `Name`s can be
+                        // bound to different combos independently.
+                        mode == .keyboardShortcut || mode != s.settings.assistantTriggerMode
+                    }) { mode in
                         Text(mode.label).tag(mode)
                     }
                 }
@@ -488,7 +494,7 @@ private struct GeneralPane: View {
                         Spacer()
                         KeyboardShortcuts.Recorder(for: .toggleDictation)
                         Button("Reset") {
-                            HotkeyBinder.shared.resetKeyboardShortcutToDefault()
+                            state.resetDictationKeyboardShortcut()
                         }
                         .controlSize(.small)
                     }
@@ -497,6 +503,32 @@ private struct GeneralPane: View {
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Hold the **\(s.settings.triggerMode.label)** key to dictate. Release to transcribe.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section("Assistant Mode hotkey") {
+                Picker("Trigger", selection: $s.settings.assistantTriggerMode) {
+                    ForEach(TriggerMode.allCases.filter { mode in
+                        mode == .keyboardShortcut || mode != s.settings.triggerMode
+                    }) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .onChange(of: s.settings.assistantTriggerMode) { _, _ in state.save() }
+
+                if s.settings.assistantTriggerMode == .keyboardShortcut {
+                    HStack {
+                        Text("Hold-to-assist")
+                        Spacer()
+                        KeyboardShortcuts.Recorder(for: .toggleAssistant)
+                        Button("Reset") {
+                            state.resetAssistantKeyboardShortcut()
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    Text("Hold the **\(s.settings.assistantTriggerMode.label)** key with text selected to dictate an instruction. The LLM decides whether to replace your selection or copy the result to the clipboard.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -815,6 +847,7 @@ private struct PromptPane: View {
         case formatting = "Pass 1 · Formatting"
         case grammar    = "Pass 2 · Grammar"
         case structure  = "Pass 3 · Structure"
+        case assistant  = "Assistant Mode"
         var id: String { rawValue }
     }
 
@@ -829,7 +862,22 @@ private struct PromptPane: View {
             case .formatting: formattingEditor
             case .grammar:    grammarEditor
             case .structure:  structuralEditor
+            case .assistant:  assistantEditor
             }
+        }
+    }
+
+    private var assistantEditor: some View {
+        @Bindable var s = state
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Used when you trigger the Assistant hotkey on selected text. The model decides whether to REPLACE the selection or DRAFT a new piece of text to the clipboard.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            promptEditor(text: $s.settings.assistantSystemPrompt) {
+                s.settings.assistantSystemPrompt = DictatorSettings.defaultAssistantPrompt
+                state.save()
+            }
+            .onChange(of: s.settings.assistantSystemPrompt) { _, _ in state.save() }
         }
     }
 

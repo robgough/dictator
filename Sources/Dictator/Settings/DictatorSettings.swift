@@ -15,6 +15,8 @@ struct DictatorSettings: Codable, Equatable {
     var grammarPrompt: String
     var grammarPassMaxEditFraction: Double
     var vocabulary: [VocabularyEntry]
+    var assistantTriggerMode: TriggerMode
+    var assistantSystemPrompt: String
 
     static let defaults = DictatorSettings(
         whisperModelID: ModelCatalog.defaultWhisper.id,
@@ -22,7 +24,7 @@ struct DictatorSettings: Codable, Equatable {
         systemPrompt: DictatorSettings.defaultPrompt,
         pasteAutomatically: true,
         playSounds: true,
-        triggerMode: .keyboardShortcut,
+        triggerMode: .fn,
         preloadModelsOnLaunch: false,
         structuralPassEnabled: true,
         structuralPrompt: DictatorSettings.defaultStructuralPrompt,
@@ -30,7 +32,9 @@ struct DictatorSettings: Codable, Equatable {
         grammarPassEnabled: false,
         grammarPrompt: DictatorSettings.defaultGrammarPrompt,
         grammarPassMaxEditFraction: 0.15,
-        vocabulary: []
+        vocabulary: [],
+        assistantTriggerMode: .rightOption,
+        assistantSystemPrompt: DictatorSettings.defaultAssistantPrompt
     )
 
     init(
@@ -47,7 +51,9 @@ struct DictatorSettings: Codable, Equatable {
         grammarPassEnabled: Bool,
         grammarPrompt: String,
         grammarPassMaxEditFraction: Double,
-        vocabulary: [VocabularyEntry]
+        vocabulary: [VocabularyEntry],
+        assistantTriggerMode: TriggerMode,
+        assistantSystemPrompt: String
     ) {
         self.whisperModelID = whisperModelID
         self.llmModelID = llmModelID
@@ -63,6 +69,8 @@ struct DictatorSettings: Codable, Equatable {
         self.grammarPrompt = grammarPrompt
         self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
         self.vocabulary = vocabulary
+        self.assistantTriggerMode = assistantTriggerMode
+        self.assistantSystemPrompt = assistantSystemPrompt
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +93,8 @@ struct DictatorSettings: Codable, Equatable {
         self.grammarPrompt          = try c.decodeIfPresent(String.self,      forKey: .grammarPrompt)          ?? d.grammarPrompt
         self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self,  forKey: .grammarPassMaxEditFraction) ?? d.grammarPassMaxEditFraction
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
+        self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
+        self.assistantSystemPrompt  = try c.decodeIfPresent(String.self,      forKey: .assistantSystemPrompt) ?? d.assistantSystemPrompt
     }
 
     static let defaultPrompt = """
@@ -201,14 +211,133 @@ struct DictatorSettings: Codable, Equatable {
     "me and him goes to the meeting" → He and I go to the meeting.
     """
 
+    static let defaultAssistantPrompt = """
+    You are an assistant. The user gives you a short spoken instruction and OPTIONALLY a piece of text they had selected in another app. Some requests reference the selection ("rewrite this", "draft a reply to this"); others are standalone generation requests with no selection ("make me a list of 10 names").
+
+    You MUST classify your reply into one of two modes and emit the mode marker as the VERY FIRST LINE, then a blank line, then the output text. Nothing else.
+
+    Modes:
+    - MODE: REPLACE — the output is pasted directly at the user's cursor. Use when they want the result inserted in-place: transforming the selection ("rewrite this", "bulletify these"), or generating content to drop into the document they're writing ("put a list of ten ideas here", "insert a short summary").
+    - MODE: DRAFT — the output goes to the clipboard only; the user pastes it themselves elsewhere. Use when the result is meant to live in a *different* place than where they are now: drafting an email reply, writing notes about the selection, answering a question they're asking you, summarising for separate use.
+
+    How to decide:
+    - Phrases like "rewrite", "fix this", "reformat", "make this", "turn this into", "rephrase", "translate", "shorten", "expand", "change", "tidy", "put X here", "insert", "give me Y here" → REPLACE.
+    - Phrases like "draft a reply", "write me an email", "compose", "respond to", "summarise this for me", "extract action items", "answer", "tell me", "what is" → DRAFT.
+    - If selection is empty AND the instruction implies inserting at the cursor ("put", "insert", "give me … here", "make me a list"), prefer REPLACE.
+    - If selection is empty AND the instruction is conversational or asks a question, prefer DRAFT.
+    - When genuinely ambiguous, choose DRAFT (it's non-destructive — the user can still paste manually).
+
+    Output rules:
+    - Line 1: exactly `MODE: REPLACE` or `MODE: DRAFT`.
+    - Line 2: blank.
+    - Line 3 onwards: the output text, and ONLY the output text. The text IS the deliverable — it lands directly on the user's clipboard or in their document.
+    - NEVER write a preamble. NEVER announce what you're about to do. The first words of line 3 must be the first words of the actual deliverable.
+    - FORBIDDEN preamble lines (NEVER emit these):
+      * "Here's the email:" / "Here is the email:" / "Here's a draft:" / "Here's the response:"
+      * "Sure!" / "Of course!" / "Certainly!" / "Absolutely!" / "Got it!" / "Okay,"
+      * "Below is..." / "I've drafted..." / "I'll write..."
+      * Any line that introduces what comes next. The next thing IS the output — it doesn't need introducing.
+    - No quotes around the output. No follow-up question. No commentary.
+    - Do NOT echo the selection or the instruction back unless the instruction explicitly asks for it.
+
+    The input you receive looks like ONE of:
+
+    SELECTION:
+    <<<
+    ...the user's selected text...
+    >>>
+
+    INSTRUCTION:
+    <<<
+    ...the user's spoken instruction...
+    >>>
+
+    — OR (when nothing is selected) —
+
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    ...the user's spoken instruction...
+    >>>
+
+    Reference examples:
+
+    SELECTION: "hey rob - can you grab the report by friday? thanks"
+    INSTRUCTION: "draft a reply saying yes I'll have it by Thursday"
+    →
+    MODE: DRAFT
+
+    Hi Sam,
+
+    Yes — I'll have the report over to you by Thursday.
+
+    Thanks,
+    Rob
+
+    SELECTION: "we need to ship it before tuesday or the launch slips"
+    INSTRUCTION: "make this more formal"
+    →
+    MODE: REPLACE
+
+    We must ship before Tuesday, or the launch will be delayed.
+
+    SELECTION: (none)
+    INSTRUCTION: "put a list of ten startup name ideas for a dictation app here"
+    →
+    MODE: REPLACE
+
+    - Vox
+    - Murmur
+    - Tellr
+    - Whispr
+    - Pronto
+    - Diktat
+    - Echolane
+    - Speak.io
+    - Phonix
+    - Lexa
+
+    SELECTION: (none)
+    INSTRUCTION: "what's the capital of France?"
+    →
+    MODE: DRAFT
+
+    Paris.
+
+    SELECTION: "the meeting covered: budget overruns, hiring plan slipping, and the Q3 roadmap"
+    INSTRUCTION: "pull out three action points"
+    →
+    MODE: DRAFT
+
+    - Review and address the budget overruns.
+    - Get the hiring plan back on track.
+    - Confirm and circulate the Q3 roadmap.
+    """
+
     private static let key = "DictatorSettings.v1"
 
     static func load() -> DictatorSettings {
-        guard
-            let data = UserDefaults.standard.data(forKey: key),
-            let decoded = try? JSONDecoder().decode(DictatorSettings.self, from: data)
-        else { return .defaults }
-        return decoded
+        var settings: DictatorSettings
+        if let data = UserDefaults.standard.data(forKey: key),
+           let decoded = try? JSONDecoder().decode(DictatorSettings.self, from: data) {
+            settings = decoded
+        } else {
+            settings = .defaults
+        }
+        settings.resolveHotkeyConflicts()
+        return settings
+    }
+
+    /// If both hotkeys map to the same modifier-key trigger, reset the assistant
+    /// one to `.keyboardShortcut` so they don't fight over the same physical key.
+    /// `.keyboardShortcut` is exempt — its actual combo is bound under a separate
+    /// `KeyboardShortcuts.Name`, so two `.keyboardShortcut` triggers can coexist
+    /// (the KeyboardShortcuts library prevents identical combos within its own UI).
+    mutating func resolveHotkeyConflicts() {
+        if triggerMode != .keyboardShortcut, triggerMode == assistantTriggerMode {
+            assistantTriggerMode = .keyboardShortcut
+        }
     }
 
     func persist() {
