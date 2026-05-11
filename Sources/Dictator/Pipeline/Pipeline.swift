@@ -37,6 +37,18 @@ enum PipelineState: Equatable {
         if case .failed = self { return false }
         return true
     }
+
+    /// Whether the user can usefully abort what's happening. True while the
+    /// pipeline is doing something interruptible (recording or any thinking
+    /// state); false in idle / done-linger / failed where there's nothing to
+    /// stop. Drives both the HUD's hover-cancel button and the panel's
+    /// `ignoresMouseEvents` so click-through works during done-linger.
+    var canCancel: Bool {
+        switch self {
+        case .idle, .done, .failed: false
+        default: true
+        }
+    }
 }
 
 @MainActor
@@ -80,6 +92,12 @@ final class Pipeline {
     private let injector = TextInjector()
 
     private var doneFader: Task<Void, Never>?
+
+    /// The post-capture or assistant pipeline currently running. Stored so
+    /// `cancelInFlight()` can abort it — LLM generation checks `Task.isCancelled`
+    /// inside its didGenerate callback and stops at the next token, then the
+    /// awaiting code bails before delivery.
+    private var inFlightTask: Task<Void, Never>?
 
     private var pendingNote: String?
 
@@ -168,7 +186,10 @@ final class Pipeline {
             state = .idle
             return
         }
-        Task { await runPostCapture(samples: samples) }
+        inFlightTask = Task { @MainActor [weak self] in
+            await self?.runPostCapture(samples: samples)
+            self?.inFlightTask = nil
+        }
     }
 
     private func runPostCapture(samples: [Float]) async {
@@ -177,9 +198,11 @@ final class Pipeline {
         do {
             raw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
         } catch {
+            if Task.isCancelled { return }
             fail("Transcribe: \(error.localizedDescription)")
             return
         }
+        if Task.isCancelled { return }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         inFlight.raw = trimmed
         guard !trimmed.isEmpty else { state = .idle; return }
@@ -239,13 +262,17 @@ final class Pipeline {
         let corrected = Vocabulary.apply(settings.vocabulary, to: formatted)
         if corrected != formatted { inFlight.dictionaryCorrected = corrected }
 
+        if Task.isCancelled { return }
+
         // Optional grammar pass: fixes obvious grammar errors. Validated by
         // word-level edit distance; reverted to the previous output if it strays too far.
         let tidied = await maybeFixGrammar(formatted: corrected)
+        if Task.isCancelled { return }
 
         // Optional structural pass: paragraph breaks and bullet lists for long
         // dictations. Validated by strict word-sequence equality (no word changes).
         let final = await maybeRestructure(formatted: tidied)
+        if Task.isCancelled { return }
 
         let warning = pendingNote
         pendingNote = nil
@@ -554,6 +581,28 @@ final class Pipeline {
         activeConversation = conversation
     }
 
+    /// User-initiated abort, triggered from the HUD's hover cancel button.
+    /// Handles every non-idle state:
+    ///   - recording: stops the recorder and discards the buffer
+    ///   - thinking states: cancels the in-flight Task. LLM generation sees
+    ///     this via its didGenerate cancellation closure and stops at the
+    ///     next token; the awaiting pipeline code checks `Task.isCancelled`
+    ///     after each await and bails before delivery.
+    func cancelInFlight() {
+        if case .recording = state {
+            _ = recorder.stop()
+            if settings.playSounds { SoundEffects.shared.playStop() }
+        }
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        inFlightAssistant = nil
+        nextAssistantIsContinuation = false
+        pendingNote = nil
+        doneFader?.cancel()
+        doneFader = nil
+        state = .idle
+    }
+
     /// Entry point for the Assistant Mode hotkey release. If the press succeeded in
     /// grabbing a selection and starting the recorder, this runs Whisper on the
     /// dictated instruction and then calls the assistant LLM.
@@ -570,7 +619,11 @@ final class Pipeline {
             state = .idle
             return
         }
-        Task { await runAssistantPipeline(samples: samples, selection: inflight.selection) }
+        let capturedSelection = inflight.selection
+        inFlightTask = Task { @MainActor [weak self] in
+            await self?.runAssistantPipeline(samples: samples, selection: capturedSelection)
+            self?.inFlightTask = nil
+        }
     }
 
     private func runAssistantPipeline(samples: [Float], selection: String?) async {
@@ -582,11 +635,13 @@ final class Pipeline {
         do {
             instructionRaw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
         } catch {
+            if Task.isCancelled { return }
             inFlightAssistant = nil
             nextAssistantIsContinuation = false
             fail("Transcribe: \(error.localizedDescription)")
             return
         }
+        if Task.isCancelled { return }
         let instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else {
             inFlightAssistant = nil
@@ -636,12 +691,14 @@ final class Pipeline {
                     priorSummary: summary,
                     modelID: settings.llmModelID
                 )
+                if Task.isCancelled { return }
                 summary = newSummary
                 priorTurns = keep
                 // Index of the last summarised turn within the *full* turn list.
                 // active.turns.count - keep.count - 1 = the last index now compacted.
                 pendingCompactionIndex = active.turns.count - keep.count - 1
             } catch {
+                if Task.isCancelled { return }
                 inFlightAssistant = nil
                 nextAssistantIsContinuation = false
                 fail("This conversation is too long. Start a new one.")
@@ -661,11 +718,13 @@ final class Pipeline {
                 summary: summary
             )
         } catch {
+            if Task.isCancelled { return }
             inFlightAssistant = nil
             nextAssistantIsContinuation = false
             fail("Assistant: \(error.localizedDescription)")
             return
         }
+        if Task.isCancelled { return }
 
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {

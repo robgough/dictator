@@ -78,7 +78,8 @@ final class LLMService {
     }
 
     private func runFormatPass(text: String, modelID: String, systemPrompt: String,
-                               maxTokenMultiplier: Double, maxTokenConstant: Int) async throws -> String {
+                               maxTokenMultiplier: Double, maxTokenConstant: Int,
+                               cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
@@ -106,7 +107,7 @@ final class LLMService {
                 input: lmInput,
                 parameters: params,
                 context: ctx,
-                didGenerate: { (_: [Int]) in .more }
+                didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
             return result.output
         }
@@ -131,7 +132,8 @@ final class LLMService {
         modelID: String,
         systemPrompt: String,
         priorTurns: [ConversationTurn] = [],
-        summary: String? = nil
+        summary: String? = nil,
+        cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> AssistantResult {
         try await ensureLoaded(modelID: modelID)
         guard let container else {
@@ -176,7 +178,7 @@ final class LLMService {
                 input: lmInput,
                 parameters: params,
                 context: ctx,
-                didGenerate: { (_: [Int]) in .more }
+                didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
             return result.output
         }
@@ -189,7 +191,12 @@ final class LLMService {
     /// (user intent, decisions, names, drafted content) the model needs to
     /// keep continuity. Failure throws — the caller surfaces a "conversation
     /// too long" message rather than silently dropping context.
-    func summariseConversation(turns: [ConversationTurn], priorSummary: String?, modelID: String) async throws -> String {
+    func summariseConversation(
+        turns: [ConversationTurn],
+        priorSummary: String?,
+        modelID: String,
+        cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
+    ) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
@@ -246,7 +253,7 @@ final class LLMService {
                 input: lmInput,
                 parameters: params,
                 context: ctx,
-                didGenerate: { (_: [Int]) in .more }
+                didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
             return result.output
         }

@@ -3,6 +3,7 @@ import SwiftUI
 struct HUDView: View {
     @Environment(AppState.self) private var state
     @State private var deviceManager = AudioDeviceManager.shared
+    @State private var hovering = false
 
     var body: some View {
         content
@@ -18,7 +19,25 @@ struct HUDView: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
             )
+            .overlay(alignment: .topTrailing) {
+                if hovering && state.pipeline.state.canCancel {
+                    Button {
+                        state.pipeline.cancelInFlight()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel")
+                    .padding(6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
+            }
+            .animation(.snappy(duration: 0.18), value: hovering)
             .animation(.snappy(duration: 0.25), value: stateKey)
+            .onHover { hovering = $0 }
     }
 
     @ViewBuilder private var content: some View {

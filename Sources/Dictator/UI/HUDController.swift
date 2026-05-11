@@ -55,6 +55,12 @@ final class HUDController {
         let s = state.pipeline.state
         let active = s.isActive || isTerminal(s)
 
+        // The panel is mouse-transparent by default so clicks pass through to
+        // whatever's underneath. Flip that off only while the state is
+        // cancellable, so the hover overlay can actually receive mouse events
+        // for the cancel button.
+        panel.ignoresMouseEvents = !s.canCancel
+
         if active && !visible {
             show()
         } else if !active && visible {
