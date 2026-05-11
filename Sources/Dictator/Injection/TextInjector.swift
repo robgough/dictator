@@ -140,7 +140,15 @@ final class TextInjector {
         _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
     }
 
-    private static func requestAccessibilityPrompt() {
+    /// Asks macOS to register Dictator in the Accessibility list and pop the
+    /// system permission dialog. Safe to call repeatedly — when the app is
+    /// already trusted, it's a no-op; when it isn't, macOS adds the app to
+    /// `System Settings → Privacy & Security → Accessibility` so the user has
+    /// somewhere to enable it.
+    ///
+    /// Exposed publicly so the Settings UI can trigger registration without
+    /// having to perform a (failing) AX call first.
+    static func requestAccessibilityPrompt() {
         // `kAXTrustedCheckOptionPrompt` is a CFString global that Swift 6 treats as
         // non-Sendable. Its underlying value is documented as "AXTrustedCheckOptionPrompt".
         let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]

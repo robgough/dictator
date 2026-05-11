@@ -1,5 +1,6 @@
 import SwiftUI
 import KeyboardShortcuts
+import AVFoundation
 
 struct SettingsView: View {
     @Environment(AppState.self) private var state
@@ -602,22 +603,10 @@ private struct GeneralPane: View {
             }
             Section("Permissions") {
                 AccessibilityStatusRow()
-                PermissionRow(label: "Microphone", hint: "System Settings → Privacy & Security → Microphone")
+                MicrophoneStatusRow()
             }
         }
         .formStyle(.grouped)
-    }
-}
-
-private struct PermissionRow: View {
-    let label: String
-    let hint: String
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).fontWeight(.medium)
-            Text(hint).foregroundStyle(.secondary).font(.caption)
-        }
-        .font(.callout)
     }
 }
 
@@ -636,13 +625,21 @@ private struct AccessibilityStatusRow: View {
                 }
                 Text(granted
                      ? "Granted — Dictator can paste into the focused app."
-                     : "Not granted — Dictator will copy to clipboard but cannot paste. Click below to open System Settings, then enable Dictator in Accessibility.")
+                     : "Not granted — Dictator will copy to clipboard but cannot paste. Click Enable to register Dictator with macOS, then toggle it on in Accessibility.")
                 .foregroundStyle(.secondary)
                 .font(.caption)
             }
             Spacer()
             if !granted {
-                Button("Open Settings") {
+                // Two-step gesture in one click: trigger the AX trust prompt
+                // (which adds Dictator to the Accessibility list in macOS's
+                // database — without this the user can't find us in
+                // System Settings), then surface the Settings page so they
+                // have somewhere to flip the toggle. The AX prompt also pops
+                // a system dialog with its own "Open System Preferences"
+                // button, which is redundant but harmless.
+                Button("Enable") {
+                    TextInjector.requestAccessibilityPrompt()
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                         NSWorkspace.shared.open(url)
                     }
@@ -653,6 +650,101 @@ private struct AccessibilityStatusRow: View {
         .font(.callout)
         .onReceive(pollTimer) { _ in
             granted = TextInjector.hasAccessibilityPermission()
+        }
+    }
+}
+
+private struct MicrophoneStatusRow: View {
+    @State private var status: AVAuthorizationStatus = MicPermission.status()
+    private let pollTimer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Microphone").fontWeight(.medium)
+                    Image(systemName: statusIcon)
+                        .foregroundStyle(statusColor)
+                        .font(.caption)
+                }
+                Text(statusDescription)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            Spacer()
+            actionButton
+        }
+        .font(.callout)
+        .onReceive(pollTimer) { _ in
+            status = MicPermission.status()
+        }
+    }
+
+    private var statusIcon: String {
+        switch status {
+        case .authorized: "checkmark.seal.fill"
+        case .denied, .restricted: "exclamationmark.triangle.fill"
+        case .notDetermined: "questionmark.circle.fill"
+        @unknown default: "questionmark.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .authorized: .green
+        case .denied, .restricted: .orange
+        case .notDetermined: .secondary
+        @unknown default: .secondary
+        }
+    }
+
+    private var statusDescription: String {
+        switch status {
+        case .authorized:
+            return "Granted — Dictator can hear you."
+        case .denied, .restricted:
+            return "Denied — dictation cannot record audio. Click Open Settings, then enable Dictator under Microphone."
+        case .notDetermined:
+            return "Not yet requested. Click Request to ask macOS for mic access."
+        @unknown default:
+            return "Unknown status."
+        }
+    }
+
+    @ViewBuilder private var actionButton: some View {
+        switch status {
+        case .notDetermined:
+            // Triggers the OS prompt + registers Dictator in the Microphone
+            // privacy list. Without this, the user only sees Dictator in
+            // System Settings after the first dictation lazily fires the
+            // request — bad first-run UX.
+            Button("Request") {
+                MicPermission.request { granted in
+                    Task { @MainActor in
+                        status = MicPermission.status()
+                        // Belt + braces: a denial from the OS prompt still
+                        // leaves us in `.denied`, where the user needs the
+                        // Settings page to undo it.
+                        if !granted {
+                            openMicrophoneSettings()
+                        }
+                    }
+                }
+            }
+            .controlSize(.small)
+        case .denied, .restricted:
+            Button("Open Settings") { openMicrophoneSettings() }
+                .controlSize(.small)
+        case .authorized:
+            EmptyView()
+        @unknown default:
+            EmptyView()
+        }
+    }
+
+    private func openMicrophoneSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
         }
     }
 }
