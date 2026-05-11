@@ -14,8 +14,13 @@ final class TextInjector {
     /// Returns whether the synthetic paste was actually attempted (it requires
     /// Accessibility permission). When permission is missing the previous
     /// clipboard is NOT restored, so the user can paste manually with ⌘V.
+    ///
+    /// When `selectAfterPaste` is true (assistant REPLACE), the focused
+    /// element's selection range is captured before the paste and re-set
+    /// afterwards to cover the just-inserted text — so the user can immediately
+    /// reprompt or tweak what the assistant produced.
     @discardableResult
-    func deliver(text: String) -> DeliveryResult {
+    func deliver(text: String, selectAfterPaste: Bool = false) -> DeliveryResult {
         let pasteboard = NSPasteboard.general
 
         // Capture previous clipboard so we can restore it after a successful paste.
@@ -35,8 +40,22 @@ final class TextInjector {
             return .copiedOnly(reason: "Accessibility permission required to paste. Text is on your clipboard — press ⌘V to paste.")
         }
 
+        // Capture pre-paste selection up-front: the focused element and the
+        // location of the existing selection/cursor. After the paste lands the
+        // cursor sits at (location + pastedLength) and the selection is empty,
+        // so we re-set it to (location, pastedLength) to cover the new text.
+        let preSelection: PreSelection? = selectAfterPaste ? Self.capturePreSelection() : nil
+        let pastedLength = text.utf16.count
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
             Self.synthesizeCommandV()
+            if let pre = preSelection {
+                // Small delay so the host app has processed the ⌘V and updated
+                // its text storage before we set the selection range.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    Self.setSelectedRange(pre.element, location: pre.location, length: pastedLength)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 guard !previous.isEmpty else { return }
                 pasteboard.clearContents()
@@ -88,6 +107,37 @@ final class TextInjector {
             if editableSubroles.contains(subrole) { return true }
         }
         return false
+    }
+
+    /// Pre-paste capture of the focused text element and its current selection
+    /// location. The location stays valid across the paste because synthetic
+    /// ⌘V replaces the selection (or inserts at the cursor) without shifting
+    /// the starting offset.
+    private struct PreSelection {
+        let element: AXUIElement
+        let location: Int
+    }
+
+    private static func capturePreSelection() -> PreSelection? {
+        guard hasAccessibilityPermission() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        guard err == .success, let focused = focusedRef else { return nil }
+        let element = focused as! AXUIElement
+
+        var rangeRef: CFTypeRef?
+        let r = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef)
+        guard r == .success, let rangeValue = rangeRef else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else { return nil }
+        return PreSelection(element: element, location: range.location)
+    }
+
+    private static func setSelectedRange(_ element: AXUIElement, location: Int, length: Int) {
+        var range = CFRange(location: location, length: length)
+        guard let value = AXValueCreate(.cfRange, &range) else { return }
+        _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
     }
 
     private static func requestAccessibilityPrompt() {

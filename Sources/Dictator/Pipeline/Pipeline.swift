@@ -807,7 +807,9 @@ final class Pipeline {
                 // Paste-replace the still-selected text, or insert at the cursor if
                 // there was no selection. TextInjector handles both — synthetic ⌘V
                 // overwrites a selection if one exists, or just inserts otherwise.
-                switch injector.deliver(text: text) {
+                // selectAfterPaste keeps the just-inserted text selected so the
+                // user can immediately reprompt the assistant on it.
+                switch injector.deliver(text: text, selectAfterPaste: true) {
                 case .pasted:
                     pasted = true
                     note = hadSelection ? "Replaced selection" : "Inserted"
