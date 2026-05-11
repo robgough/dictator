@@ -117,13 +117,38 @@ final class AudioRecorder {
 
     private func handleConfigurationChange() {
         guard running else { return }
-        let device = AudioDeviceManager.shared.activeInputDeviceName()
-        // Tear down before notifying upstream so we can't re-enter via a
-        // follow-up notification while the pipeline is mid-recovery.
+        // Tear down before re-configuring so any follow-up notification while
+        // we're swapping is a no-op.
         tearDownObservers()
         engine.stop()
         running = false
-        onUnexpectedStop?("Audio input changed mid-recording (now: \(device)).")
+
+        // The macOS audio path fires this notification whenever the active
+        // input changes (USB / Bluetooth mic unplugged, AirPods connect, hub
+        // power cycle, …). The previous behaviour treated it as a hard
+        // failure and dumped the user back to the HUD with an error. The
+        // kinder UX is to silently restart on whatever input is active now
+        // so they can keep dictating uninterrupted.
+        //
+        // Any audio captured before the swap is discarded — the old and new
+        // devices typically sample at different rates and our buffer assumes
+        // a single native rate per recording. In practice the swap usually
+        // happens at the very start of a recording anyway (e.g. AUHAL
+        // discovers the saved preferred device is gone and falls back), so
+        // there's nothing meaningful to keep.
+        rawBuffer.removeAll(keepingCapacity: true)
+        nativeSampleRate = 0
+
+        do {
+            try configureAndStartEngine(deviceOverride: nil)
+        } catch {
+            // Couldn't restart — typically means there's no usable input
+            // device at all. Now we surface the failure upstream so the
+            // pipeline can end the recording cleanly rather than hanging on
+            // a silent recorder.
+            let device = AudioDeviceManager.shared.activeInputDeviceName()
+            onUnexpectedStop?("Audio input changed mid-recording (now: \(device)).")
+        }
     }
 
     private static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
