@@ -43,6 +43,13 @@ final class Pipeline {
     private(set) var state: PipelineState = .idle
     private(set) var lastResult: String = ""
 
+    /// Fired when an Assistant Mode result lands on the clipboard rather than
+    /// being pasted in place — either because the user dictated a draft (DRAFT
+    /// mode) or because the paste path failed and we fell back to copy. The
+    /// host wires this to the result window so the user can read the output
+    /// immediately without having to find a document to paste into.
+    var onAssistantResultCopied: ((_ text: String, _ instruction: String) -> Void)?
+
     private var settings: DictatorSettings
     private let recorder = AudioRecorder()
     private let transcription = TranscriptionServiceHolder.shared
@@ -532,11 +539,11 @@ final class Pipeline {
             return
         }
 
-        await deliverAssistant(text: text, mode: result.mode, hadSelection: selection != nil)
+        await deliverAssistant(text: text, mode: result.mode, hadSelection: selection != nil, instruction: instruction)
         inFlightAssistant = nil
     }
 
-    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool) async {
+    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, instruction: String) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
         // same reasoning as `finish()`.
         let text = Self.withTrailingSpace(text)
@@ -564,6 +571,13 @@ final class Pipeline {
             NSPasteboard.general.setString(text, forType: .string)
             pasted = false
             note = "Copied — ⌘V to paste"
+        }
+
+        // Whenever the result is on the clipboard rather than pasted, open the
+        // readable result window so the user doesn't have to hunt down a
+        // document just to see what the assistant produced.
+        if !pasted {
+            onAssistantResultCopied?(text, instruction)
         }
 
         state = .done(text: text, pasted: pasted, note: note)

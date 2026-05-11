@@ -12,6 +12,7 @@ final class AppState {
 
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
+    private let assistantResultWindow = AssistantResultController()
 
     private init() {
         let settings = DictatorSettings.load()
@@ -21,6 +22,9 @@ final class AppState {
 
     func bootstrap() {
         AudioDeviceManager.shared.bootstrap()
+        pipeline.onAssistantResultCopied = { [weak self] text, instruction in
+            self?.assistantResultWindow.show(text: text, instruction: instruction)
+        }
         dictationHotkey.bind(
             mode: settings.triggerMode,
             onPress: { [weak self] in self?.pipeline.startRecording() },
