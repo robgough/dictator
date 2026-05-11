@@ -777,38 +777,52 @@ final class Pipeline {
         var pasted = false
         var note: String
 
-        switch mode {
-        case .replace:
-            // Only synthesise ⌘V if the focused element is actually an editable
-            // text input. Otherwise the paste would land somewhere unintended —
-            // a URL bar, a search box on a web page the user wasn't typing
-            // into, or simply nowhere at all. Fall back to DRAFT-style
-            // clipboard + window so the user can read and place it themselves.
-            if !TextInjector.focusedElementIsEditableText() {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                pasted = false
-                note = "No text input focused — copied to clipboard"
-                break
-            }
-            // Paste-replace the still-selected text, or insert at the cursor if
-            // there was no selection. TextInjector handles both — synthetic ⌘V
-            // overwrites a selection if one exists, or just inserts otherwise.
-            switch injector.deliver(text: text) {
-            case .pasted:
-                pasted = true
-                note = hadSelection ? "Replaced selection" : "Inserted"
-            case .copiedOnly(let reason):
-                pasted = false
-                note = reason
-            }
-        case .draft:
-            // Draft mode: never paste — just leave the result on the clipboard so
-            // the user pastes it wherever they actually want it.
+        // Conversation mode: the result window is already open, so the user is
+        // conversing with the assistant rather than editing in another app.
+        // Never paste in this state, regardless of the model's REPLACE/DRAFT
+        // classification — the reply just appends to the conversation, which
+        // the window picks up automatically via ConversationHistory. Closing
+        // the window ends conversation mode (and clears activeConversation).
+        let inConversationMode = resultWindowIsVisible?() == true
+        if inConversationMode {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             pasted = false
-            note = "Copied — ⌘V to paste"
+            note = "Added to conversation"
+        } else {
+            switch mode {
+            case .replace:
+                // Only synthesise ⌘V if the focused element is actually an editable
+                // text input. Otherwise the paste would land somewhere unintended —
+                // a URL bar, a search box on a web page the user wasn't typing
+                // into, or simply nowhere at all. Fall back to DRAFT-style
+                // clipboard + window so the user can read and place it themselves.
+                if !TextInjector.focusedElementIsEditableText() {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    pasted = false
+                    note = "No text input focused — copied to clipboard"
+                    break
+                }
+                // Paste-replace the still-selected text, or insert at the cursor if
+                // there was no selection. TextInjector handles both — synthetic ⌘V
+                // overwrites a selection if one exists, or just inserts otherwise.
+                switch injector.deliver(text: text) {
+                case .pasted:
+                    pasted = true
+                    note = hadSelection ? "Replaced selection" : "Inserted"
+                case .copiedOnly(let reason):
+                    pasted = false
+                    note = reason
+                }
+            case .draft:
+                // Draft mode: never paste — just leave the result on the clipboard so
+                // the user pastes it wherever they actually want it.
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                pasted = false
+                note = "Copied — ⌘V to paste"
+            }
         }
 
         // Always notify the host that a turn finished. When the result is on
