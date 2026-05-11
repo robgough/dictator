@@ -51,12 +51,24 @@ final class TranscriptionService {
         currentModelID = nil
     }
 
-    func transcribe(samples: [Float], modelID: String) async throws -> String {
+    func transcribe(samples: [Float], modelID: String, prompt: String? = nil) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let pipe else {
             throw NSError(domain: "Dictator", code: 1, userInfo: [NSLocalizedDescriptionKey: "Whisper not loaded"])
         }
-        let results = try await pipe.transcribe(audioArray: samples)
+
+        // Optionally bias the decoder with a short prompt (the user's name and
+        // any vocabulary terms they care about). Whisper treats `promptTokens`
+        // as conditioning context — concretely, words that appear there are
+        // more likely to be emitted with the same spelling. Tokenisation can
+        // only happen once the tokenizer's loaded, so we require an
+        // already-loaded pipeline at this point (ensureLoaded above).
+        var decodeOptions: DecodingOptions? = nil
+        if let prompt, !prompt.isEmpty, let tokens = pipe.tokenizer?.encode(text: prompt), !tokens.isEmpty {
+            decodeOptions = DecodingOptions(promptTokens: tokens)
+        }
+
+        let results = try await pipe.transcribe(audioArray: samples, decodeOptions: decodeOptions)
         return results.map(\.text).joined(separator: " ")
     }
 

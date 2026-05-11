@@ -196,6 +196,13 @@ final class Pipeline {
         state = .transcribing
         let raw: String
         do {
+            // NOTE: whisperPromptHint is intentionally NOT passed here. Two
+            // attempts at biasing Whisper via promptTokens (a wordlist and a
+            // natural-sentence form) both pushed the decoder into no-speech
+            // rejection on real audio. The TranscriptionService still accepts
+            // `prompt:` so we can revisit with a different strategy — likely
+            // a runtime-detected previous segment, or a much shorter hint —
+            // without re-plumbing.
             raw = try await transcription.transcribe(samples: samples, modelID: settings.whisperModelID)
         } catch {
             if Task.isCancelled { return }
@@ -205,7 +212,13 @@ final class Pipeline {
         if Task.isCancelled { return }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         inFlight.raw = trimmed
-        guard !trimmed.isEmpty else { state = .idle; return }
+        // Empty transcript = Whisper heard nothing (no-speech segment, mic
+        // muted, hotkey tap with no audio, …). Surface it in the HUD so the
+        // user can tell "didn't hear me" apart from "something broke".
+        guard !trimmed.isEmpty else {
+            fail("No speech detected")
+            return
+        }
 
         var formatted: String
         if settings.llmModelID == ModelCatalog.noneLLMID {
@@ -646,7 +659,7 @@ final class Pipeline {
         guard !instruction.isEmpty else {
             inFlightAssistant = nil
             nextAssistantIsContinuation = false
-            state = .idle
+            fail("No instruction heard")
             return
         }
 
