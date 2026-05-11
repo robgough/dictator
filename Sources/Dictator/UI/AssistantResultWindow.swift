@@ -155,7 +155,7 @@ private struct AssistantResultView: View {
                         }
                     }
                 }
-                if conversation.isApproachingContextLimit {
+                if conversation.isApproachingContextLimit(modelID: AppState.shared.settings.llmModelID) {
                     ApproachingLimitChip()
                 }
                 footer(conversation: conversation)

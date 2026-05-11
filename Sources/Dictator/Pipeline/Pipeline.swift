@@ -705,7 +705,7 @@ final class Pipeline {
             priorTurns: priorTurns, summary: summary,
             selection: selection, instruction: instruction
         )
-        if estimate > ConversationContextBudget.totalInputTokens {
+        if estimate > ConversationContextBudget.totalInputTokens(modelID: settings.llmModelID) {
             guard priorTurns.count > 2, let active = activeConversation else {
                 inFlightAssistant = nil
                 nextAssistantIsContinuation = false

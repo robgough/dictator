@@ -57,14 +57,36 @@ struct Conversation: Codable, Identifiable, Equatable, Hashable, Sendable {
 /// surface an "approaching limit" warning chip. Kept in one struct so both
 /// stay in lockstep.
 ///
-/// The numbers are conservative — they assume an 8K-context model and leave
-/// headroom for the system prompt, the new selection+instruction, and the
-/// reply. If the user later swaps to a larger-context model we can wire
-/// this to the model catalog, but the user said conversations stay short
-/// in practice so this is enough.
+/// Budget is computed from the active model's native context (see
+/// `LLMModel.contextWindowTokens`) minus a fixed reservation for the
+/// assistant system prompt, the worst-case reply, and a small margin for
+/// chat-template overhead. That gives a per-model number — Llama 3.2's 128K
+/// produces a ~117K input budget; Qwen 2.5's 32K produces ~21K.
 enum ConversationContextBudget {
-    static let totalInputTokens = 4000
-    static let approachingThreshold = 3200 // 80% of total
+    /// Tokens we hold back from the model's native window for things that
+    /// aren't conversation history. Sum:
+    /// - 2K for the assistant system prompt (which is large by design)
+    /// - 8K for the worst-case reply (`GenerateParameters.maxTokens` in
+    ///   LLMService.assist; almost no replies actually reach this)
+    /// - 1K margin for chat-template role markers and tokenizer slop
+    static let nonInputReservationTokens = 11_000
+
+    /// Per-conversation input budget for `modelID`. Exceeding this triggers
+    /// pre-call compaction in Pipeline (the oldest turns get summarised so
+    /// the rest still fit). Falls back to a 32K-sized budget when `modelID`
+    /// isn't recognised so a hand-edited settings file can't blow up.
+    static func totalInputTokens(modelID: String) -> Int {
+        let context = ModelCatalog.llm(id: modelID)?.contextWindowTokens
+            ?? ModelCatalog.fallbackContextWindowTokens
+        return max(2_000, context - nonInputReservationTokens)
+    }
+
+    /// 80% of the per-model input budget — when the result window crosses
+    /// this, we show the "approaching context limit" chip so the user
+    /// knows the next turn may force a compaction summarisation.
+    static func approachingThreshold(modelID: String) -> Int {
+        totalInputTokens(modelID: modelID) * 4 / 5
+    }
 
     /// Rough 4-chars-per-token approximation plus a small per-message overhead
     /// for chat-template tokens (role markers etc.). Not exact — exactness
@@ -106,7 +128,7 @@ extension Conversation {
         )
     }
 
-    var isApproachingContextLimit: Bool {
-        estimatedInputTokensForNextTurn >= ConversationContextBudget.approachingThreshold
+    func isApproachingContextLimit(modelID: String) -> Bool {
+        estimatedInputTokensForNextTurn >= ConversationContextBudget.approachingThreshold(modelID: modelID)
     }
 }

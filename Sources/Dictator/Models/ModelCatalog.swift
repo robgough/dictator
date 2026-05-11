@@ -12,6 +12,12 @@ struct LLMModel: Identifiable, Hashable, Sendable {
     let displayName: String
     let approxSizeMB: Int
     let note: String
+    /// Native context window for this model (tokens). Used by
+    /// `ConversationContextBudget` to size the per-conversation input budget
+    /// before pre-call compaction kicks in. We use the *native* number — not
+    /// any YaRN-extended ceiling — so we don't have to keep RoPE scaling
+    /// configs in sync with the model.
+    let contextWindowTokens: Int
 }
 
 /// Catalogue entry for a Parakeet ASR variant. The `id` is also FluidAudio's
@@ -44,11 +50,17 @@ enum ModelCatalog {
     ]
 
     static let llmModels: [LLMModel] = [
-        .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", displayName: "Llama 3.2 1B (4-bit)", approxSizeMB: 760, note: "Snappy, decent formatting"),
-        .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, note: "Recommended"),
-        .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen 2.5 3B (4-bit)", approxSizeMB: 1800, note: "Alt 3B option"),
-        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, note: "Higher quality, slower"),
+        .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", displayName: "Llama 3.2 1B (4-bit)", approxSizeMB: 760, note: "Snappy, decent formatting", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, note: "Recommended", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen 2.5 3B (4-bit)", approxSizeMB: 1800, note: "Alt 3B option", contextWindowTokens: 32_768),
+        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, note: "Higher quality, slower", contextWindowTokens: 131_072),
     ]
+
+    /// Fallback context size when the active model id isn't in the catalog
+    /// (defensive — covers the case where someone hand-edits settings to
+    /// point at a model we don't know). 32K matches the smallest model
+    /// currently shipping in the catalog.
+    static let fallbackContextWindowTokens = 32_768
 
     static let defaultWhisper  = whisperModels[2]   // small.en
     static let defaultParakeet = parakeetModels[0]  // v3 (multilingual)
