@@ -66,6 +66,37 @@
             font-weight: 600;
             letter-spacing: -0.005em;
         }
+        .badge-soon {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            padding: 4px 10px 4px 11px;
+            border-radius: 999px;
+            background: color-mix(in oklab, var(--accent) 14%, transparent);
+            color: var(--accent);
+        }
+        .badge-soon::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 25%, transparent);
+            display: inline-block;
+        }
+        /* Soft "not yet" CTA — clearly not the dark download button, but still
+           a clickable link so people can land on the repo to watch for release. */
+        .cta.cta-soft {
+            background: transparent;
+            color: var(--fg);
+            border: 1px solid var(--border);
+        }
+        .cta.cta-soft:hover { transform: translateY(-1px); }
         .preview-note {
             margin: 24px 0 0;
             padding: 14px 16px;
@@ -424,10 +455,11 @@
         <div class="brand-row">
             <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
             <span class="logo">Dictator</span>
+            <span class="badge-soon">Coming soon</span>
         </div>
         <h1>Talk to your Mac.<br>Nothing leaves it.</h1>
         <p class="tagline">A menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
-        <a class="cta" href="https://github.com/robgough/dictator/releases/latest">Download for macOS</a>
+        <a class="cta cta-soft" href="https://github.com/robgough/dictator">Watch the repo for the first release →</a>
         <span class="cta-meta">Apple Silicon · macOS 15+</span>
 
         <p class="preview-note">
