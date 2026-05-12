@@ -41,6 +41,12 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     from: 0.14.5
+  # Sparkle drives in-app auto-updates. The appcast feed at SUFeedURL is
+  # served from GitHub Pages (docs/appcast.xml) and is signed per-release
+  # with an EdDSA key — public key in Info.plist, private key only in CI.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 
 targets:
   Dictator:
@@ -94,6 +100,15 @@ targets:
         CFBundleVersion: "1"
         NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
         NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app."
+        # Sparkle auto-updates. The appcast lives at the URL below (served by
+        # GitHub Pages from docs/appcast.xml). SUPublicEDKey is the EdDSA
+        # public key used to verify each release's signature; generate the
+        # keypair once with Sparkle's `generate_keys` tool, paste the public
+        # half here, and store the private half as the SPARKLE_PRIVATE_KEY
+        # GitHub Actions secret. See RELEASING.md.
+        SUFeedURL: "https://dictator.robgough.net/appcast.xml"
+        SUPublicEDKey: "REPLACE_WITH_SPARKLE_PUBLIC_KEY"
+        SUEnableAutomaticChecks: true
     entitlements:
       path: Sources/Dictator/Dictator.entitlements
       properties:
@@ -144,3 +159,5 @@ targets:
         product: MLXLMCommon
       - package: FluidAudio
         product: FluidAudio
+      - package: Sparkle
+        product: Sparkle
