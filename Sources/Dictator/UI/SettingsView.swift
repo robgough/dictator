@@ -33,7 +33,7 @@ private struct AboutPane: View {
             VStack(alignment: .leading, spacing: 22) {
                 AboutHeader()
                 AboutAuthor()
-                AboutWarranty()
+                AboutPrivacy()
                 AboutCredits()
             }
             .padding(.vertical, 4)
@@ -87,13 +87,19 @@ private struct AboutHeader: View {
 private struct AboutAuthor: View {
     var body: some View {
         AboutSection(title: "Author") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Dictator is made by **Rob Gough** — an independent developer building small, well-considered native apps. Dictator started as a personal tool: a hotkey-driven dictation flow that never leaves the machine, with enough taste applied between the microphone and the cursor that the result feels written rather than transcribed.")
+            VStack(alignment: .leading, spacing: 10) {
+                Text("I'm **Rob Gough** — a tech advisor and fractional CTO, drawing on a long career of senior engineering and tech-leadership roles. Alongside the advisory work I'm building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("It was built to solve a personal need. Every macOS dictation app I tried wanted a subscription for a stack of models that are themselves free and open — Whisper for the speech-to-text, a small Llama or Qwen for the cleanup. Nothing in that pipeline costs the developer per-use, so the subscription is mostly a tax on not knowing what's inside. I figured I'd build the version without it.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 14) {
                     Link(destination: URL(string: "https://robgough.net")!) {
                         Label("robgough.net", systemImage: "globe")
+                    }
+                    Link(destination: URL(string: "https://stayupfront.com")!) {
+                        Label("stayupfront.com", systemImage: "bolt.horizontal")
                     }
                     Link(destination: URL(string: "mailto:hello@robgough.net")!) {
                         Label("hello@robgough.net", systemImage: "envelope")
@@ -105,17 +111,17 @@ private struct AboutAuthor: View {
     }
 }
 
-private struct AboutWarranty: View {
+private struct AboutPrivacy: View {
     var body: some View {
-        AboutSection(title: "Warranty & liability") {
+        AboutSection(title: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Nothing in this notice excludes or limits our liability for death or personal injury caused by negligence, for fraud or fraudulent misrepresentation, or for any other liability that cannot be excluded or limited under applicable law. We accept that liability in full.")
+                Text("Everything that matters happens on your Mac. Audio captured for transcription is held in memory while you're speaking and then discarded. Transcripts, conversations, vocabulary, and your custom prompts live only under `~/Library/Application Support/Dictator/` — on this machine.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Subject to the paragraph above, Dictator is provided **\"as is\"**, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, accuracy of transcription, and non-infringement. To the maximum extent permitted by law, the authors and contributors are not liable for any claim, damages, lost data, lost time, or other liability — whether in contract, tort, or otherwise — arising from or in connection with Dictator or its use.")
+                Text("Two things leave your Mac, both initiated by you: model downloads from Hugging Face when you pick one in **Settings → Models**, and periodic update checks (which you can disable). There's no telemetry, no analytics, and no account.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Dictator transcribes and processes audio entirely on your Mac. No recordings, transcripts, or telemetry are transmitted to the author or any third party by this app.")
+                Text("Dictator is provided as-is. Please use it for what it's good at, and let me know when it isn't.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
