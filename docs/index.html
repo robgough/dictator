@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dictator — Local-first dictation for macOS</title>
+    <meta name="description" content="A tiny menu-bar dictation app for macOS. Hold a hotkey, talk, release. Transcription and language models run entirely on your Mac.">
+    <link rel="icon" type="image/png" href="media/dictator-icon.png">
+    <link rel="apple-touch-icon" href="media/dictator-icon.png">
+    <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #15171a;
+            --fg-dim: #5b6168;
+            --fg-faint: #8a8f96;
+            --accent: #4a5cff;
+            --border: #e8e9ec;
+            --card: #f7f8fa;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0e1014;
+                --fg: #ececef;
+                --fg-dim: #a4a8b1;
+                --fg-faint: #6f747d;
+                --accent: #7a8aff;
+                --border: #20232a;
+                --card: #161922;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            line-height: 1.55;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrap {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 64px 28px 96px;
+        }
+        header { margin-bottom: 56px; }
+        .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .brand-icon {
+            display: block;
+            width: 64px;
+            height: 64px;
+            border-radius: 14px;
+            /* Subtle lift so the icon reads as an "app" rather than a flat
+               image — mirrors the soft shadow macOS uses on the icon grid. */
+            box-shadow: 0 12px 26px -16px color-mix(in oklab, var(--fg) 40%, transparent),
+                        0 2px 6px -3px color-mix(in oklab, var(--fg) 20%, transparent);
+        }
+        .logo {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 22px;
+            color: var(--fg);
+            font-weight: 600;
+            letter-spacing: -0.005em;
+        }
+        .preview-note {
+            margin: 24px 0 0;
+            padding: 14px 16px;
+            background: color-mix(in oklab, var(--accent) 7%, var(--card));
+            border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--border));
+            border-radius: 10px;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+            line-height: 1.55;
+            max-width: 580px;
+        }
+        .preview-note strong { color: var(--fg); font-weight: 600; }
+        .preview-note a { color: var(--accent); text-decoration: none; font-weight: 500; }
+        .preview-note a:hover { text-decoration: underline; }
+        h1 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 44px;
+            line-height: 1.08;
+            letter-spacing: -0.02em;
+            font-weight: 600;
+            margin: 28px 0 14px;
+        }
+        .tagline {
+            font-size: 19px;
+            color: var(--fg-dim);
+            max-width: 580px;
+            margin: 0 0 32px;
+        }
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--fg);
+            color: var(--bg);
+            padding: 12px 18px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 15px;
+            transition: transform 0.06s ease;
+        }
+        .cta:hover { transform: translateY(-1px); }
+        .cta-meta {
+            display: inline-block;
+            margin-left: 14px;
+            color: var(--fg-faint);
+            font-size: 13px;
+        }
+        .demo {
+            margin: 56px 0 0;
+        }
+        .demo-frame {
+            position: relative;
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 22px 60px -28px color-mix(in oklab, var(--fg) 30%, transparent),
+                        0 4px 12px -8px color-mix(in oklab, var(--fg) 20%, transparent);
+            background: var(--card);
+        }
+        .demo-frame video {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        section { margin-top: 56px; }
+        h2 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--fg-faint);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin: 0 0 18px;
+        }
+        .lede {
+            font-size: 17px;
+            color: var(--fg);
+            margin: 0 0 8px;
+            max-width: 620px;
+            line-height: 1.5;
+        }
+        .lede + p {
+            font-size: 15.5px;
+            color: var(--fg-dim);
+            max-width: 620px;
+            margin: 0 0 28px;
+        }
+        /* Two-column grid used by Assistant mode (REPLACE/DRAFT) and the
+           local-first trade-off cards. Collapses on narrow viewports. */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+        @media (max-width: 560px) {
+            .two-col { grid-template-columns: 1fr; }
+        }
+        .tradeoff-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 22px 24px;
+        }
+        .tradeoff-card h3 {
+            font-size: 16px;
+            margin: 0 0 10px;
+            font-weight: 600;
+        }
+        .tradeoff-card ul {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+            line-height: 1.55;
+        }
+        .tradeoff-card ul li { margin: 8px 0; }
+        .tradeoff-card ul li strong { color: var(--fg); font-weight: 600; }
+        .tradeoff-card.pros { border-color: color-mix(in oklab, var(--accent) 35%, var(--border)); }
+        /* Mode cards (Replace / Draft) — the heading itself becomes a small
+           tinted pill, so the per-mode colour is clearly carried by the
+           label rather than by a coloured stripe on the card. */
+        .mode {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 22px 24px;
+        }
+        .mode h3 {
+            display: inline-block;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            padding: 4px 11px;
+            border-radius: 999px;
+            background: color-mix(in oklab, var(--mode-color, var(--accent)) 16%, transparent);
+            color: var(--mode-color, var(--accent));
+            margin: 0 0 14px;
+        }
+        .mode p {
+            margin: 0;
+            color: var(--fg);
+            font-size: 15px;
+            line-height: 1.55;
+        }
+        /* Models table */
+        .models h3 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--fg);
+            text-transform: none;
+            letter-spacing: 0;
+            margin: 28px 0 10px;
+        }
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--card);
+        }
+        .table-wrap table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .table-wrap th, .table-wrap td {
+            text-align: left;
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        .table-wrap th {
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--fg-faint);
+            background: color-mix(in oklab, var(--fg) 3%, transparent);
+        }
+        .table-wrap tr:last-child td { border-bottom: none; }
+        .table-wrap td.model-name { color: var(--fg); font-weight: 500; }
+        .table-wrap td.size {
+            color: var(--fg-dim);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        .table-wrap td.note { color: var(--fg-dim); }
+        .table-footnote {
+            margin: 14px 0 0;
+            color: var(--fg-faint);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        /* "Why I built this" — avatar on the left, prose on the right;
+           stacks under a narrow viewport so the photo doesn't get tiny. */
+        .author-row {
+            display: grid;
+            grid-template-columns: 130px 1fr;
+            gap: 26px;
+            align-items: start;
+            margin-top: 6px;
+        }
+        .author-avatar {
+            width: 130px;
+            height: 130px;
+            border-radius: 50%;
+            display: block;
+            border: 1px solid var(--border);
+            object-fit: cover;
+        }
+        .author-text p {
+            margin: 0 0 14px;
+            max-width: 580px;
+            color: var(--fg);
+        }
+        .author-text p:last-child { margin-bottom: 0; }
+        .author-text a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .author-text a:hover { text-decoration: underline; }
+        @media (max-width: 560px) {
+            .author-row {
+                grid-template-columns: 1fr;
+                gap: 18px;
+                justify-items: start;
+            }
+            .author-avatar { width: 96px; height: 96px; }
+        }
+        .stages {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            gap: 12px;
+            counter-reset: stage;
+        }
+        .stages li {
+            position: relative;
+            padding: 20px 22px 20px 80px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            counter-increment: stage;
+        }
+        .stages li {
+            /* Each stage sets its own --stage-color via inline style — the
+               number badge tints to match the colour the running app uses
+               for that pipeline state in the HUD. Falls back to the page
+               accent so removing the inline style still looks fine. */
+            --stage-color: var(--accent);
+        }
+        .stages li::before {
+            content: counter(stage);
+            position: absolute;
+            left: 22px;
+            top: 20px;
+            width: 40px;
+            height: 40px;
+            background: color-mix(in oklab, var(--stage-color) 16%, transparent);
+            color: var(--stage-color);
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-family: "SF Pro Rounded", system-ui, sans-serif;
+            font-weight: 700;
+            font-size: 17px;
+        }
+        .stages h3 {
+            font-size: 16px;
+            margin: 0 0 4px;
+            font-weight: 600;
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+        .stages h3 .optional {
+            color: var(--fg-faint);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .stages p {
+            margin: 0;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+        }
+        .stages .guard {
+            display: inline-block;
+            margin-top: 8px;
+            color: var(--fg-faint);
+            font-size: 13px;
+        }
+        .stages .guard strong {
+            color: var(--fg-dim);
+            font-weight: 600;
+        }
+        .pipeline-footnote {
+            margin: 24px 0 0;
+            color: var(--fg-faint);
+            font-size: 14px;
+            line-height: 1.55;
+        }
+        .features {
+            display: grid;
+            gap: 14px;
+        }
+        .feature {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+        }
+        .feature h3 {
+            font-size: 16px;
+            margin: 0 0 4px;
+            font-weight: 600;
+        }
+        .feature p {
+            margin: 0;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+        }
+        .reqs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            color: var(--fg-dim);
+            font-size: 14px;
+        }
+        .reqs strong { color: var(--fg); font-weight: 600; }
+        footer {
+            margin-top: 80px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            color: var(--fg-faint);
+            font-size: 13px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            align-items: center;
+        }
+        footer a { color: var(--fg-dim); text-decoration: none; }
+        footer a:hover { color: var(--fg); }
+        footer .sep { color: var(--border); }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <div class="brand-row">
+            <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
+            <span class="logo">Dictator</span>
+        </div>
+        <h1>Talk to your Mac.<br>Nothing leaves it.</h1>
+        <p class="tagline">A menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
+        <a class="cta" href="https://github.com/robgough/dictator/releases/latest">Download for macOS</a>
+        <span class="cta-meta">Apple Silicon · macOS 15+</span>
+
+        <p class="preview-note">
+            <strong>Early preview.</strong> Dictator is in active development — things will be rough, and some behaviour may change between versions. Feedback (bugs, papercuts, "this should do X") is genuinely welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
+        </p>
+    </header>
+
+    <section class="demo" aria-label="Demo of Dictator in use">
+        <div class="demo-frame">
+            <!--
+                Autoplay + muted + playsinline is the Safari-compatible recipe.
+                preload="metadata" so we don't pull the full file until the
+                visitor scrolls; the poster shows immediately.
+            -->
+            <video
+                src="media/dictator-demo.mp4"
+                poster="media/dictator-demo-poster.jpg"
+                autoplay loop muted playsinline preload="metadata"
+                aria-label="A short screen recording of Dictator transcribing and pasting speech in real time."
+            ></video>
+        </div>
+    </section>
+
+    <section class="pipeline">
+        <h2>The pipeline</h2>
+        <p class="lede">From audio to written text — and the cleanup that makes it readable — all on your Mac.</p>
+        <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts.</p>
+
+        <ol class="stages">
+            <!-- Colours match the running app's HUD: blue/purple/pink/teal for
+                 transcribe/format/grammar/structure. See HUDView.swift. -->
+            <li style="--stage-color: #007AFF;">
+                <h3>Transcribe</h3>
+                <p>WhisperKit or Parakeet (FluidAudio on the Apple Neural Engine) turns your audio into a raw transcript. Both engines run locally; models download once and stay on disk. Pick the one that matches the trade-off you want between accuracy and latency.</p>
+            </li>
+            <li style="--stage-color: #AF52DE;">
+                <h3>Format</h3>
+                <p>A small local LLM punctuates, capitalises, and resolves spoken cues — "new line", "new paragraph", "smiley face", named emoji. Skipped entirely for question-shaped input, where the transcript is already well-punctuated.</p>
+                <span class="guard"><strong>Guard:</strong> 60% of input anchor words must survive, and the word count can't grow by more than 15% + 3. Otherwise the raw transcript is used.</span>
+            </li>
+            <li style="--stage-color: #FF2D55;">
+                <h3>Grammar <span class="optional">optional</span></h3>
+                <p>Fixes contractions, subject-verb agreement, duplicate words — the small things you'd tidy by hand. Off by default; toggle from Settings.</p>
+                <span class="guard"><strong>Guard:</strong> word-level edit distance from the input. Reverts if drift exceeds your threshold (15% by default).</span>
+            </li>
+            <li style="--stage-color: #30B0C7;">
+                <h3>Structure <span class="optional">optional</span></h3>
+                <p>Paragraph breaks and bullet lists for longer dictations — useful when you're talking out an email or a memo, not a one-liner.</p>
+                <span class="guard"><strong>Guard:</strong> strict word-sequence equality after lowercasing. Reverts on any word change — bullets and breaks only, never rewording.</span>
+            </li>
+        </ol>
+
+        <p class="pipeline-footnote">A deterministic vocabulary substitution step runs between Format and Grammar — case-insensitive whole-word replacements for names, jargon, and the words your accent always trips up. No model, just your list. The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
+    </section>
+
+    <section class="assistant">
+        <h2>Assistant mode</h2>
+        <p class="lede">A second hotkey for editing text by speaking to it.</p>
+        <p>Hold the assistant hotkey, speak an instruction, release. If you had text selected when you triggered it, Dictator sees both — the selection and the instruction — and the local LLM decides what kind of response you want.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #5e5ce6;">
+                <h3>Replace</h3>
+                <p>"Tighten this." "Translate to French." "Fix the comma splice." The selection is replaced in place — and Dictator re-selects the new text so you can iterate ("now make it shorter") without reaching for the mouse.</p>
+            </div>
+            <div class="mode" style="--mode-color: #ff9f0a;">
+                <h3>Draft</h3>
+                <p>"Reply to this with a polite no." "Summarise these notes." "Draft an email about X." The result lands on the clipboard, or in a small floating window you can read and copy from when there's nowhere obvious to paste.</p>
+            </div>
+        </div>
+
+        <p style="margin-top: 18px;">Conversations are multi-turn: follow-ups extend the same thread, with automatic compaction once the model's context window starts filling. Recent conversations are one click away in the menu-bar dropdown.</p>
+    </section>
+
+    <section class="models">
+        <h2>Choose your models</h2>
+        <p class="lede">Two engines for speech-to-text, four small instruction-tuned LLMs for the cleanup passes — or no LLM at all.</p>
+        <p>All weights are downloaded on first use and stored in <code>~/Library/Application Support/Dictator/Models/</code>. You can mix and match: smaller transcription model with a bigger LLM, or vice versa.</p>
+
+        <h3>Speech-to-text</h3>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td class="model-name">Whisper Tiny (English)</td>       <td class="size">75 MB</td>   <td class="size">~150 MB</td>  <td class="note">Fastest, lowest accuracy.</td></tr>
+                    <tr><td class="model-name">Whisper Base (English)</td>       <td class="size">140 MB</td>  <td class="size">~250 MB</td>  <td class="note">Good balance for short utterances.</td></tr>
+                    <tr><td class="model-name">Whisper Small (English)</td>      <td class="size">470 MB</td>  <td class="size">~700 MB</td>  <td class="note">Solid accuracy. Default.</td></tr>
+                    <tr><td class="model-name">Whisper Large v3 Turbo</td>       <td class="size">1.5 GB</td>  <td class="size">~2 GB</td>    <td class="note">Best quality, multilingual.</td></tr>
+                    <tr><td class="model-name">Parakeet TDT v3 (multilingual)</td><td class="size">475 MB</td> <td class="size">~700 MB</td>  <td class="note">Runs on the Apple Neural Engine. ~60–70× realtime. 25 European languages.</td></tr>
+                    <tr><td class="model-name">Parakeet TDT v2 (English)</td>    <td class="size">475 MB</td>  <td class="size">~700 MB</td>  <td class="note">Slightly better English accuracy than v3.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Language model — used for the cleanup passes and Assistant mode</h3>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="note">Snappy. Decent formatting; weaker on grammar and Assistant tasks.</td></tr>
+                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="note">Recommended default. Good balance of quality and speed.</td></tr>
+                    <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="note">Alternative 3B with a different prose style.</td></tr>
+                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="note">Higher quality output, noticeably slower.</td></tr>
+                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>         <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p class="table-footnote">All language models are 4-bit quantised via MLX. RAM figures are approximate steady-state at modest context lengths; long Assistant-mode conversations grow as the KV cache fills. Total resident memory with the defaults (Whisper Small + Llama 3.2 3B, both pre-loaded) is around 3 GB.</p>
+    </section>
+
+    <section class="tradeoff">
+        <h2>Local-first, honestly</h2>
+        <p class="lede">Running everything on your Mac is a real trade-off. Worth being clear about both sides.</p>
+
+        <div class="two-col">
+            <div class="tradeoff-card pros">
+                <h3>What you get</h3>
+                <ul>
+                    <li><strong>Privacy.</strong> Audio, transcripts, prompts, and conversation history never leave the device. No telemetry, no analytics, no account.</li>
+                    <li><strong>Cost.</strong> Free after the model downloads. No subscription, no API key, no per-token billing, no surprise bill at the end of the month.</li>
+                    <li><strong>Offline.</strong> Works on a plane, in a hotel, on a train through a tunnel. Once the models are on disk, the network is irrelevant.</li>
+                    <li><strong>Predictable.</strong> A vendor can't deprecate the model out from under you or quietly change its behaviour.</li>
+                    <li><strong>Inspectable.</strong> Open source, so you can see what runs, when, and on what data.</li>
+                </ul>
+            </div>
+            <div class="tradeoff-card">
+                <h3>What you give up</h3>
+                <ul>
+                    <li><strong>RAM.</strong> 8 GB is the floor, 16 GB is comfortable, more is better if you want the larger LLM. The bigger models assume you have memory to spare.</li>
+                    <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
+                    <li><strong>Ceiling.</strong> A 3B local model is not Claude. For dictation cleanup it's plenty; for genuinely hard text massaging the frontier still wins.</li>
+                    <li><strong>First run.</strong> A few GB of weights to download — typically 2.5 GB if you take the defaults.</li>
+                    <li><strong>Heat.</strong> Sustained inference uses the GPU and Apple Neural Engine. Your Mac will get warm under repeated use.</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="author">
+        <h2>Why I built this</h2>
+        <div class="author-row">
+            <img class="author-avatar" src="media/rob-avatar.jpg" alt="Rob Gough" width="130" height="130">
+            <div class="author-text">
+                <p>I'm <a href="https://robgough.net"><strong>Rob Gough</strong></a>. I work as a tech advisor and fractional CTO — drawing on a long career of senior engineering and tech-leadership roles. Alongside the advisory work I'm building <a href="https://stayupfront.com">Stay Upfront</a>, a unified support and incident management tool for B2B SaaS companies.</p>
+
+                <p>Dictator was built to solve a personal need. Every macOS dictation app I tried wanted a subscription for a stack of models that are themselves free and open: Whisper for the speech-to-text, a small Llama or Qwen for the cleanup. Nothing in that pipeline costs the developer per-use — there's no expensive cloud in the loop. The subscription is mostly a tax on not knowing what's inside. I figured I'd build the version that doesn't have it.</p>
+
+                <p>These days I dictate most of my long-form writing — emails, notes, half this page. Voice is faster than I'd given it credit for, and the cleanup passes mean the output is something I'd send to a colleague rather than re-edit by hand. My fingers are grateful.</p>
+
+                <p>Voice-as-input is going to matter — not as a replacement for typing, but as a second modality you reach for when it fits. Dictator is a small argument that you shouldn't need a cloud account or a credit card to start. You can start now, on the Mac you already own.</p>
+
+                <p>If you'd like a senior pair of eyes on your tech strategy, your roadmap, or what to build next — fractional CTO, advisor, sounding board — that's the work I do. More at <a href="https://robgough.net">robgough.net</a>.</p>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Requirements</h2>
+        <p class="reqs">
+            <span><strong>Apple Silicon</strong> Mac</span>
+            <span><strong>macOS 15</strong> or newer</span>
+            <span>Roughly <strong>3 GB</strong> for models (one Whisper, one LLM)</span>
+        </p>
+    </section>
+
+    <footer>
+        <a href="https://github.com/robgough/dictator">Source on GitHub</a>
+        <span class="sep">·</span>
+        <a href="privacy.html">Privacy</a>
+        <span class="sep">·</span>
+        <a href="https://robgough.net">robgough.net</a>
+    </footer>
+</div>
+</body>
+</html>

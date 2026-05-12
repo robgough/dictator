@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dictator — Privacy</title>
+    <style>
+        :root {
+            --bg: #ffffff; --fg: #15171a; --fg-dim: #5b6168;
+            --border: #e8e9ec; --accent: #4a5cff;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0e1014; --fg: #ececef; --fg-dim: #a4a8b1;
+                --border: #20232a; --accent: #7a8aff;
+            }
+        }
+        html, body { margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+            background: var(--bg); color: var(--fg); line-height: 1.6;
+        }
+        .wrap { max-width: 680px; margin: 0 auto; padding: 56px 28px 80px; }
+        h1 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 32px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em;
+        }
+        .updated { color: var(--fg-dim); font-size: 14px; margin: 0 0 32px; }
+        h2 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 18px; margin: 36px 0 10px;
+        }
+        p { color: var(--fg); }
+        p.muted { color: var(--fg-dim); }
+        a { color: var(--accent); }
+        .back {
+            display: inline-block; color: var(--fg-dim); font-size: 14px;
+            text-decoration: none; margin-bottom: 32px;
+        }
+        .back:hover { color: var(--fg); }
+        footer {
+            margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border);
+            color: var(--fg-dim); font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <a class="back" href="index.html">&larr; Dictator</a>
+    <h1>Privacy</h1>
+    <p class="updated">Last updated: 11 May 2026</p>
+
+    <p>Dictator runs entirely on your Mac. The short version: your audio, your transcripts, and your settings never leave the device.</p>
+
+    <h2>What stays on your Mac</h2>
+    <p>Audio captured from the microphone is held in memory for the duration of a recording and then discarded. The transcript is produced locally by WhisperKit or Parakeet, optionally tidied by a local language model running through MLX, and pasted into the focused app. Dictation history, conversations, vocabulary, custom prompts, and input-device preferences are stored in plain JSON files under <code>~/Library/Application Support/Dictator/</code> — only on your machine.</p>
+
+    <h2>What leaves your Mac</h2>
+    <p>Two things, both initiated by you:</p>
+    <p><strong>Model downloads.</strong> When you pick a Whisper or LLM model from Settings → Models, Dictator downloads the weights from Hugging Face. Hugging Face will see those requests; Dictator doesn't add anything to them.</p>
+    <p><strong>Update checks.</strong> Dictator periodically asks <code>dictator.robgough.net</code> whether a newer version is available, via the <a href="https://sparkle-project.org">Sparkle</a> updater. The request includes your operating system version and the running app version — what any auto-updater needs to compare. The site is hosted on GitHub Pages; standard GitHub access logs apply. You can disable update checks in Settings.</p>
+
+    <h2>No analytics, no telemetry</h2>
+    <p>Dictator does not send analytics, crash reports, or usage data to the author or anyone else. There is no account, no sign-in, and no server-side component beyond the static update feed.</p>
+
+    <h2>Permissions</h2>
+    <p>macOS asks you to grant Microphone (to record) and Accessibility (to paste into the focused app via synthetic ⌘V) the first time you use the relevant feature. Both can be revoked at any time from System Settings → Privacy &amp; Security.</p>
+
+    <h2>Contact</h2>
+    <p>Questions: <a href="mailto:hello@robgough.net">hello@robgough.net</a>.</p>
+
+    <footer>
+        Dictator is made by <a href="https://robgough.net">Rob Gough</a>. Source on <a href="https://github.com/robgough/dictator">GitHub</a>.
+    </footer>
+</div>
+</body>
+</html>

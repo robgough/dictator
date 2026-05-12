@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Dictator</title>
+        <link>https://dictator.robgough.net/appcast.xml</link>
+        <description>Local-first dictation for macOS.</description>
+        <language>en</language>
+        <!--
+            Releases are appended below by .github/workflows/release.yml when a
+            `v*` tag is pushed. Each <item> carries an <enclosure> pointing at
+            the signed, notarized DMG on GitHub Releases plus a sparkle:edSignature
+            verified by SUPublicEDKey in the running app's Info.plist.
+        -->
+    </channel>
+</rss>
