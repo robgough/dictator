@@ -234,39 +234,17 @@ jobs:
           gh release upload "$TAG" "$DMG_PATH" --clobber
 
       - name: Append release to docs/appcast.xml
+        env:
+          APPCAST_VERSION: ${{ steps.version.outputs.version }}
+          APPCAST_BUILD:   ${{ steps.version.outputs.build }}
+          APPCAST_LENGTH:  ${{ steps.sparkle_sign.outputs.length }}
+          APPCAST_ED_SIG:  ${{ steps.sparkle_sign.outputs.ed_signature }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          BUILD="${{ steps.version.outputs.build }}"
           DMG_NAME="$(basename "$DMG_PATH")"
-          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION/$DMG_NAME"
-          PUBDATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
-          ED_SIG="${{ steps.sparkle_sign.outputs.ed_signature }}"
-          LENGTH="${{ steps.sparkle_sign.outputs.length }}"
-
-          # Insert a new <item> just before </channel>. Python is on every
-          # macos-* runner; sed isn't reliable for XML edits.
-          python3 - "$VERSION" "$BUILD" "$DMG_URL" "$LENGTH" "$ED_SIG" "$PUBDATE" <<'PY'
-          import sys, pathlib, re
-          version, build, url, length, ed_sig, pubdate = sys.argv[1:]
-          path = pathlib.Path("docs/appcast.xml")
-          src = path.read_text()
-          item = f"""        <item>
-              <title>Version {version}</title>
-              <pubDate>{pubdate}</pubDate>
-              <sparkle:version>{build}</sparkle:version>
-              <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
-              <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-              <enclosure
-                  url="{url}"
-                  length="{length}"
-                  type="application/octet-stream"
-                  sparkle:edSignature="{ed_sig}" />
-          </item>
-      """
-          updated = re.sub(r"(\s*)</channel>", f"\n{item}\\1</channel>", src, count=1)
-          path.write_text(updated)
-          PY
+          export APPCAST_DMG_URL="https://github.com/${{ github.repository }}/releases/download/v$APPCAST_VERSION/$DMG_NAME"
+          export APPCAST_PUBDATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
+          python3 .github/scripts/append_appcast.py
 
       - name: Commit appcast back
         run: |
