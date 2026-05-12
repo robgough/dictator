@@ -1,0 +1,286 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g. 0.2.0) — used when running manually; tag pushes derive it from the tag name."
+        required: false
+
+permissions:
+  contents: write  # needed for the appcast commit-back and the GH Release upload
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      # ─── Required at build/sign time ──────────────────────────────────
+      APPLE_TEAM_ID:           ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_CERT_P12_BASE64:   ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+
+      # ─── Required at notarize time (STUB: workflow skips notarize when empty) ──
+      APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
+      APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
+      # ─── Required to sign Sparkle updates ─────────────────────────────
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          # Need the full history so the appcast commit-back doesn't fail with
+          # a shallow-clone push error.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive version from tag (or workflow input)
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+              VERSION="${{ inputs.version }}"
+              if [[ -z "$VERSION" ]]; then
+                  echo "::error::version input required for manual runs" && exit 1
+              fi
+          fi
+          # Build number monotonically increments via the run number — combined
+          # with version, this gives every artifact a unique CFBundleVersion.
+          BUILD="$GITHUB_RUN_NUMBER"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD"     >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION (build $BUILD)"
+
+      - name: Install xcodegen + create-dmg
+        run: brew install xcodegen create-dmg
+
+      - name: Import Developer ID signing cert
+        # Imports the .p12 into a fresh keychain dedicated to this run, so we
+        # never touch the runner's login keychain and the cert is gone the
+        # moment the runner is recycled.
+        run: |
+          if [[ -z "$APPLE_CERT_P12_BASE64" ]]; then
+              echo "::error::APPLE_CERT_P12_BASE64 secret missing — cannot sign."
+              exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$APPLE_CERT_P12_PASSWORD" \
+              -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d \"\")
+
+          # Surface the Developer ID Application identity for the next steps.
+          IDENT=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+              | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          if [[ -z "$IDENT" ]]; then
+              echo "::error::No Developer ID Application identity in imported cert"
+              security find-identity -v -p codesigning "$KEYCHAIN"
+              exit 1
+          fi
+          echo "DICTATOR_CODE_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+          echo "DICTATOR_CODE_SIGN_STYLE=Manual"    >> "$GITHUB_ENV"
+          echo "DICTATOR_TEAM_ID=$APPLE_TEAM_ID"    >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project
+        run: ./gen
+
+      - name: Build (Release, signed)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+              -project Dictator.xcodeproj \
+              -scheme Dictator \
+              -configuration Release \
+              -derivedDataPath .derivedData \
+              MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+              CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+              CODE_SIGN_IDENTITY="$DICTATOR_CODE_SIGN_IDENTITY" \
+              DEVELOPMENT_TEAM="$DICTATOR_TEAM_ID" \
+              CODE_SIGN_STYLE=Manual \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              build
+
+          APP_PATH=".derivedData/Build/Products/Release/Dictator.app"
+          if [[ ! -d "$APP_PATH" ]]; then
+              echo "::error::Build produced no .app at $APP_PATH"
+              exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Notarize app
+        # STUB: runs only when notarize secrets are present. Until you enrol in
+        # the paid Apple Developer Program and add APPLE_NOTARY_USER /
+        # APPLE_NOTARY_PASSWORD, this step is a no-op and the artifact will
+        # require users to right-click → Open on first launch.
+        if: env.APPLE_NOTARY_PASSWORD != ''
+        run: |
+          set -euo pipefail
+          ZIP="$RUNNER_TEMP/Dictator-app.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP"
+          xcrun notarytool submit "$ZIP" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_TEAM_ID" \
+              --wait
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Warn that notarization was skipped
+        if: env.APPLE_NOTARY_PASSWORD == ''
+        run: |
+          echo "::warning::Notarization skipped (APPLE_NOTARY_PASSWORD secret not set)."
+          echo "::warning::The released DMG will run, but users will see Gatekeeper warnings."
+
+      - name: Build DMG
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG_PATH="$RUNNER_TEMP/Dictator-$VERSION.dmg"
+          create-dmg \
+              --volname "Dictator $VERSION" \
+              --window-size 540 320 \
+              --icon-size 96 \
+              --icon "Dictator.app" 140 150 \
+              --app-drop-link 400 150 \
+              --no-internet-enable \
+              "$DMG_PATH" \
+              "$APP_PATH"
+
+          # Sign the DMG with the same Developer ID so Gatekeeper trusts it as
+          # a container too — required before notarizing the DMG itself.
+          codesign --force --sign "$DICTATOR_CODE_SIGN_IDENTITY" "$DMG_PATH"
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Notarize DMG
+        if: env.APPLE_NOTARY_PASSWORD != ''
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "$DMG_PATH" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_TEAM_ID" \
+              --wait
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+      - name: Sign DMG for Sparkle (EdDSA)
+        id: sparkle_sign
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+              echo "::error::SPARKLE_PRIVATE_KEY secret missing — cannot sign updates."
+              exit 1
+          fi
+
+          # Fetch a pinned Sparkle release tarball just for its bin/sign_update
+          # tool. Pinning the version stops a transient Sparkle release from
+          # breaking the pipeline. Keep this in sync with the version SPM
+          # resolves in the app (currently 2.9.1).
+          SPARKLE_VERSION="2.9.1"
+          curl -sSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
+              "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          SIGN_UPDATE="$RUNNER_TEMP/sparkle/bin/sign_update"
+
+          KEY_FILE="$RUNNER_TEMP/sparkle_key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+
+          # sign_update prints "sparkle:edSignature=... length=..." — we capture
+          # both for the appcast item attributes.
+          SIG_OUTPUT=$("$SIGN_UPDATE" -f "$KEY_FILE" "$DMG_PATH")
+          echo "$SIG_OUTPUT"
+
+          ED_SIGNATURE=$(echo "$SIG_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          LENGTH=$(echo       "$SIG_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+
+          if [[ -z "$ED_SIGNATURE" || -z "$LENGTH" ]]; then
+              echo "::error::Failed to parse sign_update output"
+              exit 1
+          fi
+          echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "length=$LENGTH"             >> "$GITHUB_OUTPUT"
+          rm -f "$KEY_FILE"
+
+      - name: Create GitHub Release & upload DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+
+          # If we got here via tag push the tag exists; if via workflow_dispatch
+          # we create it now so the Release has something to anchor to.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+              gh release create "$TAG" \
+                  --title "Dictator $VERSION" \
+                  --notes "Release notes for $VERSION." \
+                  --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" "$DMG_PATH" --clobber
+
+      - name: Append release to docs/appcast.xml
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          DMG_NAME="$(basename "$DMG_PATH")"
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION/$DMG_NAME"
+          PUBDATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
+          ED_SIG="${{ steps.sparkle_sign.outputs.ed_signature }}"
+          LENGTH="${{ steps.sparkle_sign.outputs.length }}"
+
+          # Insert a new <item> just before </channel>. Python is on every
+          # macos-* runner; sed isn't reliable for XML edits.
+          python3 - "$VERSION" "$BUILD" "$DMG_URL" "$LENGTH" "$ED_SIG" "$PUBDATE" <<'PY'
+          import sys, pathlib, re
+          version, build, url, length, ed_sig, pubdate = sys.argv[1:]
+          path = pathlib.Path("docs/appcast.xml")
+          src = path.read_text()
+          item = f"""        <item>
+              <title>Version {version}</title>
+              <pubDate>{pubdate}</pubDate>
+              <sparkle:version>{build}</sparkle:version>
+              <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
+              <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+              <enclosure
+                  url="{url}"
+                  length="{length}"
+                  type="application/octet-stream"
+                  sparkle:edSignature="{ed_sig}" />
+          </item>
+      """
+          updated = re.sub(r"(\s*)</channel>", f"\n{item}\\1</channel>", src, count=1)
+          path.write_text(updated)
+          PY
+
+      - name: Commit appcast back
+        run: |
+          set -euo pipefail
+          if git diff --quiet docs/appcast.xml; then
+              echo "appcast unchanged (nothing to commit)"
+              exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast.xml
+          git commit -m "Publish appcast entry for v${{ steps.version.outputs.version }}"
+          # Push to the branch the tag was cut from. For tag-triggered runs we
+          # don't know the branch name, so we push to main — fine for a
+          # single-branch project; revisit if you start cutting from release
+          # branches.
+          git push origin HEAD:main
