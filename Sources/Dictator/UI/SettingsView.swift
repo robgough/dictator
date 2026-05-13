@@ -1,8 +1,11 @@
 import SwiftUI
 import KeyboardShortcuts
 import AVFoundation
+import Sparkle
 
 struct SettingsView: View {
+    let updater: SPUUpdater
+
     @Environment(AppState.self) private var state
 
     var body: some View {
@@ -19,7 +22,7 @@ struct SettingsView: View {
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
             HistoryPane()
                 .tabItem { Label("History", systemImage: "clock") }
-            AboutPane()
+            AboutPane(updater: updater)
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding(20)
@@ -28,10 +31,12 @@ struct SettingsView: View {
 }
 
 private struct AboutPane: View {
+    let updater: SPUUpdater
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                AboutHeader()
+                AboutHeader(updater: updater)
                 AboutAuthor()
                 AboutPrivacy()
                 AboutCredits()
@@ -43,6 +48,8 @@ private struct AboutPane: View {
 }
 
 private struct AboutHeader: View {
+    let updater: SPUUpdater
+
     private var version: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -72,11 +79,14 @@ private struct AboutHeader: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !version.isEmpty {
-                    Text(version)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                        .padding(.top, 2)
+                    HStack(spacing: 10) {
+                        Text(version)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                        CheckForUpdatesButton(updater: updater)
+                    }
+                    .padding(.top, 4)
                 }
             }
             Spacer(minLength: 0)
@@ -84,14 +94,36 @@ private struct AboutHeader: View {
     }
 }
 
+/// "Check for Updates…" button on the About pane. Mirrors Sparkle's
+/// `canCheckForUpdates` state so it greys out while a check is in flight.
+private struct CheckForUpdatesButton: View {
+    let updater: SPUUpdater
+
+    @State private var canCheck = true
+
+    var body: some View {
+        Button {
+            updater.checkForUpdates()
+        } label: {
+            Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .controlSize(.small)
+        .disabled(!canCheck)
+        .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
+    }
+}
+
 private struct AboutAuthor: View {
     var body: some View {
         AboutSection(title: "Author") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("I'm **Rob Gough** — a tech advisor and fractional CTO, drawing on a long career of senior engineering and tech-leadership roles. Alongside the advisory work I'm building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
+                Text("I'm **Rob Gough** — a tech advisor and fractional CTO, offering a senior pair of eyes on tech strategy and what to build next, drawing on a long career in senior engineering and tech leadership. I'm also building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("It was built to solve a personal need. Every macOS dictation app I tried wanted a subscription for a stack of models that are themselves free and open — Whisper for the speech-to-text, a small Llama or Qwen for the cleanup. Nothing in that pipeline costs the developer per-use, so the subscription is mostly a tax on not knowing what's inside. I figured I'd build the version without it.")
+                Text("Dictator started as a personal itch. There are genuinely good free dictation tools for the Mac, but the moment I wanted more than the raw transcript — punctuation tidied, \"new paragraph\" honoured, a sensible bullet list when I rambled — that functionality sat behind a subscription, even when the cleanup ran on a local model. The pieces to do it without one are already open and free: Whisper for the speech-to-text, a small Llama or Qwen for the cleanup, Apple Silicon to run them. Pulling them together turned out to be a fun problem.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("I now dictate most of my long-form writing with it. I hope you find it useful — and thank you for giving it a try.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 14) {
@@ -551,10 +583,15 @@ private struct HistoryRow: View {
 
 private struct InputPane: View {
     @State private var manager = AudioDeviceManager.shared
+    /// Live meter for the active input. Lifecycle bound to this pane via
+    /// .onAppear / .onDisappear — runs only while the user is looking at
+    /// Input settings, so we're not holding an audio engine open in the
+    /// background.
+    @State private var monitor = InputLevelMonitor()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ActiveDeviceCard(manager: manager)
+            ActiveDeviceCard(manager: manager, monitor: monitor)
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
@@ -608,42 +645,55 @@ private struct InputPane: View {
                 }
             }
         }
+        .onAppear { monitor.start() }
+        .onDisappear { monitor.stop() }
     }
 }
 
+/// Combines the active-input header (device name, Refresh) with a live
+/// meter row underneath. One card, one thing — the user can see at a
+/// glance which mic Dictator is listening to *and* whether it's
+/// actually picking sound up. The meter row hides when mic permission
+/// hasn't been granted, so we don't show a stuck-at-zero bar that
+/// reads as a bug.
 private struct ActiveDeviceCard: View {
     let manager: AudioDeviceManager
+    let monitor: InputLevelMonitor
 
     var body: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "waveform")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.18))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "waveform")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("ACTIVE INPUT")
+                        .font(.caption2.weight(.semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(.secondary)
+                    Text(manager.activeInputDeviceName())
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer()
+                Button {
+                    manager.refresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ACTIVE INPUT")
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(.secondary)
-                Text(manager.activeInputDeviceName())
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            Spacer()
-            Button {
-                manager.refresh()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-                    .labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
+
+            meterRow
         }
         .padding(14)
         .background(
@@ -654,6 +704,26 @@ private struct ActiveDeviceCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
         )
+    }
+
+    /// Meter row sits flush against the bottom of the card padding. Hidden
+    /// entirely if mic permission hasn't been granted — a stuck-at-zero bar
+    /// reads as broken UI even though it's accurate.
+    @ViewBuilder private var meterRow: some View {
+        if monitor.permissionDenied {
+            Text("Mic access needed to show a live level — grant it in System Settings → Privacy & Security → Microphone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if monitor.isActive {
+            HStack(spacing: 10) {
+                Waveform(level: monitor.level)
+                Text("\(Int(monitor.level * 100))%")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(width: 36, alignment: .trailing)
+            }
+        }
     }
 }
 
@@ -1000,12 +1070,60 @@ private struct MicrophoneStatusRow: View {
     }
 }
 
+/// Sub-divisions inside the Models pane. The Models tab was getting hard to
+/// scan once the live memory readout, two transcription engines, the LLM
+/// list, and the Finder shortcut all shared a single scrolling Form — so
+/// they live behind a segmented picker at the top.
+private enum ModelsSubPane: String, CaseIterable, Identifiable {
+    case transcription = "Transcription"
+    case formatting = "Formatting"
+    case stats = "Stats"
+    var id: String { rawValue }
+}
+
 private struct ModelsPane: View {
+    @State private var manager = ModelManager.shared
+    /// Which sub-pane is showing. Reset to Transcription on each entry to
+    /// the Models tab — that's the most common reason to come here, and
+    /// landing on Stats first would bury the actual model lists.
+    @State private var subPane: ModelsSubPane = .transcription
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Models section", selection: $subPane) {
+                ForEach(ModelsSubPane.allCases) { p in
+                    Text(p.rawValue).tag(p)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
+            switch subPane {
+            case .transcription: TranscriptionModelsPane()
+            case .formatting: FormattingModelsPane()
+            case .stats: StatsModelsPane()
+            }
+        }
+        // Refresh on-disk download state when the user opens the Models
+        // tab. Each sub-pane reads from the same shared ModelManager so a
+        // single refresh covers all three.
+        .onAppear { manager.refreshCachedStates() }
+    }
+}
+
+/// Transcription sub-pane: engine picker, Parakeet variant list, Whisper
+/// variant list. The engine picker lives at the top because flipping
+/// engines is more frequent than picking a different variant within an
+/// engine. Parakeet is presented first — it's the faster, lighter default
+/// recommendation for almost everyone.
+private struct TranscriptionModelsPane: View {
     @Environment(AppState.self) private var state
     @State private var manager = ModelManager.shared
     @State private var transcription = TranscriptionServiceHolder.shared
     @State private var parakeet = ParakeetServiceHolder.shared
-    @State private var llm = LLMServiceHolder.shared
     /// Set when the user tries to switch to an engine that has no installed
     /// models. We refuse the switch (keeps `settings.transcriptionEngine`
     /// pointing at a usable engine) and pop an alert directing them to the
@@ -1024,10 +1142,6 @@ private struct ModelsPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
-            // Engine picker. Lives above the model lists because flipping
-            // engines is a more frequent action than picking a different
-            // variant within an engine — and the visual ordering matches
-            // the runtime ordering of "engine → which model in that engine".
             Section {
                 Picker("Engine", selection: Binding(
                     get: { s.settings.transcriptionEngine },
@@ -1043,14 +1157,14 @@ private struct ModelsPane: View {
                         state.save()
                     }
                 )) {
-                    Text("Whisper (WhisperKit)").tag(TranscriptionEngine.whisper)
                     Text("Parakeet (FluidAudio)").tag(TranscriptionEngine.parakeet)
+                    Text("Whisper (WhisperKit)").tag(TranscriptionEngine.whisper)
                 }
                 .pickerStyle(.segmented)
             } header: {
                 Text("Transcription engine")
             } footer: {
-                Text("**Whisper** is mature and slower; broad language support, well-tested. **Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster on Apple Silicon and slightly smaller on disk. Parakeet v3 covers 25 European languages; v2 is English-only with marginally better English accuracy.")
+                Text("**Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster than Whisper on Apple Silicon, and slightly smaller on disk. v3 covers 25 European languages; v2 is English-only with marginally better English accuracy. **Whisper** is the mature alternative — slower, but broad language support and very well-tested.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1068,51 +1182,12 @@ private struct ModelsPane: View {
             }
 
             Section {
-                ForEach(ModelCatalog.whisperModels) { model in
-                    ModelRow(
-                        name: model.displayName,
-                        note: model.note,
-                        sizeMB: model.approxSizeMB,
-                        state: manager.whisperStates[model.id] ?? .unknown,
-                        isActive: s.settings.transcriptionEngine == .whisper && s.settings.whisperModelID == model.id,
-                        isLoaded: transcription.currentModelID == model.id,
-                        isVerifying: manager.verifyingWhisper.contains(model.id),
-                        select: {
-                            s.settings.whisperModelID = model.id
-                            s.settings.transcriptionEngine = .whisper
-                            state.save()
-                        },
-                        download: {
-                            manager.downloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
-                        },
-                        cancel: {
-                            manager.cancelWhisperDownload(model.id)
-                        },
-                        verify: {
-                            Task { await manager.verifyWhisper(model.id, using: TranscriptionServiceHolder.shared) }
-                        },
-                        unload: {
-                            manager.unloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
-                        },
-                        remove: {
-                            manager.removeWhisper(model.id, using: TranscriptionServiceHolder.shared)
-                        }
-                    )
-                }
-            } header: {
-                Text("Whisper models")
-            } footer: {
-                Text("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
                 ForEach(ModelCatalog.parakeetModels) { model in
                     ModelRow(
                         name: model.displayName,
                         note: model.note,
                         sizeMB: model.approxSizeMB,
+                        ramMB: model.approxRAMMB,
                         state: manager.parakeetStates[model.id] ?? .unknown,
                         isActive: s.settings.transcriptionEngine == .parakeet && s.settings.parakeetModelID == model.id,
                         isLoaded: parakeet.currentModelID == model.id,
@@ -1148,6 +1223,63 @@ private struct ModelsPane: View {
             }
 
             Section {
+                ForEach(ModelCatalog.whisperModels) { model in
+                    ModelRow(
+                        name: model.displayName,
+                        note: model.note,
+                        sizeMB: model.approxSizeMB,
+                        ramMB: model.approxRAMMB,
+                        state: manager.whisperStates[model.id] ?? .unknown,
+                        isActive: s.settings.transcriptionEngine == .whisper && s.settings.whisperModelID == model.id,
+                        isLoaded: transcription.currentModelID == model.id,
+                        isVerifying: manager.verifyingWhisper.contains(model.id),
+                        select: {
+                            s.settings.whisperModelID = model.id
+                            s.settings.transcriptionEngine = .whisper
+                            state.save()
+                        },
+                        download: {
+                            manager.downloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelWhisperDownload(model.id)
+                        },
+                        verify: {
+                            Task { await manager.verifyWhisper(model.id, using: TranscriptionServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadWhisper(model.id, using: TranscriptionServiceHolder.shared)
+                        },
+                        remove: {
+                            manager.removeWhisper(model.id, using: TranscriptionServiceHolder.shared)
+                        }
+                    )
+                }
+            } header: {
+                Text("Whisper models")
+            } footer: {
+                Text("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Formatting sub-pane: the LLM picker plus a None option that disables
+/// every LLM pass in the pipeline. Lives in its own sub-tab because
+/// "which speech-to-text" and "which LLM tidies the result" are two
+/// independent choices.
+private struct FormattingModelsPane: View {
+    @Environment(AppState.self) private var state
+    @State private var manager = ModelManager.shared
+    @State private var llm = LLMServiceHolder.shared
+
+    var body: some View {
+        @Bindable var s = state
+        Form {
+            Section {
                 NoneLLMRow(
                     isActive: s.settings.llmModelID == ModelCatalog.noneLLMID,
                     select: {
@@ -1160,6 +1292,7 @@ private struct ModelsPane: View {
                         name: model.displayName,
                         note: model.note,
                         sizeMB: model.approxSizeMB,
+                        ramMB: model.approxRAMMB,
                         state: manager.llmStates[model.id] ?? .unknown,
                         isActive: s.settings.llmModelID == model.id,
                         isLoaded: llm.currentModelID == model.id,
@@ -1188,7 +1321,64 @@ private struct ModelsPane: View {
             } header: {
                 Text("Formatting LLM (MLX)")
             } footer: {
-                Text("Used for the formatting, grammar, and structural passes after Whisper transcribes — and for Assistant Mode. Pick **None** to skip LLM passes and ship Whisper's raw transcript.")
+                Text("Used for the formatting, grammar, and structural passes after transcription — and for Assistant Mode. Pick **None** to skip LLM passes and ship the raw transcript.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Stats sub-pane: live memory readout (physical RAM, current RSS, sum of
+/// the selected combo's approx RAM cost), plus a shortcut to reveal the
+/// on-disk model cache in Finder. Diagnostic-flavoured information that
+/// would otherwise compete for attention with the model lists.
+private struct StatsModelsPane: View {
+    @Environment(AppState.self) private var state
+    /// Live memory reading, refreshed every 2 s while this sub-pane is on
+    /// screen via a `.task` poll loop. Zero until the first read lands.
+    @State private var memory: MemoryReading = .zero
+
+    /// Sum of the approximate RAM costs for the *currently selected* models —
+    /// the active transcription engine's chosen variant plus the chosen LLM
+    /// (skipped when LLM is set to None). Forward-looking — answers "what
+    /// would Dictator use if all selected models were resident?" rather than
+    /// "what is it using now."
+    private func selectedComboRAMMB(_ settings: DictatorSettings) -> Int {
+        var total = 0
+        switch settings.transcriptionEngine {
+        case .whisper:
+            total += ModelCatalog.whisper(id: settings.whisperModelID)?.approxRAMMB ?? 0
+        case .parakeet:
+            total += ModelCatalog.parakeet(id: settings.parakeetModelID)?.approxRAMMB ?? 0
+        }
+        if settings.llmModelID != ModelCatalog.noneLLMID {
+            total += ModelCatalog.llm(id: settings.llmModelID)?.approxRAMMB ?? 0
+        }
+        return total
+    }
+
+    var body: some View {
+        @Bindable var s = state
+        Form {
+            Section {
+                LabeledContent("This Mac") {
+                    Text(formatModelSize(memory.physicalMB))
+                        .monospacedDigit()
+                }
+                LabeledContent("Dictator using") {
+                    Text(formatModelSize(memory.residentMB))
+                        .monospacedDigit()
+                }
+                LabeledContent("Selected models, loaded") {
+                    Text("≈\(formatModelSize(selectedComboRAMMB(s.settings)))")
+                        .monospacedDigit()
+                }
+            } header: {
+                Text("Memory")
+            } footer: {
+                Text("Live readout. Estimates are approximate — resident memory grows during long Assistant conversations as the model's KV cache fills, and macOS may compress cold pages.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1197,10 +1387,26 @@ private struct ModelsPane: View {
                 Button("Reveal Models in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([ModelStorage.root()])
                 }
+            } header: {
+                Text("On disk")
+            } footer: {
+                Text("All downloaded model files live under `~/Library/Application Support/Dictator/Models/`.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .onAppear { manager.refreshCachedStates() }
+        // Refresh the live memory section on a 2 s cadence while the Stats
+        // sub-pane is on screen. `.task` is automatically cancelled when
+        // the user switches sub-pane or tab. The first read fires
+        // immediately so the section never renders with the .zero
+        // placeholder.
+        .task {
+            while !Task.isCancelled {
+                memory = MemoryReporter.read()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 }
 
@@ -1219,6 +1425,10 @@ private struct ModelRow: View {
     let name: String
     let note: String
     let sizeMB: Int
+    /// Approximate steady-state RAM cost when this model is loaded. Surfaced
+    /// in the caption next to disk size so a user picking between models can
+    /// see the memory trade-off without leaving the pane.
+    let ramMB: Int
     let state: ModelDownloadState
     let isActive: Bool
     let isLoaded: Bool
@@ -1268,7 +1478,7 @@ private struct ModelRow: View {
                                     .background(Color.green, in: Capsule())
                             }
                         }
-                        Text("\(note) · ~\(formatModelSize(sizeMB))")
+                        Text("\(note) · \(formatModelSize(sizeMB)) disk · ≈\(formatModelSize(ramMB)) RAM")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

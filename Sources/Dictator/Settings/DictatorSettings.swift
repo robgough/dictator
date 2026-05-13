@@ -49,7 +49,7 @@ struct DictatorSettings: Codable, Equatable {
     var assistantPromptOverride: String?
 
     static let defaults = DictatorSettings(
-        transcriptionEngine: .whisper,
+        transcriptionEngine: .parakeet,
         whisperModelID: ModelCatalog.defaultWhisper.id,
         parakeetModelID: ModelCatalog.defaultParakeet.id,
         llmModelID: ModelCatalog.defaultLLM.id,
