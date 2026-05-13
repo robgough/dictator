@@ -1,11 +1,8 @@
 import SwiftUI
 import AppKit
 import KeyboardShortcuts
-import Sparkle
 
 struct MenuBarContent: View {
-    let updater: SPUUpdater
-
     @Environment(AppState.self) private var state
     @Environment(\.openSettings) private var openSettings
     @State private var history = DictationHistory.shared
@@ -36,8 +33,6 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
-                Spacer()
-                CheckForUpdatesButton(updater: updater)
                 Spacer()
                 Button(role: .destructive) {
                     NSApp.terminate(nil)
@@ -279,24 +274,6 @@ private struct RecentRow: View {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: date, relativeTo: Date())
-    }
-}
-
-/// "Check for Updates…" entry that mirrors Sparkle's `canCheckForUpdates`
-/// state so the button greys out while a check is in flight.
-private struct CheckForUpdatesButton: View {
-    let updater: SPUUpdater
-
-    @State private var canCheck = true
-
-    var body: some View {
-        Button {
-            updater.checkForUpdates()
-        } label: {
-            Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
-        }
-        .disabled(!canCheck)
-        .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
     }
 }
 

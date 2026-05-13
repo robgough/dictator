@@ -19,7 +19,7 @@ struct DictatorApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContent(updater: updaterController.updater)
+            MenuBarContent()
                 .environment(appState)
         } label: {
             Image(systemName: appState.pipeline.state.iconName)
@@ -28,7 +28,7 @@ struct DictatorApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView()
+            SettingsView(updater: updaterController.updater)
                 .environment(appState)
                 .frame(width: 560, height: 520)
         }
