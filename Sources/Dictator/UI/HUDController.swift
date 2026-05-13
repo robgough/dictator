@@ -8,6 +8,12 @@ final class HUDController {
     private let state: AppState
     private var visible = false
     private var observationTask: Task<Void, Never>?
+    /// Listens for Escape while the pipeline is in a cancellable state, then
+    /// routes a press to the same `cancelInFlight()` path the HUD's
+    /// hover-cancel button uses. Lifecycle is gated on `canCancel` so we
+    /// don't quietly listen for Escape while idle.
+    private let escapeMonitor = EscapeCancelMonitor()
+    private var escapeActive = false
 
     init(state: AppState) {
         self.state = state
@@ -60,6 +66,19 @@ final class HUDController {
         // cancellable, so the hover overlay can actually receive mouse events
         // for the cancel button.
         panel.ignoresMouseEvents = !s.canCancel
+
+        // Mirror the same cancellable window with the Escape-key monitor —
+        // installed only while there's something to cancel, torn down as
+        // soon as we're back to idle / done / failed.
+        if s.canCancel && !escapeActive {
+            escapeMonitor.start { [weak self] in
+                self?.state.pipeline.cancelInFlight()
+            }
+            escapeActive = true
+        } else if !s.canCancel && escapeActive {
+            escapeMonitor.stop()
+            escapeActive = false
+        }
 
         if active && !visible {
             show()
