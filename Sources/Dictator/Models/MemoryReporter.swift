@@ -10,12 +10,31 @@ struct MemoryReading: Equatable, Sendable {
 
     static let zero = MemoryReading(physicalBytes: 0, residentBytes: 0)
 
-    /// Physical RAM in megabytes (decimal, like macOS's "About this Mac"
-    /// figures — 16 GB shows as 16000 MB, not 16384).
-    var physicalMB: Int { Int(physicalBytes / 1_000_000) }
+    /// Human-readable physical RAM, formatted to match Apple's "About This
+    /// Mac" / Activity Monitor convention (binary gigabytes labelled "GB").
+    /// A 64 GiB machine reads back as 68,719,476,736 bytes — divided by
+    /// 10⁹ that's 68.7, divided by 2³⁰ it's 64. We display the binary
+    /// value to avoid the "I have 64 GB but Dictator says 68.7" surprise.
+    var physicalDisplay: String { Self.formatBinary(physicalBytes) }
 
-    /// Resident set size in megabytes. Same decimal convention.
-    var residentMB: Int { Int(residentBytes / 1_000_000) }
+    /// Resident set size, formatted with the same binary convention as
+    /// `physicalDisplay`. Lines up with Activity Monitor's reading.
+    var residentDisplay: String { Self.formatBinary(residentBytes) }
+
+    private static func formatBinary(_ bytes: UInt64) -> String {
+        let gib = Double(bytes) / 1_073_741_824 // 2³⁰
+        if gib >= 1 {
+            // Snap to an integer for whole-gigabyte machine totals (8, 16,
+            // 32, 64), use one decimal otherwise so resident readings still
+            // show movement.
+            if abs(gib.rounded() - gib) < 0.05 {
+                return "\(Int(gib.rounded())) GB"
+            }
+            return String(format: "%.1f GB", gib)
+        }
+        let mib = Double(bytes) / 1_048_576 // 2²⁰
+        return "\(Int(mib.rounded())) MB"
+    }
 }
 
 enum MemoryReporter {

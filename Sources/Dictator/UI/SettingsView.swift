@@ -1364,11 +1364,11 @@ private struct StatsModelsPane: View {
         Form {
             Section {
                 LabeledContent("This Mac") {
-                    Text(formatModelSize(memory.physicalMB))
+                    Text(memory.physicalDisplay)
                         .monospacedDigit()
                 }
                 LabeledContent("Dictator using") {
-                    Text(formatModelSize(memory.residentMB))
+                    Text(memory.residentDisplay)
                         .monospacedDigit()
                 }
                 LabeledContent("Selected models, loaded") {
