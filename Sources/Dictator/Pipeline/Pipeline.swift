@@ -138,6 +138,14 @@ final class Pipeline {
     }
     private var inFlightAssistant: InFlightAssistant?
 
+    /// Set by `finishAssistant` when the user releases the hotkey *before*
+    /// `startAssistant`'s setup task has finished awaiting the selection
+    /// grab. The setup task checks this flag after the slow await and bails
+    /// cleanly to `.idle` instead of pushing the pipeline into `.recording`
+    /// with no release path queued. Without this, a quick tap of the
+    /// assistant hotkey leaves the engine running indefinitely.
+    private var assistantReleasePending: Bool = false
+
     init(settings: DictatorSettings) {
         self.settings = settings
         recorder.onLevel = { [weak self] level in
@@ -544,6 +552,9 @@ final class Pipeline {
             return
         }
         state = .capturingSelection
+        // Reset the early-release flag for this attempt — leftover `true`
+        // from a prior aborted setup would silently swallow this press.
+        assistantReleasePending = false
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -551,6 +562,15 @@ final class Pipeline {
                 // style requests where the user has no selection (e.g. "make me a
                 // list of ten ideas here please").
                 let selection = try await SelectionGrabber.grab()
+                // User released before selection-grab finished. Don't start
+                // the recorder — just return to idle. Without this the
+                // engine starts with no release path queued and the
+                // pipeline gets stuck in `.recording` indefinitely.
+                if self.assistantReleasePending {
+                    self.assistantReleasePending = false
+                    self.state = .idle
+                    return
+                }
                 try recorder.start()
                 let continues = self.shouldContinueConversation(selection: selection)
                 self.nextAssistantIsContinuation = continues
@@ -558,9 +578,22 @@ final class Pipeline {
                 state = .recording(level: 0, isAssistant: true)
                 if settings.playSounds { SoundEffects.shared.playStart() }
             } catch SelectionGrabber.GrabError.noAccessibility {
-                fail("Accessibility permission required for Assistant Mode.")
+                // If the user released during the failed grab, drop the
+                // error — they've already given up on this press, surfacing
+                // a permission alert now would be confusing.
+                if self.assistantReleasePending {
+                    self.assistantReleasePending = false
+                    self.state = .idle
+                } else {
+                    fail("Accessibility permission required for Assistant Mode.")
+                }
             } catch {
-                fail("Assistant: \(error.localizedDescription)")
+                if self.assistantReleasePending {
+                    self.assistantReleasePending = false
+                    self.state = .idle
+                } else {
+                    fail("Assistant: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -636,6 +669,14 @@ final class Pipeline {
     /// grabbing a selection and starting the recorder, this runs Whisper on the
     /// dictated instruction and then calls the assistant LLM.
     func finishAssistant() {
+        // Release fired while `startAssistant`'s setup task is still
+        // awaiting the selection grab. Mark the press for abort — the
+        // setup task checks this flag after its await and bails to .idle
+        // instead of starting the recorder.
+        if case .capturingSelection = state {
+            assistantReleasePending = true
+            return
+        }
         guard let inflight = inFlightAssistant else {
             // Press path failed (no selection, no AX permission, etc.) — release is a no-op.
             return
