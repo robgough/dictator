@@ -325,8 +325,25 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/appcast.xml
           git commit -m "Publish appcast entry for v${{ steps.version.outputs.version }}"
-          # Push to the branch the tag was cut from. For tag-triggered runs we
-          # don't know the branch name, so we push to main — fine for a
-          # single-branch project; revisit if you start cutting from release
-          # branches.
-          git push origin HEAD:main
+          # The release job runs from a detached HEAD at the tag's commit, but
+          # by the time we push (~15 min later) main has often moved on with
+          # unrelated commits (docs, marketing site tweaks). A plain
+          # `git push origin HEAD:main` is non-fast-forward in that case and
+          # fails. Rebase our single appcast commit onto whatever main is now
+          # and retry a few times to absorb commits that land mid-push.
+          for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              git rebase origin/main || {
+                  echo "::error::appcast rebase onto origin/main failed"
+                  git rebase --abort || true
+                  exit 1
+              }
+              if git push origin HEAD:main; then
+                  echo "pushed appcast on attempt $attempt"
+                  exit 0
+              fi
+              echo "push rejected on attempt $attempt; retrying"
+              sleep 3
+          done
+          echo "::error::failed to push appcast after 5 attempts"
+          exit 1
