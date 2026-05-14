@@ -43,11 +43,20 @@ final class InputLevelMonitor {
     /// and `stop`.
     @ObservationIgnored private var watchdogTask: Task<Void, Never>?
 
+    /// Generation counter so a stale async startup that's still negotiating
+    /// HFP when the user has already closed the Input pane doesn't end up
+    /// adopting its (now-unwanted) engine on completion. Bumped by `stop`,
+    /// and by `start` when re-entering after a cancelled startup.
+    @ObservationIgnored private var startGeneration: Int = 0
+    /// True while an off-main startup is in flight. Prevents overlapping
+    /// `start()` calls from kicking off duplicate engines.
+    @ObservationIgnored private var startInFlight: Bool = false
+
     /// Spin up the meter. No-op if already running. Walks the mic-permission
     /// state machine first so we don't pop the OS prompt from a passive
     /// settings view.
     func start() {
-        guard !isActive else { return }
+        guard !isActive, !startInFlight else { return }
         switch MicPermission.status() {
         case .denied, .restricted:
             permissionDenied = true
@@ -62,25 +71,23 @@ final class InputLevelMonitor {
             return
         }
 
-        do {
-            try configureAndStart(deviceOverride: AudioDeviceManager.shared.activeInputDeviceID())
-        } catch {
-            // Mirror AudioRecorder's recovery: a -10868 (format-mismatch)
-            // failure on a device override often clears when we retry
-            // against the system default.
-            engine = AVAudioEngine()
-            try? configureAndStart(deviceOverride: nil)
-        }
-
-        // Watchdog only spins up after the first successful start — no
-        // point polling for buffers when the engine never came up at all.
-        if isActive {
-            startWatchdog()
-        }
+        startInFlight = true
+        startGeneration &+= 1
+        startEngineAsync(
+            deviceOverride: AudioDeviceManager.shared.activeInputDeviceID(),
+            allowDefaultFallback: true,
+            generation: startGeneration
+        )
     }
 
     /// Tear the engine down. Safe to call multiple times.
     func stop() {
+        // Bump the generation so any in-flight startup throws away its
+        // engine on completion instead of adopting it. Without this, the
+        // user can close Settings while AirPods is still negotiating, and
+        // a stuck engine ends up live in the background.
+        startGeneration &+= 1
+        startInFlight = false
         guard isActive else { return }
         watchdogTask?.cancel()
         watchdogTask = nil
@@ -109,24 +116,42 @@ final class InputLevelMonitor {
                 if Date().timeIntervalSince(last) > 0.6 {
                     self.teardown()
                     self.isActive = false
-                    try? self.configureAndStart(deviceOverride: nil)
+                    self.startInFlight = true
+                    self.startGeneration &+= 1
+                    self.startEngineAsync(
+                        deviceOverride: nil,
+                        allowDefaultFallback: false,
+                        generation: self.startGeneration
+                    )
                 }
             }
         }
     }
 
-    private func configureAndStart(deviceOverride: AudioDeviceID?) throws {
-        // Fresh engine each call so the AUHAL has no stale device/format
-        // state — same reason AudioRecorder does it.
-        engine = AVAudioEngine()
-        if let id = deviceOverride {
-            try? Self.setInputDevice(id, on: engine)
-        }
-        let input = engine.inputNode
-        input.removeTap(onBus: 0)
-
-        // @Sendable + `format: nil` are load-bearing (see AudioRecorder for
-        // the full story). The closure runs on the realtime audio thread.
+    /// Build the engine, install the tap, and start it. All of this used to
+    /// run synchronously on the main actor when `.onAppear` fired, but two
+    /// of the steps can block for seconds:
+    ///
+    ///   - `setInputDevice` (`AudioUnitSetProperty(kAudioOutputUnitProperty_CurrentDevice…)`)
+    ///     forces the AUHAL to take ownership of the chosen device. On a
+    ///     Bluetooth mic — AirPods Max especially — this means switching the
+    ///     headset from A2DP to HFP, which can take 2–5 seconds.
+    ///   - `engine.start()` blocks until the input device is producing audio,
+    ///     which on the same BT path includes the codec negotiation.
+    ///
+    /// Doing both on main beach-balls the Settings window for the duration.
+    /// We do the engine work off-main and only touch `self` again on
+    /// completion, gated by `generation` so a stale startup (user closed the
+    /// pane mid-negotiation) can't end up adopting an engine the user no
+    /// longer wants.
+    private func startEngineAsync(
+        deviceOverride: AudioDeviceID?,
+        allowDefaultFallback: Bool,
+        generation: Int
+    ) {
+        // Construct the tap on main — `self` is @MainActor and capturing
+        // [weak self] across the @Sendable closure boundary is cleanest from
+        // here. The closure itself runs on the realtime audio thread.
         let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { [weak self] pcm, _ in
             let rms = Self.computeRMS(pcm: pcm)
             Task { @MainActor [weak self, rms] in
@@ -134,16 +159,80 @@ final class InputLevelMonitor {
                 self?.lastBufferTime = Date()
             }
         }
-        input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
 
-        // Force a complete graph so macOS doesn't decide our tap-only
-        // engine is idle and silently suspend buffer delivery to the tap.
-        // mainMixerNode auto-connects to the output node; we mute it so
-        // nothing audible reaches the speakers. CPU cost is negligible at
-        // volume 0 and a 4096-sample buffer.
-        engine.connect(input, to: engine.mainMixerNode, format: nil)
-        engine.mainMixerNode.outputVolume = 0
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let newEngine = AVAudioEngine()
+            do {
+                if let id = deviceOverride {
+                    try? Self.setInputDevice(id, on: newEngine)
+                }
+                let input = newEngine.inputNode
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
+                // Force a complete graph so macOS doesn't decide our
+                // tap-only engine is idle and silently suspend buffer
+                // delivery. mainMixerNode auto-connects to the output node;
+                // we mute it so nothing audible reaches the speakers.
+                newEngine.connect(input, to: newEngine.mainMixerNode, format: nil)
+                newEngine.mainMixerNode.outputVolume = 0
+                newEngine.prepare()
+                try newEngine.start()
+            } catch {
+                await self?.handleStartFailure(
+                    allowDefaultFallback: allowDefaultFallback,
+                    generation: generation
+                )
+                return
+            }
 
+            await self?.completeStart(newEngine: newEngine, generation: generation)
+            // If `self` was deallocated mid-startup, `completeStart` is a
+            // no-op. ARC will drop `newEngine` when this closure returns —
+            // the tap captures `[weak self]`, so the engine doesn't retain
+            // the monitor and there's no cycle to break.
+        }
+    }
+
+    /// Main-actor completion handler for a successful off-main start. If the
+    /// generation no longer matches, the user has called stop()/start() in
+    /// the meantime and we drop this engine.
+    private func completeStart(newEngine: AVAudioEngine, generation: Int) {
+        guard generation == startGeneration else {
+            newEngine.stop()
+            return
+        }
+        adoptEngine(newEngine)
+    }
+
+    /// Main-actor completion handler for a failed off-main start. Decides
+    /// whether to retry against the system default, or to give up.
+    private func handleStartFailure(allowDefaultFallback: Bool, generation: Int) {
+        guard generation == startGeneration else { return }
+        if allowDefaultFallback {
+            // Mirror AudioRecorder's recovery: a -10868 (format-mismatch)
+            // failure on a device override often clears when we retry
+            // against the system default. Keep startInFlight true so the
+            // retry can run.
+            startEngineAsync(
+                deviceOverride: nil,
+                allowDefaultFallback: false,
+                generation: generation
+            )
+        } else {
+            startInFlight = false
+        }
+    }
+
+    /// Commit a freshly-started engine as the live one. Runs on main.
+    private func adoptEngine(_ newEngine: AVAudioEngine) {
+        // Defensive: if a previous engine somehow remained, tear it down
+        // before swapping. Shouldn't happen with the startInFlight guard
+        // but cheap insurance against future refactors.
+        if isActive {
+            teardown()
+            isActive = false
+        }
+        engine = newEngine
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
@@ -153,13 +242,12 @@ final class InputLevelMonitor {
                 self?.handleConfigurationChange()
             }
         }
-
-        engine.prepare()
-        try engine.start()
         isActive = true
         // Bootstrap so the watchdog doesn't false-fire before the first
         // real buffer lands (engine.start → first tap can take ~85 ms).
         lastBufferTime = Date()
+        startInFlight = false
+        startWatchdog()
     }
 
     private func handleConfigurationChange() {
@@ -168,8 +256,11 @@ final class InputLevelMonitor {
         isActive = false
         // Re-arm on whatever input is active now. Silent on failure — the
         // meter just stops moving, which is exactly the signal the user
-        // needs ("my new mic isn't picking anything up").
-        try? configureAndStart(deviceOverride: nil)
+        // needs ("my new mic isn't picking anything up"). Async so a BT
+        // re-negotiation here doesn't beach-ball either.
+        startInFlight = true
+        startGeneration &+= 1
+        startEngineAsync(deviceOverride: nil, allowDefaultFallback: false, generation: startGeneration)
     }
 
     private func teardown() {
@@ -181,7 +272,7 @@ final class InputLevelMonitor {
         engine.stop()
     }
 
-    private static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
+    private nonisolated static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
         guard let audioUnit = engine.inputNode.audioUnit else { return }
         var device = deviceID
         let status = AudioUnitSetProperty(
