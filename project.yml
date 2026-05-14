@@ -115,6 +115,11 @@ targets:
         com.apple.security.app-sandbox: false
         com.apple.security.device.audio-input: true
         com.apple.security.automation.apple-events: true
+        # Notarization rejects any binary that carries get-task-allow (the
+        # debugger-attach entitlement). Xcode injects it for Debug builds and
+        # usually strips it for Release, but with manual signing + a custom
+        # entitlements file we pin it to false to be sure.
+        com.apple.security.get-task-allow: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator

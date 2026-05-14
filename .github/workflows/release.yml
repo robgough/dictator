@@ -120,6 +120,55 @@ jobs:
           fi
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
+      - name: Re-sign Sparkle helpers and the app for notarization
+        # Sparkle ships as a versioned framework with nested executables —
+        # Updater.app, Autoupdate, and Downloader.xpc / Installer.xpc XPC
+        # services. Xcode's "Embed & Sign" only re-signs the framework
+        # wrapper, so those nested binaries keep whatever signature came with
+        # the SPM artifact, which the notary service then rejects ("not signed
+        # with a valid Developer ID"). xcodebuild also doesn't always attach a
+        # secure timestamp when the cert lives in a throwaway keychain, which
+        # is the second class of error in the notary log. So: walk every
+        # signable thing under the bundle and re-sign with our Developer ID,
+        # hardened runtime, and --timestamp. Innermost first — re-signing an
+        # inner bundle invalidates outer signatures.
+        run: |
+          set -euo pipefail
+          IDENT="$DICTATOR_CODE_SIGN_IDENTITY"
+          SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          # Resolve the active version via Versions/Current so we're not
+          # hardcoded to "B" if a future Sparkle bumps the version letter.
+          SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/$(readlink "$SPARKLE_FW/Versions/Current")"
+
+          # Preserve each helper's existing entitlements (Sparkle ships its
+          # XPC services with sandbox + specific temporary-exceptions).
+          for nested in \
+              "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc" \
+              "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc" \
+              "$SPARKLE_VERSION_DIR/Updater.app" \
+              "$SPARKLE_VERSION_DIR/Autoupdate"; do
+              codesign --force --timestamp --options runtime \
+                  --preserve-metadata=entitlements \
+                  --sign "$IDENT" \
+                  "$nested"
+          done
+
+          # Now the framework wrapper itself (the Sparkle dylib).
+          codesign --force --timestamp --options runtime \
+              --sign "$IDENT" \
+              "$SPARKLE_FW"
+
+          # Finally the outer app, with our entitlements file (which sets
+          # get-task-allow=false explicitly so notarization doesn't reject it).
+          codesign --force --timestamp --options runtime \
+              --entitlements Sources/Dictator/Dictator.entitlements \
+              --sign "$IDENT" \
+              "$APP_PATH"
+
+          # Fail fast if anything is still off before we burn a notarization
+          # round-trip.
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
       - name: Notarize app
         # STUB: runs only when notarize secrets are present. Until you enrol in
         # the paid Apple Developer Program and add APPLE_NOTARY_USER /
