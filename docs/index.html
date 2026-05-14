@@ -168,6 +168,16 @@
             font-weight: 600;
             margin: 28px 0 14px;
         }
+        /* Gradient on the second line of the hero — same treatment as the
+           OG/social card so the look matches when people share the page. */
+        h1 .accent {
+            background: linear-gradient(90deg,
+                color-mix(in oklab, var(--accent) 70%, var(--fg)) 0%,
+                var(--accent) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
         .tagline {
             font-size: 19px;
             color: var(--fg-dim);
@@ -589,7 +599,7 @@
             <span class="logo">Dictator</span>
             <span class="badge-preview">Early preview</span>
         </div>
-        <h1>Talk to your Mac.<br>Not the cloud.</h1>
+        <h1>Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
         <p class="tagline">A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
         <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
         <span class="cta-meta">Free · No account · Apple Silicon · macOS 15+</span>
