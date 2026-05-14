@@ -47,6 +47,12 @@ struct DictatorSettings: Codable, Equatable {
     var structuralPromptOverride: String?
     var assistantPromptAddendum: String
     var assistantPromptOverride: String?
+    /// Flips to true the first time the user finishes (or explicitly skips)
+    /// the first-run wizard. When false on launch, `AppState.bootstrap()`
+    /// shows the wizard window before the user sees the menu bar — the
+    /// wizard walks them through permissions and downloading a transcription
+    /// model so the first hotkey press just works.
+    var hasCompletedOnboarding: Bool
 
     static let defaults = DictatorSettings(
         transcriptionEngine: .parakeet,
@@ -71,7 +77,8 @@ struct DictatorSettings: Codable, Equatable {
         structuralPromptAddendum: "",
         structuralPromptOverride: nil,
         assistantPromptAddendum: "",
-        assistantPromptOverride: nil
+        assistantPromptOverride: nil,
+        hasCompletedOnboarding: false
     )
 
     init(
@@ -97,7 +104,8 @@ struct DictatorSettings: Codable, Equatable {
         structuralPromptAddendum: String,
         structuralPromptOverride: String?,
         assistantPromptAddendum: String,
-        assistantPromptOverride: String?
+        assistantPromptOverride: String?,
+        hasCompletedOnboarding: Bool
     ) {
         self.transcriptionEngine = transcriptionEngine
         self.whisperModelID = whisperModelID
@@ -122,6 +130,7 @@ struct DictatorSettings: Codable, Equatable {
         self.structuralPromptOverride = structuralPromptOverride
         self.assistantPromptAddendum = assistantPromptAddendum
         self.assistantPromptOverride = assistantPromptOverride
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
     init(from decoder: Decoder) throws {
@@ -154,6 +163,10 @@ struct DictatorSettings: Codable, Equatable {
         self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride) ?? d.structuralPromptOverride
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
         self.assistantPromptOverride  = try c.decodeIfPresent(String.self, forKey: .assistantPromptOverride)  ?? d.assistantPromptOverride
+        // Existing installs that pre-date the wizard skip onboarding — they
+        // already have models + permissions configured, and we don't want to
+        // ambush them with a setup window on next launch.
+        self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
     }
 
     // MARK: - Effective prompts (built-in + addendum, or override)

@@ -13,6 +13,7 @@ final class AppState {
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let assistantResultWindow = AssistantResultController()
+    private var onboardingController: OnboardingController?
 
     private init() {
         let settings = DictatorSettings.load()
@@ -54,6 +55,25 @@ final class AppState {
         if settings.preloadModelsOnLaunch {
             preloadModels()
         }
+        if !settings.hasCompletedOnboarding {
+            showOnboarding()
+        }
+    }
+
+    /// Show the first-run wizard. Called automatically at launch when the
+    /// user hasn't completed onboarding yet, and from the menu bar's
+    /// "Setup…" entry on demand. The flag is flipped to true regardless of
+    /// whether the user finishes or skips — they can reopen the wizard any
+    /// time, and we don't want it ambushing them on every launch.
+    func showOnboarding() {
+        if onboardingController == nil {
+            onboardingController = OnboardingController(appState: self) { [weak self] in
+                guard let self else { return }
+                self.settings.hasCompletedOnboarding = true
+                self.save()
+            }
+        }
+        onboardingController?.show()
     }
 
     /// Opens a past conversation in the result window. Called from the menu

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import KeyboardShortcuts
 
 struct MenuBarContent: View {
@@ -7,6 +8,7 @@ struct MenuBarContent: View {
     @Environment(\.openSettings) private var openSettings
     @State private var history = DictationHistory.shared
     @State private var conversations = ConversationHistory.shared
+    @State private var modelManager = ModelManager.shared
     @State private var justCopied: UUID?
 
     var body: some View {
@@ -33,6 +35,18 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
+                // The wizard exists to walk you through the things that
+                // *must* be configured for dictation to work. Once mic is
+                // granted and at least one model in the active engine is
+                // installed, there's nothing left to set up — hide the
+                // entry so it stops cluttering the menu.
+                if needsSetup {
+                    Button {
+                        state.showOnboarding()
+                    } label: {
+                        Label("Setup…", systemImage: "sparkles")
+                    }
+                }
                 Spacer()
                 Button(role: .destructive) {
                     NSApp.terminate(nil)
@@ -45,6 +59,27 @@ struct MenuBarContent: View {
         }
         .padding(14)
         .frame(width: 340)
+        .onAppear {
+            // Recompute on-disk model state each time the menu opens — the
+            // user may have downloaded or removed a model from Settings
+            // since we last refreshed.
+            modelManager.refreshCachedStates()
+        }
+    }
+
+    /// True when the wizard still has something to do for the user.
+    /// Mic must be authorized AND at least one model in the active
+    /// transcription engine must be installed. Accessibility is optional
+    /// (clipboard fallback works), and the LLM is optional too — neither
+    /// blocks dictation.
+    private var needsSetup: Bool {
+        if MicPermission.status() != .authorized { return true }
+        switch state.settings.transcriptionEngine {
+        case .parakeet:
+            return !ModelCatalog.parakeetModels.contains { modelManager.parakeetStates[$0.id] == .ready }
+        case .whisper:
+            return !ModelCatalog.whisperModels.contains { modelManager.whisperStates[$0.id] == .ready }
+        }
     }
 
     @ViewBuilder
