@@ -197,7 +197,14 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          DMG_PATH="$RUNNER_TEMP/Dictator-$VERSION.dmg"
+          # Unversioned filename so the marketing site can deep-link to
+          # https://github.com/.../releases/latest/download/Dictator.dmg —
+          # GitHub's latest-release redirect requires the asset name to be
+          # stable across releases. The version is still in the volume
+          # name (mounted disk), the GitHub Release title, and inside the
+          # app's About pane, so dropping it from the filename doesn't
+          # lose any user-visible signal.
+          DMG_PATH="$RUNNER_TEMP/Dictator.dmg"
           create-dmg \
               --volname "Dictator $VERSION" \
               --window-size 540 320 \
