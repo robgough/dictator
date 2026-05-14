@@ -4,9 +4,58 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Dictator — Local-first dictation for macOS</title>
-    <meta name="description" content="A tiny menu-bar dictation app for macOS. Hold a hotkey, talk, release. Transcription and language models run entirely on your Mac.">
+    <meta name="description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. Transcription and language models run entirely on your Mac.">
+    <link rel="canonical" href="https://dictator.robgough.net/">
     <link rel="icon" type="image/png" href="media/dictator-icon.png">
     <link rel="apple-touch-icon" href="media/dictator-icon.png">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Dictator">
+    <meta property="og:url" content="https://dictator.robgough.net/">
+    <meta property="og:title" content="Dictator — Talk to your Mac. Not the cloud.">
+    <meta property="og:description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta property="og:image" content="https://dictator.robgough.net/media/og-card.png">
+    <meta property="og:image:secure_url" content="https://dictator.robgough.net/media/og-card.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 15+.">
+    <meta property="og:locale" content="en_GB">
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Dictator — Talk to your Mac. Not the cloud.">
+    <meta name="twitter:description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta name="twitter:image" content="https://dictator.robgough.net/media/og-card.png">
+    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 15+.">
+
+    <!-- Structured data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Dictator",
+        "description": "A free, open-source menu-bar dictation app for macOS. Transcription and language models run entirely on-device.",
+        "url": "https://dictator.robgough.net/",
+        "downloadUrl": "https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "macOS 15+",
+        "image": "https://dictator.robgough.net/media/og-card.png",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        },
+        "author": {
+            "@type": "Person",
+            "name": "Rob Gough",
+            "url": "https://robgough.net"
+        }
+    }
+    </script>
     <style>
         :root {
             --bg: #ffffff;

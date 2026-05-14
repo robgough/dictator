@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Dictator OG card</title>
+    <style>
+        @font-face {
+            font-family: "SF Pro Rounded";
+            src: local("SF Pro Rounded"), local("SF Pro Display"), local("Helvetica Neue");
+        }
+        html, body { margin: 0; padding: 0; }
+        body {
+            width: 1200px;
+            height: 630px;
+            font-family: "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+            background:
+                radial-gradient(1200px 800px at 90% -20%, rgba(122, 138, 255, 0.30), transparent 60%),
+                radial-gradient(900px 700px at -10% 120%, rgba(74, 92, 255, 0.22), transparent 55%),
+                linear-gradient(180deg, #0e1014 0%, #0a0c10 100%);
+            color: #ececef;
+            overflow: hidden;
+            position: relative;
+        }
+        body::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+            background-size: 56px 56px;
+            mask-image: radial-gradient(900px 600px at 50% 60%, black 40%, transparent 80%);
+            -webkit-mask-image: radial-gradient(900px 600px at 50% 60%, black 40%, transparent 80%);
+        }
+        .frame {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 64px 72px;
+        }
+        .top {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+        .icon {
+            width: 92px;
+            height: 92px;
+            border-radius: 22px;
+            box-shadow:
+                0 24px 60px -20px rgba(74, 92, 255, 0.55),
+                0 6px 14px -6px rgba(0, 0, 0, 0.6);
+        }
+        .wordmark {
+            font-size: 44px;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            color: #ffffff;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            padding: 6px 14px 6px 16px;
+            border-radius: 999px;
+            background: rgba(253, 224, 71, 0.92);
+            color: #4a2a05;
+            border: 1px solid rgba(250, 204, 21, 0.95);
+            margin-left: 4px;
+        }
+        .badge::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #92400e;
+            display: inline-block;
+        }
+        .headline {
+            font-size: 88px;
+            line-height: 1.02;
+            letter-spacing: -0.025em;
+            font-weight: 600;
+            margin: 0;
+            color: #ffffff;
+            max-width: 1000px;
+        }
+        .headline .accent {
+            background: linear-gradient(90deg, #b5c0ff 0%, #7a8aff 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .subline {
+            font-size: 26px;
+            line-height: 1.35;
+            color: #a4a8b1;
+            margin: 22px 0 0;
+            max-width: 880px;
+            font-weight: 400;
+        }
+        .bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+        }
+        .chips {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .chip {
+            font-size: 18px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            color: #d4d6da;
+        }
+        .url {
+            font-size: 20px;
+            font-weight: 500;
+            color: #7a8aff;
+            letter-spacing: 0.01em;
+        }
+        .stack {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="frame">
+        <div class="top">
+            <img class="icon" src="dictator-icon.png" alt="">
+            <span class="wordmark">Dictator</span>
+            <span class="badge">Early preview</span>
+        </div>
+
+        <div class="stack">
+            <h1 class="headline">Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
+            <p class="subline">A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.</p>
+        </div>
+
+        <div class="bottom">
+            <div class="chips">
+                <span class="chip">Free &amp; open source</span>
+                <span class="chip">Apple Silicon</span>
+                <span class="chip">macOS 15+</span>
+                <span class="chip">No account</span>
+            </div>
+            <span class="url">dictator.robgough.net</span>
+        </div>
+    </div>
+</body>
+</html>
