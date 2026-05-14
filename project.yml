@@ -107,7 +107,7 @@ targets:
         # half here, and store the private half as the SPARKLE_PRIVATE_KEY
         # GitHub Actions secret. See RELEASING.md.
         SUFeedURL: "https://dictator.robgough.net/appcast.xml"
-        SUPublicEDKey: "REPLACE_WITH_SPARKLE_PUBLIC_KEY"
+        SUPublicEDKey: "nKdcgJBzUX/UsPNA71RLRx1CzXBby33QOor7CQ7t9Yg="
         SUEnableAutomaticChecks: true
     entitlements:
       path: Sources/Dictator/Dictator.entitlements
