@@ -14,7 +14,6 @@
             --fg-dim: #5b6168;
             --fg-faint: #8a8f96;
             --accent: #4a5cff;
-            --warn: #ca8a04;
             --border: #e8e9ec;
             --card: #f7f8fa;
         }
@@ -25,7 +24,6 @@
                 --fg-dim: #a4a8b1;
                 --fg-faint: #6f747d;
                 --accent: #7a8aff;
-                --warn: #facc15;
                 --border: #20232a;
                 --card: #161922;
             }
@@ -79,22 +77,22 @@
             letter-spacing: 0.1em;
             padding: 5px 12px 5px 13px;
             border-radius: 999px;
-            background: color-mix(in oklab, var(--warn) 24%, transparent);
-            color: var(--warn);
-            border: 1px solid color-mix(in oklab, var(--warn) 50%, transparent);
+            background: #fde047;
+            color: #713f12;
+            border: 1px solid #facc15;
         }
         .badge-preview::before {
             content: "";
             width: 7px;
             height: 7px;
             border-radius: 50%;
-            background: var(--warn);
+            background: #92400e;
             display: inline-block;
             animation: badge-pulse 2.2s ease-in-out infinite;
         }
         @keyframes badge-pulse {
-            0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--warn) 45%, transparent); }
-            50%      { box-shadow: 0 0 0 5px color-mix(in oklab, var(--warn) 0%,  transparent); }
+            0%, 100% { box-shadow: 0 0 0 0 rgba(146, 64, 14, 0.45); }
+            50%      { box-shadow: 0 0 0 5px rgba(146, 64, 14, 0); }
         }
         @media (prefers-reduced-motion: reduce) {
             .badge-preview::before { animation: none; }
