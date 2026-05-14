@@ -78,8 +78,8 @@ The `docs/CNAME` file is committed so GitHub Pages remembers the custom domain a
 ## Cutting a release
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v2026.2.0
+git push origin v2026.2.0
 ```
 
 That triggers `.github/workflows/release.yml`. The workflow will:
@@ -98,4 +98,4 @@ For a dry run without pushing a tag, use the *Run workflow* button on the Action
 
 ## Version numbering
 
-`MARKETING_VERSION` (e.g. `0.2.0`) is derived from the tag — push `v0.2.0` and you get `0.2.0`. `CURRENT_PROJECT_VERSION` (the build number) is the GitHub Actions run number, which monotonically increases — Sparkle uses this to compare which build is newer when two builds share a marketing version.
+Calendar versioning: `YYYY.MINOR.PATCH`. Bump MINOR for feature drops, PATCH for bugfixes, and roll over to a new YYYY at the new year (the minor counter resets). `MARKETING_VERSION` is derived from the tag — push `v2026.2.0` and you get `2026.2.0`. `CURRENT_PROJECT_VERSION` (the build number) is the GitHub Actions run number, which monotonically increases — Sparkle uses this to compare which build is newer when two builds share a marketing version.
