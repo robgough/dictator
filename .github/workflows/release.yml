@@ -55,6 +55,28 @@ jobs:
           echo "build=$BUILD"     >> "$GITHUB_OUTPUT"
           echo "Building $VERSION (build $BUILD)"
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        # Runs early so the markdown body is ready by the time `gh release
+        # create` needs --notes-file, and the HTML form is ready for the
+        # appcast's <description> CDATA. The "Version the CHANGELOG" step
+        # near the end of the job rewrites Unreleased → versioned in place.
+        run: |
+          set -euo pipefail
+          MD_PATH="$RUNNER_TEMP/release-notes.md"
+          HTML_PATH="$RUNNER_TEMP/release-notes.html"
+          python3 .github/scripts/release_notes.py extract > "$MD_PATH"
+          python3 .github/scripts/release_notes.py html < "$MD_PATH" > "$HTML_PATH"
+          if grep -qF '_No changes yet._' "$MD_PATH"; then
+              echo "::warning::CHANGELOG.md has no entries under '## Unreleased' — release notes will read 'No user-facing changes in this release.'"
+              # Replace the placeholder marker with the prose Sparkle and the
+              # GitHub Release should actually show, since the placeholder
+              # itself ("_No changes yet._") would render literally.
+              echo "No user-facing changes in this release." > "$MD_PATH"
+          fi
+          echo "md=$MD_PATH"     >> "$GITHUB_OUTPUT"
+          echo "html=$HTML_PATH" >> "$GITHUB_OUTPUT"
+
       - name: Install xcodegen + create-dmg
         run: brew install xcodegen create-dmg
 
@@ -292,12 +314,19 @@ jobs:
           TAG="v$VERSION"
 
           # If we got here via tag push the tag exists; if via workflow_dispatch
-          # we create it now so the Release has something to anchor to.
+          # we create it now so the Release has something to anchor to. The
+          # body comes from CHANGELOG.md's '## Unreleased' section, extracted
+          # earlier into a temp file by the "Extract release notes" step.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
               gh release create "$TAG" \
                   --title "Dictator $VERSION" \
-                  --notes "Release notes for $VERSION." \
+                  --notes-file "${{ steps.notes.outputs.md }}" \
                   --target "$GITHUB_SHA"
+          else
+              # Tag existed already (re-run, manual recovery, etc.) —
+              # overwrite the notes so they reflect the current changelog.
+              gh release edit "$TAG" \
+                  --notes-file "${{ steps.notes.outputs.md }}"
           fi
           gh release upload "$TAG" "$DMG_PATH" --clobber
 
@@ -312,19 +341,30 @@ jobs:
           DMG_NAME="$(basename "$DMG_PATH")"
           export APPCAST_DMG_URL="https://github.com/${{ github.repository }}/releases/download/v$APPCAST_VERSION/$DMG_NAME"
           export APPCAST_PUBDATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
+          export APPCAST_DESCRIPTION_HTML="$(cat "${{ steps.notes.outputs.html }}")"
           python3 .github/scripts/append_appcast.py
 
-      - name: Commit appcast back
+      - name: Version the CHANGELOG
+        # Move the '## Unreleased' section under a versioned heading and
+        # reset Unreleased to its empty placeholder. The commit-back step
+        # below ships the modified file alongside the appcast update.
         run: |
           set -euo pipefail
-          if git diff --quiet docs/appcast.xml; then
-              echo "appcast unchanged (nothing to commit)"
+          python3 .github/scripts/release_notes.py version \
+              "${{ steps.version.outputs.version }}" \
+              "$(date -u +'%Y-%m-%d')"
+
+      - name: Commit appcast + changelog back
+        run: |
+          set -euo pipefail
+          if git diff --quiet docs/appcast.xml CHANGELOG.md; then
+              echo "nothing to commit"
               exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/appcast.xml
-          git commit -m "Publish appcast entry for v${{ steps.version.outputs.version }}"
+          git add docs/appcast.xml CHANGELOG.md
+          git commit -m "Publish v${{ steps.version.outputs.version }} (appcast + changelog)"
           # The release job runs from a detached HEAD at the tag's commit, but
           # by the time we push (~15 min later) main has often moved on with
           # unrelated commits (docs, marketing site tweaks). A plain

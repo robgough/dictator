@@ -12,6 +12,11 @@ Required env:
     APPCAST_LENGTH     bytes (from Sparkle's sign_update)
     APPCAST_ED_SIG     EdDSA signature (from Sparkle's sign_update)
     APPCAST_PUBDATE    RFC-822 pubDate, e.g. "Mon, 12 May 2026 10:00:00 +0000"
+
+Optional env:
+    APPCAST_DESCRIPTION_HTML  HTML for Sparkle's "What's new" panel. When set,
+                              wrapped in CDATA inside a <description> element
+                              on the item. Empty/unset skips the element.
 """
 import os
 import pathlib
@@ -39,21 +44,31 @@ def main() -> int:
     length = os.environ["APPCAST_LENGTH"]
     ed_sig = os.environ["APPCAST_ED_SIG"]
     pubdate = os.environ["APPCAST_PUBDATE"]
+    description_html = (os.environ.get("APPCAST_DESCRIPTION_HTML") or "").strip()
 
-    item = (
-        "        <item>\n"
-        f"            <title>Version {version}</title>\n"
-        f"            <pubDate>{pubdate}</pubDate>\n"
-        f"            <sparkle:version>{build}</sparkle:version>\n"
-        f"            <sparkle:shortVersionString>{version}</sparkle:shortVersionString>\n"
-        "            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>\n"
-        "            <enclosure\n"
-        f'                url="{url}"\n'
-        f'                length="{length}"\n'
-        '                type="application/octet-stream"\n'
-        f'                sparkle:edSignature="{ed_sig}" />\n'
-        "        </item>\n    "
-    )
+    parts = [
+        "        <item>",
+        f"            <title>Version {version}</title>",
+        f"            <pubDate>{pubdate}</pubDate>",
+        f"            <sparkle:version>{build}</sparkle:version>",
+        f"            <sparkle:shortVersionString>{version}</sparkle:shortVersionString>",
+        "            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>",
+    ]
+    if description_html:
+        # CDATA so Sparkle's HTML rendering panel gets raw HTML without the
+        # appcast XML parser tripping on angle brackets. Pre-escape the
+        # CDATA terminator just in case a release note ever contains it.
+        safe = description_html.replace("]]>", "]]]]><![CDATA[>")
+        parts.append(f"            <description><![CDATA[{safe}]]></description>")
+    parts += [
+        "            <enclosure",
+        f'                url="{url}"',
+        f'                length="{length}"',
+        '                type="application/octet-stream"',
+        f'                sparkle:edSignature="{ed_sig}" />',
+        "        </item>",
+    ]
+    item = "\n".join(parts) + "\n    "
 
     path = pathlib.Path("docs/appcast.xml")
     src = path.read_text()

@@ -37,6 +37,16 @@ The post-build phase ditto-copies the built `.app` to `~/Applications/Dictator.a
 - `cp -R` doesn't preserve code-signature metadata; `ditto` does.
 - xcodegen's `postBuildScripts` run *before* Xcode's `CodeSign` phase, so the ditto'd copy is unsigned at that moment and needs an explicit `codesign` invocation.
 
+## Release notes (CHANGELOG.md)
+
+When a commit changes user-visible behaviour, add a one-line bullet under `## Unreleased` in `CHANGELOG.md` in the same commit. User-visible means something a user could notice in the app: bug fixes, new features, performance changes they'd feel, UI changes, new/changed settings. Internal changes — refactors, build/CI tweaks, website edits under `docs/`, dependency bumps with no behaviour change — don't belong here.
+
+Style is user-language, not commit-language: "Settings no longer freezes when AirPods are connected" rather than "Move InputLevelMonitor engine startup off the main thread". Inline markdown (bold, code, links) isn't supported by the HTML converter — keep entries plain text.
+
+At release time the workflow extracts that section via `.github/scripts/release_notes.py`, uses it as the GitHub Release body *and* as the Sparkle "What's new" panel description (inlined in the appcast's `<description>` CDATA), and moves it under a `## v<version> — <date>` heading.
+
+If `## Unreleased` is empty at tag time the workflow warns but doesn't fail — some releases legitimately have no user-facing changes (e.g. signing-only fixes), in which case the release notes render "No user-facing changes in this release."
+
 ## Architecture
 
 Everything runs on the main actor unless explicitly hopped off it. Concurrency is `SWIFT_STRICT_CONCURRENCY=minimal` but Swift 6 still enforces actor isolation on closures — see "Swift 6 gotchas" below.
