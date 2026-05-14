@@ -1167,6 +1167,7 @@ private struct TranscriptionModelsPane: View {
                 Text("**Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster than Whisper on Apple Silicon, and slightly smaller on disk. v3 covers 25 European languages; v2 is English-only with marginally better English accuracy. **Whisper** is the mature alternative — slower, but broad language support and very well-tested.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .alert(
                 "No \(engineSwitchBlocked == .parakeet ? "Parakeet" : "Whisper") models installed",
@@ -1220,6 +1221,7 @@ private struct TranscriptionModelsPane: View {
                 Text("Parakeet runs on the Apple Neural Engine — much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Resumable downloads aren't supported (a cancelled download is discarded and re-fetched fresh next time).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section {
@@ -1261,6 +1263,7 @@ private struct TranscriptionModelsPane: View {
                 Text("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
@@ -1324,6 +1327,7 @@ private struct FormattingModelsPane: View {
                 Text("Used for the formatting, grammar, and structural passes after transcription — and for Assistant Mode. Pick **None** to skip LLM passes and ship the raw transcript.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
@@ -1381,6 +1385,7 @@ private struct StatsModelsPane: View {
                 Text("Live readout. Estimates are approximate — resident memory grows during long Assistant conversations as the model's KV cache fills, and macOS may compress cold pages.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section {
@@ -1393,6 +1398,7 @@ private struct StatsModelsPane: View {
                 Text("All downloaded model files live under `~/Library/Application Support/Dictator/Models/`.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
