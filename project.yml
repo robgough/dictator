@@ -109,17 +109,13 @@ targets:
         SUFeedURL: "https://dictator.robgough.net/appcast.xml"
         SUPublicEDKey: "nKdcgJBzUX/UsPNA71RLRx1CzXBby33QOor7CQ7t9Yg="
         SUEnableAutomaticChecks: true
-    entitlements:
-      path: Sources/Dictator/Dictator.entitlements
-      properties:
-        com.apple.security.app-sandbox: false
-        com.apple.security.device.audio-input: true
-        com.apple.security.automation.apple-events: true
-        # Notarization rejects any binary that carries get-task-allow (the
-        # debugger-attach entitlement). Xcode injects it for Debug builds and
-        # usually strips it for Release, but with manual signing + a custom
-        # entitlements file we pin it to false to be sure.
-        com.apple.security.get-task-allow: false
+    # Two entitlements files, swapped per build config via CODE_SIGN_ENTITLEMENTS
+    # below. The only difference is `get-task-allow`:
+    #   - Debug  → true  (lets Xcode's debugger attach)
+    #   - Release → false (notarization rejects binaries with it set)
+    # Both files are checked in and owned manually — no `entitlements:` block
+    # here, because xcodegen would regenerate a single file and clobber one of
+    # them on every `./gen`.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
@@ -153,6 +149,15 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         DEAD_CODE_STRIPPING: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The "Install to ~/Applications" post-build phase needs to read
+        # BUILT_PRODUCTS_DIR and write to ~/Applications. Xcode 15+ sandboxes
+        # script phases by default, which denies both. Opt out for this target.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Sources/Dictator/Dictator.Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Sources/Dictator/Dictator.entitlements
     dependencies:
       - package: WhisperKit
         product: WhisperKit
