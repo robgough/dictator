@@ -591,6 +591,10 @@ private struct InputPane: View {
         VStack(alignment: .leading, spacing: 16) {
             ActiveDeviceCard(manager: manager, monitor: monitor)
 
+            if manager.activeInputIsBluetooth() {
+                BluetoothAdvisoryNote()
+            }
+
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Priority order")
@@ -654,6 +658,43 @@ private struct InputPane: View {
 /// actually picking sound up. The meter row hides when mic permission
 /// hasn't been granted, so we don't show a stuck-at-zero bar that
 /// reads as a bug.
+/// Inline note explaining the trade-offs of using a Bluetooth mic. Surfaced
+/// in the Input pane only when the currently-active device is a BT device.
+/// Reason it's there: BT input forces macOS into HFP profile, which
+/// downgrades headphone audio to mono 16 kHz and adds 2–5 s of warmup
+/// latency before AVAudioEngine starts producing buffers. Users routinely
+/// blame Dictator for both effects; surfacing the cause makes the trade-off
+/// legible.
+private struct BluetoothAdvisoryNote: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "headphones")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.orange)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Bluetooth mic active")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                Text("macOS switches Bluetooth headphones into a phone-call profile while recording. Expect a 2–5 s warmup at the start of each dictation, and music or system audio will sound thin and mono for as long as the recording is in flight. For snappier dictation and full-fidelity playback, promote the MacBook microphone (or any wired input) above your headphones in the list below.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.30), lineWidth: 1)
+        )
+    }
+}
+
 private struct ActiveDeviceCard: View {
     let manager: AudioDeviceManager
     let monitor: InputLevelMonitor

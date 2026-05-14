@@ -46,6 +46,31 @@ struct HUDView: View {
             EmptyView()
         case .capturingSelection:
             StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .indigo)
+        case .warmingUp(let isAssistant):
+            // Bluetooth mics (AirPods, Beats, …) need 2–5 s for HFP profile
+            // negotiation before AVAudioEngine actually starts producing
+            // buffers. Surface that explicitly so the user doesn't think
+            // they've been recording for the past few seconds.
+            HStack(spacing: 14) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isAssistant ? Color.indigo : Color.accentColor)
+                    .font(.system(size: 22, weight: .semibold))
+                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connecting microphone")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text(deviceManager.activeInputDeviceName())
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ProgressView()
+                    .controlSize(.small)
+            }
         case .recording(let level, let isAssistant):
             let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
             HStack(spacing: 16) {
@@ -124,6 +149,7 @@ struct HUDView: View {
         switch state.pipeline.state {
         case .idle: "idle"
         case .capturingSelection: "capturingSelection"
+        case .warmingUp: "warmingUp"
         case .recording: "recording"
         case .transcribing: "transcribing"
         case .formatting: "formatting"

@@ -62,6 +62,24 @@ enum AudioDeviceEnumerator {
         }
     }
 
+    /// True when the device reports a Bluetooth transport (classic or LE).
+    /// Drives BT-specific behaviour: a warning in Settings, skipping the
+    /// mainMixer routing in the live meter, and surfacing "Connecting…" in
+    /// the HUD so the user understands the ~2–5 s HFP negotiation delay.
+    static func isBluetooth(deviceID: AudioDeviceID) -> Bool {
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &transport)
+        guard status == noErr else { return false }
+        return transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
     static func systemDefaultInputDeviceID() -> AudioDeviceID? {
         var id: AudioDeviceID = kAudioObjectUnknown
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)

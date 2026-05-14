@@ -5,6 +5,12 @@ import AppKit
 enum PipelineState: Equatable {
     case idle
     case capturingSelection
+    /// AVAudioEngine has been asked to start but hasn't begun producing
+    /// buffers yet. On wired mics this flashes by in milliseconds; on
+    /// Bluetooth (AirPods etc.) it can last 2–5 s while macOS negotiates
+    /// HFP. Surfaced in the HUD so the user understands they're not yet
+    /// being recorded.
+    case warmingUp(isAssistant: Bool)
     case recording(level: Float, isAssistant: Bool)
     case transcribing
     case formatting
@@ -19,6 +25,7 @@ enum PipelineState: Equatable {
         switch self {
         case .idle: "waveform"
         case .capturingSelection: "selection.pin.in.out"
+        case .warmingUp: "antenna.radiowaves.left.and.right"
         case .recording: "waveform.badge.mic"
         case .transcribing: "waveform.badge.magnifyingglass"
         case .formatting: "sparkles"
@@ -154,9 +161,34 @@ final class Pipeline {
                 state = .recording(level: level, isAssistant: isAssistant)
             }
         }
+        recorder.onReady = { [weak self] in
+            self?.handleRecorderReady()
+        }
+        recorder.onStartFailed = { [weak self] error in
+            self?.handleRecorderStartFailed(error: error)
+        }
         recorder.onUnexpectedStop = { [weak self] message in
             self?.handleUnexpectedStop(note: message)
         }
+    }
+
+    /// Recorder finished warming up (engine running, tap installed). Promote
+    /// `.warmingUp` to `.recording` so the HUD switches from "Connecting" to
+    /// the live waveform. If we're not in `.warmingUp` any more (user
+    /// released the hotkey while the mic was negotiating HFP) the recorder
+    /// has already been told to stop; nothing to do here.
+    private func handleRecorderReady() {
+        guard case .warmingUp(let isAssistant) = state else { return }
+        state = .recording(level: 0, isAssistant: isAssistant)
+        if settings.playSounds { SoundEffects.shared.playStart() }
+    }
+
+    private func handleRecorderStartFailed(error: Error) {
+        // Only react if we're still expecting this startup. If we've already
+        // moved on (cancelled, etc.) the failure is moot.
+        guard case .warmingUp = state else { return }
+        inFlightAssistant = nil
+        fail("Mic error: \(error.localizedDescription)")
     }
 
     private func handleUnexpectedStop(note: String) {
@@ -188,19 +220,28 @@ final class Pipeline {
             break
         }
         guard case .idle = state else { return }
-        do {
-            try recorder.start()
-            state = .recording(level: 0, isAssistant: false)
-            if settings.playSounds { SoundEffects.shared.playStart() }
-        } catch {
-            fail("Mic error: \(error.localizedDescription)")
-        }
+        // Recorder start is non-blocking and asynchronous — the actual
+        // engine setup runs off-main so Bluetooth HFP negotiation (2–5 s on
+        // AirPods Max) doesn't beach-ball the main thread. Pipeline sits in
+        // `.warmingUp` until the recorder's `onReady` fires (handled in
+        // init); the HUD shows "Connecting" with the active device name for
+        // the duration.
+        state = .warmingUp(isAssistant: false)
+        recorder.start()
     }
 
     func finishRecording() {
         // If we're recording for Assistant Mode, ignore — the assistant hotkey's
         // release handler owns this recording session.
         guard inFlightAssistant == nil else { return }
+        // User released the hotkey before the mic finished warming up. The
+        // engine isn't producing buffers yet, so there's nothing to
+        // transcribe — abort the startup and return to idle cleanly.
+        if case .warmingUp = state {
+            recorder.cancelStart()
+            state = .idle
+            return
+        }
         guard case .recording = state else { return }
         let samples = recorder.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
@@ -571,12 +612,15 @@ final class Pipeline {
                     self.state = .idle
                     return
                 }
-                try recorder.start()
                 let continues = self.shouldContinueConversation(selection: selection)
                 self.nextAssistantIsContinuation = continues
                 inFlightAssistant = InFlightAssistant(selection: selection, continuesConversation: continues)
-                state = .recording(level: 0, isAssistant: true)
-                if settings.playSounds { SoundEffects.shared.playStart() }
+                // Same async-warmup story as `startRecording`: recorder
+                // start is non-blocking so BT HFP negotiation doesn't
+                // stall the assistant flow. handleRecorderReady promotes
+                // `.warmingUp(isAssistant: true)` to `.recording(...)`.
+                state = .warmingUp(isAssistant: true)
+                recorder.start()
             } catch SelectionGrabber.GrabError.noAccessibility {
                 // If the user released during the failed grab, drop the
                 // error — they've already given up on this press, surfacing
@@ -654,6 +698,8 @@ final class Pipeline {
         if case .recording = state {
             _ = recorder.stop()
             if settings.playSounds { SoundEffects.shared.playStop() }
+        } else if case .warmingUp = state {
+            recorder.cancelStart()
         }
         inFlightTask?.cancel()
         inFlightTask = nil
@@ -675,6 +721,16 @@ final class Pipeline {
         // instead of starting the recorder.
         if case .capturingSelection = state {
             assistantReleasePending = true
+            return
+        }
+        // Release fired while the mic was still warming up (likely
+        // Bluetooth). Abort the startup and return to idle without
+        // attempting a transcribe — no audio was captured.
+        if case .warmingUp = state {
+            recorder.cancelStart()
+            inFlightAssistant = nil
+            nextAssistantIsContinuation = false
+            state = .idle
             return
         }
         guard let inflight = inFlightAssistant else {

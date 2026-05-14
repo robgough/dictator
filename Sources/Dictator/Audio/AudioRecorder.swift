@@ -20,8 +20,29 @@ final class AudioRecorder {
     private var running = false
     private var configChangeObserver: NSObjectProtocol?
 
+    /// Generation counter so that a Bluetooth start still in HFP negotiation
+    /// when the user releases the hotkey doesn't end up adopting its engine
+    /// after we've already returned to .idle. Bumped by `start`, `stop`, and
+    /// `cancelStart`.
+    private var startGeneration: Int = 0
+    /// True between `start()` returning and the engine actually producing
+    /// audio. Caller checks via `onReady`; we use it internally to dedupe
+    /// overlapping starts.
+    private var startInFlight: Bool = false
+
     /// 0...1 RMS reported on the main actor.
     var onLevel: (@MainActor (Float) -> Void)?
+
+    /// Called once the engine is genuinely running and the tap is installed.
+    /// On Bluetooth mics this can fire 2–5 s after `start()` returns —
+    /// callers should reflect a "warming up" state in their UI until this
+    /// fires.
+    var onReady: (@MainActor () -> Void)?
+
+    /// Called if engine startup fails outright (mic permission denied at
+    /// driver level, no input device available, etc.). The recorder is left
+    /// in a stopped state; caller should surface the error and reset.
+    var onStartFailed: (@MainActor (Error) -> Void)?
 
     /// Called if the audio engine configuration changes while recording (e.g. the
     /// chosen input device was disconnected). The recorder stops itself first.
@@ -36,44 +57,46 @@ final class AudioRecorder {
         )!
     }
 
-    func start() throws {
-        guard !running else { return }
+    /// Kick off engine startup. Returns immediately — actual engine setup
+    /// runs off-main because two of its steps (`setInputDevice` and
+    /// `engine.start()`) can block for seconds on Bluetooth mics while
+    /// macOS negotiates the HFP profile. The caller is notified of
+    /// completion via `onReady` (success) or `onStartFailed` (failure),
+    /// both fired on the main actor.
+    ///
+    /// Previously this method was throwing-synchronous, which beach-balled
+    /// the main thread (and the HUD) on every dictation press whenever the
+    /// active input was a BT device.
+    func start() {
+        guard !running, !startInFlight else { return }
         rawBuffer.removeAll(keepingCapacity: true)
 
-        let preferred = AudioDeviceManager.shared.activeInputDeviceID()
-        do {
-            try configureAndStartEngine(deviceOverride: preferred)
-        } catch {
-            // Fall back to system default if a device override caused
-            // engine.start() to fail (commonly with -10868 on rate-mismatched
-            // devices). Recreate the engine cleanly and try once more.
-            engine = AVAudioEngine()
-            try configureAndStartEngine(deviceOverride: nil)
-        }
+        startInFlight = true
+        startGeneration &+= 1
+        startEngineAsync(
+            deviceOverride: AudioDeviceManager.shared.activeInputDeviceID(),
+            allowDefaultFallback: true,
+            generation: startGeneration
+        )
     }
 
-    private func configureAndStartEngine(deviceOverride: AudioDeviceID?) throws {
-        // Fresh engine each call so the AUHAL has no stale device/format state.
-        engine = AVAudioEngine()
+    /// Abort an in-flight startup. The async setup task still runs to
+    /// completion (we can't preempt CoreAudio profile negotiation), but its
+    /// completion handler discards the engine instead of adopting it. Safe
+    /// to call when no startup is in flight.
+    func cancelStart() {
+        startGeneration &+= 1
+        startInFlight = false
+    }
 
-        if let id = deviceOverride {
-            try? Self.setInputDevice(id, on: engine)
-        }
-
-        let input = engine.inputNode
-        nativeSampleRate = 0
-
-        input.removeTap(onBus: 0)
-        // The @Sendable annotation is critical: without it, this closure inherits
-        // @MainActor isolation from the enclosing method, and Swift inserts an
-        // isolation check at its entry. When AVAudioEngine then invokes the closure
-        // on its realtime audio thread, the check fails and dispatch traps the process.
-        //
-        // We pass `format: nil` so AVAudioEngine uses the input node's *actual*
-        // current format. Querying `outputFormat(forBus:)` right after
-        // `setInputDevice` can return a stale format (the audio unit hasn't yet
-        // propagated the switch), and installing the tap with that mismatched
-        // format makes AVFAudio throw "Failed to create tap due to format mismatch".
+    private func startEngineAsync(
+        deviceOverride: AudioDeviceID?,
+        allowDefaultFallback: Bool,
+        generation: Int
+    ) {
+        // The tap closure is constructed on main but invoked on the
+        // realtime audio thread, hence @Sendable. format: nil is also
+        // load-bearing — see the long comment in the original sync impl.
         let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { [weak self] pcm, _ in
             let rate = pcm.format.sampleRate
             guard let (mono, level) = Self.monoMixWithLevel(pcm: pcm) else { return }
@@ -83,13 +106,41 @@ final class AudioRecorder {
                 self?.onLevel?(level)
             }
         }
-        input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
 
-        // Listen for device-change-mid-flight events. AVAudioEngine pauses on its
-        // own; we tell the caller so the recording can be ended cleanly. The
-        // observer is removed *inside* the handler before we forward upstream,
-        // otherwise a follow-up notification can re-enter the handler and trip
-        // through to fail() again while we're already cleaning up.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let newEngine = AVAudioEngine()
+            do {
+                if let id = deviceOverride {
+                    try? Self.setInputDevice(id, on: newEngine)
+                }
+                let input = newEngine.inputNode
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
+                newEngine.prepare()
+                try newEngine.start()
+            } catch {
+                await self?.handleStartFailure(
+                    error: error,
+                    allowDefaultFallback: allowDefaultFallback,
+                    generation: generation
+                )
+                return
+            }
+
+            await self?.completeStart(newEngine: newEngine, generation: generation)
+        }
+    }
+
+    /// Main-actor completion handler for a successful off-main start.
+    private func completeStart(newEngine: AVAudioEngine, generation: Int) {
+        guard generation == startGeneration else {
+            // User released the hotkey while we were still warming up.
+            // Drop this engine — onReady would now be wrong to fire.
+            newEngine.stop()
+            return
+        }
+        nativeSampleRate = 0
+        engine = newEngine
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
@@ -99,10 +150,29 @@ final class AudioRecorder {
                 self?.handleConfigurationChange()
             }
         }
-
-        engine.prepare()
-        try engine.start()
         running = true
+        startInFlight = false
+        onReady?()
+    }
+
+    private func handleStartFailure(
+        error: Error,
+        allowDefaultFallback: Bool,
+        generation: Int
+    ) {
+        guard generation == startGeneration else { return }
+        if allowDefaultFallback {
+            // Mirror the previous sync recovery: a -10868 (format-mismatch)
+            // on a device override often clears against the system default.
+            startEngineAsync(
+                deviceOverride: nil,
+                allowDefaultFallback: false,
+                generation: generation
+            )
+        } else {
+            startInFlight = false
+            onStartFailed?(error)
+        }
     }
 
     /// Remove the configuration-change observer and clear our tap so that any
@@ -125,33 +195,39 @@ final class AudioRecorder {
 
         // The macOS audio path fires this notification whenever the active
         // input changes (USB / Bluetooth mic unplugged, AirPods connect, hub
-        // power cycle, …). The previous behaviour treated it as a hard
-        // failure and dumped the user back to the HUD with an error. The
-        // kinder UX is to silently restart on whatever input is active now
-        // so they can keep dictating uninterrupted.
+        // power cycle, …). Restart on whatever input is active now so the
+        // user can keep dictating uninterrupted.
         //
         // Any audio captured before the swap is discarded — the old and new
         // devices typically sample at different rates and our buffer assumes
-        // a single native rate per recording. In practice the swap usually
-        // happens at the very start of a recording anyway (e.g. AUHAL
-        // discovers the saved preferred device is gone and falls back), so
-        // there's nothing meaningful to keep.
+        // a single native rate per recording.
         rawBuffer.removeAll(keepingCapacity: true)
         nativeSampleRate = 0
 
-        do {
-            try configureAndStartEngine(deviceOverride: nil)
-        } catch {
-            // Couldn't restart — typically means there's no usable input
-            // device at all. Now we surface the failure upstream so the
-            // pipeline can end the recording cleanly rather than hanging on
-            // a silent recorder.
+        // Route through the async path. If the swap is to a Bluetooth
+        // device the user may see a brief gap while HFP comes up — that's
+        // strictly better than beach-balling mid-dictation. If the restart
+        // ultimately fails, `onStartFailed` will fire and we forward it as
+        // an unexpected stop.
+        let priorOnStartFailed = onStartFailed
+        onStartFailed = { [weak self] _ in
+            guard let self else { return }
             let device = AudioDeviceManager.shared.activeInputDeviceName()
-            onUnexpectedStop?("Audio input changed mid-recording (now: \(device)).")
+            self.onUnexpectedStop?("Audio input changed mid-recording (now: \(device)).")
+            // Restore the original handler so the next user-initiated start
+            // surfaces its failure to the pipeline normally.
+            self.onStartFailed = priorOnStartFailed
         }
+        startInFlight = true
+        startGeneration &+= 1
+        startEngineAsync(
+            deviceOverride: nil,
+            allowDefaultFallback: false,
+            generation: startGeneration
+        )
     }
 
-    private static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
+    private nonisolated static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
         guard let audioUnit = engine.inputNode.audioUnit else { return }
         var device = deviceID
         let status = AudioUnitSetProperty(
@@ -177,6 +253,10 @@ final class AudioRecorder {
         // We can be called from finishRecording() (normal release of hotkey) OR
         // after handleConfigurationChange() has already torn things down. Both
         // paths must end with the buffered samples drained.
+        //
+        // Bump the generation so a startup still warming up adopts nothing.
+        startGeneration &+= 1
+        startInFlight = false
         if running {
             tearDownObservers()
             engine.stop()

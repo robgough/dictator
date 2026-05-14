@@ -73,8 +73,18 @@ final class InputLevelMonitor {
 
         startInFlight = true
         startGeneration &+= 1
+        let deviceID = AudioDeviceManager.shared.activeInputDeviceID()
+        // BT devices force HFP profile the moment a tap engages, which
+        // downgrades headphone audio to mono 16 kHz for as long as the
+        // engine runs. Skip the mainMixer "force-active" routing on BT so
+        // we don't keep HFP engaged for the entire time the user is in the
+        // Input pane. The trade-off: macOS may suspend our tap callbacks
+        // after a few seconds and the meter stops moving. That's preferable
+        // to nuking the user's music quality.
+        let isBT = deviceID.map { AudioDeviceEnumerator.isBluetooth(deviceID: $0) } ?? false
         startEngineAsync(
-            deviceOverride: AudioDeviceManager.shared.activeInputDeviceID(),
+            deviceOverride: deviceID,
+            forceActiveGraph: !isBT,
             allowDefaultFallback: true,
             generation: startGeneration
         )
@@ -114,12 +124,18 @@ final class InputLevelMonitor {
                 // device with our 4096-sample buffer) but short enough that
                 // a hang reads as a momentary glitch, not a freeze.
                 if Date().timeIntervalSince(last) > 0.6 {
+                    // On BT we deliberately let the meter go quiet so we
+                    // don't keep HFP engaged. Restarting here would just
+                    // re-engage it — pointless ping-pong. Leave the engine
+                    // running but stop polling.
+                    if !self.engineUsesForcedGraph { return }
                     self.teardown()
                     self.isActive = false
                     self.startInFlight = true
                     self.startGeneration &+= 1
                     self.startEngineAsync(
                         deviceOverride: nil,
+                        forceActiveGraph: true,
                         allowDefaultFallback: false,
                         generation: self.startGeneration
                     )
@@ -144,8 +160,16 @@ final class InputLevelMonitor {
     /// completion, gated by `generation` so a stale startup (user closed the
     /// pane mid-negotiation) can't end up adopting an engine the user no
     /// longer wants.
+    /// Whether the most recently-started engine is using the "force-active
+    /// graph" workaround (input → mainMixer → muted output). Driven by the
+    /// active device's transport type at start time. When false (Bluetooth),
+    /// the watchdog leaves the engine alone if buffers stop arriving — a
+    /// restart loop would just keep re-engaging HFP for no benefit.
+    @ObservationIgnored private var engineUsesForcedGraph: Bool = true
+
     private func startEngineAsync(
         deviceOverride: AudioDeviceID?,
+        forceActiveGraph: Bool,
         allowDefaultFallback: Bool,
         generation: Int
     ) {
@@ -169,23 +193,31 @@ final class InputLevelMonitor {
                 let input = newEngine.inputNode
                 input.removeTap(onBus: 0)
                 input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
-                // Force a complete graph so macOS doesn't decide our
-                // tap-only engine is idle and silently suspend buffer
-                // delivery. mainMixerNode auto-connects to the output node;
-                // we mute it so nothing audible reaches the speakers.
-                newEngine.connect(input, to: newEngine.mainMixerNode, format: nil)
-                newEngine.mainMixerNode.outputVolume = 0
+                if forceActiveGraph {
+                    // Force a complete graph so macOS doesn't decide our
+                    // tap-only engine is idle and silently suspend buffer
+                    // delivery. mainMixerNode auto-connects to the output
+                    // node; we mute it so nothing audible reaches the
+                    // speakers. Skipped on Bluetooth — see start() for why.
+                    newEngine.connect(input, to: newEngine.mainMixerNode, format: nil)
+                    newEngine.mainMixerNode.outputVolume = 0
+                }
                 newEngine.prepare()
                 try newEngine.start()
             } catch {
                 await self?.handleStartFailure(
+                    forceActiveGraph: forceActiveGraph,
                     allowDefaultFallback: allowDefaultFallback,
                     generation: generation
                 )
                 return
             }
 
-            await self?.completeStart(newEngine: newEngine, generation: generation)
+            await self?.completeStart(
+                newEngine: newEngine,
+                forceActiveGraph: forceActiveGraph,
+                generation: generation
+            )
             // If `self` was deallocated mid-startup, `completeStart` is a
             // no-op. ARC will drop `newEngine` when this closure returns —
             // the tap captures `[weak self]`, so the engine doesn't retain
@@ -196,25 +228,28 @@ final class InputLevelMonitor {
     /// Main-actor completion handler for a successful off-main start. If the
     /// generation no longer matches, the user has called stop()/start() in
     /// the meantime and we drop this engine.
-    private func completeStart(newEngine: AVAudioEngine, generation: Int) {
+    private func completeStart(newEngine: AVAudioEngine, forceActiveGraph: Bool, generation: Int) {
         guard generation == startGeneration else {
             newEngine.stop()
             return
         }
+        engineUsesForcedGraph = forceActiveGraph
         adoptEngine(newEngine)
     }
 
     /// Main-actor completion handler for a failed off-main start. Decides
     /// whether to retry against the system default, or to give up.
-    private func handleStartFailure(allowDefaultFallback: Bool, generation: Int) {
+    private func handleStartFailure(forceActiveGraph: Bool, allowDefaultFallback: Bool, generation: Int) {
         guard generation == startGeneration else { return }
         if allowDefaultFallback {
             // Mirror AudioRecorder's recovery: a -10868 (format-mismatch)
             // failure on a device override often clears when we retry
             // against the system default. Keep startInFlight true so the
-            // retry can run.
+            // retry can run. The system default isn't necessarily BT, so
+            // re-enable the forced graph on the retry.
             startEngineAsync(
                 deviceOverride: nil,
+                forceActiveGraph: true,
                 allowDefaultFallback: false,
                 generation: generation
             )
@@ -260,7 +295,12 @@ final class InputLevelMonitor {
         // re-negotiation here doesn't beach-ball either.
         startInFlight = true
         startGeneration &+= 1
-        startEngineAsync(deviceOverride: nil, allowDefaultFallback: false, generation: startGeneration)
+        startEngineAsync(
+            deviceOverride: nil,
+            forceActiveGraph: true,
+            allowDefaultFallback: false,
+            generation: startGeneration
+        )
     }
 
     private func teardown() {

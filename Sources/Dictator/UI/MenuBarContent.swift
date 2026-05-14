@@ -170,6 +170,7 @@ struct MenuBarContent: View {
         switch state.pipeline.state {
         case .idle: "Idle"
         case .capturingSelection: "Reading selection…"
+        case .warmingUp: "Connecting microphone…"
         case .recording(_, let isAssistant): isAssistant ? "Listening for instruction…" : "Listening…"
         case .transcribing: "Transcribing…"
         case .formatting: "Formatting…"

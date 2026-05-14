@@ -82,6 +82,15 @@ final class AudioDeviceManager {
         return "System default"
     }
 
+    /// Whether the currently-active input is a Bluetooth device. Bluetooth
+    /// input forces macOS into HFP profile, which downgrades headphone audio
+    /// to mono 16 kHz and adds ~2–5 s of warmup latency to every
+    /// `AVAudioEngine.start()` against the device.
+    func activeInputIsBluetooth() -> Bool {
+        guard let id = activeInputDeviceID() else { return false }
+        return AudioDeviceEnumerator.isBluetooth(deviceID: id)
+    }
+
     // MARK: - Mutation
 
     func move(from source: IndexSet, to destination: Int) {
