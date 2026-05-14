@@ -333,13 +333,12 @@ private struct DictionaryPane: View {
             }
 
             if s.settings.vocabulary.isEmpty {
-                Spacer()
                 ContentUnavailableView(
                     "Your dictionary is empty",
                     systemImage: "character.book.closed",
                     description: Text("Click **Add** to create your first rule. Example: pattern \"github\" → replacement \"GitHub\".")
                 )
-                Spacer()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -425,13 +424,12 @@ private struct HistoryPane: View {
             }
 
             if history.records.isEmpty {
-                Spacer()
                 ContentUnavailableView(
                     "No dictations yet",
                     systemImage: "clock.arrow.circlepath",
                     description: Text("Recorded dictations will appear here.")
                 )
-                Spacer()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
@@ -796,14 +794,16 @@ private struct GeneralPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
+            Section("Permissions") {
+                AccessibilityStatusRow()
+                MicrophoneStatusRow()
+            }
             Section("Your name") {
                 TextField("e.g. Rob Gough", text: $s.settings.userName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { state.save() }
                     .onChange(of: s.settings.userName) { _, _ in state.save() }
-                Text("Used to bias transcription toward the correct spelling of your name, and so the assistant signs drafts as you (emails, replies, messages). Leave blank if you'd rather not set one.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Used to bias transcription toward the correct spelling of your name, and so the assistant signs drafts as you (emails, replies, messages). Leave blank if you'd rather not set one.")
             }
             Section("Dictation hotkey") {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
@@ -829,13 +829,9 @@ private struct GeneralPane: View {
                         }
                         .controlSize(.small)
                     }
-                    Text("Hold the shortcut to record, release to transcribe. Use **Reset** if the recorder gets cleared.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    SectionFootnote("Hold the shortcut to record, release to transcribe. Use **Reset** if the recorder gets cleared.")
                 } else {
-                    Text("Hold the **\(s.settings.triggerMode.label)** key to dictate. Release to transcribe.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    SectionFootnote("Hold the **\(s.settings.triggerMode.label)** key to dictate. Release to transcribe.")
                 }
             }
             Section("Assistant Mode hotkey") {
@@ -859,9 +855,7 @@ private struct GeneralPane: View {
                         .controlSize(.small)
                     }
                 } else {
-                    Text("Hold the **\(s.settings.assistantTriggerMode.label)** key with text selected to dictate an instruction. The LLM decides whether to replace your selection or copy the result to the clipboard.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    SectionFootnote("Hold the **\(s.settings.assistantTriggerMode.label)** key with text selected to dictate an instruction. The LLM decides whether to replace your selection or copy the result to the clipboard.")
                 }
             }
             Section("Behaviour") {
@@ -874,9 +868,7 @@ private struct GeneralPane: View {
                         state.save()
                         if on { state.preloadModels() }
                     }
-                Text("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant.")
 
                 let llmDisabled = s.settings.llmModelID == ModelCatalog.noneLLMID
 
@@ -894,9 +886,7 @@ private struct GeneralPane: View {
                 }
                 .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
                 .disabled(!s.settings.grammarPassEnabled || llmDisabled)
-                Text("Fixes obvious grammar errors (contractions, agreement, duplicate words). The pass is rejected if too many words change.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Fixes obvious grammar errors (contractions, agreement, duplicate words). The pass is rejected if too many words change.")
 
                 Toggle("Restructure long dictations into paragraphs / lists", isOn: $s.settings.structuralPassEnabled)
                     .onChange(of: s.settings.structuralPassEnabled) { _, _ in state.save() }
@@ -912,19 +902,11 @@ private struct GeneralPane: View {
                 }
                 .onChange(of: s.settings.structuralPassMinWords) { _, _ in state.save() }
                 .disabled(!s.settings.structuralPassEnabled || llmDisabled)
-                Text("Adds paragraph breaks and bullet lists for longer dictations. The pass is rejected if it changes any of your words.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Adds paragraph breaks and bullet lists for longer dictations. The pass is rejected if it changes any of your words.")
 
                 if llmDisabled {
-                    Text("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    SectionFootnote("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab.")
                 }
-            }
-            Section("Permissions") {
-                AccessibilityStatusRow()
-                MicrophoneStatusRow()
             }
         }
         .formStyle(.grouped)
@@ -1081,6 +1063,27 @@ private enum ModelsSubPane: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Full-width footnote / description Text for use inside Form sections
+/// (`Section { … }` content or its `footer:` slot) on macOS. macOS's grouped
+/// Form lays each row out as label + content columns; a bare Text gets
+/// allocated only the trailing column and wraps at roughly half the section
+/// width. Wrapping it in an HStack with a trailing Spacer claims the full row
+/// width so multi-line copy flows to the section's actual edge.
+private struct SectionFootnote: View {
+    private let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 private struct ModelsPane: View {
     @State private var manager = ModelManager.shared
     /// Which sub-pane is showing. Reset to Transcription on each entry to
@@ -1164,10 +1167,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Transcription engine")
             } footer: {
-                Text("**Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster than Whisper on Apple Silicon, and slightly smaller on disk. v3 covers 25 European languages; v2 is English-only with marginally better English accuracy. **Whisper** is the mature alternative — slower, but broad language support and very well-tested.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("**Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster than Whisper on Apple Silicon, and slightly smaller on disk. v3 covers 25 European languages; v2 is English-only with marginally better English accuracy. **Whisper** is the mature alternative — slower, but broad language support and very well-tested.")
             }
             .alert(
                 "No \(engineSwitchBlocked == .parakeet ? "Parakeet" : "Whisper") models installed",
@@ -1218,10 +1218,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Parakeet models")
             } footer: {
-                Text("Parakeet runs on the Apple Neural Engine — much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Resumable downloads aren't supported (a cancelled download is discarded and re-fetched fresh next time).")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("Parakeet runs on the Apple Neural Engine — much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Resumable downloads aren't supported (a cancelled download is discarded and re-fetched fresh next time).")
             }
 
             Section {
@@ -1260,10 +1257,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Whisper models")
             } footer: {
-                Text("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
             }
         }
         .formStyle(.grouped)
@@ -1324,10 +1318,7 @@ private struct FormattingModelsPane: View {
             } header: {
                 Text("Formatting LLM (MLX)")
             } footer: {
-                Text("Used for the formatting, grammar, and structural passes after transcription — and for Assistant Mode. Pick **None** to skip LLM passes and ship the raw transcript.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("Used for the formatting, grammar, and structural passes after transcription — and for Assistant Mode. Pick **None** to skip LLM passes and ship the raw transcript.")
             }
         }
         .formStyle(.grouped)
@@ -1382,10 +1373,7 @@ private struct StatsModelsPane: View {
             } header: {
                 Text("Memory")
             } footer: {
-                Text("Live readout. Estimates are approximate — resident memory grows during long Assistant conversations as the model's KV cache fills, and macOS may compress cold pages.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("Live readout. Estimates are approximate — resident memory grows during long Assistant conversations as the model's KV cache fills, and macOS may compress cold pages.")
             }
 
             Section {
@@ -1395,10 +1383,7 @@ private struct StatsModelsPane: View {
             } header: {
                 Text("On disk")
             } footer: {
-                Text("All downloaded model files live under `~/Library/Application Support/Dictator/Models/`.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SectionFootnote("All downloaded model files live under `~/Library/Application Support/Dictator/Models/`.")
             }
         }
         .formStyle(.grouped)
