@@ -59,6 +59,19 @@
                 type="application/octet-stream"
                 sparkle:edSignature="FqH9Y+FZvmuqtvKCiHuqzsN2aKTqsIJ2/siyjum/cuG1Ipv8MIAXDcTUYHQsB/2aCaKQrQEADAM9H7wu5RRzAg==" />
         </item>
+        <item>
+            <title>Version 2026.5.4</title>
+            <pubDate>Thu, 14 May 2026 22:29:51 +0000</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>2026.5.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.4/Dictator.dmg"
+                length="20645316"
+                type="application/octet-stream"
+                sparkle:edSignature="Y6urs3c41/XmLgNscmMNW6I/40IROPPU2HjoQCoI1za9RZVuH5zld8IMvZIsTbcdxGZ3b6KpXn/7qFM1egt7BQ==" />
+        </item>
+    
 
 
 
