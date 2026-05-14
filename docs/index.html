@@ -65,6 +65,12 @@
             --accent: #4a5cff;
             --border: #e8e9ec;
             --card: #f7f8fa;
+            /* Atmospheric glows lifted from the OG/social card. Tuned softer
+               for light mode so the page reads as bright with a tint rather
+               than washing the type. Both layers fade to transparent so the
+               wide centre column sits over plain --bg. */
+            --glow-1: rgba(122, 138, 255, 0.18);
+            --glow-2: rgba(74, 92, 255, 0.12);
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -75,16 +81,36 @@
                 --accent: #7a8aff;
                 --border: #20232a;
                 --card: #161922;
+                /* Same hues, full strength — matches the OG card exactly. */
+                --glow-1: rgba(122, 138, 255, 0.30);
+                --glow-2: rgba(74, 92, 255, 0.22);
             }
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
+        html { background: var(--bg); }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
-            background: var(--bg);
             color: var(--fg);
             line-height: 1.55;
             -webkit-font-smoothing: antialiased;
+        }
+        /* Atmospheric glows on a fixed pseudo-element rather than a
+           background-attachment: fixed body background. The pseudo-element
+           gets promoted to its own compositor layer, so scrolling just
+           translates the content over it instead of repainting the big
+           blurry gradient every frame — fixes the visible jitter on
+           Retina displays. */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background:
+                radial-gradient(1200px 800px at 90% -20%, var(--glow-1), transparent 60%),
+                radial-gradient(900px 700px at -10% 120%, var(--glow-2), transparent 55%);
+            will-change: transform;
         }
         .wrap {
             max-width: 720px;
