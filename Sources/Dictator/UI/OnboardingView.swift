@@ -311,12 +311,58 @@ private struct WelcomeStep: View {
 
             Spacer(minLength: 0)
 
-            Text("Three quick steps and you're set: grant permissions, download a transcription model, then dictate.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Three quick steps and you're set: grant permissions, download a transcription model, then dictate.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                MachineRAMNote()
+            }
+            .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Tells the user up-front what we've detected and what that means for the
+/// defaults they're about to see. Honest about the trade-off so the
+/// recommendation on the Models step (No LLM on lean Macs, smaller LLM on
+/// 16 GB, full 3B on 24 GB+) doesn't read as arbitrary.
+private struct MachineRAMNote: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "memorychip")
+                .foregroundStyle(tint)
+                .font(.system(size: 12, weight: .semibold))
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tint.opacity(0.10))
+        )
+    }
+
+    private var message: String {
+        let total = SystemMemory.totalGBLabel
+        switch SystemMemory.tier {
+        case .lean:
+            return "Detected \(total) of RAM — we'll keep things lean and skip the LLM by default. Dictator still works great; you'll get raw transcripts that just paste through."
+        case .balanced:
+            return "Detected \(total) of RAM — we'll default to a small LLM (Llama 3.2 1B) that fits comfortably alongside the transcription model."
+        case .generous:
+            return "Detected \(total) of RAM — comfortable for the full setup, including the recommended Llama 3.2 3B for formatting."
+        }
+    }
+
+    private var tint: Color {
+        switch SystemMemory.tier {
+        case .lean: .orange
+        case .balanced, .generous: .accentColor
+        }
     }
 }
 
@@ -579,6 +625,7 @@ private struct ModelsStep: View {
                 title: transcriptionModel.displayName,
                 subtitle: transcriptionModel.note,
                 sizeMB: transcriptionModel.approxSizeMB,
+                ramMB: transcriptionModel.approxRAMMB,
                 state: manager.parakeetStates[transcriptionModel.id] ?? .unknown,
                 primaryLabel: "Required",
                 primaryStyle: .required,
@@ -622,12 +669,16 @@ private struct LLMSection: View {
 
     var body: some View {
         @Bindable var s = state
-        let recommendedLLM = ModelCatalog.defaultLLM
+        // The "Recommended" pill points at whichever LLM fits this machine
+        // (see ModelCatalog.recommendedLLMID). On lean Macs the recommended
+        // option is *no* LLM, in which case the picker collapses to a
+        // single No-LLM state — we don't want to dangle a button that
+        // silently pulls 2 GB of weights onto an 8 GB machine.
+        let recommendedID = ModelCatalog.recommendedLLMID
+        let recommendedLLM: LLMModel? = ModelCatalog.llm(id: recommendedID)
         let llmDisabled = s.settings.llmModelID == ModelCatalog.noneLLMID
-        let llmSelected = s.settings.llmModelID == recommendedLLM.id
-        // Third state: user has reopened the wizard after picking a non-default
-        // LLM in Settings. We don't want to clobber that choice silently.
-        let customLLM: LLMModel? = (!llmDisabled && !llmSelected)
+        let llmIsRecommended = s.settings.llmModelID == recommendedID && !llmDisabled
+        let customLLM: LLMModel? = (!llmDisabled && !llmIsRecommended)
             ? ModelCatalog.llm(id: s.settings.llmModelID)
             : nil
 
@@ -636,33 +687,40 @@ private struct LLMSection: View {
                 Text("Formatting LLM (optional)")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Picker("", selection: Binding(
-                    get: {
-                        if llmDisabled { "none" }
-                        else if customLLM != nil { "custom" }
-                        else { "recommended" }
-                    },
-                    set: { newValue in
-                        switch newValue {
-                        case "none":        s.settings.llmModelID = ModelCatalog.noneLLMID
-                        case "recommended": s.settings.llmModelID = recommendedLLM.id
-                        default: break  // "custom" is read-only; pick a side to change
+                if recommendedLLM != nil {
+                    Picker("", selection: Binding(
+                        get: {
+                            if llmDisabled { "none" }
+                            else if customLLM != nil { "custom" }
+                            else { "recommended" }
+                        },
+                        set: { newValue in
+                            switch newValue {
+                            case "none":        s.settings.llmModelID = ModelCatalog.noneLLMID
+                            case "recommended": s.settings.llmModelID = recommendedID
+                            default: break
+                            }
+                            state.save()
                         }
-                        state.save()
+                    )) {
+                        Text("No LLM").tag("none")
+                        Text("Recommended").tag("recommended")
+                        if customLLM != nil {
+                            Text("Custom").tag("custom")
+                        }
                     }
-                )) {
-                    Text("No LLM").tag("none")
-                    Text("Recommended").tag("recommended")
-                    if customLLM != nil {
-                        Text("Custom").tag("custom")
-                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: customLLM != nil ? 260 : 200)
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .frame(width: customLLM != nil ? 260 : 200)
-                .labelsHidden()
             }
 
-            if llmDisabled {
+            if recommendedLLM == nil {
+                // Lean machine: we won't even offer a one-click LLM download.
+                // The user can still wire one up from Settings → Models, but
+                // they have to opt in deliberately after seeing the cost.
+                LeanLLMNotice()
+            } else if llmDisabled {
                 Text("Raw transcripts only. Fastest path — pick this if you're not sure or want to keep memory use low. You can add an LLM later from Settings → Models.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -673,6 +731,7 @@ private struct LLMSection: View {
                     title: custom.displayName,
                     subtitle: "Already chosen in Settings → Models. Switch above to use the recommended model instead.",
                     sizeMB: custom.approxSizeMB,
+                    ramMB: custom.approxRAMMB,
                     state: manager.llmStates[custom.id] ?? .unknown,
                     primaryLabel: "Custom",
                     primaryStyle: .optional,
@@ -683,23 +742,56 @@ private struct LLMSection: View {
                         manager.cancelLLMDownload(custom.id)
                     }
                 )
-            } else {
+            } else if let llm = recommendedLLM {
                 ModelDownloadCard(
-                    title: recommendedLLM.displayName,
+                    title: llm.displayName,
                     subtitle: "Tidies punctuation, capitalisation, and structure after transcription.",
-                    sizeMB: recommendedLLM.approxSizeMB,
-                    state: manager.llmStates[recommendedLLM.id] ?? .unknown,
+                    sizeMB: llm.approxSizeMB,
+                    ramMB: llm.approxRAMMB,
+                    state: manager.llmStates[llm.id] ?? .unknown,
                     primaryLabel: "Optional",
                     primaryStyle: .optional,
                     onDownload: {
-                        manager.downloadLLM(recommendedLLM.id, using: LLMServiceHolder.shared)
+                        manager.downloadLLM(llm.id, using: LLMServiceHolder.shared)
                     },
                     onCancel: {
-                        manager.cancelLLMDownload(recommendedLLM.id)
+                        manager.cancelLLMDownload(llm.id)
                     }
                 )
             }
         }
+    }
+}
+
+/// Shown in the wizard's LLM section when the user's Mac is on the tight
+/// side — running an LLM alongside transcription would put the machine
+/// into swap. The wording is honest about the tradeoff, and points at
+/// Settings → Models for users who want to override anyway.
+private struct LeanLLMNotice: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 22, height: 22, alignment: .center)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your Mac has \(SystemMemory.totalGBLabel) of RAM — we recommend skipping the LLM.")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Running a language model alongside transcription would push memory use past what your Mac can comfortably handle. Dictator works fine without one — you'll get raw transcripts with the dictionary substitution applied. Settings → Models lets you add an LLM anyway if you accept the trade-off.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+        )
     }
 }
 
@@ -711,6 +803,10 @@ private struct ModelDownloadCard: View {
     let title: String
     let subtitle: String
     let sizeMB: Int
+    /// Approximate resident RAM cost. Used to derive the fit chip so the
+    /// user sees whether downloading this model is sensible on *their*
+    /// machine before committing to multi-GB of weights.
+    let ramMB: Int
     let state: ModelDownloadState
     let primaryLabel: String
     let primaryStyle: ModelDownloadStyle
@@ -740,6 +836,7 @@ private struct ModelDownloadCard: View {
                         .background(
                             Capsule().fill((primaryStyle == .required ? Color.accentColor : Color.secondary).opacity(0.15))
                         )
+                    FitChip(ramMB: ramMB)
                     Spacer()
                     Text(sizeLabel)
                         .font(.system(size: 11, design: .monospaced))

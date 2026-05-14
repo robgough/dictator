@@ -627,13 +627,19 @@ struct DictatorSettings: Codable, Equatable {
     // which is fine — there are no users yet.
     private static let key = "DictatorSettings.v2"
 
+    @MainActor
     static func load() -> DictatorSettings {
         var settings: DictatorSettings
         if let data = UserDefaults.standard.data(forKey: key),
            let decoded = try? JSONDecoder().decode(DictatorSettings.self, from: data) {
             settings = decoded
         } else {
+            // Fresh install — start from defaults, but pick an LLM that
+            // actually fits this machine. On a lean Mac we'd rather start
+            // at "No LLM" than have the user discover swap thrash on their
+            // first dictation.
             settings = .defaults
+            settings.llmModelID = ModelCatalog.recommendedLLMID
         }
         settings.resolveHotkeyConflicts()
         return settings

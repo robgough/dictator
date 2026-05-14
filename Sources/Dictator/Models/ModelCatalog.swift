@@ -80,4 +80,31 @@ enum ModelCatalog {
     static func whisper(id: String) -> WhisperModel? { whisperModels.first { $0.id == id } }
     static func parakeet(id: String) -> ParakeetModel? { parakeetModels.first { $0.id == id } }
     static func llm(id: String) -> LLMModel? { llmModels.first { $0.id == id } }
+
+    /// What the first-run wizard recommends as the "Recommended" LLM preset
+    /// for a given machine. Lean machines get the 1B model, since pairing
+    /// Llama 3.2 3B (~2.5 GB) with a transcription model (~700 MB) puts an
+    /// 8 GB Mac firmly into swap. Balanced and above get the 3B default.
+    ///
+    /// Returns `noneLLMID` for the very tightest machines — the wizard's
+    /// "Recommended" segment then maps to "No LLM", which keeps total
+    /// resident memory under a gigabyte.
+    @MainActor
+    static var recommendedLLMID: String {
+        switch SystemMemory.tier {
+        case .lean:
+            // Under ~12 GB total RAM: running any LLM alongside the
+            // transcription model is a tight squeeze. Default to None and
+            // let the user opt in if they know what they're doing.
+            return noneLLMID
+        case .balanced:
+            // 16 GB Macs: the 1B model adds ~1.5 GB on top of Parakeet's
+            // ~700 MB, comfortably under half of system RAM with headroom.
+            return llmModels[0].id  // Llama 3.2 1B
+        case .generous:
+            // ≥24 GB: the 3B model is the original default and gives
+            // noticeably better cleanup than 1B.
+            return defaultLLM.id
+        }
+    }
 }

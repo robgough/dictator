@@ -293,6 +293,86 @@
             font-size: 13px;
             line-height: 1.55;
         }
+        /* RAM guidance callouts. `.callout` is the base (subtle tinted box);
+           `.callout.warn` ramps the colour up to amber so the "this won't
+           fit your Mac" advisory is impossible to skim past. */
+        .callout {
+            margin: 18px 0 0;
+            padding: 14px 16px;
+            border-radius: 10px;
+            border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border));
+            background: color-mix(in oklab, var(--accent) 6%, var(--bg));
+            font-size: 14px;
+            line-height: 1.55;
+            color: var(--fg);
+        }
+        .callout strong { font-weight: 600; }
+        .callout.warn {
+            border-color: #f59e0b;
+            background: color-mix(in oklab, #f59e0b 9%, var(--bg));
+        }
+        @media (prefers-color-scheme: dark) {
+            .callout.warn {
+                background: color-mix(in oklab, #f59e0b 14%, var(--bg));
+            }
+        }
+        .ram-tiers {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin: 18px 0 0;
+        }
+        @media (max-width: 540px) {
+            .ram-tiers { grid-template-columns: 1fr; }
+        }
+        .ram-tier {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 14px 13px;
+        }
+        .ram-tier h4 {
+            margin: 0 0 6px;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0;
+            color: var(--fg);
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .ram-tier h4 .tag {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 2px 7px;
+            border-radius: 999px;
+        }
+        .ram-tier.lean h4 .tag {
+            color: #92400e;
+            background: color-mix(in oklab, #f59e0b 22%, transparent);
+        }
+        .ram-tier.balanced h4 .tag {
+            color: var(--accent);
+            background: color-mix(in oklab, var(--accent) 18%, transparent);
+        }
+        .ram-tier.generous h4 .tag {
+            color: #065f46;
+            background: color-mix(in oklab, #10b981 22%, transparent);
+        }
+        @media (prefers-color-scheme: dark) {
+            .ram-tier.lean h4 .tag { color: #fbbf24; }
+            .ram-tier.generous h4 .tag { color: #34d399; }
+        }
+        .ram-tier p {
+            margin: 0;
+            font-size: 13px;
+            color: var(--fg-dim);
+            line-height: 1.5;
+        }
         /* "Why I built this" — avatar on the left, prose on the right;
            stacks under a narrow viewport so the photo doesn't get tiny. */
         .author-row {
@@ -560,22 +640,45 @@
         </div>
 
         <h3>Language model — used for the cleanup passes and Assistant mode</h3>
-        <div class="table-wrap">
+        <div class="callout warn">
+            <strong>RAM matters here.</strong> Running an LLM alongside a transcription
+            model eats a real chunk of memory. The first-run setup wizard detects how
+            much RAM your Mac has and picks defaults that won't push you into swap —
+            but if you override them in Settings, the picker shows a "Fits / Tight /
+            Too large" chip per model so the cost is visible before you commit.
+        </div>
+
+        <div class="ram-tiers">
+            <div class="ram-tier lean">
+                <h4>8 GB <span class="tag">Lean</span></h4>
+                <p>We default to <strong>no LLM</strong>. Raw transcripts go through the dictionary pass and ship. Adding any LLM here will swap-thrash the moment another app gets busy.</p>
+            </div>
+            <div class="ram-tier balanced">
+                <h4>16 GB <span class="tag">Balanced</span></h4>
+                <p>Default is <strong>Llama 3.2 1B</strong>. Comfortable with the 1B model; the 3B works if Dictator is the only memory-hungry app open at the time.</p>
+            </div>
+            <div class="ram-tier generous">
+                <h4>24 GB+ <span class="tag">Generous</span></h4>
+                <p>Default is <strong>Llama 3.2 3B</strong>. Plenty of headroom for the full setup. Qwen 7B is comfortably usable if you want the higher quality.</p>
+            </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top: 18px;">
             <table>
                 <thead>
-                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Notes</th></tr>
+                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Min RAM</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="note">Snappy. Decent formatting; weaker on grammar and Assistant tasks.</td></tr>
-                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="note">Recommended default. Good balance of quality and speed.</td></tr>
-                    <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="note">Alternative 3B with a different prose style.</td></tr>
-                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="note">Higher quality output, noticeably slower.</td></tr>
-                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>         <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies).</td></tr>
+                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting; weaker on grammar and Assistant tasks.</td></tr>
+                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Recommended on 24 GB+. Good balance of quality and speed.</td></tr>
+                    <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Alternative 3B with a different prose style.</td></tr>
+                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality output, noticeably slower. Plan for 32 GB.</td></tr>
+                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">8 GB</td>  <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies). Default on 8 GB Macs.</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <p class="table-footnote">All language models are 4-bit quantised via MLX. RAM figures are approximate steady-state at modest context lengths; long Assistant-mode conversations grow as the KV cache fills. Total resident memory with the defaults (Whisper Small + Llama 3.2 3B, both pre-loaded) is around 3 GB.</p>
+        <p class="table-footnote">All language models are 4-bit quantised via MLX. RAM figures are approximate steady-state at modest context lengths; long Assistant-mode conversations grow as the KV cache fills. "Min RAM" is the total physical memory we'd want before recommending the model — it's how much your Mac needs to keep the LLM resident <em>and</em> still leave headroom for the OS, your browser, and whatever else you have open.</p>
     </section>
 
     <section class="tradeoff">
@@ -596,7 +699,7 @@
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>RAM.</strong> 8 GB is the floor, 16 GB is comfortable, more is better if you want the larger LLM. The bigger models assume you have memory to spare.</li>
+                    <li><strong>RAM.</strong> 8 GB Macs can run dictation, but only with the LLM disabled (defaults handle this for you). 16 GB is comfortable for the small LLM; 24 GB+ for the recommended 3B. Larger models assume you have memory to spare.</li>
                     <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
                     <li><strong>Ceiling.</strong> A 3B local model is not Claude. For dictation cleanup it's plenty; for genuinely hard text massaging the frontier still wins.</li>
                     <li><strong>First run.</strong> A few GB of weights to download — typically 2.5 GB if you take the defaults.</li>
@@ -629,8 +732,10 @@
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
             <span><strong>macOS 15</strong> or newer</span>
-            <span>Roughly <strong>3 GB</strong> for models (one Whisper, one LLM)</span>
+            <span><strong>8 GB RAM</strong> minimum (16 GB+ for the LLM passes)</span>
+            <span>Roughly <strong>1–3 GB</strong> of disk for models</span>
         </p>
+        <p class="table-footnote">On 8 GB Macs, Dictator runs transcription-only by default — you'll get clean, punctuated transcripts straight from the model. 16 GB enables the small Llama 3.2 1B for the cleanup passes; 24 GB+ unlocks the recommended 3B model and assistant mode at its best.</p>
     </section>
 
     <footer>

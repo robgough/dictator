@@ -1483,6 +1483,7 @@ private struct ModelRow: View {
                                     .padding(.vertical, 1)
                                     .background(Color.green, in: Capsule())
                             }
+                            FitChip(ramMB: ramMB)
                         }
                         Text("\(note) · \(formatModelSize(sizeMB)) disk · ≈\(formatModelSize(ramMB)) RAM")
                             .font(.caption)
