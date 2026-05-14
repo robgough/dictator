@@ -245,13 +245,26 @@ jobs:
           tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
           SIGN_UPDATE="$RUNNER_TEMP/sparkle/bin/sign_update"
 
-          KEY_FILE="$RUNNER_TEMP/sparkle_key"
-          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
-
-          # sign_update prints "sparkle:edSignature=... length=..." — we capture
-          # both for the appcast item attributes.
-          SIG_OUTPUT=$("$SIGN_UPDATE" -f "$KEY_FILE" "$DMG_PATH")
+          # Pipe the key via stdin using the CI pattern documented in
+          # `sign_update --help`. Two reasons over the temp-file approach:
+          #   - the private seed never touches disk on the runner;
+          #   - `tr -d '[:space:]'` strips any trailing newline that GitHub
+          #     Secrets sometimes appends to pasted values, which would
+          #     otherwise corrupt the base64 decode and make sign_update fail
+          #     with a confusing "invalid key" error.
+          # We also temporarily disable `-e` around the call so we can capture
+          # sign_update's stderr and surface it on failure — otherwise the
+          # script aborts before the diagnostic ever reaches the workflow log.
+          set +e
+          SIG_OUTPUT=$(printf '%s' "$SPARKLE_PRIVATE_KEY" | tr -d '[:space:]' \
+              | "$SIGN_UPDATE" --ed-key-file - "$DMG_PATH" 2>&1)
+          SIG_EXIT=$?
+          set -e
           echo "$SIG_OUTPUT"
+          if [[ $SIG_EXIT -ne 0 ]]; then
+              echo "::error::sign_update exited $SIG_EXIT"
+              exit $SIG_EXIT
+          fi
 
           ED_SIGNATURE=$(echo "$SIG_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
           LENGTH=$(echo       "$SIG_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
@@ -262,7 +275,6 @@ jobs:
           fi
           echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
           echo "length=$LENGTH"             >> "$GITHUB_OUTPUT"
-          rm -f "$KEY_FILE"
 
       - name: Create GitHub Release & upload DMG
         env:
