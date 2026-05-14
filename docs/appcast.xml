@@ -11,5 +11,18 @@
             the signed, notarized DMG on GitHub Releases plus a sparkle:edSignature
             verified by SUPublicEDKey in the running app's Info.plist.
         -->
+        <item>
+            <title>Version 2026.5.0</title>
+            <pubDate>Thu, 14 May 2026 13:25:35 +0000</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>2026.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.0/Dictator-2026.5.0.dmg"
+                length="20417203"
+                type="application/octet-stream"
+                sparkle:edSignature="FLUwHJUnN0EzxwyDQid4jxSD2aB6fBOtpmVltUFJSQtYfaCBimWj3OpNEkEhLnJNHuNVJhXDFHpy3OhIuoTjBQ==" />
+        </item>
+    
     </channel>
 </rss>
