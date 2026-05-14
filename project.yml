@@ -96,8 +96,15 @@ targets:
         LSMinimumSystemVersion: "15.0"
         CFBundleName: Dictator
         CFBundleDisplayName: Dictator
-        CFBundleShortVersionString: "2026.5.0"
-        CFBundleVersion: "1"
+        # Substituted from the matching build settings below at "Process Info.plist"
+        # time. Keeping them as $() refs means the CI workflow's xcodebuild
+        # MARKETING_VERSION=... / CURRENT_PROJECT_VERSION=... overrides actually
+        # land in the shipped Info.plist — previously the literals here won and
+        # every release got stamped as 2026.5.0 build 1, which broke Sparkle's
+        # "is this newer?" check (it always was) and meant Settings → About
+        # never showed the real version.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
         NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app."
         # Sparkle auto-updates. The appcast lives at the URL below (served by
@@ -119,7 +126,13 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
-        MARKETING_VERSION: "2026.5.0"
+        # Default values for local builds. The CI release workflow overrides
+        # both via `xcodebuild MARKETING_VERSION=... CURRENT_PROJECT_VERSION=...`
+        # — the marketing version comes from the v* tag and the build number is
+        # the GitHub Actions run number (monotonically increasing). Bumping the
+        # default here just keeps `Settings → About` honest when developing
+        # against an unreleased build locally.
+        MARKETING_VERSION: "2026.5.2"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
