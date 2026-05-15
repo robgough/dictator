@@ -13,4 +13,4 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Made the listening waveform on the HUD easier to see in light mode.
