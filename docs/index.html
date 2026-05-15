@@ -735,16 +735,16 @@
 
         <div class="ram-tiers">
             <div class="ram-tier lean">
-                <h4>8 GB <span class="tag">Lean</span></h4>
-                <p>We default to <strong>no LLM</strong>. Raw transcripts go through the dictionary pass and ship. Adding any LLM here will swap-thrash the moment another app gets busy.</p>
+                <h4>16 GB <span class="tag">Minimum</span></h4>
+                <p>Default is <strong>Llama 3.2 1B</strong>. Comfortable with the 1B model and the full pipeline running; the 3B works if Dictator is the only memory-hungry app open at the time.</p>
             </div>
             <div class="ram-tier balanced">
-                <h4>16 GB <span class="tag">Balanced</span></h4>
-                <p>Default is <strong>Llama 3.2 1B</strong>. Comfortable with the 1B model; the 3B works if Dictator is the only memory-hungry app open at the time.</p>
+                <h4>24 GB <span class="tag">Recommended</span></h4>
+                <p>Default is <strong>Llama 3.2 3B</strong>. Plenty of headroom for the full setup, with room left for everything else you'd usually have open.</p>
             </div>
             <div class="ram-tier generous">
-                <h4>24 GB+ <span class="tag">Generous</span></h4>
-                <p>Default is <strong>Llama 3.2 3B</strong>. Plenty of headroom for the full setup. Qwen 7B is comfortably usable if you want the higher quality.</p>
+                <h4>32 GB+ <span class="tag">Generous</span></h4>
+                <p>Comfortable with <strong>Qwen 2.5 7B</strong> for the highest-quality cleanup, and zero swap pressure even with a long Assistant-mode conversation in flight.</p>
             </div>
         </div>
 
@@ -758,7 +758,7 @@
                     <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Recommended on 24 GB+. Good balance of quality and speed.</td></tr>
                     <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Alternative 3B with a different prose style.</td></tr>
                     <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality output, noticeably slower. Plan for 32 GB.</td></tr>
-                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">8 GB</td>  <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies). Default on 8 GB Macs.</td></tr>
+                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">—</td>     <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies). Pick this if you prefer Whisper's output straight, or want zero LLM overhead.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -784,7 +784,7 @@
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>RAM.</strong> 8 GB Macs can run dictation, but only with the LLM disabled (defaults handle this for you). 16 GB is comfortable for the small LLM; 24 GB+ for the recommended 3B. Larger models assume you have memory to spare.</li>
+                    <li><strong>RAM.</strong> 16 GB minimum — the small LLM fits comfortably alongside transcription with the OS still able to breathe. 24 GB+ for the recommended 3B model; larger models assume you have memory to spare.</li>
                     <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
                     <li><strong>Ceiling.</strong> A 3B local model is not Claude. For dictation cleanup it's plenty; for genuinely hard text massaging the frontier still wins.</li>
                     <li><strong>First run.</strong> A few GB of weights to download — typically 2.5 GB if you take the defaults.</li>
@@ -817,10 +817,10 @@
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
             <span><strong>macOS 15</strong> or newer</span>
-            <span><strong>8 GB RAM</strong> minimum (16 GB+ for the LLM passes)</span>
+            <span><strong>16 GB RAM</strong> minimum (24 GB+ for the recommended 3B model)</span>
             <span>Roughly <strong>1–3 GB</strong> of disk for models</span>
         </p>
-        <p class="table-footnote">On 8 GB Macs, Dictator runs transcription-only by default — you'll get clean, punctuated transcripts straight from the model. 16 GB enables the small Llama 3.2 1B for the cleanup passes; 24 GB+ unlocks the recommended 3B model and assistant mode at its best.</p>
+        <p class="table-footnote">16 GB keeps the small Llama 3.2 1B resident comfortably for the cleanup passes; 24 GB+ unlocks the recommended 3B model and Assistant mode at its best.</p>
     </section>
 
     <footer>
