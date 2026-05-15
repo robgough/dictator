@@ -23,6 +23,20 @@ final class LLMService {
     private(set) var isLoading: Bool = false
     @ObservationIgnored private var container: ModelContainer?
 
+    /// Downloads the model files (no compile, no load) and reports fractional
+    /// progress. Use this from the Settings / Onboarding "Download" buttons —
+    /// `ensureLoaded` does the heavy compile + RAM-resident load on top.
+    func download(modelID: String, progress: @escaping @MainActor (Double) -> Void) async throws {
+        let onFraction: @Sendable (Double) -> Void = { fraction in
+            Task { @MainActor in progress(fraction) }
+        }
+        try await Self.runHubDownload(
+            modelID: modelID,
+            downloadBase: ModelStorage.llmRoot(),
+            onFraction: onFraction
+        )
+    }
+
     func ensureLoaded(modelID: String, progress: (@Sendable @MainActor (Double) -> Void)? = nil) async throws {
         if currentModelID == modelID, container != nil { return }
         container = nil
@@ -42,6 +56,25 @@ final class LLMService {
         }
         container = loaded
         currentModelID = modelID
+    }
+
+    /// Bridge to `MLXLMCommon.downloadModel`. Nonisolated so the actual file
+    /// download runs on the cooperative pool, not the main actor — the `await`
+    /// at the call site suspends the caller cleanly. Mirrors the same shape as
+    /// `TranscriptionService.runWhisperKitDownload` / `ParakeetService.runDownload`.
+    private nonisolated static func runHubDownload(
+        modelID: String,
+        downloadBase: URL,
+        onFraction: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        let hub = HubApi(downloadBase: downloadBase)
+        let configuration = ModelConfiguration(id: modelID)
+        _ = try await MLXLMCommon.downloadModel(
+            hub: hub,
+            configuration: configuration
+        ) { p in
+            onFraction(p.fractionCompleted)
+        }
     }
 
     /// Drop the in-memory MLX container. Called before deleting the model

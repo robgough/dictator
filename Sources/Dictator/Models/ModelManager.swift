@@ -206,17 +206,20 @@ final class ModelManager {
 
     /// Fire-and-forget download. Stores the Task so the user can cancel from
     /// Settings. No-ops if a download for this model is already in flight.
+    /// Downloads files only — the heavy compile + RAM-resident load happens
+    /// lazily the first time the pipeline actually needs the model. Previously
+    /// this called `ensureLoaded`, which silently kept the model loaded in
+    /// memory after "Download" finished and left the UI frozen at 100% during
+    /// the multi-second compile tail.
     func downloadLLM(_ id: String, using service: LLMService) {
         guard llmTasks[id] == nil else { return }
         llmStates[id] = .downloading(0)
         llmTasks[id] = Task { [weak self] in
             do {
-                try await service.ensureLoaded(modelID: id) { [weak self] progress in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        if case .downloading = self.llmStates[id] {
-                            self.llmStates[id] = .downloading(progress)
-                        }
+                try await service.download(modelID: id) { [weak self] progress in
+                    guard let self else { return }
+                    if case .downloading = self.llmStates[id] {
+                        self.llmStates[id] = .downloading(progress)
                     }
                 }
                 guard let self else { return }
