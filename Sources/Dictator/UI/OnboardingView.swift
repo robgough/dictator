@@ -868,7 +868,7 @@ private struct ModelDownloadCard: View {
     private var badgeIcon: String {
         switch state {
         case .ready: "checkmark.circle.fill"
-        case .downloading, .partial: "arrow.down.circle.fill"
+        case .downloading, .partial, .preparingDownload: "arrow.down.circle.fill"
         case .failed: "exclamationmark.triangle.fill"
         default: "arrow.down.circle"
         }
@@ -877,7 +877,7 @@ private struct ModelDownloadCard: View {
     private var badgeForeground: Color {
         switch state {
         case .ready: .green
-        case .downloading, .partial: .accentColor
+        case .downloading, .partial, .preparingDownload: .accentColor
         case .failed: .orange
         default: .accentColor
         }
@@ -897,6 +897,18 @@ private struct ModelDownloadCard: View {
             Text("Installed and ready.")
                 .font(.callout)
                 .foregroundStyle(.green)
+        case .preparingDownload:
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Fetching metadata…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .controlSize(.small)
+            }
+            .padding(.top, 2)
         case .downloading(let p):
             VStack(alignment: .leading, spacing: 4) {
                 ProgressView(value: p)

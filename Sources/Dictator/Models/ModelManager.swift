@@ -10,6 +10,13 @@ enum ModelDownloadState: Equatable, Sendable {
     /// The associated value is the fraction of expected size already downloaded
     /// (0...1) for display only — Hub computes the real resume offset itself.
     case partial(Double)
+    /// Click registered, but no bytes received yet. Hub's `snapshot` lists the
+    /// repo (one HTTP call) then fetches per-file metadata (N more) before any
+    /// progress tick fires, so the bar would otherwise sit at "0%" for several
+    /// seconds on a slow connection and look stalled. Distinguishing this from
+    /// `.downloading(0)` lets the UI show "Fetching metadata…" until the first
+    /// real progress callback arrives and we know bytes are flowing.
+    case preparingDownload
     case downloading(Double)
     case ready
     case failed(String)
@@ -138,16 +145,21 @@ final class ModelManager {
     /// Settings. No-ops if a download for this model is already in flight.
     func downloadWhisper(_ id: String, using service: TranscriptionService) {
         guard whisperTasks[id] == nil else { return }
-        whisperStates[id] = .downloading(0)
+        whisperStates[id] = .preparingDownload
         whisperTasks[id] = Task { [weak self] in
             do {
                 try await service.download(modelID: id) { [weak self] progress in
                     // Don't overwrite a terminal state if cancellation already
                     // flipped us back to .notDownloaded after a late progress
-                    // tick from the underlying HubApi callback.
+                    // tick from the underlying HubApi callback. Also accept
+                    // the pre-network `.preparingDownload` state — the first
+                    // progress tick is what flips us out of it.
                     guard let self else { return }
-                    if case .downloading = self.whisperStates[id] {
+                    switch self.whisperStates[id] {
+                    case .preparingDownload, .downloading:
                         self.whisperStates[id] = .downloading(progress)
+                    default:
+                        break
                     }
                 }
                 guard let self else { return }
@@ -173,13 +185,16 @@ final class ModelManager {
     /// Fire-and-forget Parakeet download. Mirrors the Whisper variant.
     func downloadParakeet(_ id: String, using service: ParakeetService) {
         guard parakeetTasks[id] == nil else { return }
-        parakeetStates[id] = .downloading(0)
+        parakeetStates[id] = .preparingDownload
         parakeetTasks[id] = Task { [weak self] in
             do {
                 try await service.download(modelID: id) { [weak self] progress in
                     guard let self else { return }
-                    if case .downloading = self.parakeetStates[id] {
+                    switch self.parakeetStates[id] {
+                    case .preparingDownload, .downloading:
                         self.parakeetStates[id] = .downloading(progress)
+                    default:
+                        break
                     }
                 }
                 guard let self else { return }
@@ -213,13 +228,16 @@ final class ModelManager {
     /// the multi-second compile tail.
     func downloadLLM(_ id: String, using service: LLMService) {
         guard llmTasks[id] == nil else { return }
-        llmStates[id] = .downloading(0)
+        llmStates[id] = .preparingDownload
         llmTasks[id] = Task { [weak self] in
             do {
                 try await service.download(modelID: id) { [weak self] progress in
                     guard let self else { return }
-                    if case .downloading = self.llmStates[id] {
+                    switch self.llmStates[id] {
+                    case .preparingDownload, .downloading:
                         self.llmStates[id] = .downloading(progress)
+                    default:
+                        break
                     }
                 }
                 guard let self else { return }

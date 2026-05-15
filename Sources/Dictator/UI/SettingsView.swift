@@ -1563,6 +1563,22 @@ private struct ModelRow: View {
         case .notDownloaded, .unknown:
             Button("Download", action: download)
                 .controlSize(.small)
+        case .preparingDownload:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Fetching metadata…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button(action: cancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
+            }
         case .partial(let p):
             HStack(spacing: 8) {
                 VStack(alignment: .trailing, spacing: 2) {
