@@ -759,7 +759,7 @@
         <div class="table-wrap" style="margin-top: 18px;">
             <table>
                 <thead>
-                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Min RAM</th><th>Notes</th></tr>
+                    <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Min Mac RAM</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
                     <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting; weaker on grammar and Assistant tasks.</td></tr>
@@ -771,7 +771,7 @@
             </table>
         </div>
 
-        <p class="table-footnote">All language models are 4-bit quantised via MLX. RAM figures are approximate steady-state at modest context lengths; long Assistant-mode conversations grow as the KV cache fills. "Min RAM" is the total physical memory we'd want before recommending the model — it's how much your Mac needs to keep the LLM resident <em>and</em> still leave headroom for the OS, your browser, and whatever else you have open.</p>
+        <p class="table-footnote">All language models are 4-bit quantised via MLX. The <strong>RAM</strong> column is how much the loaded model itself consumes at steady-state, with modest context lengths; long Assistant-mode conversations grow as the KV cache fills. The <strong>Min Mac RAM</strong> column is the total physical memory we'd want your <em>whole machine</em> to have before recommending the model — enough to keep the LLM resident and still leave headroom for the OS, your browser, and whatever else you have open.</p>
     </section>
 
     <section class="tradeoff">
