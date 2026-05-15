@@ -365,7 +365,15 @@
             background: color-mix(in oklab, var(--fg) 3%, transparent);
         }
         .table-wrap tr:last-child td { border-bottom: none; }
-        .table-wrap td.model-name { color: var(--fg); font-weight: 500; }
+        .table-wrap td.model-name {
+            color: var(--fg);
+            font-weight: 500;
+            /* Keep model names on one line — otherwise the long-form
+               notes column grabs all the slack and squeezes the names
+               into 2-3 line wraps. .table-wrap's overflow-x:auto still
+               saves us on narrow viewports. */
+            white-space: nowrap;
+        }
         .table-wrap td.size {
             color: var(--fg-dim);
             white-space: nowrap;
