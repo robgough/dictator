@@ -28,6 +28,27 @@
 	<string>Dictator pastes transcribed text into the focused app.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dictator needs microphone access to listen and transcribe your speech.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Learn Word in Dictator…</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>learnWord</string>
+			<key>NSPortName</key>
+			<string>Dictator</string>
+			<key>NSReturnTypes</key>
+			<array/>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+				<string>NSStringPboardType</string>
+			</array>
+		</dict>
+	</array>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

@@ -308,94 +308,442 @@ private struct AboutSection<Content: View>: View {
     }
 }
 
-private struct DictionaryPane: View {
-    @Environment(AppState.self) private var state
+/// Open System Settings on the Keyboard pane. On macOS Sequoia the
+/// Services checkbox list is buried behind a "Keyboard Shortcuts\u{2026}"
+/// sheet \u{2014} no URL scheme jumps inside that sheet, and the legacy
+/// `reveal anchor` AppleScript command was removed in Ventura. We tried
+/// driving the click-through via Accessibility, but System Settings is
+/// SwiftUI-internally so its AX titles sit on descendants of the
+/// pressable element and the heuristic was unreliable. Better to just
+/// land on the Keyboard pane and spell out the remaining two clicks
+/// in the hint text.
+@MainActor
+private func openServicesSettings() {
+    guard let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") else { return }
+    NSWorkspace.shared.open(url)
+}
 
-    var body: some View {
-        @Bindable var s = state
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Custom spellings & corrections")
-                        .font(.headline)
-                    Text("Applied right after the formatter pass. Matches are word-aware and case-insensitive by default.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    s.settings.vocabulary.append(VocabularyEntry(pattern: "", replacement: ""))
-                    state.save()
-                } label: {
-                    Label("Add", systemImage: "plus")
-                }
-                .controlSize(.small)
-            }
+/// Sort options for the dictionary list. Persisted at the view level
+/// only \u{2014} re-opening Settings resets to the default. The
+/// underlying `settings.vocabulary` array is always stored in
+/// "as entered" order; sorting is purely a display concern.
+private enum VocabularySortOrder: String, CaseIterable, Identifiable {
+    case alphabetical
+    case asEntered
 
-            if s.settings.vocabulary.isEmpty {
-                ContentUnavailableView(
-                    "Your dictionary is empty",
-                    systemImage: "character.book.closed",
-                    description: Text("Click **Add** to create your first rule. Example: pattern \"github\" → replacement \"GitHub\".")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach($s.settings.vocabulary) { $entry in
-                            DictionaryEntryRow(entry: $entry) {
-                                s.settings.vocabulary.removeAll { $0.id == entry.id }
-                                state.save()
-                            }
-                            .onChange(of: entry) { _, _ in state.save() }
-                        }
-                    }
-                }
-                .frame(minHeight: 280)
-            }
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .alphabetical: "Alphabetical"
+        case .asEntered:    "As entered"
         }
     }
 }
 
-private struct DictionaryEntryRow: View {
-    @Binding var entry: VocabularyEntry
-    let remove: () -> Void
+private struct DictionaryPane: View {
+    @Environment(AppState.self) private var state
+
+    @State private var search: String = ""
+    @State private var sort: VocabularySortOrder = .alphabetical
+    @State private var showingHints: Bool = false
+    /// New rows go to the top of the visible list and get auto-focused, so
+    /// the user can start typing immediately. The id picked here is the
+    /// one to pulse-highlight + focus on next render.
+    @FocusState private var focusedFieldID: VocabularyEntry.ID?
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Heard").font(.caption).foregroundStyle(.secondary)
-                    TextField("e.g. github", text: $entry.pattern)
-                        .textFieldStyle(.roundedBorder)
-                }
-                Image(systemName: "arrow.right")
+        @Bindable var s = state
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            toolbar($s.settings.vocabulary)
+            list($s.settings.vocabulary)
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Custom spellings & corrections")
+                    .font(.headline)
+                Text("Applied right after the formatter pass. Matches are word-aware and case-insensitive by default.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 14)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Replace with").font(.caption).foregroundStyle(.secondary)
-                    TextField("e.g. GitHub", text: $entry.replacement)
-                        .textFieldStyle(.roundedBorder)
+            }
+            Button {
+                showingHints.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Adding entries from outside Settings")
+            .popover(isPresented: $showingHints, arrowEdge: .top) {
+                hintsPopover
+            }
+            Spacer()
+        }
+    }
+
+    // MARK: - Hints popover
+
+    private var hintsPopover: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Section 1: Quick-add from anywhere.
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "lightbulb")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .frame(width: 16)
+                Text("Select text in any app, right-click \u{2192} Services \u{2192} \u{201C}Learn Word in Dictator\u{2026}\u{201D} to add a rule without opening Settings.")
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+
+            // Section 2: First-time Services setup.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "checklist")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                        .frame(width: 16)
+                    Text("First-time setup")
+                        .font(.system(size: 12, weight: .semibold))
                 }
-                VStack {
+                (
+                    Text("In ")
+                    + Text("System Settings").bold()
+                    + Text(", click ")
+                    + Text("\u{201C}Keyboard Shortcuts\u{2026}\u{201D}").bold()
+                    + Text(", select ")
+                    + Text("Services").bold()
+                    + Text(" in the sidebar, expand ")
+                    + Text("Text").bold()
+                    + Text(", and tick ")
+                    + Text("\u{201C}Learn Word in Dictator\u{2026}\u{201D}").bold()
+                    + Text(".")
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 24)
+                HStack {
                     Spacer()
-                    Button(role: .destructive, action: remove) {
-                        Image(systemName: "trash")
+                    Button {
+                        openServicesSettings()
+                    } label: {
+                        Label("Open System Settings", systemImage: "arrow.up.forward.app")
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.leading, 24)
+            }
+            Divider()
+
+            // Section 3: What the per-row toggles mean. Glyphs match the
+            // icons on each row's toggle buttons so users can correlate.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "switch.2")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                        .frame(width: 16)
+                    Text("Per-rule options")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    optionRow(
+                        icon: "textformat",
+                        title: "Case-sensitive",
+                        body: "On: only matches the exact casing you typed in \u{201C}Heard\u{201D}. Off (default): matches regardless of case \u{2014} \u{201C}github\u{201D} also catches \u{201C}Github\u{201D} and \u{201C}GITHUB\u{201D}."
+                    )
+                    optionRow(
+                        icon: "text.word.spacing",
+                        title: "Whole word only",
+                        body: "On (default): only matches when the pattern stands alone, separated by spaces or punctuation. Off: matches even inside other words \u{2014} so \u{201C}api\u{201D} would also rewrite \u{201C}happier\u{201D}."
+                    )
+                }
+                .padding(.leading, 24)
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+    }
+
+    private func optionRow(icon: String, title: String, body: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .center)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(body)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Toolbar (search + sort + count + add)
+
+    private func toolbar(_ vocabulary: Binding<[VocabularyEntry]>) -> some View {
+        let total = vocabulary.wrappedValue.count
+        let shown = filteredEntries(from: vocabulary.wrappedValue).count
+        return HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                TextField("Search dictionary\u{2026}", text: $search)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                if !search.isEmpty {
+                    Button {
+                        search = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 12))
                     }
                     .buttonStyle(.borderless)
                 }
             }
-            HStack(spacing: 16) {
-                Toggle("Case-sensitive", isOn: $entry.caseSensitive)
-                Toggle("Whole word only", isOn: $entry.wholeWord)
-                Spacer()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
+            )
+
+            Text(countLabel(total: total, shown: shown))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Spacer()
+
+            Picker("Sort", selection: $sort) {
+                ForEach(VocabularySortOrder.allCases) { order in
+                    Text(order.label).tag(order)
+                }
             }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(.caption)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+
+            Button {
+                let new = VocabularyEntry(pattern: "", replacement: "")
+                vocabulary.wrappedValue.insert(new, at: 0)
+                state.save()
+                // Switch to "as entered" so the brand-new empty row is
+                // visible at the top regardless of alphabetic sort, then
+                // focus its pattern field for immediate typing.
+                sort = .asEntered
+                search = ""
+                focusedFieldID = new.id
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+            .controlSize(.small)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+    }
+
+    private func countLabel(total: Int, shown: Int) -> String {
+        if total == 0 { return "" }
+        if shown == total {
+            return total == 1 ? "1 entry" : "\(total) entries"
+        }
+        return "\(shown) of \(total)"
+    }
+
+    // MARK: - List
+
+    @ViewBuilder
+    private func list(_ vocabulary: Binding<[VocabularyEntry]>) -> some View {
+        let entries = vocabulary.wrappedValue
+        if entries.isEmpty {
+            ContentUnavailableView(
+                "Your dictionary is empty",
+                systemImage: "character.book.closed",
+                description: Text("Click **Add** to create your first rule. Example: pattern \"github\" \u{2192} replacement \"GitHub\".")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            let visible = filteredEntries(from: entries)
+            if visible.isEmpty {
+                ContentUnavailableView.search(text: search)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(visible) { entry in
+                            CompactDictionaryRow(
+                                entry: entryBinding(id: entry.id, in: vocabulary),
+                                focused: $focusedFieldID,
+                                onChange: { state.save() },
+                                onRemove: {
+                                    vocabulary.wrappedValue.removeAll { $0.id == entry.id }
+                                    state.save()
+                                }
+                            )
+                            .id(entry.id)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(minHeight: 280)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.secondary.opacity(0.04))
+                )
+            }
+        }
+    }
+
+    // MARK: - Filtering & sorting
+
+    private func filteredEntries(from source: [VocabularyEntry]) -> [VocabularyEntry] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [VocabularyEntry]
+        if q.isEmpty {
+            filtered = source
+        } else {
+            filtered = source.filter {
+                $0.pattern.lowercased().contains(q) || $0.replacement.lowercased().contains(q)
+            }
+        }
+        switch sort {
+        case .alphabetical:
+            return filtered.sorted {
+                $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending
+            }
+        case .asEntered:
+            return filtered
+        }
+    }
+
+    /// Binding that resolves an entry by id against the live source array.
+    /// Necessary because `filteredEntries` returns a snapshot \u{2014}
+    /// editing a row needs to mutate the canonical store, not the snapshot.
+    private func entryBinding(id: VocabularyEntry.ID,
+                              in array: Binding<[VocabularyEntry]>) -> Binding<VocabularyEntry> {
+        Binding(
+            get: {
+                array.wrappedValue.first { $0.id == id }
+                    ?? VocabularyEntry(id: id, pattern: "", replacement: "")
+            },
+            set: { newValue in
+                if let idx = array.wrappedValue.firstIndex(where: { $0.id == id }) {
+                    array.wrappedValue[idx] = newValue
+                }
+            }
+        )
+    }
+}
+
+/// Single-line row optimised for dictionaries with many entries. Toggles
+/// for "case-sensitive" and "whole word" become icon toggle-buttons that
+/// only render the affordance \u{2014} hover/help reveals the meaning. The
+/// trash button fades in on hover so the row reads as data, not chrome.
+private struct CompactDictionaryRow: View {
+    @Binding var entry: VocabularyEntry
+    @FocusState.Binding var focused: VocabularyEntry.ID?
+    let onChange: () -> Void
+    let onRemove: () -> Void
+
+    @State private var hovering: Bool = false
+    @FocusState private var localFocus: FocusedField?
+
+    private enum FocusedField: Hashable { case pattern, replacement }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Heard", text: $entry.pattern)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+                .focused($localFocus, equals: .pattern)
+                .onSubmit { onChange() }
+                .onChange(of: entry.pattern) { _, _ in onChange() }
+                .onChange(of: focused) { _, newID in
+                    if newID == entry.id { localFocus = .pattern }
+                }
+                // .onChange doesn't fire if the row mounts *after* the
+                // parent flips `focused` (which is what happens when Add
+                // inserts a new row). Catch that case on appear.
+                .onAppear {
+                    if focused == entry.id { localFocus = .pattern }
+                }
+
+            Image(systemName: "arrow.right")
+                .foregroundStyle(.tertiary)
+                .font(.system(size: 10))
+
+            TextField("Replacement", text: $entry.replacement)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+                .focused($localFocus, equals: .replacement)
+                .onSubmit { onChange() }
+                .onChange(of: entry.replacement) { _, _ in onChange() }
+
+            Toggle(isOn: $entry.caseSensitive) {
+                Image(systemName: "textformat")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Case-sensitive")
+            .onChange(of: entry.caseSensitive) { _, _ in onChange() }
+
+            Toggle(isOn: $entry.wholeWord) {
+                Image(systemName: "text.word.spacing")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Whole word only")
+            .onChange(of: entry.wholeWord) { _, _ in onChange() }
+
+            Button(role: .destructive, action: onRemove) {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .opacity(hovering ? 0.85 : 0)
+            .frame(width: 18)
+            .help("Delete rule")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(rowBackground)
+        )
+        .onHover { hovering = $0 }
+    }
+
+    /// Subtle hover state so the row reads as interactive without
+    /// surrounding every entry in a heavy card background like the
+    /// previous design. Focus also tints the row so the user can see
+    /// which entry is being edited.
+    private var rowBackground: Color {
+        if localFocus != nil { return Color.accentColor.opacity(0.10) }
+        if hovering           { return Color.secondary.opacity(0.10) }
+        return .clear
     }
 }
 

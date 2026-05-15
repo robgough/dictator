@@ -90,7 +90,7 @@ struct MenuBarContent: View {
             .textCase(.uppercase)
 
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(history.mostRecent(10)) { record in
+            ForEach(history.mostRecent(5)) { record in
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(record.final, forType: .string)

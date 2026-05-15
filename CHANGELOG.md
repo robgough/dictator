@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Added a "Learn Word in Dictator…" entry to the macOS Services menu — select a word in any app, right-click → Services, and a popup lets you add or update a custom-dictionary rule without opening Settings. The same action is also available from Spotlight and Shortcuts under "Learn Word in Dictator".
+- Redesigned the Dictionary pane to handle large dictionaries: search field, alphabetical / as-entered sorting, compact single-line rows with hover-to-delete, and a help button that explains the per-rule options.
+- Trimmed the menu-bar Recent list from 10 entries to 5 so the popup stays compact.
 - Stopped the HUD's colours from drifting as the panel floats over different apps.
 - Onboarding's primary buttons no longer look disabled when macOS is set to the Graphite accent.
 - Formatting-LLM downloads now show smooth progress and finish as soon as the files land, instead of jumping to 100% and freezing there while the model loaded silently into RAM.

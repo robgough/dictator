@@ -68,6 +68,22 @@ targets:
           # `ditto` preserves bundle metadata. `cp -R` doesn't.
           ditto "$BUILT_PRODUCTS_DIR/${PRODUCT_NAME}.app" "$DEST"
 
+          # ExtractAppIntentsMetadata is one of the Apple-internal build
+          # phases that runs AFTER this script, so on the very first clean
+          # build BUILT_PRODUCTS_DIR doesn't yet have Metadata.appintents
+          # at the moment we ditto. On every subsequent build the previous
+          # build's metadata is still on disk and we forward-copy it — it
+          # lags by one build during incremental development. For release
+          # archive builds the archive is produced AFTER all phases run,
+          # so the shipped .app always contains current metadata. Without
+          # this folder, Spotlight / Shortcuts / Siri don't pick up the
+          # app's App Intents (NSServices uses Info.plist and is unaffected).
+          SRC_INTENTS="$BUILT_PRODUCTS_DIR/${PRODUCT_NAME}.app/Contents/Resources/Metadata.appintents"
+          if [ -d "$SRC_INTENTS" ]; then
+              rm -rf "$DEST/Contents/Resources/Metadata.appintents"
+              ditto "$SRC_INTENTS" "$DEST/Contents/Resources/Metadata.appintents"
+          fi
+
           # This post-build script runs BEFORE the final CodeSign phase, so the
           # ditto'd copy is unsigned. Re-sign it with the same identity Xcode is
           # about to use. EXPANDED_CODE_SIGN_IDENTITY is the resolved cert (a
@@ -116,6 +132,22 @@ targets:
         SUFeedURL: "https://dictator.robgough.net/appcast.xml"
         SUPublicEDKey: "nKdcgJBzUX/UsPNA71RLRx1CzXBby33QOor7CQ7t9Yg="
         SUEnableAutomaticChecks: true
+        # Right-click → Services → "Learn Word in Dictator…" in any app
+        # that has text selected. The receiver is LearnWordProvider, wired
+        # up via NSApp.servicesProvider in AppDelegate. `NSPortName` must
+        # match CFBundleName; `NSMessage` is the selector base (macOS
+        # appends `:userData:error:` automatically). pbs caches services
+        # by signed identity — after a fresh install the entry may take a
+        # rescan to appear; NSUpdateDynamicServices() at launch nudges it.
+        NSServices:
+          - NSMessage: learnWord
+            NSPortName: Dictator
+            NSMenuItem:
+              default: "Learn Word in Dictator…"
+            NSSendTypes:
+              - public.utf8-plain-text
+              - NSStringPboardType
+            NSReturnTypes: []
     # Two entitlements files, swapped per build config via CODE_SIGN_ENTITLEMENTS
     # below. The only difference is `get-task-allow`:
     #   - Debug  → true  (lets Xcode's debugger attach)

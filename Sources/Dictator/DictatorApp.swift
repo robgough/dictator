@@ -37,11 +37,24 @@ struct DictatorApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hud: HUDController?
+    // Held by the delegate so the strong reference outlives every
+    // services-menu invocation. `NSApp.servicesProvider` is `weak`.
+    private let learnWordProvider = LearnWordProvider()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let state = AppState.shared
         hud = HUDController(state: state)
         state.bootstrap()
+
+        // Hook up the Services menu provider. The matching NSServices
+        // declaration in Info.plist is what makes "Learn Word in Dictator…"
+        // appear in other apps' right-click \u{2192} Services submenu; this
+        // is the object that handles the call when it fires. The
+        // `NSUpdateDynamicServices()` nudge prompts pbs to re-scan the
+        // bundle so a freshly-installed build's services show up without
+        // requiring a logout.
+        NSApp.servicesProvider = learnWordProvider
+        NSUpdateDynamicServices()
     }
 }
