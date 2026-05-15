@@ -4,16 +4,10 @@ import SwiftUI
 struct Waveform: View {
     let level: Float
     var tint: Color = .accentColor
-    @Environment(\.colorScheme) private var colorScheme
     @State private var bars: [Double] = Array(repeating: 0.05, count: barCount)
     private static let barCount = 28
 
     var body: some View {
-        // Light mode's `.thinMaterial` is near-white, so a low-alpha tint
-        // washes out — push the bars to full opacity. Dark mode keeps the
-        // original airier fade.
-        let isLight = colorScheme == .light
-        let minAlpha: Double = isLight ? 1.0 : 0.55
         Canvas { ctx, size in
             let gap: CGFloat = 3
             let totalGap = gap * CGFloat(Self.barCount - 1)
@@ -25,8 +19,7 @@ struct Waveform: View {
                 let x = CGFloat(i) * (barWidth + gap)
                 let rect = CGRect(x: x, y: midY - h / 2, width: barWidth, height: h)
                 let shape = Path(roundedRect: rect, cornerRadius: barWidth / 2)
-                let alpha = minAlpha + value * (1.0 - minAlpha)
-                ctx.fill(shape, with: .color(tint.opacity(alpha)))
+                ctx.fill(shape, with: .color(tint))
             }
         }
         .frame(height: 36)

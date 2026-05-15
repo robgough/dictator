@@ -1,5 +1,20 @@
 import SwiftUI
 
+// Literal RGB tints for every coloured element in the HUD. We deliberately
+// don't use SwiftUI's semantic colours (`.accentColor`, `.indigo`, `.blue`, …)
+// here: those are dynamic and re-resolve under the visual-effect view's
+// vibrancy appearance, which itself shifts with the window content behind
+// the HUD — so otherwise the bars, dot, icons, and status text would all
+// drift in colour as the user moved the HUD over different apps.
+private extension Color {
+    static let hudBlue   = Color(red: 0.039, green: 0.518, blue: 1.0)   // ~#0A84FF
+    static let hudIndigo = Color(red: 0.369, green: 0.361, blue: 0.902) // ~#5E5CE6
+    static let hudPurple = Color(red: 0.749, green: 0.353, blue: 0.949) // ~#BF5AF2
+    static let hudPink   = Color(red: 1.0,   green: 0.216, blue: 0.373) // ~#FF375F
+    static let hudTeal   = Color(red: 0.392, green: 0.824, blue: 1.0)   // ~#64D2FF
+    static let hudOrange = Color(red: 1.0,   green: 0.624, blue: 0.039) // ~#FF9F0A
+}
+
 struct HUDView: View {
     @Environment(AppState.self) private var state
     @State private var deviceManager = AudioDeviceManager.shared
@@ -10,11 +25,12 @@ struct HUDView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // SwiftUI's `.thinMaterial` clips correctly against the rounded shape,
-            // unlike a wrapped NSVisualEffectView which rasterises into the layer
-            // before the clip is applied. macOS picks up the rounded alpha and
-            // draws a window shadow that follows the pill outline.
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            // `.regularMaterial` (vs the thinner variant) blocks more of the
+            // underlying window so the waveform doesn't desaturate when the
+            // HUD floats over a dark or colourful background. SwiftUI clips
+            // the material to the rounded shape, so macOS draws the window
+            // shadow following the pill outline.
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
@@ -45,7 +61,7 @@ struct HUDView: View {
         case .idle:
             EmptyView()
         case .capturingSelection:
-            StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .indigo)
+            StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .hudIndigo)
         case .warmingUp(let isAssistant):
             // Bluetooth mics (AirPods, Beats, …) need 2–5 s for HFP profile
             // negotiation before AVAudioEngine actually starts producing
@@ -54,7 +70,7 @@ struct HUDView: View {
             HStack(spacing: 14) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isAssistant ? Color.indigo : Color.accentColor)
+                    .foregroundStyle(isAssistant ? Color.hudIndigo : Color.hudBlue)
                     .font(.system(size: 22, weight: .semibold))
                     .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
                 VStack(alignment: .leading, spacing: 2) {
@@ -77,17 +93,17 @@ struct HUDView: View {
                 if isAssistant {
                     Image(systemName: isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars")
                         .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(Color.indigo)
+                        .foregroundStyle(Color.hudIndigo)
                         .font(.system(size: 18, weight: .semibold))
                 } else {
                     RecordingDot()
                 }
-                Waveform(level: level, tint: isAssistant ? .indigo : .accentColor)
+                Waveform(level: level, tint: isAssistant ? .hudIndigo : .hudBlue)
                     .frame(maxWidth: .infinity)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(isAssistant ? Color.indigo : .primary)
+                        .foregroundStyle(isAssistant ? Color.hudIndigo : .primary)
                     Text(isContinuation
                          ? "Continuing the conversation"
                          : (isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName()))
@@ -99,22 +115,22 @@ struct HUDView: View {
                 .frame(maxWidth: 180, alignment: .trailing)
             }
         case .transcribing:
-            StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .blue)
+            StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .hudBlue)
         case .formatting:
-            StatusRow(icon: "sparkles", title: "Formatting", accent: .purple)
+            StatusRow(icon: "sparkles", title: "Formatting", accent: .hudPurple)
         case .fixingGrammar:
-            StatusRow(icon: "text.badge.checkmark", title: "Tidying grammar", accent: .pink)
+            StatusRow(icon: "text.badge.checkmark", title: "Tidying grammar", accent: .hudPink)
         case .restructuring:
-            StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .teal)
+            StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .hudTeal)
         case .assisting:
-            StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .indigo)
+            StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .hudIndigo)
         case .compacting:
-            StatusRow(icon: "archivebox", title: "Summarising earlier turns", accent: .indigo)
+            StatusRow(icon: "archivebox", title: "Summarising earlier turns", accent: .hudIndigo)
         case .done(let text, let pasted, let note):
             HStack(spacing: 14) {
                 Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, pasted ? Color.accentColor : .orange)
+                    .foregroundStyle(.white, pasted ? Color.hudBlue : Color.hudOrange)
                     .font(.system(size: 22, weight: .semibold))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(text)
@@ -125,7 +141,7 @@ struct HUDView: View {
                     if let note {
                         Text(note)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.hudOrange)
                             .lineLimit(2)
                     }
                 }
@@ -134,7 +150,7 @@ struct HUDView: View {
         case .failed(let message):
             HStack(spacing: 14) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.hudOrange)
                     .font(.system(size: 22))
                 Text(message)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -192,9 +208,9 @@ private struct RecordingDot: View {
     @State private var on = false
     var body: some View {
         Circle()
-            .fill(Color.accentColor)
+            .fill(Color.hudBlue)
             .frame(width: 10, height: 10)
-            .shadow(color: .accentColor.opacity(0.6), radius: on ? 10 : 2)
+            .shadow(color: Color.hudBlue.opacity(0.6), radius: on ? 10 : 2)
             .opacity(on ? 1 : 0.6)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }

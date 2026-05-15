@@ -13,4 +13,4 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- Made the listening waveform on the HUD easier to see in light mode.
+- Stopped the HUD's colours from drifting as the panel floats over different apps.
