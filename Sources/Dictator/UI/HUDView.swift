@@ -1,13 +1,13 @@
 import SwiftUI
 
-// Literal RGB tints for every coloured element in the HUD. We deliberately
-// don't use SwiftUI's semantic colours (`.accentColor`, `.indigo`, `.blue`, …)
-// here: those are dynamic and re-resolve under the visual-effect view's
-// vibrancy appearance, which itself shifts with the window content behind
-// the HUD — so otherwise the bars, dot, icons, and status text would all
-// drift in colour as the user moved the HUD over different apps.
+// Literal RGB tints for the non-blue HUD accents. We deliberately don't use
+// SwiftUI's semantic colours (`.indigo`, `.purple`, `.pink`, `.teal`,
+// `.orange`) here: those are dynamic and re-resolve under the visual-effect
+// view's vibrancy appearance, which itself shifts with the window content
+// behind the HUD — so otherwise the icons and status text would drift in
+// colour as the user moved the HUD over different apps. The HUD's blue
+// reuses `Color.brandBlue` (defined in BrandColors.swift).
 private extension Color {
-    static let hudBlue   = Color(red: 0.039, green: 0.518, blue: 1.0)   // ~#0A84FF
     static let hudIndigo = Color(red: 0.369, green: 0.361, blue: 0.902) // ~#5E5CE6
     static let hudPurple = Color(red: 0.749, green: 0.353, blue: 0.949) // ~#BF5AF2
     static let hudPink   = Color(red: 1.0,   green: 0.216, blue: 0.373) // ~#FF375F
@@ -70,7 +70,7 @@ struct HUDView: View {
             HStack(spacing: 14) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isAssistant ? Color.hudIndigo : Color.hudBlue)
+                    .foregroundStyle(isAssistant ? Color.hudIndigo : Color.brandBlue)
                     .font(.system(size: 22, weight: .semibold))
                     .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
                 VStack(alignment: .leading, spacing: 2) {
@@ -98,7 +98,7 @@ struct HUDView: View {
                 } else {
                     RecordingDot()
                 }
-                Waveform(level: level, tint: isAssistant ? .hudIndigo : .hudBlue)
+                Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue)
                     .frame(maxWidth: .infinity)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
@@ -115,7 +115,7 @@ struct HUDView: View {
                 .frame(maxWidth: 180, alignment: .trailing)
             }
         case .transcribing:
-            StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .hudBlue)
+            StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
         case .formatting:
             StatusRow(icon: "sparkles", title: "Formatting", accent: .hudPurple)
         case .fixingGrammar:
@@ -130,7 +130,7 @@ struct HUDView: View {
             HStack(spacing: 14) {
                 Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, pasted ? Color.hudBlue : Color.hudOrange)
+                    .foregroundStyle(.white, pasted ? Color.brandBlue : Color.hudOrange)
                     .font(.system(size: 22, weight: .semibold))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(text)
@@ -208,9 +208,9 @@ private struct RecordingDot: View {
     @State private var on = false
     var body: some View {
         Circle()
-            .fill(Color.hudBlue)
+            .fill(Color.brandBlue)
             .frame(width: 10, height: 10)
-            .shadow(color: Color.hudBlue.opacity(0.6), radius: on ? 10 : 2)
+            .shadow(color: Color.brandBlue.opacity(0.6), radius: on ? 10 : 2)
             .opacity(on ? 1 : 0.6)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }

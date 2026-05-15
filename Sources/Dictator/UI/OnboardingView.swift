@@ -163,10 +163,12 @@ private struct OnboardingView: View {
             if step == .ready {
                 Button("Finish", action: onComplete)
                     .buttonStyle(.borderedProminent)
+                    .tint(Color.brandBlue)
                     .keyboardShortcut(.defaultAction)
             } else {
                 Button("Continue") { advance(by: 1) }
                     .buttonStyle(.borderedProminent)
+                    .tint(Color.brandBlue)
                     .keyboardShortcut(.defaultAction)
                     .disabled(step == .permissions && micStatus == .notDetermined)
             }
@@ -481,6 +483,7 @@ private struct MicPermissionCard: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .tint(Color.brandBlue)
         case .denied, .restricted:
             Button("Open Settings") { openMicrophoneSettings() }
         case .authorized:
@@ -523,6 +526,7 @@ private struct AccessibilityPermissionCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(Color.brandBlue)
             }
         }
         .onReceive(pollTimer) { _ in granted = TextInjector.hasAccessibilityPermission() }
@@ -935,6 +939,7 @@ private struct ModelDownloadCard: View {
                 Spacer()
                 Button("Download", action: onDownload)
                     .buttonStyle(.borderedProminent)
+                    .tint(Color.brandBlue)
                     .controlSize(.small)
             }
             .padding(.top, 2)

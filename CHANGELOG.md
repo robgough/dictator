@@ -14,3 +14,4 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Stopped the HUD's colours from drifting as the panel floats over different apps.
+- Onboarding's primary buttons no longer look disabled when macOS is set to the Graphite accent.
