@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import Observation
 import SwiftUI
 
@@ -22,6 +23,17 @@ final class AppState {
     }
 
     func bootstrap() {
+        // Bound MLX's GPU buffer cache. The default `cacheLimit` mirrors
+        // `memoryLimit`, which on systems with abundant RAM (32+ GB) lets
+        // the buffer pool grow to many GB across repeated inferences as
+        // different-sized intermediate buffers accumulate. We've seen
+        // phys_footprint creep into the tens of GB on a 64 GB Mac after
+        // a session of dictation. 512 MB is comfortably larger than any
+        // single inference buffer the models we ship would allocate
+        // (KV cache + activations), so steady-state cache-hit rate stays
+        // high, but the pool can't run away.
+        MLX.GPU.set(cacheLimit: 512 * 1024 * 1024)
+
         AudioDeviceManager.shared.bootstrap()
         pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
             self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)

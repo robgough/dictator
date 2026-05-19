@@ -1,6 +1,7 @@
 import SwiftUI
 import KeyboardShortcuts
 import AVFoundation
+import MLX
 import Sparkle
 
 struct SettingsView: View {
@@ -1929,6 +1930,11 @@ private struct StatsModelsPane: View {
     /// Live memory reading, refreshed every 2 s while this sub-pane is on
     /// screen via a `.task` poll loop. Zero until the first read lands.
     @State private var memory: MemoryReading = .zero
+    /// MLX GPU buffer accounting. `activeMemory` is what current inference
+    /// arrays hold; `cacheMemory` is the recycle pool (capped to 512 MB at
+    /// launch — see `AppState.bootstrap()`); `peakMemory` is the high-
+    /// water mark since process start. Zero until the first MLX call.
+    @State private var mlxSnapshot: GPU.Snapshot?
 
     /// Sum of the approximate RAM costs for the *currently selected* models —
     /// the active transcription engine's chosen variant plus the chosen LLM
@@ -1968,7 +1974,26 @@ private struct StatsModelsPane: View {
             } header: {
                 Text("Memory")
             } footer: {
-                SectionFootnote("Live readout. Estimates are approximate — resident memory grows during long Assistant conversations as the model's KV cache fills, and macOS may compress cold pages.")
+                SectionFootnote("Live readout. \"Dictator using\" mirrors Activity Monitor's footprint (which counts compressed and GPU-mapped pages); the actual physical RAM cost is often less because macOS compresses cold pages.")
+            }
+
+            Section {
+                LabeledContent("Active") {
+                    Text(Self.formatBytes(mlxSnapshot?.activeMemory ?? 0))
+                        .monospacedDigit()
+                }
+                LabeledContent("Cache") {
+                    Text(Self.formatBytes(mlxSnapshot?.cacheMemory ?? 0))
+                        .monospacedDigit()
+                }
+                LabeledContent("Peak since launch") {
+                    Text(Self.formatBytes(mlxSnapshot?.peakMemory ?? 0))
+                        .monospacedDigit()
+                }
+            } header: {
+                Text("MLX (LLM)")
+            } footer: {
+                SectionFootnote("Active: buffers held by current inference. Cache: recyclable buffer pool, capped at 512 MB. Peak: highest active since launch. All three are GPU-mapped pages that count against Dictator's footprint.")
             }
 
             Section {
@@ -1990,9 +2015,28 @@ private struct StatsModelsPane: View {
         .task {
             while !Task.isCancelled {
                 memory = MemoryReporter.read()
+                mlxSnapshot = MLX.GPU.snapshot()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+
+    /// Binary-prefix byte formatter that matches the Activity-Monitor /
+    /// "About This Mac" convention (1 GB == 2³⁰ bytes). Falls through to
+    /// MB / KB for sub-GB values so the MLX rows read cleanly even when
+    /// the LLM hasn't allocated much yet.
+    private static func formatBytes(_ bytes: Int) -> String {
+        let value = Double(bytes)
+        let gib = value / 1_073_741_824
+        if gib >= 1 {
+            return String(format: "%.1f GB", gib)
+        }
+        let mib = value / 1_048_576
+        if mib >= 1 {
+            return String(format: "%.0f MB", mib)
+        }
+        let kib = value / 1_024
+        return String(format: "%.0f KB", kib)
     }
 }
 

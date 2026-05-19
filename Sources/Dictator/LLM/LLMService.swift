@@ -1,5 +1,6 @@
 import Foundation
 import Hub
+import MLX
 import MLXLLM
 import MLXLMCommon
 
@@ -120,6 +121,15 @@ final class LLMService {
     private func runFormatPass(text: String, modelID: String, systemPrompt: String,
                                maxTokenMultiplier: Double, maxTokenConstant: Int,
                                cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }) async throws -> String {
+        // Release MLX's GPU buffer pool the moment this pass is done. Each
+        // LLM pass allocates buffers shaped by its own prompt/output sizes;
+        // the next pass (or the next dictation) typically uses different
+        // shapes anyway, so the cache buys little. Keeping it around means
+        // a multi-pass session steadily grows the process footprint over
+        // minutes/hours. Evicting here keeps idle Dictator at "model
+        // weights only".
+        defer { MLX.GPU.clearCache() }
+
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
@@ -175,6 +185,8 @@ final class LLMService {
         summary: String? = nil,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> AssistantResult {
+        defer { MLX.GPU.clearCache() }
+
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
@@ -237,6 +249,8 @@ final class LLMService {
         modelID: String,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> String {
+        defer { MLX.GPU.clearCache() }
+
         try await ensureLoaded(modelID: modelID)
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
