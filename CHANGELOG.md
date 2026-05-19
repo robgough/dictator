@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Fixed Settings description text wrapping at half the column width on some machines, leaving a large empty gap on the right.
 
 ## v2026.5.6 — 2026-05-19
 

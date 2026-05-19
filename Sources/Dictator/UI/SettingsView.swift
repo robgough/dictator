@@ -1660,23 +1660,22 @@ private enum ModelsSubPane: String, CaseIterable, Identifiable {
 }
 
 /// Full-width footnote / description Text for use inside Form sections
-/// (`Section { … }` content or its `footer:` slot) on macOS. macOS's grouped
-/// Form lays each row out as label + content columns; a bare Text gets
-/// allocated only the trailing column and wraps at roughly half the section
-/// width. Wrapping it in an HStack with a trailing Spacer claims the full row
-/// width so multi-line copy flows to the section's actual edge.
+/// (`Section { … }` content or its `footer:` slot) on macOS. In
+/// `.formStyle(.grouped)` the row proposes a `nil` width to its content, so
+/// a bare Text — or an `HStack { Text; Spacer }` — sizes to its ideal width
+/// and wraps at roughly half the section. Pinning `maxWidth: .infinity`
+/// claims the actual row width; `.fixedSize(vertical:)` then lets it grow
+/// vertically to fit the wrapped lines.
 private struct SectionFootnote: View {
     private let text: LocalizedStringKey
     init(_ text: LocalizedStringKey) { self.text = text }
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
