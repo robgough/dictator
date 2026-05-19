@@ -14,7 +14,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    # macos-26 is required so the runner has Xcode 17 + the macOS 26 SDK —
+    # FoundationModels (used by AppleFoundationLLMService) only ships with the
+    # 26 SDK, and the project's MACOSX_DEPLOYMENT_TARGET is 26.0. Older runner
+    # labels (macos-15 etc.) ship an Xcode whose SDK caps at macOS 15.5 and
+    # the build fails with "no such module 'FoundationModels'".
+    runs-on: macos-26
     env:
       # ─── Required at build/sign time ──────────────────────────────────
       APPLE_TEAM_ID:           ${{ secrets.APPLE_TEAM_ID }}
