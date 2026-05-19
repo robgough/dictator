@@ -948,8 +948,13 @@ private struct InputPane: View {
                     Text("Priority order")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    let connectedCount = manager.knownDevices.filter { manager.isConnected($0.uid) }.count
-                    Text("\(connectedCount) of \(manager.knownDevices.count) connected")
+                    // Real devices only — the System default sentinel is
+                    // always "connected" by design, but counting it would
+                    // make the ratio confusing ("3 of 3 connected" when the
+                    // user has 2 real mics plugged in).
+                    let realDevices = manager.knownDevices.filter { !$0.isSystemDefault }
+                    let connectedCount = realDevices.filter { manager.isConnected($0.uid) }.count
+                    Text("\(connectedCount) of \(realDevices.count) connected")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -974,9 +979,19 @@ private struct InputPane: View {
                             .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 1)
                     )
                 } else {
+                    // Anything ranked below "System default" never wins —
+                    // the sentinel always counts as connected. Visually
+                    // dim those rows so the user can see at a glance that
+                    // they're effectively dead in the running order.
+                    let sentinelIndex = manager.knownDevices.firstIndex(where: { $0.isSystemDefault }) ?? manager.knownDevices.count
+                    let unreachableUIDs = Set(manager.knownDevices.dropFirst(sentinelIndex + 1).map(\.uid))
                     List {
                         ForEach(manager.knownDevices) { device in
-                            DeviceRow(device: device, connected: manager.isConnected(device.uid)) {
+                            DeviceRow(
+                                device: device,
+                                connected: manager.isConnected(device.uid),
+                                isUnreachable: unreachableUIDs.contains(device.uid)
+                            ) {
                                 manager.forget(uid: device.uid)
                             }
                             .listRowSeparator(.visible)
@@ -1117,6 +1132,11 @@ private struct ActiveDeviceCard: View {
 private struct DeviceRow: View {
     let device: AudioDevice
     let connected: Bool
+    /// Ranked below the System default sentinel, so it would never be
+    /// chosen — the sentinel always counts as connected and short-circuits
+    /// the priority walk. Rendered dimmed so the user can spot it at a
+    /// glance and drag it above the sentinel if they want it to matter.
+    let isUnreachable: Bool
     let forget: () -> Void
 
     @State private var hovering = false
@@ -1128,30 +1148,42 @@ private struct DeviceRow: View {
                 Text(device.name)
                     .font(.system(size: 13, weight: .medium))
                 HStack(spacing: 6) {
-                    if let manufacturer = device.manufacturer, !manufacturer.isEmpty, manufacturer != "Apple" {
-                        Text(manufacturer)
-                        Text("·")
-                            .foregroundStyle(.tertiary)
+                    if isUnreachable {
+                        Text("Below System default — never used")
+                    } else if device.isSystemDefault {
+                        Text("Follows the macOS Sound preferences")
+                    } else {
+                        if let manufacturer = device.manufacturer, !manufacturer.isEmpty, manufacturer != "Apple" {
+                            Text(manufacturer)
+                            Text("·")
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(connected ? "Connected" : "Last seen \(Self.relative(device.lastSeen))")
                     }
-                    Text(connected ? "Connected" : "Last seen \(Self.relative(device.lastSeen))")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                forget()
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(hovering ? Color.red.opacity(0.85) : .secondary)
-                    .font(.system(size: 16))
+            // The System default sentinel is structural — there's no
+            // meaningful "forget" action, so the button just disappears
+            // for that row.
+            if !device.isSystemDefault {
+                Button {
+                    forget()
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(hovering ? Color.red.opacity(0.85) : .secondary)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.borderless)
+                .help("Forget this device")
+                .onHover { hovering = $0 }
             }
-            .buttonStyle(.borderless)
-            .help("Forget this device")
-            .onHover { hovering = $0 }
         }
         .padding(.vertical, 6)
+        .opacity(isUnreachable ? 0.45 : 1)
     }
 
     private static func relative(_ date: Date) -> String {

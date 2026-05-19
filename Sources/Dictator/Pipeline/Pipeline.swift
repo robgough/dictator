@@ -227,6 +227,7 @@ final class Pipeline {
         // init); the HUD shows "Connecting" with the active device name for
         // the duration.
         state = .warmingUp(isAssistant: false)
+        if settings.playSounds { SoundEffects.shared.playArm() }
         recorder.start()
     }
 
@@ -620,6 +621,7 @@ final class Pipeline {
                 // stall the assistant flow. handleRecorderReady promotes
                 // `.warmingUp(isAssistant: true)` to `.recording(...)`.
                 state = .warmingUp(isAssistant: true)
+                if settings.playSounds { SoundEffects.shared.playArm() }
                 recorder.start()
             } catch SelectionGrabber.GrabError.noAccessibility {
                 // If the user released during the failed grab, drop the

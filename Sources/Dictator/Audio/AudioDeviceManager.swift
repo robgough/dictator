@@ -34,6 +34,8 @@ final class AudioDeviceManager {
 
     /// Re-scan the hardware. Merges any newly-seen device into `knownDevices`
     /// (appended to the end, so user-ordered devices stay where they are).
+    /// Always ensures the synthetic "System default" entry is present so the
+    /// user can rank it against real hardware.
     func refresh() {
         let connected = AudioDeviceEnumerator.listInputDevices()
         connectedDevices = connected
@@ -49,37 +51,62 @@ final class AudioDeviceManager {
                 merged.append(AudioDevice(uid: c.uid, name: c.name, manufacturer: c.manufacturer, lastSeen: now))
             }
         }
+        if !merged.contains(where: { $0.isSystemDefault }) {
+            merged.append(AudioDevice.systemDefault)
+        }
         if merged != knownDevices {
             knownDevices = merged
             persist()
         }
     }
 
+    /// True when the given UID is currently plugged in. The synthetic
+    /// "System default" entry is always treated as connected — there is
+    /// always a system default input (even if it's the built-in mic).
     func isConnected(_ uid: String) -> Bool {
-        connectedDevices.contains(where: { $0.uid == uid })
+        if uid == AudioDevice.systemDefaultUID { return true }
+        return connectedDevices.contains(where: { $0.uid == uid })
     }
 
-    /// The first known device that is currently connected. If the user has no
-    /// preference list (fresh install with no connect events yet), returns nil
-    /// and the caller should fall back to the system default.
+    /// The first known device that is currently connected. With the
+    /// always-present "System default" sentinel this is non-nil whenever
+    /// the list isn't empty — anything ranked below the sentinel is
+    /// effectively unreachable.
     func preferredConnectedDevice() -> AudioDevice? {
         knownDevices.first(where: { isConnected($0.uid) })
     }
 
-    /// Resolves the preferred device to a live `AudioDeviceID`. Falls back to
-    /// the system default input. Returns nil if even that doesn't exist.
+    /// Resolves the preferred device to a live `AudioDeviceID`. If the
+    /// "System default" sentinel wins, defers to whatever input macOS is
+    /// currently configured to use. Returns nil if even that doesn't exist.
     func activeInputDeviceID() -> AudioDeviceID? {
-        if let pref = preferredConnectedDevice(),
-           let id = AudioDeviceEnumerator.deviceID(forUID: pref.uid) {
-            return id
+        guard let pref = preferredConnectedDevice() else {
+            return AudioDeviceEnumerator.systemDefaultInputDeviceID()
         }
-        return AudioDeviceEnumerator.systemDefaultInputDeviceID()
+        if pref.isSystemDefault {
+            return AudioDeviceEnumerator.systemDefaultInputDeviceID()
+        }
+        return AudioDeviceEnumerator.deviceID(forUID: pref.uid)
+            ?? AudioDeviceEnumerator.systemDefaultInputDeviceID()
     }
 
-    /// Display name for the device currently in use (or "System default").
+    /// Display name for the device currently in use. When the System default
+    /// sentinel wins we resolve through to whatever mic macOS is actually
+    /// using right now (e.g. "MacBook Pro Microphone"), so the HUD / active-
+    /// device card always tells the user *which* physical mic is live —
+    /// "System default" alone leaves them guessing.
     func activeInputDeviceName() -> String {
-        if let pref = preferredConnectedDevice() { return pref.name }
-        return "System default"
+        guard let pref = preferredConnectedDevice() else {
+            return AudioDevice.systemDefault.name
+        }
+        if pref.isSystemDefault {
+            if let id = AudioDeviceEnumerator.systemDefaultInputDeviceID(),
+               let name = AudioDeviceEnumerator.name(forDeviceID: id) {
+                return name
+            }
+            return AudioDevice.systemDefault.name
+        }
+        return pref.name
     }
 
     /// Whether the currently-active input is a Bluetooth device. Bluetooth
@@ -99,6 +126,11 @@ final class AudioDeviceManager {
     }
 
     func forget(uid: String) {
+        // The "System default" sentinel is structural — refuse to drop it
+        // so the user can't accidentally remove their fallback option. The
+        // UI hides the forget button on this row already, but belt-and-
+        // braces in case something else calls in.
+        guard uid != AudioDevice.systemDefaultUID else { return }
         knownDevices.removeAll(where: { $0.uid == uid })
         persist()
     }
@@ -109,12 +141,23 @@ final class AudioDeviceManager {
         guard
             let data = UserDefaults.standard.data(forKey: Self.storageKey),
             let decoded = try? JSONDecoder().decode([AudioDevice].self, from: data)
-        else { return }
+        else {
+            // First launch (or wiped settings): seed with just the System
+            // default sentinel so the priority list is never empty.
+            knownDevices = [AudioDevice.systemDefault]
+            return
+        }
         // Earlier versions persisted CoreAudio's transient private-aggregate shims
         // (one new UID per session). Sweep them out so the user sees a clean list.
-        let cleaned = decoded.filter { !AudioDeviceEnumerator.looksLikePrivateAggregate(name: $0.name, uid: $0.uid) }
+        var cleaned = decoded.filter { !AudioDeviceEnumerator.looksLikePrivateAggregate(name: $0.name, uid: $0.uid) }
+        // Pre-existing users won't have the sentinel persisted yet. Append it
+        // at the bottom so behaviour matches before the upgrade — real devices
+        // win first; system default only kicks in when none are connected.
+        if !cleaned.contains(where: { $0.isSystemDefault }) {
+            cleaned.append(AudioDevice.systemDefault)
+        }
         knownDevices = cleaned
-        if cleaned.count != decoded.count {
+        if cleaned != decoded {
             persist()
         }
     }

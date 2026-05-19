@@ -27,6 +27,13 @@ enum AudioDeviceEnumerator {
         name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("CADefaultDeviceAggregate")
     }
 
+    /// Reads the device's display name. Used when we already have an
+    /// `AudioDeviceID` in hand and want to label it (e.g. resolving the
+    /// system default input back to "MacBook Pro Microphone" for the HUD).
+    static func name(forDeviceID id: AudioDeviceID) -> String? {
+        stringProperty(deviceID: id, selector: kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal)
+    }
+
     /// Resolves a `kAudioDevicePropertyDeviceUID` string to its current `AudioDeviceID`.
     /// Returns nil when the device is not currently connected.
     static func deviceID(forUID uid: String) -> AudioDeviceID? {

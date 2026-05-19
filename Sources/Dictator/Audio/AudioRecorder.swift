@@ -76,7 +76,8 @@ final class AudioRecorder {
         startEngineAsync(
             deviceOverride: AudioDeviceManager.shared.activeInputDeviceID(),
             allowDefaultFallback: true,
-            generation: startGeneration
+            generation: startGeneration,
+            timeoutSeconds: 10
         )
     }
 
@@ -92,7 +93,8 @@ final class AudioRecorder {
     private func startEngineAsync(
         deviceOverride: AudioDeviceID?,
         allowDefaultFallback: Bool,
-        generation: Int
+        generation: Int,
+        timeoutSeconds: Double
     ) {
         // The tap closure is constructed on main but invoked on the
         // realtime audio thread, hence @Sendable. format: nil is also
@@ -129,6 +131,33 @@ final class AudioRecorder {
 
             await self?.completeStart(newEngine: newEngine, generation: generation)
         }
+
+        // Warmup watchdog. CoreAudio occasionally blocks indefinitely on USB
+        // device negotiation — a Yeti / similar mic claimed exclusively by
+        // another app, a device in power-state limbo, or coreaudiod stuck
+        // after a recent input swap. Without this we'd sit in .warmingUp
+        // forever (engine.start() never returns → completeStart never runs).
+        // After timeoutSeconds we treat the in-flight attempt as failed and
+        // route through handleStartFailure, which will retry against the
+        // system default if allowed, otherwise surface the error.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(timeoutSeconds))
+            guard let self else { return }
+            guard self.startInFlight, generation == self.startGeneration else { return }
+            let device = AudioDeviceManager.shared.activeInputDeviceName()
+            let err = NSError(
+                domain: "Dictator",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "\(device) didn't respond. Another app may be using it — try a different input in Settings."
+                ]
+            )
+            self.handleStartFailure(
+                error: err,
+                allowDefaultFallback: allowDefaultFallback,
+                generation: generation
+            )
+        }
     }
 
     /// Main-actor completion handler for a successful off-main start.
@@ -162,12 +191,18 @@ final class AudioRecorder {
     ) {
         guard generation == startGeneration else { return }
         if allowDefaultFallback {
-            // Mirror the previous sync recovery: a -10868 (format-mismatch)
-            // on a device override often clears against the system default.
+            // Bump the generation so any still-pending detached task from
+            // the failed attempt becomes stale on completion (matters when
+            // the watchdog routed us here — the original engine.start() may
+            // still be blocked deep in CoreAudio). Then retry against the
+            // system default with a tighter watchdog; if that hangs too,
+            // there's nothing we can do but tell the user.
+            startGeneration &+= 1
             startEngineAsync(
                 deviceOverride: nil,
                 allowDefaultFallback: false,
-                generation: generation
+                generation: startGeneration,
+                timeoutSeconds: 4
             )
         } else {
             startInFlight = false
@@ -223,7 +258,8 @@ final class AudioRecorder {
         startEngineAsync(
             deviceOverride: nil,
             allowDefaultFallback: false,
-            generation: startGeneration
+            generation: startGeneration,
+            timeoutSeconds: 10
         )
     }
 
