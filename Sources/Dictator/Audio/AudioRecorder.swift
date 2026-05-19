@@ -1,80 +1,123 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
-import CoreAudio
+import CoreMedia
 
 private final class MutableFlag: @unchecked Sendable {
     var value: Bool = false
 }
 
+/// Thin NSObject shim that bridges AVCaptureAudioDataOutput's
+/// Objective-C delegate protocol to a Swift closure. Lets `AudioRecorder`
+/// stay a plain `final class` rather than inheriting NSObject just to
+/// adopt one delegate method. Marked `@unchecked Sendable` because the
+/// AVCapture machinery only invokes the delegate from its configured
+/// queue; the closure handles the actor hop itself.
+private final class SampleBufferForwarder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
+    private let handler: @Sendable (CMSampleBuffer) -> Void
+
+    init(handler: @escaping @Sendable (CMSampleBuffer) -> Void) {
+        self.handler = handler
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        handler(sampleBuffer)
+    }
+}
+
+/// Microphone capture, built on AVCaptureSession.
+///
+/// Why AVCaptureSession and not AVAudioEngine? Capture-only workloads sit
+/// awkwardly inside AVAudioEngine's audio-graph model — every recording
+/// pays for the graph machinery (AUHAL device-property overrides, tap
+/// format propagation, ConfigurationChange rebuilds) without using it.
+/// In practice that machinery is *also* the source of most of the
+/// flakiness we see: USB devices that share clock with the output (Yeti,
+/// audio interfaces) get silently knocked into stale formats when system
+/// audio output changes, and the engine's catch-all ConfigurationChange
+/// notification doesn't always fire for those subtle clock shifts.
+///
+/// AVCaptureSession is the AVFoundation media-capture stack — same one
+/// Apple's speech-recognition samples and most macOS recording apps use.
+/// It's designed around "this device → give me samples; handle
+/// reconfiguration internally", with dedicated notifications for runtime
+/// errors and device disconnects, and an explicit
+/// beginConfiguration/commitConfiguration model for hot-swaps. We get a
+/// stream of `CMSampleBuffer`s on a delegate queue; everything else (mono
+/// downmix, level metering, 16 kHz resample for WhisperKit) is ours.
 @MainActor
 final class AudioRecorder {
-    // Recreated on every `start()`. Reusing the same instance after a device
-    // override on macOS can leave the AUHAL in a state where `start()` returns
-    // -10868 (kAudioUnitErr_FormatNotSupported). A fresh engine is the cleanest
-    // workaround.
-    private var engine = AVAudioEngine()
-    private let targetFormat: AVAudioFormat
-    private var rawBuffer: [Float] = []        // mono, at native sample rate
-    private var nativeSampleRate: Double = 0   // populated from the first tap buffer
+    private let targetSampleRate: Double = 16_000
+    private var rawBuffer: [Float] = []         // mono, at native sample rate
+    private var nativeSampleRate: Double = 0    // populated from the first CMSampleBuffer
     private var running = false
-    private var configChangeObserver: NSObjectProtocol?
+    private var startInFlight = false
 
-    /// Generation counter so that a Bluetooth start still in HFP negotiation
-    /// when the user releases the hotkey doesn't end up adopting its engine
-    /// after we've already returned to .idle. Bumped by `start`, `stop`, and
-    /// `cancelStart`.
+    /// Generation counter so a Bluetooth start still in HFP negotiation
+    /// when the user releases the hotkey doesn't end up adopting its
+    /// session after we've already returned to .idle. Bumped by `start`,
+    /// `stop`, `cancelStart`, and on each retry path inside
+    /// `handleStartFailure`.
     private var startGeneration: Int = 0
-    /// True between `start()` returning and the engine actually producing
-    /// audio. Caller checks via `onReady`; we use it internally to dedupe
-    /// overlapping starts.
-    private var startInFlight: Bool = false
+
+    /// The live session, set once `adoptSession` accepts a started session
+    /// from the off-main setup task. Nil between `stop()` and the next
+    /// successful start.
+    private var session: AVCaptureSession?
+    /// Strong reference to the delegate object — AVCaptureAudioDataOutput
+    /// only weakly retains it.
+    private var sampleForwarder: SampleBufferForwarder?
+    /// Notification observers tied to the live session's lifecycle.
+    private var observers: [NSObjectProtocol] = []
+    /// Dedicated dispatch queue the capture output delivers buffers on.
+    /// Reused across recordings.
+    private let outputQueue = DispatchQueue(label: "Dictator.AudioRecorder.output", qos: .userInitiated)
+
+    /// Most-recent time a CMSampleBuffer made it back to the main actor.
+    /// The silent-capture watchdog uses this to spot the rare case where
+    /// AVCaptureSession.startRunning() returns but no audio actually
+    /// flows (device claimed exclusively by another app, BT device whose
+    /// HFP negotiation half-failed, etc.).
+    private var lastBufferTime: Date?
+    private var silentCaptureTask: Task<Void, Never>?
 
     /// 0...1 RMS reported on the main actor.
     var onLevel: (@MainActor (Float) -> Void)?
 
-    /// Called once the engine is genuinely running and the tap is installed.
-    /// On Bluetooth mics this can fire 2–5 s after `start()` returns —
-    /// callers should reflect a "warming up" state in their UI until this
-    /// fires.
+    /// Fired once the capture session is genuinely producing audio. On
+    /// Bluetooth mics this can be 2–5 s after `start()` returns —
+    /// callers should reflect "warming up" in their UI until then.
     var onReady: (@MainActor () -> Void)?
 
-    /// Called if engine startup fails outright (mic permission denied at
-    /// driver level, no input device available, etc.). The recorder is left
-    /// in a stopped state; caller should surface the error and reset.
+    /// Fired if session startup fails outright (mic permission denied at
+    /// the OS level, the chosen device couldn't be added to the session,
+    /// no input device at all, or the warm-up / silent-capture watchdog
+    /// gave up). The recorder is left in a stopped state.
     var onStartFailed: (@MainActor (Error) -> Void)?
 
-    /// Called if the audio engine configuration changes while recording (e.g. the
-    /// chosen input device was disconnected). The recorder stops itself first.
+    /// Fired if capture is lost while running — runtime error from
+    /// CoreAudio, the active input device was disconnected, or session
+    /// was interrupted. The recorder stops itself first.
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
-    init() {
-        targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        )!
-    }
+    init() {}
 
-    /// Kick off engine startup. Returns immediately — actual engine setup
-    /// runs off-main because two of its steps (`setInputDevice` and
-    /// `engine.start()`) can block for seconds on Bluetooth mics while
-    /// macOS negotiates the HFP profile. The caller is notified of
-    /// completion via `onReady` (success) or `onStartFailed` (failure),
-    /// both fired on the main actor.
-    ///
-    /// Previously this method was throwing-synchronous, which beach-balled
-    /// the main thread (and the HUD) on every dictation press whenever the
-    /// active input was a BT device.
+    /// Kick off session startup. Returns immediately — the AVCaptureSession
+    /// build and `startRunning()` call both run off-main because the latter
+    /// can block for seconds on Bluetooth devices while macOS negotiates HFP.
+    /// Caller is notified via `onReady` (success) or `onStartFailed`
+    /// (failure), both on the main actor.
     func start() {
         guard !running, !startInFlight else { return }
         rawBuffer.removeAll(keepingCapacity: true)
+        nativeSampleRate = 0
+        lastBufferTime = nil
 
         startInFlight = true
         startGeneration &+= 1
-        startEngineAsync(
-            deviceOverride: AudioDeviceManager.shared.activeInputDeviceID(),
+        let device = Self.resolveCaptureDevice()
+        startSessionAsync(
+            device: device,
             allowDefaultFallback: true,
             generation: startGeneration,
             timeoutSeconds: 10
@@ -82,44 +125,121 @@ final class AudioRecorder {
     }
 
     /// Abort an in-flight startup. The async setup task still runs to
-    /// completion (we can't preempt CoreAudio profile negotiation), but its
-    /// completion handler discards the engine instead of adopting it. Safe
-    /// to call when no startup is in flight.
+    /// completion (we can't preempt CoreAudio negotiation), but its
+    /// completion handler discards the session instead of adopting it.
+    /// Safe to call when no startup is in flight.
     func cancelStart() {
         startGeneration &+= 1
         startInFlight = false
     }
 
-    private func startEngineAsync(
-        deviceOverride: AudioDeviceID?,
+    /// Stop capture and return 16 kHz mono Float32 samples ready for
+    /// WhisperKit. All sample-rate conversion happens here on the main
+    /// actor, off the capture queue. Safe to call multiple times; later
+    /// calls return an empty array.
+    func stop() -> [Float] {
+        startGeneration &+= 1
+        startInFlight = false
+        if running {
+            teardownSession()
+            running = false
+        }
+        silentCaptureTask?.cancel()
+        silentCaptureTask = nil
+
+        let nativeSamples = rawBuffer
+        let rate = nativeSampleRate
+        rawBuffer.removeAll(keepingCapacity: false)
+
+        guard rate > 0 else { return nativeSamples }
+        return Self.resampleToTarget(monoSamples: nativeSamples, fromSampleRate: rate, toSampleRate: targetSampleRate)
+            ?? nativeSamples
+    }
+
+    // MARK: - Setup pipeline
+
+    private func startSessionAsync(
+        device: AVCaptureDevice?,
         allowDefaultFallback: Bool,
         generation: Int,
         timeoutSeconds: Double
     ) {
-        // The tap closure is constructed on main but invoked on the
-        // realtime audio thread, hence @Sendable. format: nil is also
-        // load-bearing — see the long comment in the original sync impl.
-        let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { [weak self] pcm, _ in
-            let rate = pcm.format.sampleRate
-            guard let (mono, level) = Self.monoMixWithLevel(pcm: pcm) else { return }
-            Task { @MainActor [weak self, mono, level, rate] in
-                self?.rawBuffer.append(contentsOf: mono)
-                self?.nativeSampleRate = rate
-                self?.onLevel?(level)
-            }
+        guard let device else {
+            startInFlight = false
+            onStartFailed?(NSError(
+                domain: "Dictator",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No microphone available."]
+            ))
+            return
         }
 
+        // Forwarder closes over `generation` so any samples it delivers
+        // are tagged with the start they came from. If the user cancels or
+        // we retry, samples from the stale generation get dropped on main.
+        let capturedGeneration = generation
+        let forwarder = SampleBufferForwarder { [weak self] sampleBuffer in
+            guard let processed = Self.processSampleBuffer(sampleBuffer) else { return }
+            Task { @MainActor [weak self, processed, capturedGeneration] in
+                guard let self else { return }
+                guard self.startGeneration == capturedGeneration else { return }
+                self.appendSamples(
+                    mono: processed.mono,
+                    level: processed.level,
+                    sampleRate: processed.sampleRate
+                )
+            }
+        }
+        let queue = outputQueue
+
         Task.detached(priority: .userInitiated) { [weak self] in
-            let newEngine = AVAudioEngine()
+            let session = AVCaptureSession()
+            session.beginConfiguration()
+
             do {
-                if let id = deviceOverride {
-                    try? Self.setInputDevice(id, on: newEngine)
+                let input = try AVCaptureDeviceInput(device: device)
+                guard session.canAddInput(input) else {
+                    session.commitConfiguration()
+                    throw NSError(
+                        domain: "Dictator",
+                        code: -2,
+                        userInfo: [NSLocalizedDescriptionKey: "Couldn't attach \(device.localizedName) to the capture session."]
+                    )
                 }
-                let input = newEngine.inputNode
-                input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
-                newEngine.prepare()
-                try newEngine.start()
+                session.addInput(input)
+
+                let output = AVCaptureAudioDataOutput()
+                // Interleaved Float32 PCM keeps the per-buffer extraction
+                // simple — one CMBlockBuffer, samples laid out frame-by-
+                // frame with channels grouped. Sample rate and channel
+                // count are left to the device; we downmix and resample
+                // ourselves at stop time so the device can use whatever
+                // it likes natively (usually 44.1 / 48 / 96 kHz).
+                output.audioSettings = [
+                    AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                    AVLinearPCMBitDepthKey: 32,
+                    AVLinearPCMIsFloatKey: true,
+                    AVLinearPCMIsNonInterleaved: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                ]
+                output.setSampleBufferDelegate(forwarder, queue: queue)
+                guard session.canAddOutput(output) else {
+                    session.commitConfiguration()
+                    throw NSError(
+                        domain: "Dictator",
+                        code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Couldn't attach the audio output to the capture session."]
+                    )
+                }
+                session.addOutput(output)
+
+                session.commitConfiguration()
+                // startRunning blocks until the session is producing
+                // samples. On BT this includes HFP profile negotiation;
+                // on USB it's near-instant unless the device is held by
+                // another app — that case is what the watchdog below
+                // catches.
+                session.startRunning()
             } catch {
                 await self?.handleStartFailure(
                     error: error,
@@ -129,27 +249,27 @@ final class AudioRecorder {
                 return
             }
 
-            await self?.completeStart(newEngine: newEngine, generation: generation)
+            await self?.adoptSession(
+                session: session,
+                forwarder: forwarder,
+                generation: generation
+            )
         }
 
-        // Warmup watchdog. CoreAudio occasionally blocks indefinitely on USB
-        // device negotiation — a Yeti / similar mic claimed exclusively by
-        // another app, a device in power-state limbo, or coreaudiod stuck
-        // after a recent input swap. Without this we'd sit in .warmingUp
-        // forever (engine.start() never returns → completeStart never runs).
-        // After timeoutSeconds we treat the in-flight attempt as failed and
-        // route through handleStartFailure, which will retry against the
-        // system default if allowed, otherwise surface the error.
+        // Warmup watchdog. CoreAudio occasionally blocks indefinitely
+        // inside startRunning — USB device claimed exclusively by another
+        // app, device in power-state limbo, coreaudiod stuck after a
+        // recent input swap. After `timeoutSeconds` of no progress treat
+        // the in-flight attempt as failed.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(timeoutSeconds))
             guard let self else { return }
             guard self.startInFlight, generation == self.startGeneration else { return }
-            let device = AudioDeviceManager.shared.activeInputDeviceName()
             let err = NSError(
                 domain: "Dictator",
                 code: -1,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "\(device) didn't respond. Another app may be using it — try a different input in Settings."
+                    NSLocalizedDescriptionKey: "\(device.localizedName) didn't respond. Another app may be using it — try a different input in Settings."
                 ]
             )
             self.handleStartFailure(
@@ -160,27 +280,25 @@ final class AudioRecorder {
         }
     }
 
-    /// Main-actor completion handler for a successful off-main start.
-    private func completeStart(newEngine: AVAudioEngine, generation: Int) {
+    /// Main-actor completion handler for a successful off-main setup. If
+    /// the generation no longer matches, the user released the hotkey
+    /// while we were warming up — drop the session rather than firing
+    /// `onReady`.
+    private func adoptSession(
+        session newSession: AVCaptureSession,
+        forwarder: SampleBufferForwarder,
+        generation: Int
+    ) {
         guard generation == startGeneration else {
-            // User released the hotkey while we were still warming up.
-            // Drop this engine — onReady would now be wrong to fire.
-            newEngine.stop()
+            stopSessionAsync(newSession)
             return
         }
-        nativeSampleRate = 0
-        engine = newEngine
-        configChangeObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.handleConfigurationChange()
-            }
-        }
+        session = newSession
+        sampleForwarder = forwarder
+        installObservers(for: newSession)
         running = true
         startInFlight = false
+        startSilentCaptureWatchdog()
         onReady?()
     }
 
@@ -191,15 +309,15 @@ final class AudioRecorder {
     ) {
         guard generation == startGeneration else { return }
         if allowDefaultFallback {
-            // Bump the generation so any still-pending detached task from
-            // the failed attempt becomes stale on completion (matters when
-            // the watchdog routed us here — the original engine.start() may
+            // Bump the generation so any still-pending detached task
+            // becomes stale on completion (matters when the warmup
+            // watchdog routed us here — the original startRunning() may
             // still be blocked deep in CoreAudio). Then retry against the
             // system default with a tighter watchdog; if that hangs too,
             // there's nothing we can do but tell the user.
             startGeneration &+= 1
-            startEngineAsync(
-                deviceOverride: nil,
+            startSessionAsync(
+                device: AVCaptureDevice.default(for: .audio),
                 allowDefaultFallback: false,
                 generation: startGeneration,
                 timeoutSeconds: 4
@@ -210,151 +328,212 @@ final class AudioRecorder {
         }
     }
 
-    /// Remove the configuration-change observer and clear our tap so that any
-    /// queued duplicate notification is a no-op.
-    private func tearDownObservers() {
-        engine.inputNode.removeTap(onBus: 0)
-        if let configChangeObserver {
-            NotificationCenter.default.removeObserver(configChangeObserver)
-            self.configChangeObserver = nil
-        }
+    // MARK: - Runtime observation
+
+    private func installObservers(for session: AVCaptureSession) {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] note in
+            // Extract Sendable values from the Notification before crossing
+            // into MainActor.assumeIsolated — Notification itself isn't
+            // Sendable so Swift 6 won't let us reference it from inside.
+            let detail = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription
+                ?? "unknown error"
+            MainActor.assumeIsolated {
+                self?.handleUnexpectedStop("Audio capture failed: \(detail).")
+            }
+        })
+        observers.append(center.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let device = note.object as? AVCaptureDevice
+            let uniqueID = device?.uniqueID
+            let localizedName = device?.localizedName ?? "Microphone"
+            MainActor.assumeIsolated {
+                guard let self, let uniqueID else { return }
+                guard self.running else { return }
+                let inputDevices = (self.session?.inputs.compactMap { ($0 as? AVCaptureDeviceInput)?.device }) ?? []
+                guard inputDevices.contains(where: { $0.uniqueID == uniqueID }) else { return }
+                self.handleUnexpectedStop("\(localizedName) was disconnected.")
+            }
+        })
+        observers.append(center.addObserver(
+            forName: AVCaptureSession.wasInterruptedNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleUnexpectedStop("Audio capture was interrupted.")
+            }
+        })
     }
 
-    private func handleConfigurationChange() {
+    private func teardownObservers() {
+        let center = NotificationCenter.default
+        for o in observers { center.removeObserver(o) }
+        observers.removeAll()
+    }
+
+    private func teardownSession() {
+        teardownObservers()
+        silentCaptureTask?.cancel()
+        silentCaptureTask = nil
+        if let s = session {
+            stopSessionAsync(s)
+        }
+        session = nil
+        sampleForwarder = nil
+    }
+
+    /// `stopRunning()` can block briefly when tearing down a Bluetooth
+    /// session (un-engaging HFP). Move it off-main so it doesn't beach-
+    /// ball the UI during a stop. Capture the session by value into the
+    /// detached task — once we've stopped tracking it on the main actor
+    /// it's safe to let the task own it for the brief stop window.
+    private nonisolated func stopSessionAsync(_ session: AVCaptureSession) {
+        Task.detached { session.stopRunning() }
+    }
+
+    private func handleUnexpectedStop(_ message: String) {
         guard running else { return }
-        // Tear down before re-configuring so any follow-up notification while
-        // we're swapping is a no-op.
-        tearDownObservers()
-        engine.stop()
+        teardownSession()
         running = false
+        onUnexpectedStop?(message)
+    }
 
-        // The macOS audio path fires this notification whenever the active
-        // input changes (USB / Bluetooth mic unplugged, AirPods connect, hub
-        // power cycle, …). Restart on whatever input is active now so the
-        // user can keep dictating uninterrupted.
-        //
-        // Any audio captured before the swap is discarded — the old and new
-        // devices typically sample at different rates and our buffer assumes
-        // a single native rate per recording.
-        rawBuffer.removeAll(keepingCapacity: true)
-        nativeSampleRate = 0
+    // MARK: - Silent-capture watchdog
 
-        // Route through the async path. If the swap is to a Bluetooth
-        // device the user may see a brief gap while HFP comes up — that's
-        // strictly better than beach-balling mid-dictation. If the restart
-        // ultimately fails, `onStartFailed` will fire and we forward it as
-        // an unexpected stop.
-        let priorOnStartFailed = onStartFailed
-        onStartFailed = { [weak self] _ in
+    /// Belt-and-braces: AVCaptureSession.startRunning() can return having
+    /// declared itself "running" without ever producing a sample buffer
+    /// (we've seen this on USB devices that get stuck mid-init). Without
+    /// this, the user gets a Recording state with a flat waveform and no
+    /// transcript. After 1.5 s of running with no buffer delivered, treat
+    /// it as a startup failure so the pipeline can leave the recording
+    /// state cleanly.
+    private func startSilentCaptureWatchdog() {
+        silentCaptureTask?.cancel()
+        silentCaptureTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
             guard let self else { return }
-            let device = AudioDeviceManager.shared.activeInputDeviceName()
-            self.onUnexpectedStop?("Audio input changed mid-recording (now: \(device)).")
-            // Restore the original handler so the next user-initiated start
-            // surfaces its failure to the pipeline normally.
-            self.onStartFailed = priorOnStartFailed
+            guard self.running, self.lastBufferTime == nil else { return }
+            self.handleUnexpectedStop("Mic isn't producing audio. Try a different input in Settings.")
         }
-        startInFlight = true
-        startGeneration &+= 1
-        startEngineAsync(
-            deviceOverride: nil,
-            allowDefaultFallback: false,
-            generation: startGeneration,
-            timeoutSeconds: 10
+    }
+
+    // MARK: - Sample buffer ingest
+
+    private func appendSamples(mono: [Float], level: Float, sampleRate: Double) {
+        // Drop samples that arrive after teardown — outputQueue callbacks
+        // can race with stopRunning by a few milliseconds.
+        guard running || startInFlight else { return }
+        rawBuffer.append(contentsOf: mono)
+        nativeSampleRate = sampleRate
+        lastBufferTime = Date()
+        onLevel?(level)
+    }
+
+    // MARK: - Static helpers (off-main, no actor isolation)
+
+    private struct ProcessedBuffer: Sendable {
+        let mono: [Float]
+        let level: Float
+        let sampleRate: Double
+    }
+
+    private nonisolated static func processSampleBuffer(_ sampleBuffer: CMSampleBuffer) -> ProcessedBuffer? {
+        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return nil }
+        let asbd = asbdPtr.pointee
+        let sampleRate = asbd.mSampleRate
+        let channels = Int(asbd.mChannelsPerFrame)
+        guard channels > 0, sampleRate > 0 else { return nil }
+
+        let frameCount = Int(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frameCount > 0,
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
+
+        var totalLength = 0
+        var dataPointer: UnsafeMutablePointer<CChar>?
+        let status = CMBlockBufferGetDataPointer(
+            blockBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &totalLength,
+            dataPointerOut: &dataPointer
         )
-    }
+        guard status == noErr, let dataPointer else { return nil }
+        let totalFloats = totalLength / MemoryLayout<Float>.size
+        // Defensive: the CMBlockBuffer should contain exactly
+        // frameCount * channels floats. Bail rather than read garbage.
+        guard totalFloats == frameCount * channels else { return nil }
 
-    private nonisolated static func setInputDevice(_ deviceID: AudioDeviceID, on engine: AVAudioEngine) throws {
-        guard let audioUnit = engine.inputNode.audioUnit else { return }
-        var device = deviceID
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &device,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        if status != noErr {
-            throw NSError(
-                domain: NSOSStatusErrorDomain,
-                code: Int(status),
-                userInfo: [NSLocalizedDescriptionKey: "Couldn't set input device (OSStatus \(status))"]
-            )
-        }
-    }
-
-    /// Stops recording and returns 16 kHz mono Float32 samples ready for WhisperKit.
-    /// All sample-rate conversion happens here on the main actor, off the audio thread.
-    func stop() -> [Float] {
-        // We can be called from finishRecording() (normal release of hotkey) OR
-        // after handleConfigurationChange() has already torn things down. Both
-        // paths must end with the buffered samples drained.
-        //
-        // Bump the generation so a startup still warming up adopts nothing.
-        startGeneration &+= 1
-        startInFlight = false
-        if running {
-            tearDownObservers()
-            engine.stop()
-            running = false
-        }
-
-        let nativeSamples = rawBuffer
-        let sampleRate = nativeSampleRate
-        rawBuffer.removeAll(keepingCapacity: false)
-
-        guard sampleRate > 0,
-              let resampled = Self.resampleToTarget(monoSamples: nativeSamples, fromSampleRate: sampleRate, to: targetFormat)
-        else { return nativeSamples } // fall back to raw if anything goes wrong
-
-        return resampled
-    }
-
-    // MARK: - Audio thread helpers (pure functions, no shared state)
-
-    /// Downmix to mono and return RMS for the meter. Runs on the audio thread, so
-    /// it must be `nonisolated` — otherwise the @MainActor class isolation propagates
-    /// and Swift's runtime executor check fires when this is invoked off-main.
-    private nonisolated static func monoMixWithLevel(pcm: AVAudioPCMBuffer) -> ([Float], Float)? {
-        guard let channelData = pcm.floatChannelData else { return nil }
-        let frameCount = Int(pcm.frameLength)
-        guard frameCount > 0 else { return ([], 0) }
-        let channels = Int(pcm.format.channelCount)
+        let floats = UnsafeRawPointer(dataPointer)
+            .assumingMemoryBound(to: Float.self)
+        let buffer = UnsafeBufferPointer(start: floats, count: totalFloats)
 
         var mono = [Float](repeating: 0, count: frameCount)
         if channels == 1 {
-            _ = mono.withUnsafeMutableBufferPointer { dst in
-                memcpy(dst.baseAddress!, channelData[0], frameCount * MemoryLayout<Float>.size)
+            mono.withUnsafeMutableBufferPointer { dst -> Void in
+                memcpy(dst.baseAddress!, buffer.baseAddress!, frameCount * MemoryLayout<Float>.size)
             }
         } else {
-            // Average all channels.
-            _ = mono.withUnsafeMutableBufferPointer { dst in
+            mono.withUnsafeMutableBufferPointer { dst -> Void in
                 let base = dst.baseAddress!
-                for i in 0..<frameCount { base[i] = 0 }
-                for ch in 0..<channels {
-                    vDSP_vadd(base, 1, channelData[ch], 1, base, 1, vDSP_Length(frameCount))
+                let invChannels = 1 / Float(channels)
+                for i in 0..<frameCount {
+                    var sum: Float = 0
+                    let frameStart = i * channels
+                    for c in 0..<channels { sum += buffer[frameStart + c] }
+                    base[i] = sum * invChannels
                 }
-                var scale = 1 / Float(channels)
-                vDSP_vsmul(base, 1, &scale, base, 1, vDSP_Length(frameCount))
             }
         }
 
         var rms: Float = 0
-        _ = mono.withUnsafeBufferPointer { ptr in
+        mono.withUnsafeBufferPointer { ptr -> Void in
             vDSP_rmsqv(ptr.baseAddress!, 1, &rms, vDSP_Length(frameCount))
         }
         let level = min(1, max(0, rms * 8))
-        return (mono, level)
+        return ProcessedBuffer(mono: mono, level: level, sampleRate: sampleRate)
     }
 
-    // MARK: - Main thread resample
-    private nonisolated static func resampleToTarget(monoSamples: [Float], fromSampleRate: Double, to target: AVAudioFormat) -> [Float]? {
-        guard !monoSamples.isEmpty else { return [] }
-        if abs(fromSampleRate - target.sampleRate) < 1 { return monoSamples }
+    /// Resolve the user's preferred input through to a live
+    /// `AVCaptureDevice`. The "System default" sentinel — and any
+    /// fall-through case — resolves to `AVCaptureDevice.default(for: .audio)`,
+    /// which is whatever macOS currently has set as the system input.
+    /// `AVCaptureDevice.uniqueID` matches CoreAudio's device UID for real
+    /// hardware, so the look-up just works.
+    private static func resolveCaptureDevice() -> AVCaptureDevice? {
+        let mgr = AudioDeviceManager.shared
+        guard let pref = mgr.preferredConnectedDevice() else {
+            return AVCaptureDevice.default(for: .audio)
+        }
+        if pref.isSystemDefault {
+            return AVCaptureDevice.default(for: .audio)
+        }
+        return AVCaptureDevice(uniqueID: pref.uid)
+            ?? AVCaptureDevice.default(for: .audio)
+    }
 
-        // Build a transient AVAudioConverter; created and used entirely on main.
+    /// Converts a mono Float32 stream at one sample rate to another via
+    /// AVAudioConverter. Used at `stop()` time to land WhisperKit's
+    /// expected 16 kHz input.
+    private nonisolated static func resampleToTarget(
+        monoSamples: [Float],
+        fromSampleRate: Double,
+        toSampleRate: Double
+    ) -> [Float]? {
+        guard !monoSamples.isEmpty else { return [] }
+        if abs(fromSampleRate - toSampleRate) < 1 { return monoSamples }
+
         guard let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: fromSampleRate, channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: sourceFormat, to: target),
+              let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: toSampleRate, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: sourceFormat, to: targetFormat),
               let inputBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(monoSamples.count))
         else { return nil }
 
@@ -365,9 +544,9 @@ final class AudioRecorder {
             }
         }
 
-        let ratio = target.sampleRate / fromSampleRate
+        let ratio = toSampleRate / fromSampleRate
         let outCap = AVAudioFrameCount(Double(monoSamples.count) * ratio + 1024)
-        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outCap) else { return nil }
+        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCap) else { return nil }
 
         var error: NSError?
         let supplied = MutableFlag()

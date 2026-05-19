@@ -929,15 +929,10 @@ private struct HistoryRow: View {
 
 private struct InputPane: View {
     @State private var manager = AudioDeviceManager.shared
-    /// Live meter for the active input. Lifecycle bound to this pane via
-    /// .onAppear / .onDisappear — runs only while the user is looking at
-    /// Input settings, so we're not holding an audio engine open in the
-    /// background.
-    @State private var monitor = InputLevelMonitor()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ActiveDeviceCard(manager: manager, monitor: monitor)
+            MicTestCard(manager: manager)
 
             if manager.activeInputIsBluetooth() {
                 BluetoothAdvisoryNote()
@@ -1010,8 +1005,6 @@ private struct InputPane: View {
                 }
             }
         }
-        .onAppear { monitor.start() }
-        .onDisappear { monitor.stop() }
     }
 }
 
@@ -1058,12 +1051,36 @@ private struct BluetoothAdvisoryNote: View {
     }
 }
 
-private struct ActiveDeviceCard: View {
+/// Card replacing the old always-on live RMS meter. The user explicitly
+/// triggers a short test recording, we capture, transcribe, and show
+/// what the active ASR engine actually heard. That answers the question
+/// the meter only hinted at ("is my mic working?") — *and* tells the
+/// user how their voice is being decoded, which is the actually-useful
+/// information when tuning models/devices.
+///
+/// Side-benefit: no continuous AVAudioEngine running while Settings is
+/// open. Previously the meter's engine fought `AudioRecorder` for the
+/// input device on single-client mics (Yeti / Bluetooth) and caused
+/// occasional hangs at hotkey press.
+private struct MicTestCard: View {
     let manager: AudioDeviceManager
-    let monitor: InputLevelMonitor
+
+    @Environment(AppState.self) private var state
+    @State private var recorder = AudioRecorder()
+    @State private var phase: Phase = .idle
+    @State private var liveLevel: Float = 0
+    @State private var lastResult: String?
+    @State private var lastError: String?
+
+    private enum Phase: Equatable {
+        case idle
+        case warmingUp
+        case recording
+        case transcribing
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1072,7 +1089,6 @@ private struct ActiveDeviceCard: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Color.accentColor)
-                        .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("ACTIVE INPUT")
@@ -1095,7 +1111,21 @@ private struct ActiveDeviceCard: View {
                 .controlSize(.regular)
             }
 
-            meterRow
+            testRow
+
+            if let result = lastResult {
+                resultBlock(result)
+            } else if let error = lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(Color.red.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Speak a sentence after pressing the button — we'll show you what the active engine transcribes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(14)
         .background(
@@ -1106,25 +1136,169 @@ private struct ActiveDeviceCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
         )
+        .onAppear { wireUpRecorder() }
+        .onDisappear {
+            // If the user navigates away mid-test, drop whatever is
+            // captured so the engine isn't stuck holding the mic.
+            recorder.cancelStart()
+            _ = recorder.stop()
+        }
     }
 
-    /// Meter row sits flush against the bottom of the card padding. Hidden
-    /// entirely if mic permission hasn't been granted — a stuck-at-zero bar
-    /// reads as broken UI even though it's accurate.
-    @ViewBuilder private var meterRow: some View {
-        if monitor.permissionDenied {
-            Text("Mic access needed to show a live level — grant it in System Settings → Privacy & Security → Microphone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else if monitor.isActive {
-            HStack(spacing: 10) {
-                Waveform(level: monitor.level)
-                Text("\(Int(monitor.level * 100))%")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .frame(width: 36, alignment: .trailing)
+    @ViewBuilder private var testRow: some View {
+        HStack(spacing: 12) {
+            Button(action: toggle) {
+                Label(buttonTitle, systemImage: buttonIcon)
+                    .frame(minWidth: 140)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(phase == .warmingUp || phase == .transcribing)
+            .keyboardShortcut(.defaultAction)
+
+            switch phase {
+            case .idle:
+                EmptyView()
+            case .warmingUp:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting microphone…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .recording:
+                Waveform(level: liveLevel)
+                    .frame(maxWidth: .infinity)
+            case .transcribing:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Transcribing with \(engineLabel)…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder private func resultBlock(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("HEARD VIA \(engineLabel.uppercased())")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.secondary)
+            }
+            Text(text)
+                .font(.system(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.accentColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private var buttonTitle: String {
+        switch phase {
+        case .idle: return lastResult == nil ? "Test microphone" : "Test again"
+        case .warmingUp: return "Connecting…"
+        case .recording: return "Stop"
+        case .transcribing: return "Transcribing…"
+        }
+    }
+
+    private var buttonIcon: String {
+        switch phase {
+        case .idle: return "mic.fill"
+        case .warmingUp: return "antenna.radiowaves.left.and.right"
+        case .recording: return "stop.fill"
+        case .transcribing: return "waveform.badge.magnifyingglass"
+        }
+    }
+
+    private var engineLabel: String {
+        switch state.settings.transcriptionEngine {
+        case .whisper: return "Whisper"
+        case .parakeet: return "Parakeet"
+        }
+    }
+
+    private func wireUpRecorder() {
+        recorder.onLevel = { level in liveLevel = level }
+        recorder.onReady = {
+            // Mic is genuinely capturing; flip from warmingUp to recording.
+            if phase == .warmingUp { phase = .recording }
+        }
+        recorder.onStartFailed = { error in
+            phase = .idle
+            lastResult = nil
+            lastError = error.localizedDescription
+        }
+        recorder.onUnexpectedStop = { msg in
+            phase = .idle
+            lastResult = nil
+            lastError = msg
+        }
+    }
+
+    private func toggle() {
+        switch phase {
+        case .idle:
+            lastResult = nil
+            lastError = nil
+            liveLevel = 0
+            phase = .warmingUp
+            recorder.start()
+        case .recording:
+            let samples = recorder.stop()
+            // Match Pipeline's threshold (< 0.5 s at 16 kHz) — anything
+            // shorter is almost certainly a misclick rather than speech.
+            guard samples.count >= 8_000 else {
+                phase = .idle
+                lastError = "Too short — speak for at least a second."
+                return
+            }
+            phase = .transcribing
+            Task { await runTranscription(samples: samples) }
+        case .warmingUp, .transcribing:
+            break
+        }
+    }
+
+    private func runTranscription(samples: [Float]) async {
+        let settings = state.settings
+        let engine: any ASREngine
+        let modelID: String
+        switch settings.transcriptionEngine {
+        case .whisper:
+            engine = TranscriptionServiceHolder.shared
+            modelID = settings.whisperModelID
+        case .parakeet:
+            engine = ParakeetServiceHolder.shared
+            modelID = settings.parakeetModelID
+        }
+        do {
+            try await engine.ensureLoaded(modelID: modelID)
+            let text = try await engine.transcribe(samples: samples, modelID: modelID)
+            lastError = nil
+            lastResult = text.isEmpty ? "(no speech detected)" : text
+            phase = .idle
+        } catch {
+            lastError = "Transcription failed: \(error.localizedDescription)"
+            lastResult = nil
+            phase = .idle
         }
     }
 }
