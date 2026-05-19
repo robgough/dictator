@@ -83,6 +83,38 @@
                 type="application/octet-stream"
                 sparkle:edSignature="25cZUiFFWTDP9knvi5akf75YYDQzz0gII2JXqUvWIZeRJeWhdgFBzIxJhfSHqg1y5yI69S6KxLqG99VNWv+eCQ==" />
         </item>
+        <item>
+            <title>Version 2026.5.6</title>
+            <pubDate>Tue, 19 May 2026 04:18:09 +0000</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>2026.5.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Added a &quot;Learn Word in Dictator…&quot; entry to the macOS Services menu — select a word in any app, right-click → Services, and a popup lets you add or update a custom-dictionary rule without opening Settings. The same action is also available from Spotlight and Shortcuts under &quot;Learn Word in Dictator&quot;.</li>
+  <li>Redesigned the Dictionary pane to handle large dictionaries: search field, alphabetical / as-entered sorting, compact single-line rows with hover-to-delete, and a help button that explains the per-rule options.</li>
+  <li>Trimmed the menu-bar Recent list from 10 entries to 5 so the popup stays compact.</li>
+  <li>Stopped the HUD&#x27;s colours from drifting as the panel floats over different apps.</li>
+  <li>Onboarding&#x27;s primary buttons no longer look disabled when macOS is set to the Graphite accent.</li>
+  <li>Formatting-LLM downloads now show smooth progress and finish as soon as the files land, instead of jumping to 100% and freezing there while the model loaded silently into RAM.</li>
+  <li>Model downloads now show &quot;Fetching metadata…&quot; for the brief Hub-lookup window before the progress bar starts filling, so a slow first response doesn&#x27;t look like a stalled download.</li>
+  <li>Fixed the HUD sometimes failing to appear when a full-screen app is active, especially on a multi-monitor setup — the HUD now anchors to the screen containing the mouse cursor instead of relying on the foreground app&#x27;s key-window screen.</li>
+  <li>Softened the start/stop/done sounds — lower pitch, smoother onset, and less harmonic edge so they feel gentler.</li>
+  <li>Added a quieter &quot;arming&quot; tone the moment a dictation or assistant hotkey is pressed, ahead of the regular start tone that fires when the mic is actually capturing. On built-in mics the two play almost together; on Bluetooth headsets that take a moment to negotiate, you now hear &quot;preparing… (pause)… go&quot; instead of wondering whether your first words made it.</li>
+  <li>&quot;Connecting microphone&quot; no longer hangs forever when the mic fails to respond. If macOS doesn&#x27;t bring the chosen input up within ~10 seconds (usually because another app is exclusively holding the device, e.g. a Yeti claimed by a video-call tab), Dictator now falls back to the system default automatically, and surfaces a clear error if that also fails — instead of leaving the HUD spinning indefinitely.</li>
+  <li>Added &quot;System default&quot; as a first-class entry in the input priority list, draggable like any other device. Rank it where you want: at the top to always follow whatever macOS is set to, lower down to act as a fallback when your usual mics aren&#x27;t connected. Existing users keep the previous behaviour — the entry is inserted at the bottom on first launch.</li>
+  <li>Replaced the always-on Input level meter in Settings → Input with a &quot;Test microphone&quot; button. Click to start, click again to stop, and Dictator shows you exactly what the active transcription engine heard. More useful than a moving bar, and Settings no longer keeps an audio engine alive in the background — which was the source of occasional hangs the first time you triggered dictation after opening Settings on single-client mics like the Yeti.</li>
+  <li>Made microphone capture much more resilient to system audio churn. Switching output devices, plugging in headphones, or another app starting playback while you were dictating could previously knock the input into a stale-format state and leave the next recording silent or stuck. The capture path now uses AVFoundation&#x27;s media-capture stack (the same one Zoom and Loom use) instead of the audio-graph one, with dedicated handlers for runtime errors and device disconnects — so recordings now also abort cleanly with a useful message if your mic vanishes mid-dictation, rather than failing silently.</li>
+  <li>Massively reduced Dictator&#x27;s memory footprint after extended use. MLX&#x27;s GPU buffer pool was uncapped and held onto every intermediate tensor across every LLM pass, so the process could drift into the tens of GB over a session even with no open conversations. The pool is now capped at 512 MB and flushed at the end of every LLM pass, so idle Dictator stays at model-weights-only rather than slowly creeping upward.</li>
+  <li>Fixed the memory readout in Settings → Models → Stats. It was reading the legacy &quot;resident set&quot; metric which misses both compressed pages and the GPU-mapped memory MLX uses for model weights, so it was reporting hundreds of MB when Activity Monitor reported tens of GB. The in-app number now matches what Activity Monitor shows.</li>
+  <li>Added a new &quot;MLX (LLM)&quot; row to Stats showing active / cached / peak GPU buffer use, so you can see at a glance how much of Dictator&#x27;s footprint is the LLM&#x27;s working set vs the model itself.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.6/Dictator.dmg"
+                length="20428560"
+                type="application/octet-stream"
+                sparkle:edSignature="EMzmaGKtp/eUHWjYT1DE/8rC5RSz6JjuEx7buoq0St9TpjtdzAm2j4HRo3z5cj5uGTqsdZKBKmxHFKJn7MgdCQ==" />
+        </item>
+    
     
     
 

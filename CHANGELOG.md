@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.5.6 — 2026-05-19
+
 - Added a "Learn Word in Dictator…" entry to the macOS Services menu — select a word in any app, right-click → Services, and a popup lets you add or update a custom-dictionary rule without opening Settings. The same action is also available from Spotlight and Shortcuts under "Learn Word in Dictator".
 - Redesigned the Dictionary pane to handle large dictionaries: search field, alphabetical / as-entered sorting, compact single-line rows with hover-to-delete, and a help button that explains the per-rule options.
 - Trimmed the menu-bar Recent list from 10 entries to 5 so the popup stays compact.
@@ -30,3 +34,4 @@ entries as plain bullet lines.
 - Massively reduced Dictator's memory footprint after extended use. MLX's GPU buffer pool was uncapped and held onto every intermediate tensor across every LLM pass, so the process could drift into the tens of GB over a session even with no open conversations. The pool is now capped at 512 MB and flushed at the end of every LLM pass, so idle Dictator stays at model-weights-only rather than slowly creeping upward.
 - Fixed the memory readout in Settings → Models → Stats. It was reading the legacy "resident set" metric which misses both compressed pages and the GPU-mapped memory MLX uses for model weights, so it was reporting hundreds of MB when Activity Monitor reported tens of GB. The in-app number now matches what Activity Monitor shows.
 - Added a new "MLX (LLM)" row to Stats showing active / cached / peak GPU buffer use, so you can see at a glance how much of Dictator's footprint is the LLM's working set vs the model itself.
+
