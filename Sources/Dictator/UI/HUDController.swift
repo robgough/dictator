@@ -94,7 +94,7 @@ final class HUDController {
     }
 
     private func show() {
-        positionPanel()
+        guard positionPanel() else { return }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
@@ -118,8 +118,10 @@ final class HUDController {
         })
     }
 
-    private func positionPanel() {
-        guard let screen = NSScreen.main else { return }
+    /// Returns false if no screen at all is resolvable, so `show()` can bail
+    /// instead of ordering the panel front at a stale (often off-screen) frame.
+    private func positionPanel() -> Bool {
+        guard let screen = activeScreen() else { return false }
         let size = NSSize(width: 460, height: 96)
         panel.setContentSize(size)
         let frame = screen.visibleFrame
@@ -128,6 +130,23 @@ final class HUDController {
             y: frame.minY + 88
         )
         panel.setFrameOrigin(origin)
+        return true
+    }
+
+    /// `NSScreen.main` is defined as "the screen containing the key window",
+    /// which is unreliable for an `.accessory` app with no key window of its
+    /// own — particularly when the foreground app is fullscreen on a
+    /// secondary display, or during space transitions, where it can return
+    /// the wrong screen or nil. The mouse cursor is the most reliable signal
+    /// of which screen the user is looking at when they hit a hotkey, so
+    /// prefer that; fall back through the rest only if cursor resolution
+    /// somehow fails.
+    private func activeScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        if let s = NSScreen.screens.first(where: { NSPointInRect(mouse, $0.frame) }) {
+            return s
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 }
 

@@ -20,3 +20,4 @@ entries as plain bullet lines.
 - Onboarding's primary buttons no longer look disabled when macOS is set to the Graphite accent.
 - Formatting-LLM downloads now show smooth progress and finish as soon as the files land, instead of jumping to 100% and freezing there while the model loaded silently into RAM.
 - Model downloads now show "Fetching metadata…" for the brief Hub-lookup window before the progress bar starts filling, so a slow first response doesn't look like a stalled download.
+- Fixed the HUD sometimes failing to appear when a full-screen app is active, especially on a multi-monitor setup — the HUD now anchors to the screen containing the mouse cursor instead of relying on the foreground app's key-window screen.
