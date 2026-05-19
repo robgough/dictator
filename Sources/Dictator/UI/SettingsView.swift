@@ -128,8 +128,8 @@ private struct AboutAuthor: View {
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 14) {
-                    Link(destination: URL(string: "https://robgough.net")!) {
-                        Label("robgough.net", systemImage: "globe")
+                    Link(destination: URL(string: "https://dictator.robgough.net")!) {
+                        Label("dictator.robgough.net", systemImage: "globe")
                     }
                     Link(destination: URL(string: "https://stayupfront.com")!) {
                         Label("stayupfront.com", systemImage: "bolt.horizontal")
