@@ -692,7 +692,7 @@
             </li>
             <li style="--stage-color: #AF52DE;">
                 <h3>Format</h3>
-                <p>A small local LLM punctuates, capitalises, and resolves spoken cues — "new line", "new paragraph", "smiley face", named emoji. Skipped entirely for question-shaped input, where the transcript is already well-punctuated.</p>
+                <p>An on-device LLM punctuates, capitalises, and tidies obvious grammar slips. Uses Apple's on-device foundation model when Apple Intelligence is enabled, or a bundled MLX checkpoint as an alternative. Spoken punctuation, line breaks, and named emojis are substituted deterministically before this pass, so they're reliable regardless of which model you pick. Skipped entirely for question-shaped input, where the transcript is already well-punctuated.</p>
                 <span class="guard"><strong>Guard:</strong> 60% of input anchor words must survive, and the word count can't grow by more than 15% + 3. Otherwise the raw transcript is used.</span>
             </li>
             <li style="--stage-color: #FF2D55;">
@@ -752,12 +752,14 @@
         </div>
 
         <h3>Language model — used for the cleanup passes and Assistant mode</h3>
+        <p>By default — when Apple Intelligence is enabled — Dictator routes its language-model passes through Apple's on-device foundation model. It's shared with Apple Intelligence (system-resident), so the in-process RAM cost is effectively zero and there's no per-app language-model download. The bundled MLX models below are an alternative if you'd rather pick a specific checkpoint, or aren't using Apple Intelligence; the RAM tiers and table on the rest of this section refer to them.</p>
         <div class="callout warn">
-            <strong>RAM matters here.</strong> Running an LLM alongside a transcription
-            model eats a real chunk of memory. The first-run setup wizard detects how
-            much RAM your Mac has and picks defaults that won't push you into swap —
-            but if you override them in Settings, the picker shows a "Fits / Tight /
-            Too large" chip per model so the cost is visible before you commit.
+            <strong>RAM matters if you pick MLX.</strong> Running an MLX language model
+            alongside the transcription model eats a real chunk of memory. The first-run
+            setup wizard detects how much RAM your Mac has and picks defaults that won't
+            push you into swap — but if you override them in Settings, the picker shows
+            a "Fits / Tight / Too large" chip per model so the cost is visible before
+            you commit.
         </div>
 
         <div class="ram-tiers">
@@ -811,10 +813,10 @@
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>RAM.</strong> 16 GB minimum — the small LLM fits comfortably alongside transcription with the OS still able to breathe. 24 GB+ for the recommended 3B model; larger models assume you have memory to spare.</li>
+                    <li><strong>RAM.</strong> With Apple's foundation model handling the LLM passes, any Apple Intelligence–capable Mac is fine. With bundled MLX models, 16 GB minimum for the 1B option; 24 GB+ for the 3B; more for the larger checkpoints.</li>
                     <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
-                    <li><strong>Ceiling.</strong> A 3B local model is not Claude. For dictation cleanup it's plenty; for genuinely hard text massaging the frontier still wins.</li>
-                    <li><strong>First run.</strong> A few GB of weights to download — typically 2.5 GB if you take the defaults.</li>
+                    <li><strong>Ceiling.</strong> Apple's foundation model and a 3B MLX model are not Claude. For dictation cleanup they're plenty; for genuinely hard text massaging the frontier still wins.</li>
+                    <li><strong>First run.</strong> The transcription model (~500 MB) downloads on first dictation. If you opt for a bundled MLX language model in place of Apple's, that's another 0.8–2 GB depending on size.</li>
                     <li><strong>Heat.</strong> Sustained inference uses the GPU and Apple Neural Engine. Your Mac will get warm under repeated use.</li>
                 </ul>
             </div>
@@ -844,10 +846,10 @@
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
             <span><strong>macOS 26</strong> or newer</span>
-            <span><strong>16 GB RAM</strong> minimum (24 GB+ for the recommended 3B model)</span>
-            <span>Roughly <strong>1–3 GB</strong> of disk for models</span>
+            <span><strong>Apple Intelligence</strong> enabled — or 16 GB+ RAM to run a bundled MLX language model instead</span>
+            <span><strong>~500 MB</strong> of disk for the transcription model</span>
         </p>
-        <p class="table-footnote">16 GB keeps the small Llama 3.2 1B resident comfortably for the cleanup passes; 24 GB+ unlocks the recommended 3B model and Assistant mode at its best.</p>
+        <p class="table-footnote">With Apple Intelligence enabled, Dictator routes its language-model passes through Apple's on-device foundation model — system-resident, shared across every app that uses the framework, so the in-process RAM cost is effectively zero. The bundled MLX models are available in Settings if you'd rather not use Apple Intelligence: the 1B option fits a 16 GB Mac comfortably, the 3B option wants 24 GB+, and there's a "Fits / Tight / Too large" chip per row so the cost is visible before you switch.</p>
     </section>
 
     <footer>
