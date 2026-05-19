@@ -114,6 +114,26 @@
                 type="application/octet-stream"
                 sparkle:edSignature="EMzmaGKtp/eUHWjYT1DE/8rC5RSz6JjuEx7buoq0St9TpjtdzAm2j4HRo3z5cj5uGTqsdZKBKmxHFKJn7MgdCQ==" />
         </item>
+        <item>
+            <title>Version 2026.5.8</title>
+            <pubDate>Tue, 19 May 2026 16:42:51 +0000</pubDate>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>2026.5.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dictator now requires macOS 26 or later. Macs on earlier macOS versions will stay on their currently installed version and won&#x27;t be offered this update.</li>
+  <li>Added the Apple Foundation Model as a new LLM engine option, alongside MLX and None. It runs Apple Intelligence&#x27;s on-device model — zero disk space, no in-process weights, shared across every app that uses the framework. New installs that have Apple Intelligence enabled get it as the default. Existing users keep their current engine (MLX or None) and can switch from Settings → Models → Formatting.</li>
+  <li>Settings → Models → Formatting now has an Engine picker at the top — Apple Foundation, MLX, or None. The model list and download cards only appear when MLX is selected; Apple Foundation shows a live availability status with a shortcut to System Settings if Apple Intelligence is off.</li>
+  <li>Spoken punctuation, line breaks, and emoji names are now substituted deterministically before any LLM pass — say &quot;comma&quot;, &quot;new paragraph&quot;, &quot;question mark&quot;, &quot;fire emoji&quot;, &quot;thumbs up emoji&quot;, and so on, and you&#x27;ll get the symbol rather than the spoken word. Works with every engine (including No LLM) and across all ~3700 standard emojis via their Unicode names plus a curated list of common synonyms (&quot;heart&quot; → ❤️, &quot;tada&quot; → 🎉, etc.). Adjacent emojis no longer get commas inserted between them by the LLM (&quot;fire emoji celebration emoji&quot; → &quot;🔥 🎉&quot; rather than &quot;🔥, 🎉&quot;). Toggle in Settings → General → Behaviour.</li>
+  <li>Fixed Settings description text wrapping at half the column width on some machines, leaving a large empty gap on the right.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.8/Dictator.dmg"
+                length="20443037"
+                type="application/octet-stream"
+                sparkle:edSignature="7oNL3JL4qTOA57+FDFcpL4oxYJaM4u/6JVyqcDW6uLuywns2WiW6AT1/AdtnHPmA5GfwRgZd7gC8IMKy9Pv7AQ==" />
+        </item>
+    
     
     
     

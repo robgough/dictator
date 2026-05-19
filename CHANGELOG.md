@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.5.8 — 2026-05-19
+
 - Dictator now requires macOS 26 or later. Macs on earlier macOS versions will stay on their currently installed version and won't be offered this update.
 - Added the Apple Foundation Model as a new LLM engine option, alongside MLX and None. It runs Apple Intelligence's on-device model — zero disk space, no in-process weights, shared across every app that uses the framework. New installs that have Apple Intelligence enabled get it as the default. Existing users keep their current engine (MLX or None) and can switch from Settings → Models → Formatting.
 - Settings → Models → Formatting now has an Engine picker at the top — Apple Foundation, MLX, or None. The model list and download cards only appear when MLX is selected; Apple Foundation shows a live availability status with a shortcut to System Settings if Apple Intelligence is off.
