@@ -22,7 +22,7 @@
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 15+.">
+    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 26+.">
     <meta property="og:locale" content="en_GB">
 
     <!-- Twitter / X -->
@@ -30,7 +30,7 @@
     <meta name="twitter:title" content="Dictator — Talk to your Mac. Not the cloud.">
     <meta name="twitter:description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
     <meta name="twitter:image" content="https://dictator.robgough.net/media/og-card.png">
-    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 15+.">
+    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 26+.">
 
     <!-- Structured data -->
     <script type="application/ld+json">
@@ -42,7 +42,7 @@
         "url": "https://dictator.robgough.net/",
         "downloadUrl": "https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg",
         "applicationCategory": "ProductivityApplication",
-        "operatingSystem": "macOS 15+",
+        "operatingSystem": "macOS 26+",
         "image": "https://dictator.robgough.net/media/og-card.png",
         "offers": {
             "@type": "Offer",
@@ -229,6 +229,20 @@
             margin-left: 14px;
             color: var(--fg-faint);
             font-size: 13px;
+        }
+        .release-row {
+            margin: 10px 0 0;
+            color: var(--fg-faint);
+            font-size: 13px;
+        }
+        .release-row a {
+            color: var(--fg-faint);
+            text-decoration: none;
+            border-bottom: 1px solid color-mix(in srgb, var(--fg-faint) 40%, transparent);
+        }
+        .release-row a:hover {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
         }
         .demo {
             margin: 56px 0 0;
@@ -636,7 +650,12 @@
         <h1>Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
         <p class="tagline">A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
         <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
-        <span class="cta-meta">Free · No account · Apple Silicon · macOS 15+</span>
+        <span class="cta-meta">Free · No account · Apple Silicon · macOS 26+</span>
+
+        <p class="release-row">
+            Latest release: <a id="latest-release-link" href="https://github.com/robgough/dictator/releases/tag/v2026.5.6">v2026.5.6</a>
+            · <a href="https://github.com/robgough/dictator/releases">All releases</a>
+        </p>
 
         <p class="preview-note">
             <strong>Early preview.</strong> Dictator is in active development — things will be rough, and some behaviour may change between versions. Feedback (bugs, papercuts, "this should do X") is genuinely welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
@@ -824,7 +843,7 @@
         <h2>Requirements</h2>
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
-            <span><strong>macOS 15</strong> or newer</span>
+            <span><strong>macOS 26</strong> or newer</span>
             <span><strong>16 GB RAM</strong> minimum (24 GB+ for the recommended 3B model)</span>
             <span>Roughly <strong>1–3 GB</strong> of disk for models</span>
         </p>
