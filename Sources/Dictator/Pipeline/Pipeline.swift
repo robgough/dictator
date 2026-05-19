@@ -96,7 +96,6 @@ final class Pipeline {
     private let recorder = AudioRecorder()
     private let whisper = TranscriptionServiceHolder.shared
     private let parakeet = ParakeetServiceHolder.shared
-    private let llm = LLMServiceHolder.shared
     private let injector = TextInjector()
 
     /// Resolves the currently-selected engine to the concrete service plus
@@ -110,6 +109,14 @@ final class Pipeline {
         case .parakeet:
             return (parakeet, settings.parakeetModelID)
         }
+    }
+
+    /// Resolves the currently-selected LLM engine. Thin wrapper around
+    /// `settings.activeLLMEngine()` — kept private to Pipeline because the
+    /// dispatch needs to happen on the *current* settings snapshot, not whatever
+    /// AppState happens to hold right now.
+    private func currentLLM() -> (any LLMEngine)? {
+        settings.activeLLMEngine()
     }
 
     private var doneFader: Task<Void, Never>?
@@ -276,7 +283,7 @@ final class Pipeline {
             return
         }
         if Task.isCancelled { return }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         inFlight.raw = trimmed
         // Empty transcript = Whisper heard nothing (no-speech segment, mic
         // muted, hotkey tap with no audio, …). Surface it in the HUD so the
@@ -286,8 +293,19 @@ final class Pipeline {
             return
         }
 
+        // Deterministic spoken-cue substitution runs BEFORE the LLM so every
+        // engine (including None) gets emoji + punctuation handling. Small
+        // local models — especially Apple Foundation's ~3 B — are unreliable
+        // at the cue rules in the formatter prompt, so we don't depend on
+        // them. The formatter prompt keeps the rules as a backstop for
+        // anything the curated map misses.
+        if settings.spokenCuesEnabled {
+            trimmed = SpokenCues.apply(to: trimmed)
+        }
+
         var formatted: String
-        if settings.llmModelID == ModelCatalog.noneLLMID {
+        let formatterLLM = currentLLM()
+        if formatterLLM == nil {
             // User opted out of LLM formatting — ship Whisper's raw transcript through
             // the dictionary pass and out. Skips state .formatting so the HUD doesn't
             // flash a "Formatting…" frame that never does anything.
@@ -305,9 +323,8 @@ final class Pipeline {
         } else {
             state = .formatting
             do {
-                formatted = try await llm.format(
+                formatted = try await formatterLLM!.format(
                     text: trimmed,
-                    modelID: settings.llmModelID,
                     systemPrompt: settings.effectiveFormattingPrompt
                 )
             } catch {
@@ -360,12 +377,11 @@ final class Pipeline {
 
     private func maybeFixGrammar(formatted: String) async -> String {
         guard settings.grammarPassEnabled else { return formatted }
-        guard settings.llmModelID != ModelCatalog.noneLLMID else { return formatted }
+        guard let llm = currentLLM() else { return formatted }
         state = .fixingGrammar
         do {
             let tidied = try await llm.tidyGrammar(
                 text: formatted,
-                modelID: settings.llmModelID,
                 systemPrompt: settings.effectiveGrammarPrompt
             )
             // Empty output usually means the model echoed the wrapping and the
@@ -386,7 +402,7 @@ final class Pipeline {
 
     private func maybeRestructure(formatted: String) async -> String {
         guard settings.structuralPassEnabled else { return formatted }
-        guard settings.llmModelID != ModelCatalog.noneLLMID else { return formatted }
+        guard let llm = currentLLM() else { return formatted }
         let wordCount = Self.wordSequence(formatted).count
         guard wordCount >= settings.structuralPassMinWords else { return formatted }
 
@@ -394,7 +410,6 @@ final class Pipeline {
         do {
             let restructured = try await llm.restructure(
                 text: formatted,
-                modelID: settings.llmModelID,
                 systemPrompt: settings.effectiveStructuralPrompt
             )
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -520,7 +535,14 @@ final class Pipeline {
         // Trailing space so the next dictation/keystroke doesn't glue itself to this
         // chunk. Particularly important when piping dictation straight into chat apps
         // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
-        let text = Self.withTrailingSpace(text)
+        var text = text
+        if settings.spokenCuesEnabled {
+            // Strip LLM-introduced separators between adjacent emojis
+            // ("🔥, 🎉" → "🔥 🎉"). Apple Foundation in particular tends to
+            // list-format substituted emojis.
+            text = SpokenCues.tidyDelivery(text)
+        }
+        text = Self.withTrailingSpace(text)
         lastResult = text
         var pasted = false
         var note: String? = warning
@@ -589,7 +611,7 @@ final class Pipeline {
             break
         }
         guard case .idle = state else { return }
-        guard settings.llmModelID != ModelCatalog.noneLLMID else {
+        guard settings.llmEngine != .none else {
             fail("Assistant Mode needs an LLM. Pick one in Settings → Models.")
             return
         }
@@ -771,12 +793,18 @@ final class Pipeline {
             return
         }
         if Task.isCancelled { return }
-        let instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else {
             inFlightAssistant = nil
             nextAssistantIsContinuation = false
             fail("No instruction heard")
             return
+        }
+        // Apply spoken-cue substitution to the instruction only — the
+        // selection is the user's pre-existing text from another app and
+        // shouldn't be touched.
+        if settings.spokenCuesEnabled {
+            instruction = SpokenCues.apply(to: instruction)
         }
 
         // Resolve prior context for this turn. If continuing, take the verbatim
@@ -794,6 +822,16 @@ final class Pipeline {
             }
         }
 
+        // The Assistant Mode entry-point already guarded against .none, so
+        // currentLLM() here is non-nil under normal flow. If settings flipped
+        // mid-flight (unlikely) we fail cleanly.
+        guard let llm = currentLLM() else {
+            inFlightAssistant = nil
+            nextAssistantIsContinuation = false
+            fail("LLM is disabled. Pick one in Settings → Models.")
+            return
+        }
+
         // Pre-call compaction. Estimate input tokens; if over budget, summarise
         // the oldest turns (always keeping at least the last 2 verbatim). On
         // summariser failure we surface a hard "conversation too long" error
@@ -804,7 +842,7 @@ final class Pipeline {
             priorTurns: priorTurns, summary: summary,
             selection: selection, instruction: instruction
         )
-        if estimate > ConversationContextBudget.totalInputTokens(modelID: settings.llmModelID) {
+        if estimate > llm.assistantInputTokenBudget {
             guard priorTurns.count > 2, let active = activeConversation else {
                 inFlightAssistant = nil
                 nextAssistantIsContinuation = false
@@ -818,7 +856,7 @@ final class Pipeline {
                 let newSummary = try await llm.summariseConversation(
                     turns: toSummarise,
                     priorSummary: summary,
-                    modelID: settings.llmModelID
+                    cancellation: { Task.isCancelled }
                 )
                 if Task.isCancelled { return }
                 summary = newSummary
@@ -841,10 +879,10 @@ final class Pipeline {
             result = try await llm.assist(
                 selection: selection,
                 instruction: instruction,
-                modelID: settings.llmModelID,
                 systemPrompt: settings.effectiveAssistantPrompt,
                 priorTurns: priorTurns,
-                summary: summary
+                summary: summary,
+                cancellation: { Task.isCancelled }
             )
         } catch {
             if Task.isCancelled { return }
@@ -901,7 +939,11 @@ final class Pipeline {
     private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
         // same reasoning as `finish()`.
-        let text = Self.withTrailingSpace(text)
+        var text = text
+        if settings.spokenCuesEnabled {
+            text = SpokenCues.tidyDelivery(text)
+        }
+        text = Self.withTrailingSpace(text)
         lastResult = text
         var pasted = false
         var note: String

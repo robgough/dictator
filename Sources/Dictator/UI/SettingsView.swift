@@ -1466,7 +1466,11 @@ private struct GeneralPane: View {
                     }
                 SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant.")
 
-                let llmDisabled = s.settings.llmModelID == ModelCatalog.noneLLMID
+                Toggle("Spoken punctuation and emojis", isOn: $s.settings.spokenCuesEnabled)
+                    .onChange(of: s.settings.spokenCuesEnabled) { _, _ in state.save() }
+                SectionFootnote("Substitutes spoken cues — \"comma\" → \",\", \"new paragraph\" → blank line, \"fire emoji\" → 🔥, and so on — deterministically before any LLM pass. Works for every engine, even No LLM. Single-word cues like \"period\" and \"comma\" always substitute; turn this off if your dictations frequently use those words literally.")
+
+                let llmDisabled = s.settings.llmEngine == .none
 
                 Toggle("Tidy grammar (third pass)", isOn: $s.settings.grammarPassEnabled)
                     .onChange(of: s.settings.grammarPassEnabled) { _, _ in state.save() }
@@ -1859,64 +1863,137 @@ private struct TranscriptionModelsPane: View {
     }
 }
 
-/// Formatting sub-pane: the LLM picker plus a None option that disables
-/// every LLM pass in the pipeline. Lives in its own sub-tab because
-/// "which speech-to-text" and "which LLM tidies the result" are two
-/// independent choices.
+/// Formatting sub-pane: top-level engine picker (None / Apple Foundation / MLX),
+/// then engine-specific content underneath. The engine choice drives both which
+/// backend runs the dictation-cleanup passes AND which one powers Assistant
+/// Mode — they're not separable.
 private struct FormattingModelsPane: View {
     @Environment(AppState.self) private var state
     @State private var manager = ModelManager.shared
-    @State private var llm = LLMServiceHolder.shared
+    @State private var mlxLLM = MLXLLMServiceHolder.shared
 
     var body: some View {
         @Bindable var s = state
         Form {
             Section {
-                NoneLLMRow(
-                    isActive: s.settings.llmModelID == ModelCatalog.noneLLMID,
-                    select: {
-                        s.settings.llmModelID = ModelCatalog.noneLLMID
+                Picker("LLM engine", selection: Binding(
+                    get: { s.settings.llmEngine },
+                    set: { newValue in
+                        s.settings.llmEngine = newValue
                         state.save()
                     }
-                )
-                ForEach(ModelCatalog.llmModels) { model in
-                    ModelRow(
-                        name: model.displayName,
-                        note: model.note,
-                        sizeMB: model.approxSizeMB,
-                        ramMB: model.approxRAMMB,
-                        state: manager.llmStates[model.id] ?? .unknown,
-                        isActive: s.settings.llmModelID == model.id,
-                        isLoaded: llm.currentModelID == model.id,
-                        isVerifying: manager.verifyingLLM.contains(model.id),
-                        select: {
-                            s.settings.llmModelID = model.id
-                            state.save()
-                        },
-                        download: {
-                            manager.downloadLLM(model.id, using: LLMServiceHolder.shared)
-                        },
-                        cancel: {
-                            manager.cancelLLMDownload(model.id)
-                        },
-                        verify: {
-                            Task { await manager.verifyLLM(model.id, using: LLMServiceHolder.shared) }
-                        },
-                        unload: {
-                            manager.unloadLLM(model.id, using: LLMServiceHolder.shared)
-                        },
-                        remove: {
-                            manager.removeLLM(model.id, using: LLMServiceHolder.shared)
-                        }
-                    )
+                )) {
+                    Text("Apple Foundation").tag(LLMEngineKind.apple)
+                    Text("MLX (downloaded)").tag(LLMEngineKind.mlx)
+                    Text("None").tag(LLMEngineKind.none)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             } header: {
-                Text("Formatting LLM (MLX)")
+                Text("Engine")
             } footer: {
-                SectionFootnote("Used for the formatting, grammar, and structural passes after transcription — and for Assistant Mode. Pick **None** to skip LLM passes and ship the raw transcript.")
+                SectionFootnote("**Apple Foundation** uses the on-device model Apple Intelligence ships with — zero disk, no in-process weights, requires Apple Intelligence to be enabled in System Settings. **MLX** downloads a HuggingFace checkpoint and runs it in-process. **None** ships the raw transcript with no LLM passes and disables Assistant Mode.")
+            }
+
+            switch s.settings.llmEngine {
+            case .none:
+                Section {
+                    Text("LLM passes are disabled. Dictations ship the raw Whisper transcript with the user dictionary applied. Assistant Mode is unavailable.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            case .apple:
+                Section {
+                    AppleFoundationStatusRow()
+                } header: {
+                    Text("Apple Foundation Model")
+                } footer: {
+                    SectionFootnote("Apple Intelligence's ~3 B on-device model. Shared across every app that uses the framework — no per-app download, no in-process weight cost. Apple applies safety filtering you don't control.")
+                }
+            case .mlx:
+                Section {
+                    ForEach(ModelCatalog.llmModels) { model in
+                        ModelRow(
+                            name: model.displayName,
+                            note: model.note,
+                            sizeMB: model.approxSizeMB,
+                            ramMB: model.approxRAMMB,
+                            state: manager.llmStates[model.id] ?? .unknown,
+                            isActive: s.settings.llmModelID == model.id,
+                            isLoaded: mlxLLM.currentModelID == model.id,
+                            isVerifying: manager.verifyingLLM.contains(model.id),
+                            select: {
+                                s.settings.llmModelID = model.id
+                                state.save()
+                            },
+                            download: {
+                                manager.downloadLLM(model.id, using: MLXLLMServiceHolder.shared)
+                            },
+                            cancel: {
+                                manager.cancelLLMDownload(model.id)
+                            },
+                            verify: {
+                                Task { await manager.verifyLLM(model.id, using: MLXLLMServiceHolder.shared) }
+                            },
+                            unload: {
+                                manager.unloadLLM(model.id, using: MLXLLMServiceHolder.shared)
+                            },
+                            remove: {
+                                manager.removeLLM(model.id, using: MLXLLMServiceHolder.shared)
+                            }
+                        )
+                    }
+                } header: {
+                    Text("MLX Models")
+                } footer: {
+                    SectionFootnote("Downloaded HuggingFace checkpoints run via MLX-Swift. Larger models are more accurate but slower and use more RAM. **Verify** loads the model to confirm the download finished cleanly — useful after a flaky connection.")
+                }
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Renders the current `SystemLanguageModel.default.availability` state with a
+/// matching icon, explanation, and (when the user has actionable next steps) a
+/// shortcut to System Settings → Apple Intelligence.
+private struct AppleFoundationStatusRow: View {
+    @State private var availability: AppleFoundationAvailability.Reading = .unknown
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: availability.iconName)
+                        .foregroundStyle(availability.tint)
+                    Text(availability.headline).fontWeight(.medium)
+                }
+                Text(availability.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if availability == .appleIntelligenceOff {
+                Button("Open System Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppleIntelligence") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .onAppear { availability = AppleFoundationAvailability.Reading.current() }
+        // Re-poll every couple of seconds while the pane is visible so the
+        // status flips live when the user toggles Apple Intelligence on/off
+        // from System Settings without bouncing back to Dictator.
+        .task {
+            while !Task.isCancelled {
+                availability = AppleFoundationAvailability.Reading.current()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 }
 
@@ -1948,9 +2025,11 @@ private struct StatsModelsPane: View {
         case .parakeet:
             total += ModelCatalog.parakeet(id: settings.parakeetModelID)?.approxRAMMB ?? 0
         }
-        if settings.llmModelID != ModelCatalog.noneLLMID {
+        if settings.llmEngine == .mlx {
             total += ModelCatalog.llm(id: settings.llmModelID)?.approxRAMMB ?? 0
         }
+        // Apple Foundation Model is system-resident — its weights don't count
+        // against Dictator's RSS.
         return total
     }
 
@@ -2224,43 +2303,6 @@ private struct ModelRow: View {
                 Text(msg).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
         }
-    }
-}
-
-/// Special "None" pseudo-model for the LLM section — selectable but has no
-/// download/remove affordances since there's nothing to download.
-private struct NoneLLMRow: View {
-    let isActive: Bool
-    let select: () -> Void
-
-    var body: some View {
-        Button(action: select) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isActive ? Color.accentColor : .secondary)
-                    .font(.system(size: 16))
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("None").fontWeight(isActive ? .semibold : .regular)
-                        if isActive {
-                            Text("Active")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                    }
-                    Text("Ship Whisper's raw transcript — no formatting, grammar, structural, or assistant passes.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.vertical, 2)
-        }
-        .buttonStyle(.plain)
     }
 }
 

@@ -9,15 +9,42 @@ enum TranscriptionEngine: String, Codable, Sendable, Hashable, CaseIterable {
     case parakeet  // Parakeet TDT via FluidAudio CoreML (Apple Neural Engine)
 }
 
+/// Which LLM backend the pipeline drives for the formatter / grammar / structure
+/// passes and Assistant Mode. Switching here is the primary "do I want a local
+/// LLM at all, and which one" lever.
+///
+/// `apple` uses the Apple Foundation Models framework — the system-resident
+/// ~3B model that ships with Apple Intelligence. Zero in-process weights, but
+/// requires the user to have Apple Intelligence enabled.
+///
+/// `mlx` uses a HuggingFace MLX checkpoint picked from `ModelCatalog.llmModels`
+/// — the legacy path. The specific model is `llmModelID`.
+///
+/// `none` disables every LLM pass; raw Whisper transcripts ship straight through.
+enum LLMEngineKind: String, Codable, Sendable, Hashable, CaseIterable {
+    case none
+    case apple
+    case mlx
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
     var parakeetModelID: String
+    var llmEngine: LLMEngineKind
+    /// Only meaningful when `llmEngine == .mlx`. Ignored for `.none` and `.apple`,
+    /// but kept around so the user can flip back to MLX without losing their last
+    /// picked model.
     var llmModelID: String
     var pasteAutomatically: Bool
     var playSounds: Bool
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
+    /// Deterministic substitution of spoken cues — "comma" → ",", "new
+    /// paragraph" → blank line, "fire emoji" → 🔥, etc. Applied to the raw
+    /// transcript before any LLM pass, so it works for every engine and even
+    /// when LLM is set to None.
+    var spokenCuesEnabled: Bool
     var structuralPassEnabled: Bool
     var structuralPassMinWords: Int
     var grammarPassEnabled: Bool
@@ -58,11 +85,13 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: .parakeet,
         whisperModelID: ModelCatalog.defaultWhisper.id,
         parakeetModelID: ModelCatalog.defaultParakeet.id,
+        llmEngine: .apple,
         llmModelID: ModelCatalog.defaultLLM.id,
         pasteAutomatically: true,
         playSounds: true,
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
+        spokenCuesEnabled: true,
         structuralPassEnabled: true,
         structuralPassMinWords: 30,
         grammarPassEnabled: false,
@@ -85,11 +114,13 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: TranscriptionEngine,
         whisperModelID: String,
         parakeetModelID: String,
+        llmEngine: LLMEngineKind,
         llmModelID: String,
         pasteAutomatically: Bool,
         playSounds: Bool,
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
+        spokenCuesEnabled: Bool,
         structuralPassEnabled: Bool,
         structuralPassMinWords: Int,
         grammarPassEnabled: Bool,
@@ -110,11 +141,13 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = transcriptionEngine
         self.whisperModelID = whisperModelID
         self.parakeetModelID = parakeetModelID
+        self.llmEngine = llmEngine
         self.llmModelID = llmModelID
         self.pasteAutomatically = pasteAutomatically
         self.playSounds = playSounds
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
+        self.spokenCuesEnabled = spokenCuesEnabled
         self.structuralPassEnabled = structuralPassEnabled
         self.structuralPassMinWords = structuralPassMinWords
         self.grammarPassEnabled = grammarPassEnabled
@@ -143,11 +176,26 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = try c.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? d.transcriptionEngine
         self.whisperModelID     = try c.decodeIfPresent(String.self,      forKey: .whisperModelID)     ?? d.whisperModelID
         self.parakeetModelID    = try c.decodeIfPresent(String.self,      forKey: .parakeetModelID)    ?? d.parakeetModelID
-        self.llmModelID         = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
+        let decodedLLMID        = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
+        self.llmModelID         = decodedLLMID == "none" ? d.llmModelID : decodedLLMID
+        // Migration: pre-v3 installs only had `llmModelID`, with a "none" sentinel
+        // meaning "disable LLM passes." Map that onto the new `llmEngine` axis —
+        // existing MLX users keep their MLX selection, existing No-LLM users keep
+        // .none. We deliberately don't auto-upgrade existing users to .apple; a
+        // silent engine switch could surprise someone who'd previously decided
+        // they wanted MLX (or no LLM at all).
+        if let decodedEngine = try c.decodeIfPresent(LLMEngineKind.self, forKey: .llmEngine) {
+            self.llmEngine = decodedEngine
+        } else if decodedLLMID == "none" {
+            self.llmEngine = .none
+        } else {
+            self.llmEngine = .mlx
+        }
         self.pasteAutomatically     = try c.decodeIfPresent(Bool.self,        forKey: .pasteAutomatically)     ?? d.pasteAutomatically
         self.playSounds             = try c.decodeIfPresent(Bool.self,        forKey: .playSounds)             ?? d.playSounds
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
+        self.spokenCuesEnabled      = try c.decodeIfPresent(Bool.self,        forKey: .spokenCuesEnabled)      ?? d.spokenCuesEnabled
         self.structuralPassEnabled  = try c.decodeIfPresent(Bool.self,        forKey: .structuralPassEnabled)  ?? d.structuralPassEnabled
         self.structuralPassMinWords = try c.decodeIfPresent(Int.self,         forKey: .structuralPassMinWords) ?? d.structuralPassMinWords
         self.grammarPassEnabled     = try c.decodeIfPresent(Bool.self,        forKey: .grammarPassEnabled)     ?? d.grammarPassEnabled
@@ -634,12 +682,17 @@ struct DictatorSettings: Codable, Equatable {
            let decoded = try? JSONDecoder().decode(DictatorSettings.self, from: data) {
             settings = decoded
         } else {
-            // Fresh install — start from defaults, but pick an LLM that
-            // actually fits this machine. On a lean Mac we'd rather start
-            // at "No LLM" than have the user discover swap thrash on their
-            // first dictation.
+            // Fresh install — start from defaults, then ask the catalog what's
+            // actually a good fit for this machine. On a Mac with Apple
+            // Intelligence enabled that's .apple (zero-disk, system-resident).
+            // On other machines it falls back to the RAM-tier MLX recommendation,
+            // or .none on the leanest configurations.
             settings = .defaults
-            settings.llmModelID = ModelCatalog.recommendedLLMID
+            let recommended = ModelCatalog.recommendedLLMEngine
+            settings.llmEngine = recommended.engine
+            // Always populate llmModelID so the user can flip to MLX later
+            // without an extra round trip. Defaults to the RAM-tier MLX pick.
+            settings.llmModelID = recommended.mlxModelID ?? ModelCatalog.recommendedLLMID
         }
         settings.resolveHotkeyConflicts()
         return settings
@@ -659,5 +712,27 @@ struct DictatorSettings: Codable, Equatable {
     func persist() {
         guard let data = try? JSONEncoder().encode(self) else { return }
         UserDefaults.standard.set(data, forKey: Self.key)
+    }
+
+    /// Resolves the user's currently-selected LLM engine to a protocol-typed
+    /// instance, or nil when LLM passes are disabled (`llmEngine == .none`).
+    /// Used by Pipeline before every LLM-driven stage and by UI surfaces that
+    /// need engine-specific information (e.g. the assistant result window's
+    /// "approaching context limit" chip uses the engine's token budget).
+    ///
+    /// For MLX, writes the configured model id into the singleton before
+    /// returning so any subsequent per-pass call loads the right checkpoint.
+    @MainActor
+    func activeLLMEngine() -> (any LLMEngine)? {
+        switch llmEngine {
+        case .none:
+            return nil
+        case .apple:
+            return AppleFoundationLLMServiceHolder.shared
+        case .mlx:
+            let mlx = MLXLLMServiceHolder.shared
+            mlx.modelID = llmModelID
+            return mlx
+        }
     }
 }

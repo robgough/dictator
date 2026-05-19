@@ -1,28 +1,39 @@
 import Foundation
 import Hub
-import MLX
 import MLXLLM
 import MLXLMCommon
 
-enum AssistantMode: String, Sendable, Codable, Hashable {
-    case replace
-    case draft
-}
-
-struct AssistantResult: Sendable {
-    let mode: AssistantMode
-    let text: String
-}
-
+/// MLX-Swift backed LLM engine. Downloads a HuggingFace checkpoint via Hub, loads
+/// it into a MainActor-isolated `ModelContainer`, and runs the dictation /
+/// assistant passes on it.
+///
+/// Identity is carried by the `modelID` property — the dispatcher in Pipeline
+/// (`activeLLM()`) writes the currently-selected MLX model id into it before each
+/// per-call API. `ensureLoaded`/`download`/`unload(modelID:)` are *additional*
+/// public methods used by ModelManager's per-model download/verify/unload UI;
+/// they're not part of the `LLMEngine` protocol.
 @MainActor
 @Observable
-final class LLMService {
+final class MLXLLMService: LLMEngine {
+    /// The MLX model id this engine should act as for the next per-pass call.
+    /// Set by Pipeline's `activeLLM()` dispatch before any pipeline-driven call.
+    /// The download / verify code paths take an explicit modelID parameter so
+    /// they can act on a model that isn't the currently configured one.
+    var modelID: String?
+
     /// The ID of the model currently held in memory (nil when nothing is loaded).
     /// Exposed read-only so the Settings UI can show a "Loaded" badge.
     private(set) var currentModelID: String?
     /// True while `ensureLoaded` is running.
     private(set) var isLoading: Bool = false
     @ObservationIgnored private var container: ModelContainer?
+
+    var assistantInputTokenBudget: Int {
+        let id = modelID ?? ""
+        let context = ModelCatalog.llm(id: id)?.contextWindowTokens
+            ?? ModelCatalog.fallbackContextWindowTokens
+        return max(2_000, context - ConversationContextBudget.nonInputReservationTokens)
+    }
 
     /// Downloads the model files (no compile, no load) and reports fractional
     /// progress. Use this from the Settings / Onboarding "Download" buttons —
@@ -59,6 +70,14 @@ final class LLMService {
         currentModelID = modelID
     }
 
+    func ensureReady() async throws {
+        guard let id = modelID else {
+            throw NSError(domain: "Dictator", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "MLX LLM engine has no model selected."])
+        }
+        try await ensureLoaded(modelID: id)
+    }
+
     /// Bridge to `MLXLMCommon.downloadModel`. Nonisolated so the actual file
     /// download runs on the cooperative pool, not the main actor — the `await`
     /// at the call site suspends the caller cleanly. Mirrors the same shape as
@@ -87,50 +106,47 @@ final class LLMService {
         currentModelID = nil
     }
 
+    /// `LLMEngine` protocol method — drops whatever's currently loaded.
+    func unload() {
+        container = nil
+        currentModelID = nil
+    }
+
     /// Optional grammar tidying pass. Allowed to make small grammar fixes; the caller
     /// validates by word-level edit distance and discards the result if it drifts too far.
-    func tidyGrammar(text: String, modelID: String, systemPrompt: String) async throws -> String {
+    func tidyGrammar(text: String, systemPrompt: String) async throws -> String {
         // Grammar fixes don't grow the text — same cap shape as the formatter pass.
-        try await runFormatPass(text: text, modelID: modelID, systemPrompt: systemPrompt,
+        try await runFormatPass(text: text, systemPrompt: systemPrompt,
                                 maxTokenMultiplier: 1.20, maxTokenConstant: 8)
     }
 
     /// Structural rewrite. Adds paragraph/list structure without touching the
     /// words. The caller is responsible for verifying the word sequence is preserved.
-    func restructure(text: String, modelID: String, systemPrompt: String) async throws -> String {
+    func restructure(text: String, systemPrompt: String) async throws -> String {
         // Structure pass legitimately *adds* tokens — bullet markers ("- "), blank
         // lines for paragraphs, numbered prefixes — even though no words change.
         // Give it a much more generous cap so a long dictation can be bulleted
         // without getting truncated mid-list. The word-sequence equality check in
         // Pipeline.maybeRestructure() is what enforces correctness here.
-        try await runFormatPass(text: text, modelID: modelID, systemPrompt: systemPrompt,
+        try await runFormatPass(text: text, systemPrompt: systemPrompt,
                                 maxTokenMultiplier: 1.60, maxTokenConstant: 32)
     }
 
-    func format(text: String, modelID: String, systemPrompt: String) async throws -> String {
+    func format(text: String, systemPrompt: String) async throws -> String {
         // Tight cap on the formatter — a correctly formatted version is almost
         // always within ~15% of the input length. The real defense against the
         // "model answered the question" failure mode is the word-count growth
         // check in Pipeline.passOnePreservesContent(); the cap here is just a
         // belt-and-braces perf optimisation so a wandering model doesn't generate
         // an entire essay before we reject it.
-        try await runFormatPass(text: text, modelID: modelID, systemPrompt: systemPrompt,
+        try await runFormatPass(text: text, systemPrompt: systemPrompt,
                                 maxTokenMultiplier: 1.20, maxTokenConstant: 8)
     }
 
-    private func runFormatPass(text: String, modelID: String, systemPrompt: String,
+    private func runFormatPass(text: String, systemPrompt: String,
                                maxTokenMultiplier: Double, maxTokenConstant: Int,
                                cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }) async throws -> String {
-        // Release MLX's GPU buffer pool the moment this pass is done. Each
-        // LLM pass allocates buffers shaped by its own prompt/output sizes;
-        // the next pass (or the next dictation) typically uses different
-        // shapes anyway, so the cache buys little. Keeping it around means
-        // a multi-pass session steadily grows the process footprint over
-        // minutes/hours. Evicting here keeps idle Dictator at "model
-        // weights only".
-        defer { MLX.GPU.clearCache() }
-
-        try await ensureLoaded(modelID: modelID)
+        try await ensureReady()
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
         }
@@ -139,8 +155,9 @@ final class LLMService {
         // question or instruction. Without this signal, small models slip into
         // "helpful assistant" mode and answer the user. The `Input:/Output:` labels
         // we used previously caused the model to echo the wrapping back — the
-        // post-processor in clean() handles any residual echo defensively.
-        let userText = "<<<\n\(text)\n>>>"
+        // post-processor in LLMTextUtilities.clean() handles any residual echo
+        // defensively.
+        let userText = LLMTextUtilities.wrapAsData(text)
 
         let raw = try await container.perform { (ctx: ModelContext) -> String in
             let userInput = UserInput(chat: [
@@ -162,7 +179,7 @@ final class LLMService {
             return result.output
         }
 
-        return Self.clean(raw)
+        return LLMTextUtilities.clean(raw)
     }
 
     /// Assistant Mode: takes an optional snippet of text the user had selected plus
@@ -179,20 +196,17 @@ final class LLMService {
     func assist(
         selection: String?,
         instruction: String,
-        modelID: String,
         systemPrompt: String,
         priorTurns: [ConversationTurn] = [],
         summary: String? = nil,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> AssistantResult {
-        defer { MLX.GPU.clearCache() }
-
-        try await ensureLoaded(modelID: modelID)
+        try await ensureReady()
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
         }
 
-        let currentUserText = Self.renderAssistantUserMessage(selection: selection, instruction: instruction)
+        let currentUserText = LLMTextUtilities.renderAssistantUserMessage(selection: selection, instruction: instruction)
 
         let raw = try await container.perform { (ctx: ModelContext) -> String in
             var messages: [Chat.Message] = [.system(systemPrompt)]
@@ -207,7 +221,7 @@ final class LLMService {
             }
 
             for turn in priorTurns {
-                messages.append(.user(Self.renderAssistantUserMessage(selection: turn.selection, instruction: turn.instruction)))
+                messages.append(.user(LLMTextUtilities.renderAssistantUserMessage(selection: turn.selection, instruction: turn.instruction)))
                 // Re-include the MODE: marker so the model keeps emitting it on the
                 // next turn — without it, follow-up replies often drop the marker
                 // and we lose REPLACE intent (parseAssistant falls back to .draft).
@@ -235,7 +249,7 @@ final class LLMService {
             return result.output
         }
 
-        return Self.parseAssistant(raw)
+        return LLMTextUtilities.parseAssistant(raw)
     }
 
     /// Compacts a slice of conversation turns plus any pre-existing summary
@@ -246,12 +260,9 @@ final class LLMService {
     func summariseConversation(
         turns: [ConversationTurn],
         priorSummary: String?,
-        modelID: String,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> String {
-        defer { MLX.GPU.clearCache() }
-
-        try await ensureLoaded(modelID: modelID)
+        try await ensureReady()
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
         }
@@ -288,17 +299,9 @@ final class LLMService {
         >>>
         """
 
-        let system = """
-        You are compacting an Assistant Mode conversation so the model can keep \
-        following along after older turns have been trimmed. Write a single tight \
-        summary (under 200 words). Preserve the user's intent, any names, decisions, \
-        drafted text, and outstanding asks. Drop pleasantries and meta. Do NOT add \
-        commentary, framing, headers, or preambles — return only the summary text.
-        """
-
         let raw = try await container.perform { (ctx: ModelContext) -> String in
             let userInput = UserInput(chat: [
-                .system(system),
+                .system(LLMTextUtilities.summariserSystemPrompt),
                 .user(userText)
             ])
             let lmInput = try await ctx.processor.prepare(input: userInput)
@@ -312,154 +315,10 @@ final class LLMService {
             return result.output
         }
 
-        let cleaned = Self.clean(raw)
+        let cleaned = LLMTextUtilities.clean(raw)
         guard !cleaned.isEmpty else {
             throw NSError(domain: "Dictator", code: 3, userInfo: [NSLocalizedDescriptionKey: "Summariser returned no text"])
         }
         return cleaned
-    }
-
-    nonisolated private static func renderAssistantUserMessage(selection: String?, instruction: String) -> String {
-        let selectionBlock: String
-        if let selection, !selection.isEmpty {
-            selectionBlock = """
-            SELECTION:
-            <<<
-            \(selection)
-            >>>
-            """
-        } else {
-            selectionBlock = "SELECTION: (none — the user has nothing selected)"
-        }
-        return """
-        \(selectionBlock)
-
-        INSTRUCTION:
-        <<<
-        \(instruction)
-        >>>
-        """
-    }
-
-    /// Strips the `MODE: REPLACE`/`MODE: DRAFT` first-line marker the assistant prompt
-    /// asks the model to emit, and returns the body. Falls back to `.draft` (the safer
-    /// default — clipboard-only, non-destructive) if the marker is missing or unrecognised.
-    static func parseAssistant(_ raw: String) -> AssistantResult {
-        let cleaned = clean(raw)
-        // Look for `MODE: X` at the start of any of the first few lines — small models
-        // sometimes wrap the response in extra blank lines or quotes before the marker.
-        let lines = cleaned.split(separator: "\n", omittingEmptySubsequences: false)
-        for (idx, line) in lines.prefix(3).enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let upper = trimmed.uppercased()
-            if upper.hasPrefix("MODE:") {
-                let suffix = upper.dropFirst("MODE:".count).trimmingCharacters(in: .whitespaces)
-                let mode: AssistantMode
-                if suffix.hasPrefix("REPLACE") { mode = .replace }
-                else if suffix.hasPrefix("DRAFT") { mode = .draft }
-                else { mode = .draft }
-                let bodyLines = lines.dropFirst(idx + 1)
-                let body = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                return AssistantResult(mode: mode, text: stripAssistantPreamble(body))
-            }
-        }
-        return AssistantResult(mode: .draft, text: stripAssistantPreamble(cleaned))
-    }
-
-    /// Small local models almost always sneak in a meta preamble ("Sure! Here's the
-    /// email you asked for:" / "Of course, here is a draft:") even when the prompt
-    /// explicitly forbids it. We strip them defensively — only when they appear as
-    /// their own line followed by actual content, so we never accidentally chop a
-    /// legitimate single-line answer that happens to start with "Here is...".
-    static func stripAssistantPreamble(_ s: String) -> String {
-        var lines = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        // If the entire output is one line, it IS the content — never strip.
-        guard lines.count > 1 else { return s }
-
-        var keepGoing = true
-        while keepGoing, lines.count > 1 {
-            keepGoing = false
-            let first = lines[0].trimmingCharacters(in: .whitespaces)
-            if first.isEmpty {
-                lines.removeFirst()
-                keepGoing = true
-                continue
-            }
-            if isPreambleLine(first) {
-                lines.removeFirst()
-                keepGoing = true
-            }
-        }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static let standaloneAffirmations: Set<String> = [
-        "sure", "of course", "certainly", "absolutely",
-        "got it", "no problem", "okay", "ok", "yes", "alright"
-    ]
-
-    private static let preamblePrefixes: [String] = [
-        "here's", "here is", "here are", "here you go",
-        "sure, here", "sure! here", "sure here",
-        "of course, here", "of course! here",
-        "certainly, here", "absolutely, here",
-        "below is", "below are",
-        "i've drafted", "i have drafted",
-        "i'll draft", "i'll write", "i've written", "i have written",
-        "i'll give", "i can give"
-    ]
-
-    private static func isPreambleLine(_ line: String) -> Bool {
-        let lower = line.lowercased()
-        let stripped = lower.trimmingCharacters(in: CharacterSet(charactersIn: ".!,;:"))
-        if standaloneAffirmations.contains(stripped) { return true }
-        // Meta preamble lines end with a colon or period (the content follows on the
-        // next line). Without that, the line might be a legitimate sentence that just
-        // happens to start with "Here is".
-        let endsWithIntroducer = lower.hasSuffix(":") || lower.hasSuffix(".") || lower.hasSuffix("…") || lower.hasSuffix("...")
-        guard endsWithIntroducer else { return false }
-        return preamblePrefixes.contains(where: lower.hasPrefix)
-    }
-
-    private static func clean(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Strip a leading echoed block like `<<<\n...\n>>>` (possibly with surrounding lines).
-        if s.hasPrefix("<<<"), let endRange = s.range(of: ">>>") {
-            s = String(s[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        // Backstop: the model occasionally echoes a stray `<<<` or `>>>` mid- or
-        // end-of-output that the prefix strip above missed. These are never
-        // legitimate transcript content, so remove them unconditionally and
-        // tidy up any whitespace they leave behind.
-        s = s.replacingOccurrences(of: "<<<", with: "")
-        s = s.replacingOccurrences(of: ">>>", with: "")
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Strip a leading "Output:" / "OUTPUT:" / "Formatted:" label.
-        for label in ["Output:", "OUTPUT:", "output:", "Formatted:", "FORMATTED:"] {
-            if s.hasPrefix(label) {
-                s = String(s.dropFirst(label.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                break
-            }
-        }
-
-        // Strip a markdown code-fence wrapper if the model decided to wrap the output.
-        if s.hasPrefix("```"), let firstNL = s.firstIndex(of: "\n") {
-            let body = String(s[s.index(after: firstNL)...])
-            if body.hasSuffix("```") {
-                s = String(body.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        // Strip a single pair of wrapping quotes/backticks.
-        if s.count >= 2 {
-            let first = s.first!, last = s.last!
-            if (first == "\"" && last == "\"") || (first == "'" && last == "'") || (first == "`" && last == "`") {
-                s = String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return s
     }
 }

@@ -52,7 +52,7 @@ def main() -> int:
         f"            <pubDate>{pubdate}</pubDate>",
         f"            <sparkle:version>{build}</sparkle:version>",
         f"            <sparkle:shortVersionString>{version}</sparkle:shortVersionString>",
-        "            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>",
+        "            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>",
     ]
     if description_html:
         # CDATA so Sparkle's HTML rendering panel gets raw HTML without the

@@ -155,7 +155,8 @@ private struct AssistantResultView: View {
                         }
                     }
                 }
-                if conversation.isApproachingContextLimit(modelID: AppState.shared.settings.llmModelID) {
+                if let engine = AppState.shared.settings.activeLLMEngine(),
+                   conversation.isApproachingContextLimit(engine: engine) {
                     ApproachingLimitChip()
                 }
                 footer(conversation: conversation)

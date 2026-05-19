@@ -2,7 +2,7 @@ name: Dictator
 options:
   bundleIdPrefix: net.robgough
   deploymentTarget:
-    macOS: "15.0"
+    macOS: "26.0"
   createIntermediateGroups: true
   schemePathPrefix: ""
 
@@ -109,7 +109,7 @@ targets:
       path: Sources/Dictator/Info.plist
       properties:
         LSUIElement: true
-        LSMinimumSystemVersion: "15.0"
+        LSMinimumSystemVersion: "26.0"
         CFBundleName: Dictator
         CFBundleDisplayName: Dictator
         # Substituted from the matching build settings below at "Process Info.plist"
@@ -168,7 +168,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
-        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
         # macOS TCC keys Mic / Accessibility grants by *signed identity*, so an
         # unstable signature (ad-hoc) makes the OS forget you every rebuild.

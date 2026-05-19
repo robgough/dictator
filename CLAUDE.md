@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Dictator is a menu-bar macOS dictation app. Hold a hotkey → record → transcribe locally (WhisperKit or Parakeet/FluidAudio) → optionally pipe through 1–3 MLX-Swift LLM passes (format, grammar, restructure) → paste into the focused app via synthetic ⌘V. Apple Silicon only, macOS 15+, all inference on-device.
+Dictator is a menu-bar macOS dictation app. Hold a hotkey → record → transcribe locally (WhisperKit or Parakeet/FluidAudio) → optionally pipe through 1–3 MLX-Swift LLM passes (format, grammar, restructure) → paste into the focused app via synthetic ⌘V. Apple Silicon only, macOS 26+, all inference on-device.
 
 A second mode (Assistant Mode, separate hotkey) grabs the current selection, takes a spoken instruction, and either replaces the selection in-place or copies a drafted reply to the clipboard.
 

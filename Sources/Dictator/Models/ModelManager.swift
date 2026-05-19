@@ -226,7 +226,7 @@ final class ModelManager {
     /// this called `ensureLoaded`, which silently kept the model loaded in
     /// memory after "Download" finished and left the UI frozen at 100% during
     /// the multi-second compile tail.
-    func downloadLLM(_ id: String, using service: LLMService) {
+    func downloadLLM(_ id: String, using service: MLXLLMService) {
         guard llmTasks[id] == nil else { return }
         llmStates[id] = .preparingDownload
         llmTasks[id] = Task { [weak self] in
@@ -311,7 +311,7 @@ final class ModelManager {
         }
     }
 
-    func verifyLLM(_ id: String, using service: LLMService) async {
+    func verifyLLM(_ id: String, using service: MLXLLMService) async {
         verifyingLLM.insert(id)
         defer { verifyingLLM.remove(id) }
         do {
@@ -340,7 +340,7 @@ final class ModelManager {
         service.unload(modelID: id)
     }
 
-    func unloadLLM(_ id: String, using service: LLMService) {
+    func unloadLLM(_ id: String, using service: MLXLLMService) {
         service.unload(modelID: id)
     }
 
@@ -383,7 +383,7 @@ final class ModelManager {
 
     /// Unload (if loaded) and remove an LLM model's on-disk files.
     @discardableResult
-    func removeLLM(_ id: String, using service: LLMService) -> Bool {
+    func removeLLM(_ id: String, using service: MLXLLMService) -> Bool {
         service.unload(modelID: id)
         let dir = ModelStorage.llmRoot()
             .appendingPathComponent("models/\(id)", isDirectory: true)

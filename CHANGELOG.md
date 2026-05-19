@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictator now requires macOS 26 or later. Macs on earlier macOS versions will stay on their currently installed version and won't be offered this update.
+- Added the Apple Foundation Model as a new LLM engine option, alongside MLX and None. It runs Apple Intelligence's on-device model — zero disk space, no in-process weights, shared across every app that uses the framework. New installs that have Apple Intelligence enabled get it as the default. Existing users keep their current engine (MLX or None) and can switch from Settings → Models → Formatting.
+- Settings → Models → Formatting now has an Engine picker at the top — Apple Foundation, MLX, or None. The model list and download cards only appear when MLX is selected; Apple Foundation shows a live availability status with a shortcut to System Settings if Apple Intelligence is off.
+- Spoken punctuation, line breaks, and emoji names are now substituted deterministically before any LLM pass — say "comma", "new paragraph", "question mark", "fire emoji", "thumbs up emoji", and so on, and you'll get the symbol rather than the spoken word. Works with every engine (including No LLM) and across all ~3700 standard emojis via their Unicode names plus a curated list of common synonyms ("heart" → ❤️, "tada" → 🎉, etc.). Adjacent emojis no longer get commas inserted between them by the LLM ("fire emoji celebration emoji" → "🔥 🎉" rather than "🔥, 🎉"). Toggle in Settings → General → Behaviour.
 - Fixed Settings description text wrapping at half the column width on some machines, leaving a large empty gap on the right.
 
 ## v2026.5.6 — 2026-05-19

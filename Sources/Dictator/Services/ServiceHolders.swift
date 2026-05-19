@@ -8,9 +8,20 @@ enum TranscriptionServiceHolder {
     static let shared = TranscriptionService()
 }
 
+/// MLX-Swift LLM engine. Holds the loaded ModelContainer for the user's currently
+/// selected MLX model so Pipeline calls and Settings → Models verifies share the
+/// same warm container.
 @MainActor
-enum LLMServiceHolder {
-    static let shared = LLMService()
+enum MLXLLMServiceHolder {
+    static let shared = MLXLLMService()
+}
+
+/// Apple Foundation Models LLM engine. Stateless wrapper — there's no in-process
+/// model state to share, but we keep a singleton so its `isLoading` observable
+/// can be read from both Settings UI and Pipeline.
+@MainActor
+enum AppleFoundationLLMServiceHolder {
+    static let shared = AppleFoundationLLMService()
 }
 
 @MainActor

@@ -673,95 +673,137 @@ private struct LLMSection: View {
 
     var body: some View {
         @Bindable var s = state
-        // The "Recommended" pill points at whichever LLM fits this machine
-        // (see ModelCatalog.recommendedLLMID). On lean Macs the recommended
-        // option is *no* LLM, in which case the picker collapses to a
-        // single No-LLM state — we don't want to dangle a button that
-        // silently pulls 2 GB of weights onto an 8 GB machine.
-        let recommendedID = ModelCatalog.recommendedLLMID
-        let recommendedLLM: LLMModel? = ModelCatalog.llm(id: recommendedID)
-        let llmDisabled = s.settings.llmModelID == ModelCatalog.noneLLMID
-        let llmIsRecommended = s.settings.llmModelID == recommendedID && !llmDisabled
-        let customLLM: LLMModel? = (!llmDisabled && !llmIsRecommended)
-            ? ModelCatalog.llm(id: s.settings.llmModelID)
-            : nil
+        let recommendation = ModelCatalog.recommendedLLMEngine
 
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Formatting LLM (optional)")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if recommendedLLM != nil {
-                    Picker("", selection: Binding(
-                        get: {
-                            if llmDisabled { "none" }
-                            else if customLLM != nil { "custom" }
-                            else { "recommended" }
-                        },
-                        set: { newValue in
-                            switch newValue {
-                            case "none":        s.settings.llmModelID = ModelCatalog.noneLLMID
-                            case "recommended": s.settings.llmModelID = recommendedID
-                            default: break
-                            }
-                            state.save()
+                Picker("", selection: Binding(
+                    get: { s.settings.llmEngine },
+                    set: { newValue in
+                        s.settings.llmEngine = newValue
+                        // If switching to MLX and the user has no model id yet
+                        // (legacy "none" got migrated to defaults), populate
+                        // with the RAM-tier MLX pick so the download card has
+                        // something to show.
+                        if newValue == .mlx, ModelCatalog.llm(id: s.settings.llmModelID) == nil {
+                            s.settings.llmModelID = ModelCatalog.recommendedLLMID
                         }
-                    )) {
-                        Text("No LLM").tag("none")
-                        Text("Recommended").tag("recommended")
-                        if customLLM != nil {
-                            Text("Custom").tag("custom")
-                        }
+                        state.save()
                     }
-                    .pickerStyle(.segmented)
-                    .frame(width: customLLM != nil ? 260 : 200)
-                    .labelsHidden()
+                )) {
+                    Text("Apple").tag(LLMEngineKind.apple)
+                    Text("MLX").tag(LLMEngineKind.mlx)
+                    Text("None").tag(LLMEngineKind.none)
                 }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                .labelsHidden()
             }
 
-            if recommendedLLM == nil {
-                // Lean machine: we won't even offer a one-click LLM download.
-                // The user can still wire one up from Settings → Models, but
-                // they have to opt in deliberately after seeing the cost.
-                LeanLLMNotice()
-            } else if llmDisabled {
-                Text("Raw transcripts only. Fastest path — pick this if you're not sure or want to keep memory use low. You can add an LLM later from Settings → Models.")
+            switch s.settings.llmEngine {
+            case .apple:
+                OnboardingAppleFoundationCard(isRecommended: recommendation.engine == .apple)
+            case .mlx:
+                if let llm = ModelCatalog.llm(id: s.settings.llmModelID) {
+                    let isRecommended = recommendation.engine == .mlx && recommendation.mlxModelID == llm.id
+                    ModelDownloadCard(
+                        title: llm.displayName,
+                        subtitle: isRecommended
+                            ? "Recommended for your Mac. Tidies punctuation, capitalisation, and structure after transcription."
+                            : "Tidies punctuation, capitalisation, and structure after transcription. Swap in Settings → Models.",
+                        sizeMB: llm.approxSizeMB,
+                        ramMB: llm.approxRAMMB,
+                        state: manager.llmStates[llm.id] ?? .unknown,
+                        primaryLabel: isRecommended ? "Recommended" : "Optional",
+                        primaryStyle: .optional,
+                        onDownload: {
+                            manager.downloadLLM(llm.id, using: MLXLLMServiceHolder.shared)
+                        },
+                        onCancel: {
+                            manager.cancelLLMDownload(llm.id)
+                        }
+                    )
+                } else {
+                    // No MLX model is available for this machine and the user has
+                    // forced MLX anyway. Surface the tradeoff honestly.
+                    LeanLLMNotice()
+                }
+            case .none:
+                Text("Raw transcripts only. Fastest path — pick this if you'd rather keep things minimal. You can switch to an LLM any time from Settings → Models.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 2)
-            } else if let custom = customLLM {
-                ModelDownloadCard(
-                    title: custom.displayName,
-                    subtitle: "Already chosen in Settings → Models. Switch above to use the recommended model instead.",
-                    sizeMB: custom.approxSizeMB,
-                    ramMB: custom.approxRAMMB,
-                    state: manager.llmStates[custom.id] ?? .unknown,
-                    primaryLabel: "Custom",
-                    primaryStyle: .optional,
-                    onDownload: {
-                        manager.downloadLLM(custom.id, using: LLMServiceHolder.shared)
-                    },
-                    onCancel: {
-                        manager.cancelLLMDownload(custom.id)
+            }
+        }
+    }
+}
+
+/// Onboarding-flavoured affordance for the Apple Foundation engine. Replaces
+/// the MLX download card with a status row plus a "Open System Settings" deep
+/// link when Apple Intelligence is off (the common "you picked Apple but
+/// haven't turned it on" path).
+private struct OnboardingAppleFoundationCard: View {
+    let isRecommended: Bool
+    @State private var availability: AppleFoundationAvailability.Reading = .unknown
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.14))
+                    .frame(width: 38, height: 38)
+                Image(systemName: "apple.logo")
+                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 17, weight: .semibold))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Apple Foundation Model")
+                        .font(.system(size: 14, weight: .semibold))
+                    if isRecommended {
+                        Text("RECOMMENDED")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.green.opacity(0.15)))
                     }
-                )
-            } else if let llm = recommendedLLM {
-                ModelDownloadCard(
-                    title: llm.displayName,
-                    subtitle: "Tidies punctuation, capitalisation, and structure after transcription.",
-                    sizeMB: llm.approxSizeMB,
-                    ramMB: llm.approxRAMMB,
-                    state: manager.llmStates[llm.id] ?? .unknown,
-                    primaryLabel: "Optional",
-                    primaryStyle: .optional,
-                    onDownload: {
-                        manager.downloadLLM(llm.id, using: LLMServiceHolder.shared)
-                    },
-                    onCancel: {
-                        manager.cancelLLMDownload(llm.id)
+                    Image(systemName: availability.iconName)
+                        .foregroundStyle(availability.tint)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                Text(availability.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if availability == .appleIntelligenceOff {
+                Button("Open System Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppleIntelligence") {
+                        NSWorkspace.shared.open(url)
                     }
-                )
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .onAppear { availability = AppleFoundationAvailability.Reading.current() }
+        .task {
+            while !Task.isCancelled {
+                availability = AppleFoundationAvailability.Reading.current()
+                try? await Task.sleep(for: .seconds(2))
             }
         }
     }

@@ -81,7 +81,7 @@ enum ModelCatalog {
     static func parakeet(id: String) -> ParakeetModel? { parakeetModels.first { $0.id == id } }
     static func llm(id: String) -> LLMModel? { llmModels.first { $0.id == id } }
 
-    /// What the first-run wizard recommends as the "Recommended" LLM preset
+    /// What the first-run wizard recommends as the *MLX* "Recommended" LLM preset
     /// for a given machine. Lean machines get the 1B model, since pairing
     /// Llama 3.2 3B (~2.5 GB) with a transcription model (~700 MB) puts an
     /// 8 GB Mac firmly into swap. Balanced and above get the 3B default.
@@ -89,6 +89,10 @@ enum ModelCatalog {
     /// Returns `noneLLMID` for the very tightest machines — the wizard's
     /// "Recommended" segment then maps to "No LLM", which keeps total
     /// resident memory under a gigabyte.
+    ///
+    /// This is the per-MLX recommendation. The overall engine-level
+    /// recommendation (which might pick Apple Foundation instead) is in
+    /// `recommendedLLMEngine`.
     @MainActor
     static var recommendedLLMID: String {
         switch SystemMemory.tier {
@@ -106,5 +110,32 @@ enum ModelCatalog {
             // noticeably better cleanup than 1B.
             return defaultLLM.id
         }
+    }
+
+    /// One-shot recommendation for `(engine, mlxModelID)` based on what's actually
+    /// usable on this machine right now. Two stored properties so the caller can
+    /// surface the MLX pick alongside the engine recommendation (the Settings
+    /// view shows it as a preview even when Apple is the default).
+    struct LLMRecommendation {
+        let engine: LLMEngineKind
+        let mlxModelID: String?
+    }
+
+    /// What the first-run wizard recommends end-to-end. Prefers Apple's on-device
+    /// Foundation Model when the user has Apple Intelligence enabled (zero disk,
+    /// zero in-process RAM, quality bar comparable to a 3B class MLX model). Falls
+    /// back to the RAM-tier MLX recommendation otherwise. Returns `.none` on the
+    /// very leanest machines where even the smallest MLX model would push the
+    /// system into swap.
+    @MainActor
+    static var recommendedLLMEngine: LLMRecommendation {
+        if AppleFoundationAvailability.isUsable {
+            return LLMRecommendation(engine: .apple, mlxModelID: recommendedLLMID == noneLLMID ? nil : recommendedLLMID)
+        }
+        let mlxPick = recommendedLLMID
+        if mlxPick == noneLLMID {
+            return LLMRecommendation(engine: .none, mlxModelID: nil)
+        }
+        return LLMRecommendation(engine: .mlx, mlxModelID: mlxPick)
     }
 }

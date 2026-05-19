@@ -97,9 +97,9 @@ final class AppState {
     /// Warm the active transcription engine + the LLM in the background so the
     /// first hotkey press doesn't pay for model load. Only models that are
     /// already on disk are loaded — we don't silently kick off a multi-GB
-    /// download at launch.
+    /// download at launch. Apple Foundation Models is system-resident with
+    /// no in-process load step, so there's nothing to preload for that engine.
     func preloadModels() {
-        let llmID = settings.llmModelID
         let manager = ModelManager.shared
         manager.refreshCachedStates()
 
@@ -115,8 +115,8 @@ final class AppState {
                 Task { try? await ParakeetServiceHolder.shared.ensureLoaded(modelID: id) }
             }
         }
-        if llmID != ModelCatalog.noneLLMID, manager.llmStates[llmID] == .ready {
-            Task { try? await LLMServiceHolder.shared.ensureLoaded(modelID: llmID) }
+        if settings.llmEngine == .mlx, manager.llmStates[settings.llmModelID] == .ready {
+            Task { try? await MLXLLMServiceHolder.shared.ensureLoaded(modelID: settings.llmModelID) }
         }
     }
 
