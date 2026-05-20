@@ -148,6 +148,16 @@ targets:
               - public.utf8-plain-text
               - NSStringPboardType
             NSReturnTypes: []
+        # Custom URL scheme — handles `dictator://settings` (opens the Settings
+        # window) and `dictator://onboarding` (re-runs the first-run wizard).
+        # Useful as a deep-link target for support docs and scripting; the menu
+        # bar is otherwise the only way to reach these surfaces in an accessory
+        # app. CFBundleURLName uses reverse-DNS by convention so we don't clash
+        # with anyone else who happens to claim "dictator".
+        CFBundleURLTypes:
+          - CFBundleURLName: net.robgough.Dictator
+            CFBundleURLSchemes:
+              - dictator
     # Two entitlements files, swapped per build config via CODE_SIGN_ENTITLEMENTS
     # below. The only difference is `get-task-allow`:
     #   - Debug  → true  (lets Xcode's debugger attach)

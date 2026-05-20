@@ -11,6 +11,14 @@ final class AppState {
     var settings: DictatorSettings
     let pipeline: Pipeline
 
+    /// Captured `EnvironmentValues.openSettings` action, populated by the
+    /// SwiftUI tree the first time MenuBarContent's body runs. Stored here
+    /// so non-SwiftUI surfaces (the AppDelegate's URL handler, scripts
+    /// triggering `dictator://settings`) can open Settings without
+    /// SwiftUI's "use SettingsLink" runtime fault. Optional because the
+    /// menu-bar popover may not have rendered yet on a cold launch.
+    var openSettingsAction: (@MainActor () -> Void)?
+
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let assistantResultWindow = AssistantResultController()
