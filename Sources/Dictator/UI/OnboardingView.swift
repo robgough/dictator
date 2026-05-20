@@ -611,19 +611,41 @@ private struct ModelsStep: View {
     @Environment(AppState.self) private var state
     @State private var manager = ModelManager.shared
 
-    /// Recommended speech-to-text model. We hard-wire Parakeet v3 in the
-    /// wizard — it's faster than Whisper on Apple Silicon, smaller on disk,
-    /// and covers 25 European languages. Power users who want a Whisper
-    /// variant can switch in Settings → Models after onboarding.
-    private var transcriptionModel: ParakeetModel { ModelCatalog.defaultParakeet }
+    /// The Parakeet variant the user currently has selected. Defaults to v3
+    /// (multilingual) until they pick otherwise. Whisper power users can swap
+    /// engines entirely in Settings → Models after onboarding.
+    private var transcriptionModel: ParakeetModel {
+        ModelCatalog.parakeet(id: state.settings.parakeetModelID) ?? ModelCatalog.defaultParakeet
+    }
 
     var body: some View {
         @Bindable var s = state
         VStack(alignment: .leading, spacing: 14) {
             StepHeading(
                 title: "Download a transcription model",
-                detail: "Dictator needs at least one speech-to-text model on disk. We've picked a good default — you can switch later in Settings → Models."
+                detail: "Dictator needs at least one speech-to-text model on disk. Pick the variant that matches the language you'll be dictating in — you can change it later in Settings → Models."
             )
+
+            // Inline Parakeet variant picker. v3 covers 25 European languages
+            // out of the box; v2 is English-only with slightly better English
+            // WER. Showing the choice up front saves multilingual users from
+            // a "why can't it understand my Polish" first-run experience and
+            // English-only users from carrying multilingual model weight.
+            Picker("Model", selection: Binding(
+                get: { s.settings.parakeetModelID },
+                set: { newID in
+                    s.settings.parakeetModelID = newID
+                    if s.settings.transcriptionEngine != .parakeet {
+                        s.settings.transcriptionEngine = .parakeet
+                    }
+                    state.save()
+                }
+            )) {
+                ForEach(ModelCatalog.parakeetModels, id: \.id) { m in
+                    Text(m.displayName).tag(m.id)
+                }
+            }
+            .pickerStyle(.menu)
 
             ModelDownloadCard(
                 title: transcriptionModel.displayName,
@@ -647,7 +669,6 @@ private struct ModelsStep: View {
                 // transcribe with Whisper afterwards.
                 if s.settings.transcriptionEngine != .parakeet {
                     s.settings.transcriptionEngine = .parakeet
-                    s.settings.parakeetModelID = transcriptionModel.id
                     state.save()
                 }
             }
@@ -707,13 +728,39 @@ private struct LLMSection: View {
             case .apple:
                 OnboardingAppleFoundationCard(isRecommended: recommendation.engine == .apple)
             case .mlx:
+                // Inline model picker so the user can pick something other than
+                // the recommended default without finishing the wizard, going
+                // to Settings, switching, and downloading separately. Each
+                // catalog entry's RAM fit is shown beside the name so the
+                // tradeoff is visible at the point of choice.
+                Picker("Model", selection: Binding(
+                    get: { s.settings.llmModelID },
+                    set: { newID in
+                        s.settings.llmModelID = newID
+                        state.save()
+                    }
+                )) {
+                    ForEach(ModelCatalog.llmModels, id: \.id) { m in
+                        let fit = SystemMemory.fit(forModelRAM: m.approxRAMMB)
+                        let suffix: String = {
+                            switch fit {
+                            case .comfortable: return ""
+                            case .tight:       return " · Tight"
+                            case .tooLarge:    return " · Too large"
+                            }
+                        }()
+                        Text("\(m.displayName)\(suffix)").tag(m.id)
+                    }
+                }
+                .pickerStyle(.menu)
+
                 if let llm = ModelCatalog.llm(id: s.settings.llmModelID) {
                     let isRecommended = recommendation.engine == .mlx && recommendation.mlxModelID == llm.id
                     ModelDownloadCard(
                         title: llm.displayName,
                         subtitle: isRecommended
                             ? "Recommended for your Mac. Tidies punctuation, capitalisation, and structure after transcription."
-                            : "Tidies punctuation, capitalisation, and structure after transcription. Swap in Settings → Models.",
+                            : "Tidies punctuation, capitalisation, and structure after transcription.",
                         sizeMB: llm.approxSizeMB,
                         ramMB: llm.approxRAMMB,
                         state: manager.llmStates[llm.id] ?? .unknown,

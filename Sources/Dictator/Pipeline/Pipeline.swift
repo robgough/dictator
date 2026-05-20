@@ -64,6 +64,13 @@ final class Pipeline {
     private(set) var state: PipelineState = .idle
     private(set) var lastResult: String = ""
 
+    /// Mode driving the in-flight dictation. Captured at `startRecording()`
+    /// time from `settings.activeMode(forFrontmostBundleID:)`, then frozen
+    /// for the rest of the pipeline run so mid-recording cycling (Step 2)
+    /// affects only the current recording, and post-finish settings churn
+    /// can't change pass behaviour underneath us.
+    private(set) var currentMode: DictationMode = .write
+
     /// Fired after every successful Assistant Mode turn so the host can show
     /// (or refresh) the result window. `surfaceWindow` is true when the
     /// result wasn't pasted in place — either DRAFT mode or a paste-fallback
@@ -213,6 +220,32 @@ final class Pipeline {
         settings = new
     }
 
+    /// Rotates `currentMode` to the next entry in `settings.modes.filter(\.includeInCycle)`,
+    /// wrapping at the end. No-op outside `.recording` (mid-flight passes
+    /// have already snapshotted the mode; cycling after the user releases
+    /// the hotkey would have no effect anyway) and when the cycle has ≤1
+    /// entry. Plays a subtle click via `playArm()` so the user gets aural
+    /// confirmation without staring at the HUD.
+    func cycleMode() {
+        guard case .recording = state else { return }
+        let cycleable = settings.modes.filter { $0.includeInCycle }
+        guard cycleable.count > 1 else { return }
+        let currentIdx = cycleable.firstIndex(where: { $0.id == currentMode.id }) ?? -1
+        let nextIdx = (currentIdx + 1) % cycleable.count
+        currentMode = cycleable[nextIdx]
+        if settings.playSounds { SoundEffects.shared.playArm() }
+    }
+
+    /// Next mode in the cycle order, used by the HUD to render
+    /// "Tab → <next>" while recording. Returns nil when ≤1 cycleable mode.
+    var nextCycleMode: DictationMode? {
+        let cycleable = settings.modes.filter { $0.includeInCycle }
+        guard cycleable.count > 1 else { return nil }
+        let currentIdx = cycleable.firstIndex(where: { $0.id == currentMode.id }) ?? -1
+        let nextIdx = (currentIdx + 1) % cycleable.count
+        return cycleable[nextIdx]
+    }
+
     func startRecording() {
         // If we're sitting in a terminal state (.done / .failed) when the hotkey
         // fires again, snap back to .idle right now. Previously we cancelled the
@@ -227,6 +260,12 @@ final class Pipeline {
             break
         }
         guard case .idle = state else { return }
+        // Snapshot the mode that will drive this dictation. Resolution order:
+        // (1) any mode bound to the frontmost app's bundle ID, (2) the user's
+        // configured defaultModeID. Frozen here so mid-pipeline settings
+        // churn or app-switching can't change pass behaviour underneath us.
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        currentMode = settings.activeMode(forFrontmostBundleID: bundleID)
         // Recorder start is non-blocking and asynchronous — the actual
         // engine setup runs off-main so Bluetooth HFP negotiation (2–5 s on
         // AirPods Max) doesn't beach-ball the main thread. Pipeline sits in
@@ -298,17 +337,19 @@ final class Pipeline {
         // local models — especially Apple Foundation's ~3 B — are unreliable
         // at the cue rules in the formatter prompt, so we don't depend on
         // them. The formatter prompt keeps the rules as a backstop for
-        // anything the curated map misses.
-        if settings.spokenCuesEnabled {
+        // anything the curated map misses. Per-mode gate so users can have
+        // a "raw" mode where "comma" and "period" stay literal words.
+        if currentMode.spokenCuesEnabled {
             trimmed = SpokenCues.apply(to: trimmed)
         }
 
         var formatted: String
         let formatterLLM = currentLLM()
-        if formatterLLM == nil {
-            // User opted out of LLM formatting — ship Whisper's raw transcript through
-            // the dictionary pass and out. Skips state .formatting so the HUD doesn't
-            // flash a "Formatting…" frame that never does anything.
+        if formatterLLM == nil || !currentMode.formattingPassEnabled {
+            // No LLM engine, OR the active mode opts out of Pass 1 (e.g. Quick).
+            // Ship Whisper's raw transcript through the dictionary pass and out.
+            // Skips state .formatting so the HUD doesn't flash a "Formatting…"
+            // frame that never does anything.
             formatted = trimmed
             inFlight.formatted = nil
         } else if Self.looksLikeQuestion(trimmed) {
@@ -325,7 +366,7 @@ final class Pipeline {
             do {
                 formatted = try await formatterLLM!.format(
                     text: trimmed,
-                    systemPrompt: settings.effectiveFormattingPrompt
+                    systemPrompt: currentMode.effectiveFormattingPrompt
                 )
             } catch {
                 // Fallback: ship raw transcript if LLM fails
@@ -354,8 +395,15 @@ final class Pipeline {
 
         // User dictionary: deterministic case-insensitive whole-word substitutions
         // applied right after the formatter pass. Subsequent passes (grammar,
-        // structure) preserve words, so corrections survive intact.
-        let corrected = Vocabulary.apply(settings.vocabulary, to: formatted)
+        // structure) preserve words, so corrections survive intact. The list
+        // itself is global; the per-mode toggle decides whether to apply it
+        // (a "raw" mode opts out so words pass through untouched).
+        let corrected: String
+        if currentMode.vocabularyEnabled {
+            corrected = Vocabulary.apply(settings.vocabulary, to: formatted)
+        } else {
+            corrected = formatted
+        }
         if corrected != formatted { inFlight.dictionaryCorrected = corrected }
 
         if Task.isCancelled { return }
@@ -376,13 +424,13 @@ final class Pipeline {
     }
 
     private func maybeFixGrammar(formatted: String) async -> String {
-        guard settings.grammarPassMode != .off else { return formatted }
+        guard currentMode.grammarPassMode != .off else { return formatted }
         guard let llm = currentLLM() else { return formatted }
         state = .fixingGrammar
         do {
             let tidied = try await llm.tidyGrammar(
                 text: formatted,
-                systemPrompt: settings.effectiveGrammarPrompt
+                systemPrompt: currentMode.effectiveGrammarPrompt
             )
             // Empty output usually means the model echoed the wrapping and the
             // post-processor collapsed it to nothing. Treat as failure.
@@ -396,12 +444,12 @@ final class Pipeline {
             // rejected. The 0.30 ceiling on the stripped comparison still
             // catches actual paraphrase / hallucination.
             let accepted: Bool
-            switch settings.grammarPassMode {
+            switch currentMode.grammarPassMode {
             case .off:
                 accepted = false // unreachable — short-circuit above
             case .tidy:
                 let drift = Self.wordEditFraction(from: formatted, to: tidied)
-                accepted = drift <= settings.grammarPassMaxEditFraction
+                accepted = drift <= currentMode.grammarPassMaxEditFraction
             case .tighten:
                 let drift = Self.wordEditFractionStrippingFillers(from: formatted, to: tidied)
                 accepted = drift <= 0.30
@@ -417,16 +465,16 @@ final class Pipeline {
     }
 
     private func maybeRestructure(formatted: String) async -> String {
-        guard settings.structuralPassEnabled else { return formatted }
+        guard currentMode.structuralPassEnabled else { return formatted }
         guard let llm = currentLLM() else { return formatted }
         let wordCount = Self.wordSequence(formatted).count
-        guard wordCount >= settings.structuralPassMinWords else { return formatted }
+        guard wordCount >= currentMode.structuralPassMinWords else { return formatted }
 
         state = .restructuring
         do {
             let restructured = try await llm.restructure(
                 text: formatted,
-                systemPrompt: settings.effectiveStructuralPrompt
+                systemPrompt: currentMode.effectiveStructuralPrompt
             )
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
@@ -581,7 +629,7 @@ final class Pipeline {
         // chunk. Particularly important when piping dictation straight into chat apps
         // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
         var text = text
-        if settings.spokenCuesEnabled {
+        if currentMode.spokenCuesEnabled {
             // Strip LLM-introduced separators between adjacent emojis
             // ("🔥, 🎉" → "🔥 🎉"). Apple Foundation in particular tends to
             // list-format substituted emojis.
@@ -847,10 +895,11 @@ final class Pipeline {
         }
         // Apply spoken-cue substitution to the instruction only — the
         // selection is the user's pre-existing text from another app and
-        // shouldn't be touched.
-        if settings.spokenCuesEnabled {
-            instruction = SpokenCues.apply(to: instruction)
-        }
+        // shouldn't be touched. Assistant Mode is a separate flow with no
+        // mode binding, so the substitution is always on here — disabling
+        // it would silently swallow user-spoken punctuation in their
+        // instruction with no surface to expose it.
+        instruction = SpokenCues.apply(to: instruction)
 
         // Resolve prior context for this turn. If continuing, take the verbatim
         // tail (turns after the compaction cutoff) plus the existing summary.
@@ -983,11 +1032,11 @@ final class Pipeline {
 
     private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
-        // same reasoning as `finish()`.
+        // same reasoning as `finish()`. Assistant Mode is mode-less, so the
+        // emoji-tidy pass always runs — matches the always-on substitution on
+        // the instruction side.
         var text = text
-        if settings.spokenCuesEnabled {
-            text = SpokenCues.tidyDelivery(text)
-        }
+        text = SpokenCues.tidyDelivery(text)
         text = Self.withTrailingSpace(text)
         lastResult = text
         var pasted = false

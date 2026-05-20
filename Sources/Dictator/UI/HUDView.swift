@@ -111,8 +111,22 @@ struct HUDView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    // Mode chip — dictation only. Modes don't apply to
+                    // Assistant Mode (separate flow, separate prompt). The
+                    // "Tab → next" suffix only renders when Tab cycling will
+                    // actually work — i.e. when Accessibility is granted so
+                    // the CGEventTap can swallow Tab before it inserts a tab
+                    // character into the focused app. Without AX we'd be
+                    // promising a feature we can't deliver.
+                    if !isAssistant {
+                        let canCycle = TextInjector.hasAccessibilityPermission()
+                        ModeChip(
+                            name: state.pipeline.currentMode.name,
+                            nextName: canCycle ? state.pipeline.nextCycleMode?.name : nil
+                        )
+                    }
                 }
-                .frame(maxWidth: 180, alignment: .trailing)
+                .frame(maxWidth: 200, alignment: .trailing)
             }
         case .transcribing:
             StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
@@ -201,6 +215,43 @@ private struct StatusRow: View {
                 .controlSize(.small)
         }
         .onAppear { pulse = true }
+    }
+}
+
+/// Compact pill that names the active dictation mode, plus a "Tab → <next>"
+/// suffix when the cycle has more than one entry. Renders inline in the HUD's
+/// trailing column during `.recording` (dictation flow only).
+private struct ModeChip: View {
+    let name: String
+    let nextName: String?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(name)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.brandBlue)
+            if let nextName {
+                Text("⇥")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                Text(nextName)
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill(Color.brandBlue.opacity(0.12))
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.brandBlue.opacity(0.25), lineWidth: 0.5)
+        )
+        .padding(.top, 1)
     }
 }
 

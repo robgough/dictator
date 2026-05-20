@@ -150,6 +150,24 @@ enum SpokenCues {
         s = s.replacing(/[ \t]+([,.!?;:])/) { match in
             String(match.1)
         }
+        // Strong terminators absorb adjacent soft punctuation. Whisper
+        // routinely adds a trailing "." to spoken cues — "question mark"
+        // arrives as "Question mark." which substitutes to "?." here. The
+        // "?" already terminates the sentence; the period is noise.
+        //
+        // Applies in both directions:
+        // - "?." / "!,"  → "?", "!"   (soft punctuation following ! or ?)
+        // - ".?" / ",!"  → "?", "!"   (soft punctuation preceding ! or ?)
+        //
+        // ".." (ellipsis without the dedicated glyph) and "!!" / "??"
+        // multi-character emphasis are explicitly preserved — they're
+        // intentional speech-like punctuation, not Whisper noise.
+        s = s.replacing(/([?!])[.,;:]+/) { match in
+            String(match.1)
+        }
+        s = s.replacing(/[.,;:]+([?!])/) { match in
+            String(match.1)
+        }
         // Collapse runs of horizontal whitespace introduced by substitutions
         // landing next to existing spaces. No capture group → literal "" is
         // fine on the String form.

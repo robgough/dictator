@@ -14,6 +14,12 @@ final class HUDController {
     /// don't quietly listen for Escape while idle.
     private let escapeMonitor = EscapeCancelMonitor()
     private var escapeActive = false
+    /// Listens for Tab during `.recording` and cycles the active DictationMode.
+    /// Lifecycle is gated to `.recording` only — outside recording, cycling
+    /// has nothing to act on, and we don't want to consume Tab events the
+    /// user is intentionally sending elsewhere.
+    private let recordingMonitor = RecordingKeyMonitor()
+    private var recordingMonitorActive = false
 
     init(state: AppState) {
         self.state = state
@@ -78,6 +84,19 @@ final class HUDController {
         } else if !s.canCancel && escapeActive {
             escapeMonitor.stop()
             escapeActive = false
+        }
+
+        // Mode-cycling monitor: gated tightly to `.recording`. We don't want
+        // to consume Tab during warmup, transcription, or assistant flows.
+        let isRecording: Bool = { if case .recording = s { return true } else { return false } }()
+        if isRecording && !recordingMonitorActive {
+            recordingMonitor.start { [weak self] in
+                self?.state.pipeline.cycleMode()
+            }
+            recordingMonitorActive = true
+        } else if !isRecording && recordingMonitorActive {
+            recordingMonitor.stop()
+            recordingMonitorActive = false
         }
 
         if active && !visible {

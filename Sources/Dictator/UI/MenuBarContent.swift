@@ -12,10 +12,19 @@ struct MenuBarContent: View {
     @State private var justCopied: UUID?
 
     var body: some View {
+        @Bindable var s = state
         VStack(alignment: .leading, spacing: 10) {
             header
             Divider()
             statusRow
+
+            // Default mode picker — only shown once the user has more than the
+            // built-in Quick (i.e. after migration or once they add a custom
+            // mode). One mode = nothing to pick between.
+            if state.settings.modes.count > 1 {
+                Divider()
+                modePicker(bindable: $s)
+            }
 
             if !conversations.conversations.isEmpty {
                 Divider()
@@ -79,6 +88,54 @@ struct MenuBarContent: View {
             return !ModelCatalog.parakeetModels.contains { modelManager.parakeetStates[$0.id] == .ready }
         case .whisper:
             return !ModelCatalog.whisperModels.contains { modelManager.whisperStates[$0.id] == .ready }
+        }
+    }
+
+    /// Inline mode picker. Renders the user's modes as a horizontal pill row
+    /// rather than a Menu picker — fewer clicks, and the selected mode is
+    /// always visible in the menu bar without expanding anything.
+    @ViewBuilder
+    private func modePicker(bindable s: Bindable<AppState>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Default mode")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            HStack(spacing: 6) {
+                ForEach(state.settings.modes) { mode in
+                    Button {
+                        state.settings.defaultModeID = mode.id
+                        state.save()
+                    } label: {
+                        Text(mode.name)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule().fill(
+                                    state.settings.defaultModeID == mode.id
+                                    ? Color.brandBlue.opacity(0.20)
+                                    : Color.secondary.opacity(0.10)
+                                )
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(
+                                    state.settings.defaultModeID == mode.id
+                                    ? Color.brandBlue.opacity(0.45)
+                                    : Color.clear,
+                                    lineWidth: 1
+                                )
+                            )
+                            .foregroundStyle(
+                                state.settings.defaultModeID == mode.id
+                                ? Color.brandBlue
+                                : .primary
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
         }
     }
 

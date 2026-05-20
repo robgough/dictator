@@ -66,17 +66,6 @@ struct DictatorSettings: Codable, Equatable {
     var playSounds: Bool
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
-    /// Deterministic substitution of spoken cues — "comma" → ",", "new
-    /// paragraph" → blank line, "fire emoji" → 🔥, etc. Applied to the raw
-    /// transcript before any LLM pass, so it works for every engine and even
-    /// when LLM is set to None.
-    var spokenCuesEnabled: Bool
-    var structuralPassEnabled: Bool
-    var structuralPassMinWords: Int
-    var grammarPassMode: GrammarPassMode
-    /// Applies to `.tidy` only. The `.tighten` mode uses its own (more permissive)
-    /// validator — see `Pipeline.maybeFixGrammar`.
-    var grammarPassMaxEditFraction: Double
     var vocabulary: [VocabularyEntry]
     var assistantTriggerMode: TriggerMode
     /// The user's preferred name. Used to (a) bias Whisper toward the correct
@@ -85,21 +74,22 @@ struct DictatorSettings: Codable, Equatable {
     /// Empty string means "not set" — no name biasing is applied.
     var userName: String
 
-    // Prompt customisation model:
-    // - The "built-in" prompts (DictatorSettings.builtinXxxPrompt) are the source of
-    //   truth and ship with the app. Users can't edit them.
-    // - `xxxPromptAddendum` is small extra text that gets appended under a clearly-
-    //   labelled header. Use for personal tweaks like "always use British spelling".
-    //   Empty means "no addendum — just use the built-in".
-    // - `xxxPromptOverride` is an escape hatch. When non-nil, the built-in is
-    //   replaced entirely with the user's text (addendum is ignored). Settings UI
-    //   shows a warning that built-in updates won't apply.
-    var formattingPromptAddendum: String
-    var formattingPromptOverride: String?
-    var grammarPromptAddendum: String
-    var grammarPromptOverride: String?
-    var structuralPromptAddendum: String
-    var structuralPromptOverride: String?
+    /// All available dictation modes, in display + cycle order. Always contains
+    /// at least the locked Quick mode. The user picks `defaultModeID` from
+    /// these; mid-recording the active mode cycles through entries with
+    /// `includeInCycle == true`.
+    var modes: [DictationMode]
+    /// ID of the mode used at the start of every dictation, when no app binding
+    /// matches. Guaranteed to reference one of `modes` (the loader and any
+    /// mutation that removes a mode re-points this if it would dangle).
+    var defaultModeID: UUID
+
+    // Assistant Mode prompt customisation. Stays global — Assistant Mode is a
+    // separate flow with its own hotkey, not part of the dictation pipeline.
+    // - `xxxPromptAddendum` appends under a labelled header. Empty = "no
+    //   addendum — just use the built-in".
+    // - `xxxPromptOverride` (non-nil) replaces the built-in wholesale; the
+    //   Settings UI shows a warning that built-in updates won't apply.
     var assistantPromptAddendum: String
     var assistantPromptOverride: String?
     /// Flips to true the first time the user finishes (or explicitly skips)
@@ -119,20 +109,11 @@ struct DictatorSettings: Codable, Equatable {
         playSounds: true,
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
-        spokenCuesEnabled: true,
-        structuralPassEnabled: true,
-        structuralPassMinWords: 30,
-        grammarPassMode: .tighten,
-        grammarPassMaxEditFraction: 0.15,
         vocabulary: [],
         assistantTriggerMode: .rightOption,
         userName: "",
-        formattingPromptAddendum: "",
-        formattingPromptOverride: nil,
-        grammarPromptAddendum: "",
-        grammarPromptOverride: nil,
-        structuralPromptAddendum: "",
-        structuralPromptOverride: nil,
+        modes: [.quick, .write],
+        defaultModeID: DictationMode.writeID,
         assistantPromptAddendum: "",
         assistantPromptOverride: nil,
         hasCompletedOnboarding: false
@@ -148,20 +129,11 @@ struct DictatorSettings: Codable, Equatable {
         playSounds: Bool,
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
-        spokenCuesEnabled: Bool,
-        structuralPassEnabled: Bool,
-        structuralPassMinWords: Int,
-        grammarPassMode: GrammarPassMode,
-        grammarPassMaxEditFraction: Double,
         vocabulary: [VocabularyEntry],
         assistantTriggerMode: TriggerMode,
         userName: String,
-        formattingPromptAddendum: String,
-        formattingPromptOverride: String?,
-        grammarPromptAddendum: String,
-        grammarPromptOverride: String?,
-        structuralPromptAddendum: String,
-        structuralPromptOverride: String?,
+        modes: [DictationMode],
+        defaultModeID: UUID,
         assistantPromptAddendum: String,
         assistantPromptOverride: String?,
         hasCompletedOnboarding: Bool
@@ -175,20 +147,11 @@ struct DictatorSettings: Codable, Equatable {
         self.playSounds = playSounds
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
-        self.spokenCuesEnabled = spokenCuesEnabled
-        self.structuralPassEnabled = structuralPassEnabled
-        self.structuralPassMinWords = structuralPassMinWords
-        self.grammarPassMode = grammarPassMode
-        self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
         self.vocabulary = vocabulary
         self.assistantTriggerMode = assistantTriggerMode
         self.userName = userName
-        self.formattingPromptAddendum = formattingPromptAddendum
-        self.formattingPromptOverride = formattingPromptOverride
-        self.grammarPromptAddendum = grammarPromptAddendum
-        self.grammarPromptOverride = grammarPromptOverride
-        self.structuralPromptAddendum = structuralPromptAddendum
-        self.structuralPromptOverride = structuralPromptOverride
+        self.modes = modes
+        self.defaultModeID = defaultModeID
         self.assistantPromptAddendum = assistantPromptAddendum
         self.assistantPromptOverride = assistantPromptOverride
         self.hasCompletedOnboarding = hasCompletedOnboarding
@@ -223,68 +186,149 @@ struct DictatorSettings: Codable, Equatable {
         self.playSounds             = try c.decodeIfPresent(Bool.self,        forKey: .playSounds)             ?? d.playSounds
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
-        self.spokenCuesEnabled      = try c.decodeIfPresent(Bool.self,        forKey: .spokenCuesEnabled)      ?? d.spokenCuesEnabled
-        self.structuralPassEnabled  = try c.decodeIfPresent(Bool.self,        forKey: .structuralPassEnabled)  ?? d.structuralPassEnabled
-        self.structuralPassMinWords = try c.decodeIfPresent(Int.self,         forKey: .structuralPassMinWords) ?? d.structuralPassMinWords
-        // Grammar pass migration: pre-tighten installs had `grammarPassEnabled: Bool`.
-        // New installs persist `grammarPassMode: GrammarPassMode`. Prefer the new
-        // key; fall back to the old bool (true → .tidy, false → .off) so existing
-        // users keep behaviour. Default for fresh installs is .off (set in defaults).
-        if let mode = try c.decodeIfPresent(GrammarPassMode.self, forKey: .grammarPassMode) {
-            self.grammarPassMode = mode
-        } else {
-            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
-            if let oldEnabled = try legacy.decodeIfPresent(Bool.self, forKey: .grammarPassEnabled) {
-                self.grammarPassMode = oldEnabled ? .tidy : .off
-            } else {
-                self.grammarPassMode = d.grammarPassMode
-            }
-        }
-        self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self,  forKey: .grammarPassMaxEditFraction) ?? d.grammarPassMaxEditFraction
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
         self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
-        self.formattingPromptAddendum = try c.decodeIfPresent(String.self, forKey: .formattingPromptAddendum) ?? d.formattingPromptAddendum
-        self.formattingPromptOverride = try c.decodeIfPresent(String.self, forKey: .formattingPromptOverride) ?? d.formattingPromptOverride
-        self.grammarPromptAddendum    = try c.decodeIfPresent(String.self, forKey: .grammarPromptAddendum)    ?? d.grammarPromptAddendum
-        self.grammarPromptOverride    = try c.decodeIfPresent(String.self, forKey: .grammarPromptOverride)    ?? d.grammarPromptOverride
-        self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? d.structuralPromptAddendum
-        self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride) ?? d.structuralPromptOverride
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
         self.assistantPromptOverride  = try c.decodeIfPresent(String.self, forKey: .assistantPromptOverride)  ?? d.assistantPromptOverride
+
+        // Modes migration. Pre-modes installs persisted the pass gates and the
+        // three dictation prompt fields at the top level; we now bundle them
+        // into named DictationMode entries. If `modes` is already in the
+        // persisted JSON, use it. Otherwise synthesise a Write mode seeded
+        // from the legacy fields (so tuned prompts and pass settings survive
+        // intact) and a locked Quick mode that skips every LLM pass.
+        if let decodedModes = try c.decodeIfPresent([DictationMode].self, forKey: .modes), !decodedModes.isEmpty {
+            self.modes = decodedModes
+        } else {
+            self.modes = Self.synthesiseLegacyModes(from: decoder)
+        }
+        let decodedDefaultID = try c.decodeIfPresent(UUID.self, forKey: .defaultModeID)
+        if let decodedDefaultID, self.modes.contains(where: { $0.id == decodedDefaultID }) {
+            self.defaultModeID = decodedDefaultID
+        } else {
+            // Prefer the seed Write mode if it survived migration; otherwise
+            // fall back to the first non-Quick mode, or finally Quick itself.
+            if let write = self.modes.first(where: { $0.id == DictationMode.writeID }) {
+                self.defaultModeID = write.id
+            } else if let firstUnlocked = self.modes.first(where: { !$0.isLocked }) {
+                self.defaultModeID = firstUnlocked.id
+            } else {
+                self.defaultModeID = self.modes.first?.id ?? DictationMode.quickID
+            }
+        }
+
         // Existing installs that pre-date the wizard skip onboarding — they
         // already have models + permissions configured, and we don't want to
         // ambush them with a setup window on next launch.
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
     }
 
-    // MARK: - Effective prompts (built-in + addendum, or override)
-
-    var effectiveFormattingPrompt: String {
-        Self.combine(builtin: Self.builtinFormattingPrompt,
-                     override: formattingPromptOverride,
-                     addendum: formattingPromptAddendum)
-    }
-    var effectiveGrammarPrompt: String {
-        // Tidy vs tighten pick different built-ins; override (when set) still
-        // replaces wholesale so users can pin a single custom prompt without
-        // it silently swapping under them when they change the mode.
-        let builtin: String
-        switch grammarPassMode {
-        case .off, .tidy:
-            builtin = Self.builtinGrammarPrompt
-        case .tighten:
-            builtin = Self.builtinTightenPrompt
+    /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
+    /// every legacy pass + prompt field; Quick is the no-LLM floor. Pre-tighten
+    /// installs that still carry `grammarPassEnabled: Bool` are bridged here
+    /// (true → .tidy, false → .off) just like the previous decoder did.
+    private static func synthesiseLegacyModes(from decoder: Decoder) -> [DictationMode] {
+        // decodeIfPresent returns T?, `try?` adds another optional layer,
+        // optional-chaining on `c` adds a third — so each read is T??? in the
+        // worst case. The helper below collapses the noise: it returns the
+        // first non-nil at any level, or `fallback` if everything decodes nil.
+        func read<T: Decodable>(_ keyPath: LegacyDictationModeKeys, _ type: T.Type, _ fallback: T) -> T {
+            guard let c = try? decoder.container(keyedBy: LegacyDictationModeKeys.self) else { return fallback }
+            return ((try? c.decodeIfPresent(type, forKey: keyPath)) ?? nil) ?? fallback
         }
-        return Self.combine(builtin: builtin,
-                            override: grammarPromptOverride,
-                            addendum: grammarPromptAddendum)
+        func readOptional<T: Decodable>(_ keyPath: LegacyDictationModeKeys, _ type: T.Type) -> T? {
+            guard let c = try? decoder.container(keyedBy: LegacyDictationModeKeys.self) else { return nil }
+            return (try? c.decodeIfPresent(type, forKey: keyPath)) ?? nil
+        }
+
+        let legacyGrammarMode: GrammarPassMode = {
+            if let m = readOptional(.grammarPassMode, GrammarPassMode.self) {
+                return m
+            }
+            if let legacy = try? decoder.container(keyedBy: LegacyCodingKeys.self),
+               let oldEnabled = (try? legacy.decodeIfPresent(Bool.self, forKey: .grammarPassEnabled)) ?? nil {
+                return oldEnabled ? .tidy : .off
+            }
+            return .tighten  // matches the pre-modes default
+        }()
+
+        // Pre-modes installs persisted `spokenCuesEnabled` at the top level.
+        // Inherit it onto the migrated Write mode so people who'd explicitly
+        // turned off spoken cues don't get them silently re-enabled. Defaults
+        // to on for blobs that never had the field.
+        let legacySpokenCues = read(.spokenCuesEnabled, Bool.self, true)
+
+        let write = DictationMode(
+            id: DictationMode.writeID,
+            name: "Write",
+            isLocked: false,
+            includeInCycle: true,
+            appBundleIDs: [],
+            spokenCuesEnabled: legacySpokenCues,
+            vocabularyEnabled: true,
+            formattingPassEnabled: true,
+            grammarPassMode: legacyGrammarMode,
+            grammarPassMaxEditFraction: read(.grammarPassMaxEditFraction, Double.self, 0.15),
+            structuralPassEnabled: read(.structuralPassEnabled, Bool.self, true),
+            structuralPassMinWords: read(.structuralPassMinWords, Int.self, 30),
+            formattingPromptAddendum: read(.formattingPromptAddendum, String.self, ""),
+            formattingPromptOverride: readOptional(.formattingPromptOverride, String.self),
+            grammarPromptAddendum: read(.grammarPromptAddendum, String.self, ""),
+            grammarPromptOverride: readOptional(.grammarPromptOverride, String.self),
+            structuralPromptAddendum: read(.structuralPromptAddendum, String.self, ""),
+            structuralPromptOverride: readOptional(.structuralPromptOverride, String.self)
+        )
+        // Quick is locked to "no LLM, but pre-processing on" — the migrated
+        // user's spoken-cue preference applies to Write (their primary mode),
+        // not to Quick. Quick's behaviour is deliberately uniform across
+        // installs.
+        return [DictationMode.quick, write]
     }
-    var effectiveStructuralPrompt: String {
-        Self.combine(builtin: Self.builtinStructuralPrompt,
-                     override: structuralPromptOverride,
-                     addendum: structuralPromptAddendum)
+
+    /// Keys that exist only in pre-modes persisted blobs. We never emit these
+    /// any more, but we still read them during migration to seed the Write mode
+    /// from the user's prior tuning. Once we're confident no installed copy
+    /// could still be holding the pre-modes shape, this can be deleted.
+    private enum LegacyDictationModeKeys: String, CodingKey {
+        case grammarPassMode
+        case grammarPassMaxEditFraction
+        case structuralPassEnabled
+        case structuralPassMinWords
+        case formattingPromptAddendum
+        case formattingPromptOverride
+        case grammarPromptAddendum
+        case grammarPromptOverride
+        case structuralPromptAddendum
+        case structuralPromptOverride
+        case spokenCuesEnabled
     }
+
+    // MARK: - Mode lookup
+
+    /// Resolves the mode used at the start of a dictation. If the focused
+    /// app's bundle ID matches any mode's `appBundleIDs`, that mode wins —
+    /// first match in `modes` order. Otherwise the user's `defaultModeID`
+    /// is used. Falls back to Quick if the default has somehow been deleted.
+    func activeMode(forFrontmostBundleID bundleID: String?) -> DictationMode {
+        if let bundleID, !bundleID.isEmpty,
+           let bound = modes.first(where: { $0.appBundleIDs.contains(bundleID) }) {
+            return bound
+        }
+        if let def = modes.first(where: { $0.id == defaultModeID }) { return def }
+        if let any = modes.first { return any }
+        return .quick
+    }
+
+    /// The user's currently-selected default mode, ignoring any app binding.
+    /// Used by Settings UI surfaces that edit "the default mode" rather than
+    /// the active one for a given dictation. Falls back to Quick if missing.
+    var defaultMode: DictationMode {
+        modes.first(where: { $0.id == defaultModeID }) ?? modes.first ?? DictationMode.quick
+    }
+
+    // MARK: - Effective prompts
+
     var effectiveAssistantPrompt: String {
         // Assistant Mode drafts emails, replies, messages — it's the one pass
         // where the LLM actually needs to know who's writing. We do TWO things:

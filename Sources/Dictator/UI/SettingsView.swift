@@ -17,8 +17,10 @@ struct SettingsView: View {
                 .tabItem { Label("Input", systemImage: "mic") }
             ModelsPane()
                 .tabItem { Label("Models", systemImage: "cpu") }
-            PromptPane()
-                .tabItem { Label("Prompt", systemImage: "text.alignleft") }
+            ModesPane()
+                .tabItem { Label("Modes", systemImage: "rectangle.stack") }
+            AssistantPromptPane()
+                .tabItem { Label("Assistant", systemImage: "wand.and.stars") }
             DictionaryPane()
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
             HistoryPane()
@@ -41,9 +43,40 @@ private struct AboutPane: View {
                 AboutAuthor()
                 AboutPrivacy()
                 AboutCredits()
+                AboutUtilities()
             }
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// "Open setup wizard…" affordance. The menu bar's Setup entry only shows
+/// when something's actually missing (mic or transcription model); once you
+/// have a working install the menu bar hides it. This permanent button lets
+/// you re-open the wizard any time — useful for walking through it again,
+/// trying a different transcription / LLM model from the wizard's pickers,
+/// or just re-checking permissions.
+private struct AboutUtilities: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        AboutSection(title: "Utilities") {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("First-run wizard")
+                        .font(.callout.weight(.medium))
+                    Text("Re-opens the setup walkthrough — permissions, transcription model, formatting LLM. Safe to run on an already-configured install; nothing is reset, you can step straight through to the end.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button("Open…") {
+                    state.showOnboarding()
+                }
+                .controlSize(.small)
+            }
         }
     }
 }
@@ -1466,60 +1499,7 @@ private struct GeneralPane: View {
                     }
                 SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant.")
 
-                Toggle("Spoken punctuation and emojis", isOn: $s.settings.spokenCuesEnabled)
-                    .onChange(of: s.settings.spokenCuesEnabled) { _, _ in state.save() }
-                SectionFootnote("Substitutes spoken cues — \"comma\" → \",\", \"new paragraph\" → blank line, \"fire emoji\" → 🔥, and so on — deterministically before any LLM pass. Works for every engine, even No LLM. Single-word cues like \"period\" and \"comma\" always substitute; turn this off if your dictations frequently use those words literally.")
-
-                let llmDisabled = s.settings.llmEngine == .none
-
-                Picker("Grammar pass (second LLM pass)", selection: $s.settings.grammarPassMode) {
-                    Text("Off").tag(GrammarPassMode.off)
-                    Text("Tidy grammar").tag(GrammarPassMode.tidy)
-                    Text("Tidy and tighten").tag(GrammarPassMode.tighten)
-                }
-                .onChange(of: s.settings.grammarPassMode) { _, _ in state.save() }
-                .disabled(llmDisabled)
-                if s.settings.grammarPassMode == .tidy {
-                    Stepper(value: $s.settings.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
-                        HStack {
-                            Text("Discard if more than")
-                            Spacer()
-                            Text("\(Int(s.settings.grammarPassMaxEditFraction * 100))% of words change")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
-                    .disabled(llmDisabled)
-                }
-                switch s.settings.grammarPassMode {
-                case .off:
-                    SectionFootnote("Skip the grammar pass. The formatter's output ships unchanged.")
-                case .tidy:
-                    SectionFootnote("Fixes obvious grammar errors (contractions, agreement, duplicate words) while preserving your voice and filler words. The pass is rejected if too many words change.")
-                case .tighten:
-                    SectionFootnote("Removes filler words (\"um\", \"uh\", \"like\", \"you know\"), false starts and self-corrections, and lightly tightens phrasing — so the output reads more like writing than speech. Meaning is preserved; substantive rewrites are still rejected.")
-                }
-
-                Toggle("Restructure long dictations into paragraphs / lists", isOn: $s.settings.structuralPassEnabled)
-                    .onChange(of: s.settings.structuralPassEnabled) { _, _ in state.save() }
-                    .disabled(llmDisabled)
-                Stepper(value: $s.settings.structuralPassMinWords, in: 10...200, step: 5) {
-                    HStack {
-                        Text("Trigger when transcript reaches")
-                        Spacer()
-                        Text("\(s.settings.structuralPassMinWords) words")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .onChange(of: s.settings.structuralPassMinWords) { _, _ in state.save() }
-                .disabled(!s.settings.structuralPassEnabled || llmDisabled)
-                SectionFootnote("Adds paragraph breaks and bullet lists for longer dictations. The pass is rejected if it changes any of your words.")
-
-                if llmDisabled {
-                    SectionFootnote("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab.")
-                }
+                SectionFootnote("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥), vocabulary application, grammar, structure, and per-pass prompts are all part of each **Mode** — see the Modes tab. The default mode is also pickable from the menu bar.")
             }
         }
         .formStyle(.grouped)
@@ -2347,57 +2327,619 @@ private struct TrashTapGlyph: View {
     }
 }
 
-private struct PromptPane: View {
+private struct ModesPane: View {
     @Environment(AppState.self) private var state
-    @State private var selected: Tab = .formatting
-
-    enum Tab: String, CaseIterable, Identifiable {
-        case formatting = "Pass 1 · Formatting"
-        case grammar    = "Pass 2 · Grammar"
-        case structure  = "Pass 3 · Structure"
-        case assistant  = "Assistant Mode"
-        var id: String { rawValue }
-    }
+    @State private var selectedID: UUID?
 
     var body: some View {
         @Bindable var s = state
         VStack(alignment: .leading, spacing: 10) {
-            Picker("", selection: $selected) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-
-            switch selected {
-            case .formatting:
-                PromptCustomiser(
-                    description: "Punctuation, emojis, capitalisation. Runs on every dictation.",
-                    builtin: DictatorSettings.builtinFormattingPrompt,
-                    addendum: $s.settings.formattingPromptAddendum,
-                    override: $s.settings.formattingPromptOverride
-                ) { state.save() }
-            case .grammar:
-                PromptCustomiser(
-                    description: "Fixes obvious grammar errors after pass 1. Runs only when **Tidy grammar** is enabled. Result is discarded if too many words change.",
-                    builtin: DictatorSettings.builtinGrammarPrompt,
-                    addendum: $s.settings.grammarPromptAddendum,
-                    override: $s.settings.grammarPromptOverride
-                ) { state.save() }
-            case .structure:
-                PromptCustomiser(
-                    description: "Adds paragraph breaks and bullet lists. Runs only when **Restructure long dictations** is enabled and the transcript is long enough. Word changes are rejected automatically.",
-                    builtin: DictatorSettings.builtinStructuralPrompt,
-                    addendum: $s.settings.structuralPromptAddendum,
-                    override: $s.settings.structuralPromptOverride
-                ) { state.save() }
-            case .assistant:
-                PromptCustomiser(
-                    description: "Used when you trigger the Assistant hotkey. The model classifies its own reply as REPLACE (paste at the cursor) or DRAFT (clipboard only).",
-                    builtin: DictatorSettings.builtinAssistantPrompt,
-                    addendum: $s.settings.assistantPromptAddendum,
-                    override: $s.settings.assistantPromptOverride
-                ) { state.save() }
+            CycleAXBanner()
+            HStack(alignment: .top, spacing: 12) {
+                modeList
+                    .frame(width: 200)
+                Divider()
+                Group {
+                    if let id = effectiveSelection,
+                       let idx = state.settings.modes.firstIndex(where: { $0.id == id }) {
+                        ModeDetail(
+                            mode: $s.settings.modes[idx],
+                            isDefault: state.settings.defaultModeID == id,
+                            onMakeDefault: {
+                                state.settings.defaultModeID = id
+                                state.save()
+                            },
+                            onChange: { state.save() }
+                        )
+                    } else {
+                        Text("Select a mode")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(minHeight: 480)
+    }
+
+    /// Falls back to the default mode when no selection has been recorded yet
+    /// (first open of the tab) or when the previously-selected id was deleted.
+    private var effectiveSelection: UUID? {
+        if let id = selectedID, state.settings.modes.contains(where: { $0.id == id }) {
+            return id
+        }
+        return state.settings.defaultModeID
+    }
+
+    @ViewBuilder
+    private var modeList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(state.settings.modes) { mode in
+                        ModeListRow(
+                            mode: mode,
+                            isSelected: effectiveSelection == mode.id,
+                            isDefault: state.settings.defaultModeID == mode.id,
+                            onSelect: { selectedID = mode.id }
+                        )
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.15)))
+
+            HStack(spacing: 6) {
+                Button {
+                    addMode()
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 18, height: 18)
+                }
+                .help("Add a new mode (cloned from the selected mode)")
+                Button {
+                    duplicateMode()
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                        .frame(width: 18, height: 18)
+                }
+                .disabled(currentMode == nil)
+                .help("Duplicate the selected mode")
+                Button {
+                    deleteMode()
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 18, height: 18)
+                }
+                .disabled(!canDeleteCurrent)
+                .help(canDeleteCurrent ? "Delete the selected mode" : "This mode is locked or is the only one remaining")
+                Spacer()
+            }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
+        }
+    }
+
+    // MARK: - List actions
+
+    private var currentMode: DictationMode? {
+        guard let id = selectedID ?? state.settings.modes.first(where: { $0.id == state.settings.defaultModeID })?.id else { return nil }
+        return state.settings.modes.first(where: { $0.id == id })
+    }
+
+    private var canDeleteCurrent: Bool {
+        guard let mode = currentMode else { return false }
+        if mode.isLocked { return false }
+        // Don't let the list collapse to empty.
+        return state.settings.modes.count > 1
+    }
+
+    private func addMode() {
+        // Clone the current selection as the seed — a fresh mode rarely makes
+        // sense (the user has to recreate the same pass settings), but a tweak
+        // of an existing one is the common case. Falls back to Write if
+        // nothing's selected.
+        let template = currentMode ?? state.settings.defaultMode
+        var copy = template
+        copy.id = UUID()
+        copy.name = uniqueName(basedOn: template.name)
+        copy.isLocked = false
+        copy.includeInCycle = true
+        copy.appBundleIDs = []
+        state.settings.modes.append(copy)
+        selectedID = copy.id
+        state.save()
+    }
+
+    private func duplicateMode() {
+        guard let mode = currentMode else { return }
+        var copy = mode
+        copy.id = UUID()
+        copy.name = uniqueName(basedOn: mode.name)
+        copy.isLocked = false
+        copy.appBundleIDs = []  // Don't double-claim apps
+        if let idx = state.settings.modes.firstIndex(where: { $0.id == mode.id }) {
+            state.settings.modes.insert(copy, at: idx + 1)
+        } else {
+            state.settings.modes.append(copy)
+        }
+        selectedID = copy.id
+        state.save()
+    }
+
+    private func deleteMode() {
+        guard let mode = currentMode, canDeleteCurrent else { return }
+        let wasDefault = state.settings.defaultModeID == mode.id
+        state.settings.modes.removeAll(where: { $0.id == mode.id })
+        if wasDefault {
+            // Re-point default to whatever's at the top of the list — usually
+            // Quick, since it's seeded first.
+            state.settings.defaultModeID = state.settings.modes.first?.id ?? DictationMode.quickID
+        }
+        selectedID = state.settings.defaultModeID
+        state.save()
+    }
+
+    /// Returns "Name copy" / "Name copy 2" / ... so duplicates don't share a
+    /// label and become indistinguishable in the list.
+    private func uniqueName(basedOn name: String) -> String {
+        let existing = Set(state.settings.modes.map(\.name))
+        let base = name.hasSuffix(" copy") ? name : "\(name) copy"
+        if !existing.contains(base) { return base }
+        var n = 2
+        while existing.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
+    }
+}
+
+/// Banner shown above the Modes list when Accessibility isn't granted.
+/// Tab cycling needs AX so the CGEventTap can swallow the Tab keystroke
+/// before it inserts a tab character into the focused app. Without it the
+/// HUD also hides the "Tab → next" hint, so the banner is the user's only
+/// signal that the feature exists and how to unlock it.
+private struct CycleAXBanner: View {
+    @State private var granted: Bool = TextInjector.hasAccessibilityPermission()
+    private let pollTimer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        if !granted {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tab cycling needs Accessibility")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Modes are configured normally, but you can't cycle between them by tapping Tab during a recording until you grant Accessibility — without it, Tab would insert a tab character into the focused app instead of switching mode. You can still pick the default mode from the menu bar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Enable") {
+                    TextInjector.requestAccessibilityPrompt()
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .controlSize(.small)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.35)))
+            .onReceive(pollTimer) { _ in
+                granted = TextInjector.hasAccessibilityPermission()
+            }
+        }
+    }
+}
+
+/// Single-line entry in the modes list. Shows the mode name, an optional
+/// "default" pip, and a lock icon for the built-in Quick mode.
+private struct ModeListRow: View {
+    let mode: DictationMode
+    let isSelected: Bool
+    let isDefault: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                if mode.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 12)
+                } else {
+                    Spacer().frame(width: 12)
+                }
+                Text(mode.name)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                if isDefault {
+                    Text("default")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.brandBlue)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isSelected ? Color.brandBlue.opacity(0.18) : Color.clear)
+            )
+            // Without an explicit contentShape, a Button with `.plain` style
+            // and a Color.clear background only hits on the visible content
+            // (text glyphs) — so unselected rows only respond when the user
+            // clicks the name directly. Rectangle gives the whole row a
+            // hittable surface.
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+    }
+}
+
+/// Detail editor for one DictationMode. The whole right pane of ModesPane is
+/// this view; switching selection in the list re-renders with a new binding.
+private struct ModeDetail: View {
+    @Binding var mode: DictationMode
+    let isDefault: Bool
+    let onMakeDefault: () -> Void
+    let onChange: () -> Void
+
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                if mode.isLocked {
+                    lockedExplanation
+                } else {
+                    cycleAndDefaultSection
+                    appBindingsSection
+                    Divider()
+                    preProcessingSection
+                    passSettingsSection
+                }
+            }
+            .padding(.trailing, 4)
+        }
+    }
+
+    // MARK: - Sections
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                if mode.isLocked {
+                    Text(mode.name)
+                        .font(.title2.weight(.semibold))
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.tertiary)
+                } else {
+                    TextField("Mode name", text: $mode.name)
+                        .font(.title2.weight(.semibold))
+                        .textFieldStyle(.plain)
+                        .onSubmit { onChange() }
+                        .onChange(of: mode.name) { _, _ in onChange() }
+                }
+                Spacer()
+                if !isDefault {
+                    Button("Make default", action: onMakeDefault)
+                        .controlSize(.small)
+                } else {
+                    Text("Default mode")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.brandBlue)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
+                }
+            }
+        }
+    }
+
+    private var lockedExplanation: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Quick mode skips every LLM pass. Whisper's raw transcript still flows through your spoken-cue substitutions (\"comma\" → \",\", \"fire emoji\" → 🔥) and your vocabulary list before landing at your cursor — useful when you want speed over polish, or when you don't want any AI rewriting.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("Quick is locked because that's the whole point — it's the fastest LLM-less path Dictator ships with. If you want a truly raw mode that also skips spoken cues and vocabulary, duplicate Quick and turn those toggles off in the copy.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var cycleAndDefaultSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Include in mid-recording cycle (Tab)", isOn: $mode.includeInCycle)
+                .onChange(of: mode.includeInCycle) { _, _ in onChange() }
+            Text("When on, tapping Tab during a recording rotates between this mode and the other cycle-enabled modes. Order in the list determines cycle order.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var appBindingsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Auto-activate for apps")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Button {
+                    pickApp()
+                } label: {
+                    Label("Add app…", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+            if mode.appBundleIDs.isEmpty {
+                Text("When a dictation starts and the focused app's bundle ID matches one in this list, this mode is used (instead of the default). First match across modes wins — drag a mode higher in the list to give its bindings precedence.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(mode.appBundleIDs, id: \.self) { bundleID in
+                        AppBindingRow(
+                            bundleID: bundleID,
+                            onRemove: {
+                                mode.appBundleIDs.removeAll(where: { $0 == bundleID })
+                                onChange()
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var preProcessingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pre-processing")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥)", isOn: $mode.spokenCuesEnabled)
+                    .onChange(of: mode.spokenCuesEnabled) { _, _ in onChange() }
+                Text("Substitutes spoken punctuation, line breaks, and named emojis before any LLM pass. Works without an LLM. Turn off in a mode if your dictations frequently use words like \"comma\" and \"period\" literally.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Apply vocabulary list", isOn: $mode.vocabularyEnabled)
+                    .onChange(of: mode.vocabularyEnabled) { _, _ in onChange() }
+                Text("When on, your custom vocabulary substitutions from the Dictionary tab are applied. The list itself is shared across modes — only the toggle is per-mode, so you can keep one dictionary and switch it off in a \"raw\" mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var passSettingsSection: some View {
+        let llmDisabled = state.settings.llmEngine == .none
+
+        return VStack(alignment: .leading, spacing: 16) {
+            // Pass 1
+            DisclosureGroup(isExpanded: .constant(true)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Run Pass 1 (Formatting)", isOn: $mode.formattingPassEnabled)
+                        .onChange(of: mode.formattingPassEnabled) { _, _ in onChange() }
+                        .disabled(llmDisabled)
+                    Text("Adds punctuation, capitalisation, and converts spoken emojis into glyphs. Turning this off ships the raw Whisper transcript through your vocabulary substitutions and out — the same as Quick mode for this pass.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if mode.formattingPassEnabled {
+                        PromptCustomiser(
+                            description: "Punctuation, emojis, capitalisation. Runs on every dictation in this mode.",
+                            builtin: DictatorSettings.builtinFormattingPrompt,
+                            addendum: $mode.formattingPromptAddendum,
+                            override: $mode.formattingPromptOverride
+                        ) { onChange() }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Pass 1 · Formatting").font(.headline)
+            }
+
+            // Pass 2
+            DisclosureGroup(isExpanded: .constant(true)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Grammar pass", selection: $mode.grammarPassMode) {
+                        Text("Off").tag(GrammarPassMode.off)
+                        Text("Tidy grammar").tag(GrammarPassMode.tidy)
+                        Text("Tidy and tighten").tag(GrammarPassMode.tighten)
+                    }
+                    .onChange(of: mode.grammarPassMode) { _, _ in onChange() }
+                    .disabled(llmDisabled)
+
+                    if mode.grammarPassMode == .tidy {
+                        Stepper(value: $mode.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
+                            HStack {
+                                Text("Discard if more than")
+                                Spacer()
+                                Text("\(Int(mode.grammarPassMaxEditFraction * 100))% of words change")
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .onChange(of: mode.grammarPassMaxEditFraction) { _, _ in onChange() }
+                        .disabled(llmDisabled)
+                    }
+
+                    switch mode.grammarPassMode {
+                    case .off:
+                        Text("Skip the grammar pass. The formatter's output ships unchanged.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .tidy:
+                        Text("Fixes obvious grammar errors (contractions, agreement, duplicate words) while preserving your voice and filler words. The pass is rejected if too many words change.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .tighten:
+                        Text("Removes filler words (\"um\", \"uh\", \"like\", \"you know\"), false starts and self-corrections, and lightly tightens phrasing. Meaning is preserved; substantive rewrites are still rejected.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    if mode.grammarPassMode != .off {
+                        PromptCustomiser(
+                            description: "Fixes obvious grammar errors. Result is discarded if drift exceeds the threshold.",
+                            builtin: DictatorSettings.builtinGrammarPrompt,
+                            addendum: $mode.grammarPromptAddendum,
+                            override: $mode.grammarPromptOverride
+                        ) { onChange() }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Pass 2 · Grammar").font(.headline)
+            }
+
+            // Pass 3
+            DisclosureGroup(isExpanded: .constant(true)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Restructure long dictations into paragraphs / lists", isOn: $mode.structuralPassEnabled)
+                        .onChange(of: mode.structuralPassEnabled) { _, _ in onChange() }
+                        .disabled(llmDisabled)
+
+                    Stepper(value: $mode.structuralPassMinWords, in: 10...200, step: 5) {
+                        HStack {
+                            Text("Trigger when transcript reaches")
+                            Spacer()
+                            Text("\(mode.structuralPassMinWords) words")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: mode.structuralPassMinWords) { _, _ in onChange() }
+                    .disabled(!mode.structuralPassEnabled || llmDisabled)
+                    Text("Adds paragraph breaks and bullet lists for longer dictations. Word changes are rejected automatically.")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    if mode.structuralPassEnabled {
+                        PromptCustomiser(
+                            description: "Adds paragraph breaks and bullet lists.",
+                            builtin: DictatorSettings.builtinStructuralPrompt,
+                            addendum: $mode.structuralPromptAddendum,
+                            override: $mode.structuralPromptOverride
+                        ) { onChange() }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Pass 3 · Structure").font(.headline)
+            }
+
+            if llmDisabled {
+                Text("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab. Turn LLM back on there to use Passes 1–3.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.10)))
+            }
+        }
+    }
+
+    /// Opens NSOpenPanel filtered to `.application`, extracts the bundle ID,
+    /// and appends it to this mode's bindings (if not already present).
+    private func pickApp() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.message = "Pick an app to auto-activate this mode in."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let bundle = Bundle(url: url), let bundleID = bundle.bundleIdentifier else { return }
+        if !mode.appBundleIDs.contains(bundleID) {
+            mode.appBundleIDs.append(bundleID)
+            onChange()
+        }
+    }
+}
+
+/// One row in the app-bindings list. Shows the app's icon (resolved from the
+/// bundle ID via NSWorkspace) and either its display name or, if unresolvable,
+/// the raw bundle ID. The remove button is on hover so the row doesn't carry
+/// visual noise at rest.
+private struct AppBindingRow: View {
+    let bundleID: String
+    let onRemove: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let icon = appIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 18, height: 18)
+            } else {
+                Image(systemName: "questionmark.app")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 18, height: 18)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Text(bundleID)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            if hovering {
+                Button(role: .destructive, action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+        .onHover { hovering = $0 }
+    }
+
+    private var appURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    }
+
+    private var appIcon: NSImage? {
+        guard let url = appURL else { return nil }
+        return NSWorkspace.shared.icon(forFile: url.path)
+    }
+
+    private var displayName: String {
+        guard let url = appURL else { return bundleID }
+        // FileManager.displayName strips the .app extension; if the app's been
+        // uninstalled since the binding was created, fall back to the id so
+        // the user can still recognise what they bound.
+        return FileManager.default.displayName(atPath: url.path)
+    }
+}
+
+/// Assistant Mode prompt customisation. Standalone tab because Assistant Mode
+/// is a separate flow (own hotkey, own prompt), not a dictation mode.
+private struct AssistantPromptPane: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        @Bindable var s = state
+        PromptCustomiser(
+            description: "Used when you trigger the Assistant hotkey. The model classifies its own reply as REPLACE (paste at the cursor) or DRAFT (clipboard only).",
+            builtin: DictatorSettings.builtinAssistantPrompt,
+            addendum: $s.settings.assistantPromptAddendum,
+            override: $s.settings.assistantPromptOverride
+        ) { state.save() }
     }
 }
 
