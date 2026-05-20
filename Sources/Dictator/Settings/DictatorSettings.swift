@@ -66,7 +66,16 @@ struct DictatorSettings: Codable, Equatable {
     var playSounds: Bool
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
+    /// One-shot migration scratch space. Pre-VocabularyStore installs persisted
+    /// vocabulary entries here; on first launch under the file-backed store
+    /// `AppState` hands these to `VocabularyStore.bootstrap` and then clears
+    /// the array. Stays Codable so we can still read older blobs, but should
+    /// be empty in any settings file written by this version forward.
     var vocabulary: [VocabularyEntry]
+    /// Optional custom directory for `vocabulary.json`. nil = default
+    /// (`~/Documents/Dictator/`). The user picks this in Settings → General;
+    /// `VocabularyStore.relocate(to:)` does the actual move.
+    var vocabularyDirectoryPath: String?
     var assistantTriggerMode: TriggerMode
     /// The user's preferred name. Used to (a) bias Whisper toward the correct
     /// spelling when they say it, and (b) tell the LLM who's writing so
@@ -117,6 +126,7 @@ struct DictatorSettings: Codable, Equatable {
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
         vocabulary: [],
+        vocabularyDirectoryPath: nil,
         assistantTriggerMode: .rightOption,
         userName: "",
         modes: [.quick, .write],
@@ -137,6 +147,7 @@ struct DictatorSettings: Codable, Equatable {
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
         vocabulary: [VocabularyEntry],
+        vocabularyDirectoryPath: String?,
         assistantTriggerMode: TriggerMode,
         userName: String,
         modes: [DictationMode],
@@ -155,6 +166,7 @@ struct DictatorSettings: Codable, Equatable {
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
         self.vocabulary = vocabulary
+        self.vocabularyDirectoryPath = vocabularyDirectoryPath
         self.assistantTriggerMode = assistantTriggerMode
         self.userName = userName
         self.modes = modes
@@ -194,6 +206,7 @@ struct DictatorSettings: Codable, Equatable {
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
+        self.vocabularyDirectoryPath = try c.decodeIfPresent(String.self,     forKey: .vocabularyDirectoryPath)
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
         self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
@@ -814,24 +827,68 @@ struct DictatorSettings: Codable, Equatable {
     transforming it. The reply is the deliverable the user asked for — not a repeat of what they said.
     """
 
-    // Bumped from v1 → v2 when we moved from full-edit prompt fields to the
-    // built-in + addendum + override model. Old v1 data is orphaned on disk,
-    // which is fine — there are no users yet.
-    private static let key = "DictatorSettings.v2"
+    // UserDefaults key carrying the pre-file-store blob. Read once during
+    // migration; left in place afterwards as a belt-and-braces recovery
+    // copy (small, ignored by current code) until enough time has passed
+    // that no installed copy could still need it.
+    private static let legacyUserDefaultsKey = "DictatorSettings.v2"
 
     /// Explicit CodingKeys so `persistSuspendedDueToCorruption` (an
-    /// in-memory recovery flag) doesn't get serialised. Every other stored
-    /// property must appear here verbatim — Swift's synthesised encode/decode
-    /// uses these keys.
+    /// in-memory recovery flag) doesn't get serialised, and so we can list
+    /// every persisted key in one place — `syncedKeys` and `localKeys`
+    /// below partition this set for the two-file layout.
     private enum CodingKeys: String, CodingKey {
         case transcriptionEngine, whisperModelID, parakeetModelID
         case llmEngine, llmModelID
         case pasteAutomatically, playSounds
         case triggerMode, preloadModelsOnLaunch
-        case vocabulary, assistantTriggerMode, userName
+        case vocabulary, vocabularyDirectoryPath
+        case assistantTriggerMode, userName
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
         case hasCompletedOnboarding
+    }
+
+    /// Keys that belong in the user-visible synced file
+    /// (`~/Documents/Dictator/settings.json`). These are user preferences
+    /// that make sense to share across all the user's Macs — prompts,
+    /// modes, hotkey choice, paste/sounds, identity.
+    private static let syncedKeys: Set<String> = [
+        "userName",
+        "pasteAutomatically",
+        "playSounds",
+        "triggerMode",
+        "assistantTriggerMode",
+        "modes",
+        "defaultModeID",
+        "assistantPromptAddendum",
+        "assistantPromptOverride",
+    ]
+
+    /// Keys that belong in the per-Mac file
+    /// (`~/Library/Application Support/Dictator/local-settings.json`).
+    /// These depend on this Mac's hardware (RAM tier → which models are
+    /// installed) or are inherently per-installation (onboarding completion,
+    /// where you've pointed the vocabulary file). Syncing them across
+    /// machines would cause "this model isn't installed on the other Mac"
+    /// failures or re-open the wizard on a healthy install.
+    private static let localKeys: Set<String> = [
+        "transcriptionEngine",
+        "whisperModelID",
+        "parakeetModelID",
+        "llmEngine",
+        "llmModelID",
+        "preloadModelsOnLaunch",
+        "vocabulary",                  // legacy migration scratch — empty after migration
+        "vocabularyDirectoryPath",
+        "hasCompletedOnboarding",
+    ]
+
+    /// Whether the named field belongs in the synced file. Used by the
+    /// Settings UI to badge sections as "Syncs" / "This Mac". Takes a
+    /// String so callers don't need access to the private CodingKeys enum.
+    static func isSyncedFieldName(_ name: String) -> Bool {
+        syncedKeys.contains(name)
     }
 
     /// Legacy keys we no longer emit but still read for migration. Keep entries
@@ -841,53 +898,138 @@ struct DictatorSettings: Codable, Equatable {
         case grammarPassEnabled
     }
 
+    static func syncedFileURL() -> URL {
+        VocabularyStore.defaultDirectory().appendingPathComponent("settings.json")
+    }
+
+    static func localFileURL() -> URL {
+        let support = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support")
+        return support
+            .appendingPathComponent("Dictator", isDirectory: true)
+            .appendingPathComponent("local-settings.json")
+    }
+
     @MainActor
     static func load() -> DictatorSettings {
-        var settings: DictatorSettings
-        if let data = UserDefaults.standard.data(forKey: key) {
+        // Try the file pair first. Each file holds an envelope with its own
+        // subset of fields; we merge them into a single in-memory shape
+        // using DictatorSettings.init(from:) — that init uses
+        // decodeIfPresent for everything, so missing fields fall through to
+        // defaults regardless of which file they were meant to live in.
+        if let settings = loadFromFiles() {
+            return settings
+        }
+
+        // No file pair yet → first launch on this build. Try to migrate
+        // from the old UserDefaults blob.
+        if let data = UserDefaults.standard.data(forKey: legacyUserDefaultsKey) {
             do {
-                settings = try JSONDecoder().decode(DictatorSettings.self, from: data)
+                var migrated = try JSONDecoder().decode(DictatorSettings.self, from: data)
+                migrated.resolveHotkeyConflicts()
+                // Best-effort first write of both files. If either fails the
+                // second launch will retry from UserDefaults — we leave that
+                // key in place as a safety net.
+                migrated.persist()
+                NSLog("[Dictator] Settings migrated from UserDefaults to file-backed store.")
+                return migrated
             } catch {
-                // Decode failure with a real blob on disk is the dangerous
-                // case — silently falling back to defaults here and letting
-                // the next save() overwrite the live key wiped a user's
-                // vocabulary and custom modes once. Now: preserve the
-                // original bytes under a recovery key (one per failure,
-                // dated), keep the live key as-is so a future binary that
-                // *can* decode the blob still recovers it, and surface the
-                // failure in the log.
                 let stamp = ISO8601DateFormatter().string(from: Date())
                     .replacingOccurrences(of: ":", with: "-")
-                let recoveryKey = "\(key).recovered-\(stamp)"
+                let recoveryKey = "\(legacyUserDefaultsKey).recovered-\(stamp)"
                 UserDefaults.standard.set(data, forKey: recoveryKey)
-                NSLog("[Dictator] Settings decode failed (\(error)). Original blob preserved under UserDefaults key '\(recoveryKey)' (\(data.count) bytes). Defaults loaded into memory; the live settings key was NOT overwritten.")
-                // Hand back defaults so the app stays usable, but flag the
-                // settings instance so persist() refuses to overwrite the
-                // live key on disk — that way a subsequent launch on a
-                // fixed binary can still decode the original.
-                settings = .defaults
+                NSLog("[Dictator] Settings UserDefaults decode failed (\(error)). Preserved as '\(recoveryKey)'. Loading defaults; persist() suspended until corruption is acknowledged.")
+                var settings = freshInstallDefaults()
                 settings.persistSuspendedDueToCorruption = true
-                let recommended = ModelCatalog.recommendedLLMEngine
-                settings.llmEngine = recommended.engine
-                settings.llmModelID = recommended.mlxModelID ?? ModelCatalog.recommendedLLMID
-                settings.resolveHotkeyConflicts()
                 return settings
             }
-        } else {
-            // Fresh install — start from defaults, then ask the catalog what's
-            // actually a good fit for this machine. On a Mac with Apple
-            // Intelligence enabled that's .apple (zero-disk, system-resident).
-            // On other machines it falls back to the RAM-tier MLX recommendation,
-            // or .none on the leanest configurations.
-            settings = .defaults
-            let recommended = ModelCatalog.recommendedLLMEngine
-            settings.llmEngine = recommended.engine
-            // Always populate llmModelID so the user can flip to MLX later
-            // without an extra round trip. Defaults to the RAM-tier MLX pick.
-            settings.llmModelID = recommended.mlxModelID ?? ModelCatalog.recommendedLLMID
         }
+
+        // Fresh install — defaults seeded with the recommended LLM for this Mac.
+        return freshInstallDefaults()
+    }
+
+    @MainActor
+    private static func freshInstallDefaults() -> DictatorSettings {
+        var settings: DictatorSettings = .defaults
+        let recommended = ModelCatalog.recommendedLLMEngine
+        settings.llmEngine = recommended.engine
+        settings.llmModelID = recommended.mlxModelID ?? ModelCatalog.recommendedLLMID
         settings.resolveHotkeyConflicts()
         return settings
+    }
+
+    /// Reads both files, merges them into a single DictatorSettings. Returns
+    /// nil when *neither* file exists (signals "no migration done yet" to
+    /// the caller). When one file exists and the other doesn't, treats the
+    /// missing one as empty — defaults take over for those fields.
+    @MainActor
+    private static func loadFromFiles() -> DictatorSettings? {
+        let syncedURL = syncedFileURL()
+        let localURL = localFileURL()
+        let syncedExists = FileManager.default.fileExists(atPath: syncedURL.path)
+        let localExists = FileManager.default.fileExists(atPath: localURL.path)
+        guard syncedExists || localExists else { return nil }
+
+        let syncedDict = readEnvelope(at: syncedURL)
+        let localDict = readEnvelope(at: localURL)
+        // Local wins on overlap, but in normal operation there shouldn't be
+        // any — each file owns its own keys.
+        var merged: [String: Any] = [:]
+        for (k, v) in syncedDict { merged[k] = v }
+        for (k, v) in localDict { merged[k] = v }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: merged, options: []) else {
+            NSLog("[Dictator] Settings: couldn't re-serialise merged dict.")
+            var s = freshInstallDefaults()
+            s.persistSuspendedDueToCorruption = true
+            return s
+        }
+        do {
+            var settings = try JSONDecoder().decode(DictatorSettings.self, from: data)
+            settings.resolveHotkeyConflicts()
+            return settings
+        } catch {
+            // The files exist but the merged JSON doesn't decode. Preserve
+            // both files under recovery filenames, suspend further writes.
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            if syncedExists {
+                let recovery = syncedURL.deletingLastPathComponent()
+                    .appendingPathComponent("settings.recovered-\(stamp).json")
+                try? FileManager.default.copyItem(at: syncedURL, to: recovery)
+            }
+            if localExists {
+                let recovery = localURL.deletingLastPathComponent()
+                    .appendingPathComponent("local-settings.recovered-\(stamp).json")
+                try? FileManager.default.copyItem(at: localURL, to: recovery)
+            }
+            NSLog("[Dictator] Settings file decode failed (\(error)). Recovery copies written; persist suspended.")
+            var s = freshInstallDefaults()
+            s.persistSuspendedDueToCorruption = true
+            return s
+        }
+    }
+
+    /// Reads an `{schemaVersion, settings: {...}}` envelope. Returns the
+    /// inner `settings` dictionary, or `[:]` on any failure — callers
+    /// distinguish "missing file" from "empty file" via FileManager.
+    private static func readEnvelope(at url: URL) -> [String: Any] {
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordError: NSError?
+        var data: Data?
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordError) { coordURL in
+            data = try? Data(contentsOf: coordURL)
+        }
+        guard let bytes = data,
+              let object = try? JSONSerialization.jsonObject(with: bytes, options: []),
+              let envelope = object as? [String: Any],
+              let inner = envelope["settings"] as? [String: Any]
+        else { return [:] }
+        return inner
     }
 
     /// If both hotkeys map to the same modifier-key trigger, reset the assistant
@@ -904,11 +1046,55 @@ struct DictatorSettings: Codable, Equatable {
     func persist() {
         // Refuse to write when load() flagged the previous blob as
         // un-decodable. The original bytes are kept under a `.recovered-…`
-        // key and the live key is still there; writing now would clobber
-        // both pieces of recoverable state.
+        // filename and the live files are still there; writing now would
+        // clobber both pieces of recoverable state.
         guard !persistSuspendedDueToCorruption else { return }
-        guard let data = try? JSONEncoder().encode(self) else { return }
-        UserDefaults.standard.set(data, forKey: Self.key)
+        guard let data = try? JSONEncoder().encode(self),
+              let object = try? JSONSerialization.jsonObject(with: data, options: []),
+              let dict = object as? [String: Any]
+        else { return }
+        let synced = dict.filter { Self.syncedKeys.contains($0.key) }
+        let local = dict.filter { Self.localKeys.contains($0.key) }
+        Self.writeEnvelope(synced, to: Self.syncedFileURL())
+        Self.writeEnvelope(local, to: Self.localFileURL())
+    }
+
+    /// Writes a `{schemaVersion: 1, settings: {…}}` envelope atomically,
+    /// with a one-slot rolling `.previous` backup. NSFileCoordinator wraps
+    /// the write so two Dictator processes (or a sync daemon) can't corrupt
+    /// each other.
+    private static func writeEnvelope(_ inner: [String: Any], to url: URL) {
+        let envelope: [String: Any] = ["schemaVersion": 1, "settings": inner]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: envelope,
+            options: [.prettyPrinted, .sortedKeys]
+        ) else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            NSLog("[Dictator] Couldn't ensure directory for \(url.path): \(error)")
+            return
+        }
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordError: NSError?
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { coordURL in
+            let backup = coordURL.appendingPathExtension("previous")
+            if FileManager.default.fileExists(atPath: coordURL.path) {
+                try? FileManager.default.removeItem(at: backup)
+                try? FileManager.default.copyItem(at: coordURL, to: backup)
+            }
+            do {
+                try data.write(to: coordURL, options: .atomic)
+            } catch {
+                NSLog("[Dictator] Couldn't write \(coordURL.path): \(error)")
+            }
+        }
+        if let coordError {
+            NSLog("[Dictator] Coordination failed for \(url.path): \(coordError)")
+        }
     }
 
     /// Resolves the user's currently-selected LLM engine to a protocol-typed

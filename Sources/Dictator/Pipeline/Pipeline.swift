@@ -400,7 +400,7 @@ final class Pipeline {
         // (a "raw" mode opts out so words pass through untouched).
         let corrected: String
         if currentMode.vocabularyEnabled {
-            corrected = Vocabulary.apply(settings.vocabulary, to: formatted)
+            corrected = Vocabulary.apply(VocabularyStore.shared.entries, to: formatted)
         } else {
             corrected = formatted
         }

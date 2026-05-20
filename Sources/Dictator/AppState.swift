@@ -34,6 +34,19 @@ final class AppState {
         // high, but the pool can't run away.
         MLX.GPU.set(cacheLimit: 512 * 1024 * 1024)
 
+        // VocabularyStore must boot before anything reads vocab. On a
+        // pre-VocabularyStore install we hand it the legacy
+        // settings.vocabulary array as a one-shot migration source; once
+        // it's flushed to disk we clear the array on the in-memory
+        // settings so a future save doesn't keep re-writing it.
+        let customVocabDirectory = settings.vocabularyDirectoryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let legacyVocab = settings.vocabulary
+        VocabularyStore.shared.bootstrap(customDirectory: customVocabDirectory, legacyEntries: legacyVocab)
+        if !legacyVocab.isEmpty {
+            settings.vocabulary = []
+            save()
+        }
+
         AudioDeviceManager.shared.bootstrap()
         pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
             self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)

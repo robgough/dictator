@@ -43,13 +43,12 @@ final class LearnWordPanelController: NSObject, NSWindowDelegate {
     }
 
     private func applyEntry(_ entry: VocabularyEntry, replacingID: UUID?) {
-        let state = AppState.shared
-        if let replacingID, let idx = state.settings.vocabulary.firstIndex(where: { $0.id == replacingID }) {
-            state.settings.vocabulary[idx] = entry
+        let store = VocabularyStore.shared
+        if let replacingID, let idx = store.entries.firstIndex(where: { $0.id == replacingID }) {
+            store.entries[idx] = entry
         } else {
-            state.settings.vocabulary.append(entry)
+            store.entries.append(entry)
         }
-        state.save()
     }
 
     private func ensureWindow() -> NSWindow {
@@ -103,7 +102,7 @@ private struct LearnWordPanelView: View {
     private var existingMatch: VocabularyEntry? {
         let needle = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return nil }
-        return AppState.shared.settings.vocabulary.first {
+        return VocabularyStore.shared.entries.first {
             $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == needle
         }
     }

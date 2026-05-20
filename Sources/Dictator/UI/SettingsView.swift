@@ -377,6 +377,11 @@ private enum VocabularySortOrder: String, CaseIterable, Identifiable {
 
 private struct DictionaryPane: View {
     @Environment(AppState.self) private var state
+    /// VocabularyStore is observable, so referencing it here participates in
+    /// Observation tracking — UI re-renders when entries change (whether the
+    /// change came from the UI itself or from an external file edit / sync
+    /// drop the vnode watcher picked up).
+    @State private var store = VocabularyStore.shared
 
     @State private var search: String = ""
     @State private var sort: VocabularySortOrder = .alphabetical
@@ -387,12 +392,18 @@ private struct DictionaryPane: View {
     @FocusState private var focusedFieldID: VocabularyEntry.ID?
 
     var body: some View {
-        @Bindable var s = state
         VStack(alignment: .leading, spacing: 12) {
             header
-            toolbar($s.settings.vocabulary)
-            list($s.settings.vocabulary)
+            toolbar(vocabBinding)
+            list(vocabBinding)
         }
+    }
+
+    /// Bridges the store's mutable `entries` property to the toolbar/list
+    /// helpers that expect a Binding. Writes flow through the store's
+    /// debounced save path, so a stream of edits coalesces to one disk write.
+    private var vocabBinding: Binding<[VocabularyEntry]> {
+        Binding(get: { store.entries }, set: { store.entries = $0 })
     }
 
     // MARK: - Header
@@ -1427,14 +1438,14 @@ private struct GeneralPane: View {
                 AccessibilityStatusRow()
                 MicrophoneStatusRow()
             }
-            Section("Your name") {
+            Section {
                 TextField("e.g. Rob Gough", text: $s.settings.userName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { state.save() }
                     .onChange(of: s.settings.userName) { _, _ in state.save() }
                 SectionFootnote("Used to bias transcription toward the correct spelling of your name, and so the assistant signs drafts as you (emails, replies, messages). Leave blank if you'd rather not set one.")
-            }
-            Section("Dictation hotkey") {
+            } header: { SyncSectionHeader("Your name", isSynced: true) }
+            Section {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
                     ForEach(TriggerMode.allCases.filter { mode in
                         // Hide whatever the assistant trigger is currently using so
@@ -1462,8 +1473,8 @@ private struct GeneralPane: View {
                 } else {
                     SectionFootnote("Hold the **\(s.settings.triggerMode.label)** key to dictate. Release to transcribe.")
                 }
-            }
-            Section("Assistant Mode hotkey") {
+            } header: { SyncSectionHeader("Dictation hotkey", isSynced: true) }
+            Section {
                 Picker("Trigger", selection: $s.settings.assistantTriggerMode) {
                     ForEach(TriggerMode.allCases.filter { mode in
                         mode == .keyboardShortcut || mode != s.settings.triggerMode
@@ -1486,23 +1497,89 @@ private struct GeneralPane: View {
                 } else {
                     SectionFootnote("Hold the **\(s.settings.assistantTriggerMode.label)** key with text selected to dictate an instruction. The LLM decides whether to replace your selection or copy the result to the clipboard.")
                 }
-            }
-            Section("Behaviour") {
+            } header: { SyncSectionHeader("Assistant Mode hotkey", isSynced: true) }
+            Section {
                 Toggle("Paste into focused app automatically", isOn: $s.settings.pasteAutomatically)
                     .onChange(of: s.settings.pasteAutomatically) { _, _ in state.save() }
                 Toggle("Play feedback sounds", isOn: $s.settings.playSounds)
                     .onChange(of: s.settings.playSounds) { _, _ in state.save() }
+
+                SectionFootnote("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥), vocabulary application, grammar, structure, and per-pass prompts are all part of each **Mode** — see the Modes tab. The default mode is also pickable from the menu bar.")
+            } header: { SyncSectionHeader("Behaviour", isSynced: true) }
+            Section {
                 Toggle("Pre-load models on launch", isOn: $s.settings.preloadModelsOnLaunch)
                     .onChange(of: s.settings.preloadModelsOnLaunch) { _, on in
                         state.save()
                         if on { state.preloadModels() }
                     }
-                SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant.")
-
-                SectionFootnote("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥), vocabulary application, grammar, structure, and per-pass prompts are all part of each **Mode** — see the Modes tab. The default mode is also pickable from the menu bar.")
-            }
+                SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant. Per-Mac because RAM cost differs by machine.")
+            } header: { SyncSectionHeader("Performance", isSynced: false) }
+            Section {
+                VocabularyLocationRow()
+            } header: { SyncSectionHeader("Vocabulary file", isSynced: false) }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Row that shows the current vocabulary file location and lets the user
+/// pick a different folder. The default location is ~/Documents/Dictator/,
+/// which syncs automatically if Documents is in iCloud Drive — point this at
+/// any other folder (e.g. Dropbox, a shared drive) to override.
+private struct VocabularyLocationRow: View {
+    @State private var store = VocabularyStore.shared
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        @Bindable var s = state
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Vocabulary file").fontWeight(.medium)
+                    Text(store.fileURL?.path ?? "—")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Button("Choose…") { chooseLocation() }
+                    .controlSize(.small)
+                if s.settings.vocabularyDirectoryPath != nil {
+                    Button("Reset") { resetLocation() }
+                        .controlSize(.small)
+                }
+            }
+            if let err = store.lastError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            SectionFootnote("Your vocabulary lives in a JSON file in this folder. Default is ~/Documents/Dictator/ — if that's in iCloud Drive, your dictionary syncs across Macs automatically. You can hand-edit the file or copy it between machines; Dictator picks up external changes within a couple of seconds.")
+        }
+    }
+
+    private func chooseLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Pick a folder for vocabulary.json. Dictator will move your existing entries into the new location."
+        if panel.runModal() == .OK, let url = panel.url {
+            state.settings.vocabularyDirectoryPath = url.path
+            state.save()
+            store.relocate(to: url)
+        }
+    }
+
+    private func resetLocation() {
+        let defaultDir = VocabularyStore.defaultDirectory()
+        state.settings.vocabularyDirectoryPath = nil
+        state.save()
+        store.relocate(to: defaultDir)
     }
 }
 
@@ -1676,6 +1753,40 @@ private struct SectionFootnote: View {
     }
 }
 
+/// Section header with a small "Syncs" / "This Mac" chip to make the
+/// sync/local split visible at a glance. Synced settings live in
+/// `~/Documents/Dictator/settings.json`; per-Mac settings live in
+/// `~/Library/Application Support/Dictator/local-settings.json`.
+private struct SyncSectionHeader: View {
+    let title: String
+    let isSynced: Bool
+
+    init(_ title: String, isSynced: Bool) {
+        self.title = title
+        self.isSynced = isSynced
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+            Image(systemName: isSynced ? "icloud" : "laptopcomputer")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(isSynced ? Color.brandBlue : .secondary)
+            Text(isSynced ? "Syncs" : "This Mac")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(isSynced ? Color.brandBlue : .secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(
+                    Capsule().fill((isSynced ? Color.brandBlue : Color.secondary).opacity(0.12))
+                )
+        }
+        .help(isSynced
+              ? "Stored in ~/Documents/Dictator/settings.json — if that folder syncs (iCloud Drive, Dropbox), this setting syncs across your Macs."
+              : "Stored in ~/Library/Application Support/Dictator/local-settings.json — per-Mac only.")
+    }
+}
+
 private struct ModelsPane: View {
     @State private var manager = ModelManager.shared
     /// Which sub-pane is showing. Reset to Transcription on each entry to
@@ -1685,6 +1796,13 @@ private struct ModelsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                SyncBadge(isSynced: false, tooltip: "Model selection is per-Mac — different Macs have different RAM and may suit different model tiers.")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+
             Picker("Models section", selection: $subPane) {
                 ForEach(ModelsSubPane.allCases) { p in
                     Text(p.rawValue).tag(p)
@@ -1693,7 +1811,7 @@ private struct ModelsPane: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 20)
-            .padding(.top, 12)
+            .padding(.top, 4)
             .padding(.bottom, 4)
 
             switch subPane {
@@ -1706,6 +1824,30 @@ private struct ModelsPane: View {
         // tab. Each sub-pane reads from the same shared ModelManager so a
         // single refresh covers all three.
         .onAppear { manager.refreshCachedStates() }
+    }
+}
+
+/// Inline standalone chip — same visual language as `SyncSectionHeader`
+/// but free-floating (no section title attached). Used at the top of tabs
+/// like Models where the whole pane is on one side of the sync split.
+private struct SyncBadge: View {
+    let isSynced: Bool
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: isSynced ? "icloud" : "laptopcomputer")
+                .font(.system(size: 9, weight: .semibold))
+            Text(isSynced ? "Syncs" : "This Mac")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(isSynced ? Color.brandBlue : .secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            Capsule().fill((isSynced ? Color.brandBlue : Color.secondary).opacity(0.12))
+        )
+        .help(tooltip)
     }
 }
 
@@ -2334,6 +2476,10 @@ private struct ModesPane: View {
     var body: some View {
         @Bindable var s = state
         VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Spacer()
+                SyncBadge(isSynced: true, tooltip: "Modes (names, prompts, pass toggles, app bindings) live in the synced settings file and apply to every Mac that shares it.")
+            }
             CycleAXBanner()
             HStack(alignment: .top, spacing: 12) {
                 modeList
