@@ -99,6 +99,13 @@ struct DictatorSettings: Codable, Equatable {
     /// model so the first hotkey press just works.
     var hasCompletedOnboarding: Bool
 
+    /// Set to true by `load()` when the persisted blob existed but failed to
+    /// decode. While true, `persist()` is a no-op — we refuse to overwrite
+    /// the live key on disk because doing so would clobber data we couldn't
+    /// read but a future binary might still be able to recover. Not Codable
+    /// (only meaningful in-memory) — see CodingKeys.
+    var persistSuspendedDueToCorruption: Bool = false
+
     static let defaults = DictatorSettings(
         transcriptionEngine: .parakeet,
         whisperModelID: ModelCatalog.defaultWhisper.id,
@@ -812,6 +819,21 @@ struct DictatorSettings: Codable, Equatable {
     // which is fine — there are no users yet.
     private static let key = "DictatorSettings.v2"
 
+    /// Explicit CodingKeys so `persistSuspendedDueToCorruption` (an
+    /// in-memory recovery flag) doesn't get serialised. Every other stored
+    /// property must appear here verbatim — Swift's synthesised encode/decode
+    /// uses these keys.
+    private enum CodingKeys: String, CodingKey {
+        case transcriptionEngine, whisperModelID, parakeetModelID
+        case llmEngine, llmModelID
+        case pasteAutomatically, playSounds
+        case triggerMode, preloadModelsOnLaunch
+        case vocabulary, assistantTriggerMode, userName
+        case modes, defaultModeID
+        case assistantPromptAddendum, assistantPromptOverride
+        case hasCompletedOnboarding
+    }
+
     /// Legacy keys we no longer emit but still read for migration. Keep entries
     /// here until enough time has passed that no installed copy of the app
     /// could still be holding the old shape — at which point they can be deleted.
@@ -822,9 +844,35 @@ struct DictatorSettings: Codable, Equatable {
     @MainActor
     static func load() -> DictatorSettings {
         var settings: DictatorSettings
-        if let data = UserDefaults.standard.data(forKey: key),
-           let decoded = try? JSONDecoder().decode(DictatorSettings.self, from: data) {
-            settings = decoded
+        if let data = UserDefaults.standard.data(forKey: key) {
+            do {
+                settings = try JSONDecoder().decode(DictatorSettings.self, from: data)
+            } catch {
+                // Decode failure with a real blob on disk is the dangerous
+                // case — silently falling back to defaults here and letting
+                // the next save() overwrite the live key wiped a user's
+                // vocabulary and custom modes once. Now: preserve the
+                // original bytes under a recovery key (one per failure,
+                // dated), keep the live key as-is so a future binary that
+                // *can* decode the blob still recovers it, and surface the
+                // failure in the log.
+                let stamp = ISO8601DateFormatter().string(from: Date())
+                    .replacingOccurrences(of: ":", with: "-")
+                let recoveryKey = "\(key).recovered-\(stamp)"
+                UserDefaults.standard.set(data, forKey: recoveryKey)
+                NSLog("[Dictator] Settings decode failed (\(error)). Original blob preserved under UserDefaults key '\(recoveryKey)' (\(data.count) bytes). Defaults loaded into memory; the live settings key was NOT overwritten.")
+                // Hand back defaults so the app stays usable, but flag the
+                // settings instance so persist() refuses to overwrite the
+                // live key on disk — that way a subsequent launch on a
+                // fixed binary can still decode the original.
+                settings = .defaults
+                settings.persistSuspendedDueToCorruption = true
+                let recommended = ModelCatalog.recommendedLLMEngine
+                settings.llmEngine = recommended.engine
+                settings.llmModelID = recommended.mlxModelID ?? ModelCatalog.recommendedLLMID
+                settings.resolveHotkeyConflicts()
+                return settings
+            }
         } else {
             // Fresh install — start from defaults, then ask the catalog what's
             // actually a good fit for this machine. On a Mac with Apple
@@ -854,6 +902,11 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     func persist() {
+        // Refuse to write when load() flagged the previous blob as
+        // un-decodable. The original bytes are kept under a `.recovered-…`
+        // key and the live key is still there; writing now would clobber
+        // both pieces of recoverable state.
+        guard !persistSuspendedDueToCorruption else { return }
         guard let data = try? JSONEncoder().encode(self) else { return }
         UserDefaults.standard.set(data, forKey: Self.key)
     }

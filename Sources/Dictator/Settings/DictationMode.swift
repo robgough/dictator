@@ -70,6 +70,96 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// or freshly-installed state has this id present.
     static let writeID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 
+    // MARK: - Codable
+
+    /// Hand-rolled init so adding a new field doesn't break decode of every
+    /// persisted blob that pre-dates it. Each property uses `decodeIfPresent`
+    /// with a sensible default — missing keys fall through, unknown keys are
+    /// ignored. Without this, Swift's synthesised init demands every key be
+    /// present, and an older blob causes the entire settings decode to throw —
+    /// which the outer `try?` swallows, settings fall back to defaults, and
+    /// the next save silently overwrites the user's data on disk.
+    enum CodingKeys: String, CodingKey {
+        case id, name, isLocked, includeInCycle, appBundleIDs
+        case spokenCuesEnabled, vocabularyEnabled
+        case formattingPassEnabled, grammarPassMode, grammarPassMaxEditFraction
+        case structuralPassEnabled, structuralPassMinWords
+        case formattingPromptAddendum, formattingPromptOverride
+        case grammarPromptAddendum, grammarPromptOverride
+        case structuralPromptAddendum, structuralPromptOverride
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `id` and `name` are the only fields where a missing value would
+        // genuinely indicate a broken record; for those we still throw rather
+        // than invent an identity.
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        // Everything else defaults to a sensible value if absent — matches the
+        // shape of `DictationMode.write` so a half-shaped blob comes back as a
+        // normally-behaved Write mode rather than failing to decode.
+        self.isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        self.includeInCycle = try c.decodeIfPresent(Bool.self, forKey: .includeInCycle) ?? true
+        self.appBundleIDs = try c.decodeIfPresent([String].self, forKey: .appBundleIDs) ?? []
+        self.spokenCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .spokenCuesEnabled) ?? true
+        self.vocabularyEnabled = try c.decodeIfPresent(Bool.self, forKey: .vocabularyEnabled) ?? true
+        self.formattingPassEnabled = try c.decodeIfPresent(Bool.self, forKey: .formattingPassEnabled) ?? true
+        self.grammarPassMode = try c.decodeIfPresent(GrammarPassMode.self, forKey: .grammarPassMode) ?? .tighten
+        self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self, forKey: .grammarPassMaxEditFraction) ?? 0.15
+        self.structuralPassEnabled = try c.decodeIfPresent(Bool.self, forKey: .structuralPassEnabled) ?? true
+        self.structuralPassMinWords = try c.decodeIfPresent(Int.self, forKey: .structuralPassMinWords) ?? 30
+        self.formattingPromptAddendum = try c.decodeIfPresent(String.self, forKey: .formattingPromptAddendum) ?? ""
+        self.formattingPromptOverride = try c.decodeIfPresent(String.self, forKey: .formattingPromptOverride)
+        self.grammarPromptAddendum = try c.decodeIfPresent(String.self, forKey: .grammarPromptAddendum) ?? ""
+        self.grammarPromptOverride = try c.decodeIfPresent(String.self, forKey: .grammarPromptOverride)
+        self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? ""
+        self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride)
+    }
+
+    /// Memberwise init is no longer synthesised because we declared
+    /// `init(from:)`. Restore it explicitly so call sites that build modes
+    /// (seeds, settings UI) still compile.
+    init(
+        id: UUID,
+        name: String,
+        isLocked: Bool,
+        includeInCycle: Bool,
+        appBundleIDs: [String],
+        spokenCuesEnabled: Bool,
+        vocabularyEnabled: Bool,
+        formattingPassEnabled: Bool,
+        grammarPassMode: GrammarPassMode,
+        grammarPassMaxEditFraction: Double,
+        structuralPassEnabled: Bool,
+        structuralPassMinWords: Int,
+        formattingPromptAddendum: String,
+        formattingPromptOverride: String?,
+        grammarPromptAddendum: String,
+        grammarPromptOverride: String?,
+        structuralPromptAddendum: String,
+        structuralPromptOverride: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.isLocked = isLocked
+        self.includeInCycle = includeInCycle
+        self.appBundleIDs = appBundleIDs
+        self.spokenCuesEnabled = spokenCuesEnabled
+        self.vocabularyEnabled = vocabularyEnabled
+        self.formattingPassEnabled = formattingPassEnabled
+        self.grammarPassMode = grammarPassMode
+        self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
+        self.structuralPassEnabled = structuralPassEnabled
+        self.structuralPassMinWords = structuralPassMinWords
+        self.formattingPromptAddendum = formattingPromptAddendum
+        self.formattingPromptOverride = formattingPromptOverride
+        self.grammarPromptAddendum = grammarPromptAddendum
+        self.grammarPromptOverride = grammarPromptOverride
+        self.structuralPromptAddendum = structuralPromptAddendum
+        self.structuralPromptOverride = structuralPromptOverride
+    }
+
     // MARK: - Effective prompts
 
     var effectiveFormattingPrompt: String {
