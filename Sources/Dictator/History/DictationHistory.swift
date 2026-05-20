@@ -12,13 +12,12 @@ final class DictationHistory {
     private static let maxAgeDays = 7
     private static let maxEntries = 500
 
+    /// Resolved fresh on every read/write so a Settings → General → Synced
+    /// folder change is picked up by the next persist with no in-memory
+    /// caching to invalidate. Lives in the synced folder so a user with
+    /// Documents in iCloud Drive sees their recent dictations on every Mac.
     private static var storeURL: URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Dictator", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("history.json")
+        SyncedStorage.fileURL(for: "history.json")
     }
 
     private init() {

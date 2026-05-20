@@ -72,10 +72,13 @@ struct DictatorSettings: Codable, Equatable {
     /// the array. Stays Codable so we can still read older blobs, but should
     /// be empty in any settings file written by this version forward.
     var vocabulary: [VocabularyEntry]
-    /// Optional custom directory for `vocabulary.json`. nil = default
-    /// (`~/Documents/Dictator/`). The user picks this in Settings → General;
-    /// `VocabularyStore.relocate(to:)` does the actual move.
-    var vocabularyDirectoryPath: String?
+    /// Optional custom directory for synced data — settings.json,
+    /// vocabulary.json, history.json, conversations.json all live here.
+    /// nil = default (`~/Documents/Dictator/`). The user picks this in
+    /// Settings → General → Synced folder. Per-Mac (in local-settings.json)
+    /// because each machine may point at a different folder (e.g. one Mac
+    /// on iCloud Drive, another on Dropbox).
+    var syncedDirectoryPath: String?
     var assistantTriggerMode: TriggerMode
     /// The user's preferred name. Used to (a) bias Whisper toward the correct
     /// spelling when they say it, and (b) tell the LLM who's writing so
@@ -126,7 +129,7 @@ struct DictatorSettings: Codable, Equatable {
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
         vocabulary: [],
-        vocabularyDirectoryPath: nil,
+        syncedDirectoryPath: nil,
         assistantTriggerMode: .rightOption,
         userName: "",
         modes: [.quick, .write],
@@ -147,7 +150,7 @@ struct DictatorSettings: Codable, Equatable {
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
         vocabulary: [VocabularyEntry],
-        vocabularyDirectoryPath: String?,
+        syncedDirectoryPath: String?,
         assistantTriggerMode: TriggerMode,
         userName: String,
         modes: [DictationMode],
@@ -166,7 +169,7 @@ struct DictatorSettings: Codable, Equatable {
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
         self.vocabulary = vocabulary
-        self.vocabularyDirectoryPath = vocabularyDirectoryPath
+        self.syncedDirectoryPath = syncedDirectoryPath
         self.assistantTriggerMode = assistantTriggerMode
         self.userName = userName
         self.modes = modes
@@ -206,7 +209,19 @@ struct DictatorSettings: Codable, Equatable {
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
-        self.vocabularyDirectoryPath = try c.decodeIfPresent(String.self,     forKey: .vocabularyDirectoryPath)
+        // syncedDirectoryPath replaced the older vocabularyDirectoryPath
+        // field — read both, prefer the new name, so existing blobs migrate
+        // transparently. The legacy key lives in its own enum because it's
+        // not a stored property of the struct and would otherwise break
+        // Encodable synthesis.
+        if let synced = try c.decodeIfPresent(String.self, forKey: .syncedDirectoryPath) {
+            self.syncedDirectoryPath = synced
+        } else if let legacyContainer = try? decoder.container(keyedBy: LegacyTopLevelKeys.self),
+                  let legacy = try? legacyContainer.decodeIfPresent(String.self, forKey: .vocabularyDirectoryPath) {
+            self.syncedDirectoryPath = legacy
+        } else {
+            self.syncedDirectoryPath = nil
+        }
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
         self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
@@ -842,11 +857,19 @@ struct DictatorSettings: Codable, Equatable {
         case llmEngine, llmModelID
         case pasteAutomatically, playSounds
         case triggerMode, preloadModelsOnLaunch
-        case vocabulary, vocabularyDirectoryPath
+        case vocabulary, syncedDirectoryPath
         case assistantTriggerMode, userName
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
         case hasCompletedOnboarding
+    }
+
+    /// Keys that exist only in pre-rename persisted blobs. We never emit
+    /// these any more but still read them during migration so a user with
+    /// a custom folder path doesn't lose it on the rename
+    /// (vocabularyDirectoryPath → syncedDirectoryPath).
+    private enum LegacyTopLevelKeys: String, CodingKey {
+        case vocabularyDirectoryPath
     }
 
     /// Keys that belong in the user-visible synced file
@@ -880,7 +903,7 @@ struct DictatorSettings: Codable, Equatable {
         "llmModelID",
         "preloadModelsOnLaunch",
         "vocabulary",                  // legacy migration scratch — empty after migration
-        "vocabularyDirectoryPath",
+        "syncedDirectoryPath",
         "hasCompletedOnboarding",
     ]
 
@@ -898,11 +921,26 @@ struct DictatorSettings: Codable, Equatable {
         case grammarPassEnabled
     }
 
-    static func syncedFileURL() -> URL {
-        VocabularyStore.defaultDirectory().appendingPathComponent("settings.json")
+    /// Default URL for the synced settings file when no custom folder is set.
+    /// Boot-strap callers use this before local-settings.json has been read.
+    nonisolated static func defaultSyncedFileURL() -> URL {
+        SyncedStorage.defaultDirectory.appendingPathComponent("settings.json")
     }
 
-    static func localFileURL() -> URL {
+    /// URL for the synced settings file at the user's currently-configured
+    /// synced folder location. Pass the resolved path from local-settings.json
+    /// so the boot-strap loader doesn't depend on AppState being ready.
+    nonisolated static func syncedFileURL(syncedDirectoryPath: String?) -> URL {
+        let dir: URL
+        if let syncedDirectoryPath, !syncedDirectoryPath.isEmpty {
+            dir = URL(fileURLWithPath: syncedDirectoryPath, isDirectory: true)
+        } else {
+            dir = SyncedStorage.defaultDirectory
+        }
+        return dir.appendingPathComponent("settings.json")
+    }
+
+    nonisolated static func localFileURL() -> URL {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first
@@ -962,20 +1000,32 @@ struct DictatorSettings: Codable, Equatable {
         return settings
     }
 
-    /// Reads both files, merges them into a single DictatorSettings. Returns
-    /// nil when *neither* file exists (signals "no migration done yet" to
-    /// the caller). When one file exists and the other doesn't, treats the
-    /// missing one as empty — defaults take over for those fields.
+    /// Two-stage load:
+    /// 1. Read `local-settings.json` from its fixed App Support path. Pull
+    ///    out `syncedDirectoryPath` (the user's choice of where shared data
+    ///    lives), falling back to the legacy `vocabularyDirectoryPath` key
+    ///    for blobs predating the rename.
+    /// 2. Read `settings.json` from the resolved synced folder (default
+    ///    `~/Documents/Dictator/`).
+    /// 3. Merge into a single DictatorSettings.
+    ///
+    /// Returns nil when *neither* file exists (signals "no migration done
+    /// yet" to the caller). When one file exists and the other doesn't,
+    /// treats the missing one as empty — defaults fill the gap.
     @MainActor
     private static func loadFromFiles() -> DictatorSettings? {
-        let syncedURL = syncedFileURL()
         let localURL = localFileURL()
-        let syncedExists = FileManager.default.fileExists(atPath: syncedURL.path)
         let localExists = FileManager.default.fileExists(atPath: localURL.path)
+        let localDict = readEnvelope(at: localURL)
+
+        // Resolve the synced folder before opening the synced file.
+        let customPath = (localDict["syncedDirectoryPath"] as? String)
+            ?? (localDict["vocabularyDirectoryPath"] as? String)
+        let syncedURL = syncedFileURL(syncedDirectoryPath: customPath)
+        let syncedExists = FileManager.default.fileExists(atPath: syncedURL.path)
         guard syncedExists || localExists else { return nil }
 
         let syncedDict = readEnvelope(at: syncedURL)
-        let localDict = readEnvelope(at: localURL)
         // Local wins on overlap, but in normal operation there shouldn't be
         // any — each file owns its own keys.
         var merged: [String: Any] = [:]
@@ -1055,7 +1105,7 @@ struct DictatorSettings: Codable, Equatable {
         else { return }
         let synced = dict.filter { Self.syncedKeys.contains($0.key) }
         let local = dict.filter { Self.localKeys.contains($0.key) }
-        Self.writeEnvelope(synced, to: Self.syncedFileURL())
+        Self.writeEnvelope(synced, to: Self.syncedFileURL(syncedDirectoryPath: syncedDirectoryPath))
         Self.writeEnvelope(local, to: Self.localFileURL())
     }
 

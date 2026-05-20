@@ -130,15 +130,11 @@ final class VocabularyStore {
         startWatching(url: newURL)
     }
 
-    /// Default vocabulary folder: `~/Documents/Dictator/`. User-visible (in
-    /// Finder under Documents), and if Documents is in iCloud Drive the
-    /// folder syncs automatically. `nonisolated` so callers from any actor
-    /// (including DictatorSettings.load() which runs at startup) can reach
-    /// it without hopping to the main actor.
+    /// Default folder for synced data, kept here as a compatibility shim for
+    /// callers that haven't moved to `SyncedStorage` yet. New code should
+    /// reference `SyncedStorage.defaultDirectory` directly.
     nonisolated static func defaultDirectory() -> URL {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
-        return documents.appendingPathComponent("Dictator", isDirectory: true)
+        SyncedStorage.defaultDirectory
     }
 
     // MARK: - Save (debounced)

@@ -42,12 +42,22 @@ final class AppState {
         // high, but the pool can't run away.
         MLX.GPU.set(cacheLimit: 512 * 1024 * 1024)
 
+        // Move dictation history and conversations from their legacy App
+        // Support location into the user's synced folder if they haven't
+        // already migrated. Idempotent: subsequent launches no-op once the
+        // synced copy exists. Runs before the singletons are first
+        // referenced (DictationHistory.shared / ConversationHistory.shared)
+        // so they pick up the synced location on initial load.
+        SyncedStorage.migrateFromAppSupport(filename: "history.json")
+        SyncedStorage.migrateFromAppSupport(filename: "conversations.json")
+
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy
         // settings.vocabulary array as a one-shot migration source; once
         // it's flushed to disk we clear the array on the in-memory
         // settings so a future save doesn't keep re-writing it.
-        let customVocabDirectory = settings.vocabularyDirectoryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let customVocabDirectory = settings.syncedDirectoryPath
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
         let legacyVocab = settings.vocabulary
         VocabularyStore.shared.bootstrap(customDirectory: customVocabDirectory, legacyEntries: legacyVocab)
         if !legacyVocab.isEmpty {

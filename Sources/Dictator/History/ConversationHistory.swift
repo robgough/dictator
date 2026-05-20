@@ -2,7 +2,8 @@ import Foundation
 import Observation
 
 /// Persisted list of Assistant Mode conversations, mirroring the shape of
-/// DictationHistory. Sits alongside `history.json` in the app support dir.
+/// DictationHistory. Lives alongside `history.json` in the user's synced
+/// folder so threads continue seamlessly across Macs that share it.
 /// Conversations are short by design (the user told us so), so keep a small
 /// cap rather than the 500-deep dictation history.
 @MainActor
@@ -17,12 +18,7 @@ final class ConversationHistory {
     private static let maxEntries = 20
 
     private static var storeURL: URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Dictator", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("conversations.json")
+        SyncedStorage.fileURL(for: "conversations.json")
     }
 
     private init() {
