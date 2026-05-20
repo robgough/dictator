@@ -498,7 +498,13 @@ final class AudioRecorder {
         mono.withUnsafeBufferPointer { ptr -> Void in
             vDSP_rmsqv(ptr.baseAddress!, 1, &rms, vDSP_Length(frameCount))
         }
-        let level = min(1, max(0, rms * 8))
+        // Map RMS onto [0, 1] via a square-root curve. Linear scaling (the
+        // original `rms * 8`) collapses quieter mics — AirPods, distant USB,
+        // anything with low OS-side gain — below the HUD waveform's 0.05
+        // floor, so the bars looked frozen during normal speech. Sqrt
+        // compresses the dynamic range so RMS ~0.005 (quiet) lifts visibly
+        // off the floor without pinning RMS ~0.2 (loud) at the top.
+        let level = min(1, max(0, sqrtf(rms) * 2.5))
         return ProcessedBuffer(mono: mono, level: level, sampleRate: sampleRate)
     }
 

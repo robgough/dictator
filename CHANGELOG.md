@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The HUD's input-level bars are taller and more responsive across the volume range. The meter previously used a linear scale calibrated for louder built-in mics, so AirPods and lower-gain USB inputs sat at the minimum bar height even when audio was being captured fine, and the bars themselves only used a fraction of the HUD's vertical space. Switched to a square-root curve, a taller meter, and a slightly more generous mapping so typical speech fills more of the meter and quieter voices still register motion.
 - The grammar pass is now a three-way picker in Settings → General → Behaviour: Off, Tidy grammar, or Tidy and tighten. "Tidy grammar" is the existing conservative pass — small fixes only, keeps your voice. "Tidy and tighten" goes further: removes filler words ("um", "uh", "like", "you know"), false starts and self-corrections, and lightly trims redundant phrasing so the output reads more like writing than speech. New installs default to Tidy and tighten; existing users keep their previous setting.
 
 ## v2026.5.8 — 2026-05-19

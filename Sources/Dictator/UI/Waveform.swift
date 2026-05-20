@@ -22,7 +22,7 @@ struct Waveform: View {
                 ctx.fill(shape, with: .color(tint))
             }
         }
-        .frame(height: 36)
+        .frame(height: 52)
         .onChange(of: level, initial: false) { _, new in
             tick(with: Double(new))
         }
@@ -34,7 +34,10 @@ struct Waveform: View {
         var next = bars
         next.removeFirst()
         let jitter = Double.random(in: 0.85...1.0)
-        let target = max(0.05, min(1.0, newLevel * jitter * 1.4))
+        // Bias toward filling the meter for typical speech — loud syllables
+        // pinning at 1.0 briefly is fine; visually-flat bars when someone
+        // *is* talking is worse than occasional clipping at the top.
+        let target = max(0.05, min(1.0, newLevel * jitter * 1.7))
         next.append(target)
 
         // Light smoothing across neighbours so it doesn't look stuttery.
