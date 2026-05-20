@@ -376,7 +376,7 @@ final class Pipeline {
     }
 
     private func maybeFixGrammar(formatted: String) async -> String {
-        guard settings.grammarPassEnabled else { return formatted }
+        guard settings.grammarPassMode != .off else { return formatted }
         guard let llm = currentLLM() else { return formatted }
         state = .fixingGrammar
         do {
@@ -389,8 +389,24 @@ final class Pipeline {
             guard !tidied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
             }
-            let drift = Self.wordEditFraction(from: formatted, to: tidied)
-            if drift <= settings.grammarPassMaxEditFraction {
+            // Tidy uses raw word-Levenshtein with the user-tunable ceiling.
+            // Tighten is allowed to delete disfluencies, so we strip a known
+            // filler set from both sides before measuring — otherwise dropping
+            // 4 ums in a 20-word sentence would look like 20% drift and get
+            // rejected. The 0.30 ceiling on the stripped comparison still
+            // catches actual paraphrase / hallucination.
+            let accepted: Bool
+            switch settings.grammarPassMode {
+            case .off:
+                accepted = false // unreachable — short-circuit above
+            case .tidy:
+                let drift = Self.wordEditFraction(from: formatted, to: tidied)
+                accepted = drift <= settings.grammarPassMaxEditFraction
+            case .tighten:
+                let drift = Self.wordEditFractionStrippingFillers(from: formatted, to: tidied)
+                accepted = drift <= 0.30
+            }
+            if accepted {
                 inFlight.tidied = tidied
                 return tidied
             }
@@ -434,6 +450,35 @@ final class Pipeline {
         guard n > 0 else { return 0 }
         return Double(wordLevenshtein(aw, bw)) / Double(n)
     }
+
+    /// Drift measure for the `.tighten` mode. We strip known speech fillers
+    /// and articles from BOTH sides before computing Levenshtein, so the
+    /// validator doesn't punish the model for dropping ums, false starts, or
+    /// adding/removing articles — those are the changes we want it to make.
+    /// What's still measured: substantive substitutions and additions of
+    /// content words, which is where actual hallucination would show up.
+    private static func wordEditFractionStrippingFillers(from a: String, to b: String) -> Double {
+        let aw = wordSequence(a).filter { !grammarFillerStripSet.contains($0) }
+        let bw = wordSequence(b).filter { !grammarFillerStripSet.contains($0) }
+        let n = max(aw.count, bw.count)
+        guard n > 0 else { return 0 }
+        return Double(wordLevenshtein(aw, bw)) / Double(n)
+    }
+
+    /// Single-word fillers that the tighten validator ignores on both sides.
+    /// Intentionally lenient — the goal is to not REJECT legitimate filler
+    /// removal, not to require it. The model isn't told this list; it's just
+    /// a safety relaxation. Multi-word fillers ("you know", "I mean") aren't
+    /// here because their components are normal words elsewhere — they'll
+    /// usually drop out via Levenshtein's deletion cost staying under the
+    /// 0.30 ceiling.
+    private static let grammarFillerStripSet: Set<String> = [
+        "um", "umm", "uh", "uhh", "ah", "ahh", "er", "erm", "ehm",
+        "hmm", "mm", "mhm",
+        "like", "well", "basically", "literally", "actually",
+        "just", "really", "so",
+        "a", "an", "the",
+    ]
 
     private static func wordLevenshtein(_ a: [String], _ b: [String]) -> Int {
         if a.isEmpty { return b.count }

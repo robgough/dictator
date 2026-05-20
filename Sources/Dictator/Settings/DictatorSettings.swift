@@ -27,6 +27,32 @@ enum LLMEngineKind: String, Codable, Sendable, Hashable, CaseIterable {
     case mlx
 }
 
+/// How aggressive the second LLM pass (grammar) is allowed to be.
+///
+/// - `off`: skipped entirely; the formatter's output ships unchanged into
+///   the structural pass / paste step.
+/// - `tidy`: conservative fixes only — obvious agreement/contractions/duplicate
+///   words — and rejects the pass via `grammarPassMaxEditFraction` if drift
+///   exceeds the configured ceiling. Preserves the user's voice, fillers
+///   included.
+/// - `tighten`: bolder. Removes disfluencies ("um", "uh", false starts,
+///   self-corrections, redundant filler) and lightly tightens phrasing while
+///   preserving meaning. Uses a different validator that doesn't penalise
+///   filler removal.
+enum GrammarPassMode: String, Codable, Sendable, Hashable, CaseIterable {
+    case off
+    case tidy
+    case tighten
+
+    var label: String {
+        switch self {
+        case .off: return "Off"
+        case .tidy: return "Tidy grammar"
+        case .tighten: return "Tidy and tighten"
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
@@ -47,7 +73,9 @@ struct DictatorSettings: Codable, Equatable {
     var spokenCuesEnabled: Bool
     var structuralPassEnabled: Bool
     var structuralPassMinWords: Int
-    var grammarPassEnabled: Bool
+    var grammarPassMode: GrammarPassMode
+    /// Applies to `.tidy` only. The `.tighten` mode uses its own (more permissive)
+    /// validator — see `Pipeline.maybeFixGrammar`.
     var grammarPassMaxEditFraction: Double
     var vocabulary: [VocabularyEntry]
     var assistantTriggerMode: TriggerMode
@@ -94,7 +122,7 @@ struct DictatorSettings: Codable, Equatable {
         spokenCuesEnabled: true,
         structuralPassEnabled: true,
         structuralPassMinWords: 30,
-        grammarPassEnabled: false,
+        grammarPassMode: .tighten,
         grammarPassMaxEditFraction: 0.15,
         vocabulary: [],
         assistantTriggerMode: .rightOption,
@@ -123,7 +151,7 @@ struct DictatorSettings: Codable, Equatable {
         spokenCuesEnabled: Bool,
         structuralPassEnabled: Bool,
         structuralPassMinWords: Int,
-        grammarPassEnabled: Bool,
+        grammarPassMode: GrammarPassMode,
         grammarPassMaxEditFraction: Double,
         vocabulary: [VocabularyEntry],
         assistantTriggerMode: TriggerMode,
@@ -150,7 +178,7 @@ struct DictatorSettings: Codable, Equatable {
         self.spokenCuesEnabled = spokenCuesEnabled
         self.structuralPassEnabled = structuralPassEnabled
         self.structuralPassMinWords = structuralPassMinWords
-        self.grammarPassEnabled = grammarPassEnabled
+        self.grammarPassMode = grammarPassMode
         self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
         self.vocabulary = vocabulary
         self.assistantTriggerMode = assistantTriggerMode
@@ -198,7 +226,20 @@ struct DictatorSettings: Codable, Equatable {
         self.spokenCuesEnabled      = try c.decodeIfPresent(Bool.self,        forKey: .spokenCuesEnabled)      ?? d.spokenCuesEnabled
         self.structuralPassEnabled  = try c.decodeIfPresent(Bool.self,        forKey: .structuralPassEnabled)  ?? d.structuralPassEnabled
         self.structuralPassMinWords = try c.decodeIfPresent(Int.self,         forKey: .structuralPassMinWords) ?? d.structuralPassMinWords
-        self.grammarPassEnabled     = try c.decodeIfPresent(Bool.self,        forKey: .grammarPassEnabled)     ?? d.grammarPassEnabled
+        // Grammar pass migration: pre-tighten installs had `grammarPassEnabled: Bool`.
+        // New installs persist `grammarPassMode: GrammarPassMode`. Prefer the new
+        // key; fall back to the old bool (true → .tidy, false → .off) so existing
+        // users keep behaviour. Default for fresh installs is .off (set in defaults).
+        if let mode = try c.decodeIfPresent(GrammarPassMode.self, forKey: .grammarPassMode) {
+            self.grammarPassMode = mode
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            if let oldEnabled = try legacy.decodeIfPresent(Bool.self, forKey: .grammarPassEnabled) {
+                self.grammarPassMode = oldEnabled ? .tidy : .off
+            } else {
+                self.grammarPassMode = d.grammarPassMode
+            }
+        }
         self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self,  forKey: .grammarPassMaxEditFraction) ?? d.grammarPassMaxEditFraction
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
         self.assistantTriggerMode   = try c.decodeIfPresent(TriggerMode.self, forKey: .assistantTriggerMode) ?? d.assistantTriggerMode
@@ -225,9 +266,19 @@ struct DictatorSettings: Codable, Equatable {
                      addendum: formattingPromptAddendum)
     }
     var effectiveGrammarPrompt: String {
-        Self.combine(builtin: Self.builtinGrammarPrompt,
-                     override: grammarPromptOverride,
-                     addendum: grammarPromptAddendum)
+        // Tidy vs tighten pick different built-ins; override (when set) still
+        // replaces wholesale so users can pin a single custom prompt without
+        // it silently swapping under them when they change the mode.
+        let builtin: String
+        switch grammarPassMode {
+        case .off, .tidy:
+            builtin = Self.builtinGrammarPrompt
+        case .tighten:
+            builtin = Self.builtinTightenPrompt
+        }
+        return Self.combine(builtin: builtin,
+                            override: grammarPromptOverride,
+                            addendum: grammarPromptAddendum)
     }
     var effectiveStructuralPrompt: String {
         Self.combine(builtin: Self.builtinStructuralPrompt,
@@ -457,6 +508,48 @@ struct DictatorSettings: Codable, Equatable {
     "me and him goes to the meeting" → He and I go to the meeting.
     """
 
+    static let builtinTightenPrompt = """
+    You are a GRAMMAR + TIGHTENING pass for dictation. The user's message is already-punctuated text wrapped in `<<<` and `>>>`. Your job is to tidy obvious grammar errors AND remove speech disfluencies, so the output reads cleanly as written English — not as a transcript of someone speaking. Never include `<<<` or `>>>` in your reply.
+
+    Permitted edits (apply only when unambiguous):
+    - Remove filler words and hesitations: "um", "uh", "ah", "er", "erm", "hmm", "mm", "mhm".
+    - Remove discourse-marker fillers when they add no meaning: "well", "you know", "I mean", "basically", "literally", "actually", "kind of" / "sort of", "just", "really", "like" — but ONLY when used as filler. Keep them when they carry meaning: "I like running" (verb), "kind of fish" (category), "really tall" (intensifier with a clear target), "well-built" (adjective).
+    - Remove false starts and self-corrections, keeping the corrected version: "I went to the — actually, I drove to the office" → "I drove to the office". "We need three — sorry, four people" → "We need four people".
+    - Collapse repeated words from speech disfluency: "the the meeting" → "the meeting", "I I think" → "I think".
+    - Fix subject–verb agreement: "they was" → "they were", "he are" → "he is".
+    - Fix obvious tense slips and pronoun case: "me and him went" → "he and I went".
+    - Add apostrophes to obvious contractions: "dont" → "don't", "Im" → "I'm", "youre" → "you're", "its" used as "it is" → "it's".
+    - Add a missing article only when its absence makes the sentence ungrammatical: "I bought car" → "I bought a car".
+    - Lightly tighten redundant phrasing while preserving meaning: "in the event that" → "if", "at this point in time" → "now", "due to the fact that" → "because". Be conservative — only when the meaning is identical and the change is small.
+
+    FORBIDDEN:
+    - Adding new ideas, examples, plans, opinions, greetings, sign-offs, or commentary.
+    - Continuing the user's thought, answering questions, or otherwise generating new content.
+    - Substantive paraphrasing or wholesale rewriting — keep the user's vocabulary and stance.
+    - Changing the topic, tone, or claim of any sentence.
+    - Reordering content beyond what's needed to drop a filler.
+    - Adding punctuation that radically changes structure (sentence boundaries are pass 1's job).
+    - Adding titles, headings, or list formatting (that's pass 3's job).
+
+    If the input is already clean and disfluency-free, output it unchanged.
+
+    Output rules:
+    - Your reply is ONLY the tidied text. Nothing before it. Nothing after it.
+    - NEVER echo the wrapping or labels. No preamble ("Sure", "Here is"). No commentary. No explanation.
+    - If the input is empty or just whitespace, output nothing.
+
+    Reference transformations:
+
+    "Um, yeah, so I went to, you know, the store." → I went to the store.
+    "They was, uh, they were going to the meeting." → They were going to the meeting.
+    "I think — I mean, I believe — we should ship it." → I believe we should ship it.
+    "Basically, the the report is ready." → The report is ready.
+    "I like running like, three miles a day." → I like running three miles a day.
+    "In the event that the build fails, retry." → If the build fails, retry.
+    "dont forget Im out of milk" → Don't forget I'm out of milk.
+    "we need three — sorry, four people on the call" → We need four people on the call.
+    """
+
     static let builtinAssistantPrompt = """
     You are the on-device writing assistant inside Dictator, a macOS dictation app. Your job is to help the user produce text — drafting, rewriting, restructuring, listing, or briefly answering factual questions. You run locally on the user's Mac.
 
@@ -674,6 +767,13 @@ struct DictatorSettings: Codable, Equatable {
     // built-in + addendum + override model. Old v1 data is orphaned on disk,
     // which is fine — there are no users yet.
     private static let key = "DictatorSettings.v2"
+
+    /// Legacy keys we no longer emit but still read for migration. Keep entries
+    /// here until enough time has passed that no installed copy of the app
+    /// could still be holding the old shape — at which point they can be deleted.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case grammarPassEnabled
+    }
 
     @MainActor
     static func load() -> DictatorSettings {

@@ -1472,21 +1472,34 @@ private struct GeneralPane: View {
 
                 let llmDisabled = s.settings.llmEngine == .none
 
-                Toggle("Tidy grammar (third pass)", isOn: $s.settings.grammarPassEnabled)
-                    .onChange(of: s.settings.grammarPassEnabled) { _, _ in state.save() }
-                    .disabled(llmDisabled)
-                Stepper(value: $s.settings.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
-                    HStack {
-                        Text("Discard if more than")
-                        Spacer()
-                        Text("\(Int(s.settings.grammarPassMaxEditFraction * 100))% of words change")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+                Picker("Grammar pass (second LLM pass)", selection: $s.settings.grammarPassMode) {
+                    Text("Off").tag(GrammarPassMode.off)
+                    Text("Tidy grammar").tag(GrammarPassMode.tidy)
+                    Text("Tidy and tighten").tag(GrammarPassMode.tighten)
                 }
-                .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
-                .disabled(!s.settings.grammarPassEnabled || llmDisabled)
-                SectionFootnote("Fixes obvious grammar errors (contractions, agreement, duplicate words). The pass is rejected if too many words change.")
+                .onChange(of: s.settings.grammarPassMode) { _, _ in state.save() }
+                .disabled(llmDisabled)
+                if s.settings.grammarPassMode == .tidy {
+                    Stepper(value: $s.settings.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
+                        HStack {
+                            Text("Discard if more than")
+                            Spacer()
+                            Text("\(Int(s.settings.grammarPassMaxEditFraction * 100))% of words change")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: s.settings.grammarPassMaxEditFraction) { _, _ in state.save() }
+                    .disabled(llmDisabled)
+                }
+                switch s.settings.grammarPassMode {
+                case .off:
+                    SectionFootnote("Skip the grammar pass. The formatter's output ships unchanged.")
+                case .tidy:
+                    SectionFootnote("Fixes obvious grammar errors (contractions, agreement, duplicate words) while preserving your voice and filler words. The pass is rejected if too many words change.")
+                case .tighten:
+                    SectionFootnote("Removes filler words (\"um\", \"uh\", \"like\", \"you know\"), false starts and self-corrections, and lightly tightens phrasing — so the output reads more like writing than speech. Meaning is preserved; substantive rewrites are still rejected.")
+                }
 
                 Toggle("Restructure long dictations into paragraphs / lists", isOn: $s.settings.structuralPassEnabled)
                     .onChange(of: s.settings.structuralPassEnabled) { _, _ in state.save() }

@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- The grammar pass is now a three-way picker in Settings → General → Behaviour: Off, Tidy grammar, or Tidy and tighten. "Tidy grammar" is the existing conservative pass — small fixes only, keeps your voice. "Tidy and tighten" goes further: removes filler words ("um", "uh", "like", "you know"), false starts and self-corrections, and lightly trims redundant phrasing so the output reads more like writing than speech. New installs default to Tidy and tighten; existing users keep their previous setting.
 
 ## v2026.5.8 — 2026-05-19
 
