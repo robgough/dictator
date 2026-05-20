@@ -2375,19 +2375,32 @@ private struct ModesPane: View {
     @ViewBuilder
     private var modeList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(state.settings.modes) { mode in
-                        ModeListRow(
-                            mode: mode,
-                            isSelected: effectiveSelection == mode.id,
-                            isDefault: state.settings.defaultModeID == mode.id,
-                            onSelect: { selectedID = mode.id }
-                        )
-                    }
+            // Selection is bound through List itself rather than a custom tap
+            // gesture. With our own .onTapGesture on the row, the gesture ate
+            // drags anywhere inside the row's content shape and only the
+            // outer padding worked as a drag pickup zone. Letting List own
+            // selection means it can coordinate click-to-select and
+            // press-drag-to-reorder across the entire row — the standard
+            // macOS list interaction model.
+            List(selection: $selectedID) {
+                ForEach(state.settings.modes) { mode in
+                    ModeListRow(
+                        mode: mode,
+                        isSelected: effectiveSelection == mode.id,
+                        isDefault: state.settings.defaultModeID == mode.id
+                    )
+                    .tag(mode.id)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+                    .listRowBackground(Color.clear)
                 }
-                .padding(.vertical, 4)
+                .onMove { offsets, destination in
+                    state.settings.modes.move(fromOffsets: offsets, toOffset: destination)
+                    state.save()
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.05)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.15)))
 
@@ -2540,47 +2553,41 @@ private struct ModeListRow: View {
     let mode: DictationMode
     let isSelected: Bool
     let isDefault: Bool
-    let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 8) {
-                if mode.isLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12)
-                } else {
-                    Spacer().frame(width: 12)
-                }
-                Text(mode.name)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-                if isDefault {
-                    Text("default")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.brandBlue)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
-                }
+        // No gestures here — selection lives on the parent List via
+        // `.tag` + `List(selection:)`. Adding a tap gesture would compete
+        // with List's drag-to-reorder coordination and force users to grab
+        // the row from an edge.
+        HStack(spacing: 8) {
+            if mode.isLocked {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12)
+            } else {
+                Spacer().frame(width: 12)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isSelected ? Color.brandBlue.opacity(0.18) : Color.clear)
-            )
-            // Without an explicit contentShape, a Button with `.plain` style
-            // and a Color.clear background only hits on the visible content
-            // (text glyphs) — so unselected rows only respond when the user
-            // clicks the name directly. Rectangle gives the whole row a
-            // hittable surface.
-            .contentShape(Rectangle())
+            Text(mode.name)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            if isDefault {
+                Text("default")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.brandBlue)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? Color.brandBlue.opacity(0.18) : Color.clear)
+        )
         .padding(.horizontal, 4)
     }
 }
