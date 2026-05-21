@@ -471,10 +471,10 @@ enum SpokenCues {
     //   "fourteen forty-five hours" → "1445 hours"
     // We deliberately require the marker word to fire — bare "ten thirty"
     // is left alone because it's often a quantity, not a time
-    // ("ten thirty-dollar items"). AM/PM markers come out without
-    // dots regardless of how Whisper punctuated the utterance — "a.m."
-    // and "p.m." normalise to "am" / "pm" — but the case the speaker
-    // (or Whisper) used is preserved. "o'clock" and "hours" pass
+    // ("ten thirty-dollar items"). AM/PM markers always render as
+    // lowercase "am" / "pm" regardless of how Whisper punctuated or
+    // cased the utterance — "A.M." and "p.m." both normalise to "am".
+    // "o'clock" also lowercases. "Hours" (military marker) passes
     // through unchanged. The hour-minute shape always renders minutes
     // as two digits so "two fifteen" becomes "2:15", not "2:5".
 
@@ -526,10 +526,14 @@ enum SpokenCues {
     /// Whisper happened to punctuate it on a given utterance.
     private static let timeMarkerFragment = "(?:[ap]\\.?m\\.?|o['\u{2019}]clock)"
 
-    /// Normalise an AM/PM marker by stripping any dots Whisper added.
-    /// Case is preserved. `o'clock` (no dots) passes through unchanged.
+    /// Normalise an AM/PM marker by stripping any dots Whisper added
+    /// and forcing the rendered form to lowercase. Whisper's case for
+    /// the marker is essentially random across utterances, and lower
+    /// case is what most prose styles want anyway — "10 am" reads
+    /// better mid-sentence than "10 AM". `o'clock` (no dots) also
+    /// normalises to lowercase for the same reason.
     private static func normalizeTimeMarker(_ raw: String) -> String {
-        raw.replacingOccurrences(of: ".", with: "")
+        raw.replacingOccurrences(of: ".", with: "").lowercased()
     }
 
     private static func applyHourWithMarker(_ text: String) -> String {
