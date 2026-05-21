@@ -174,7 +174,15 @@ final class DictionaryTester {
             }()
             do {
                 let raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Whisper and Parakeet are sentence-aware and routinely
+                // wrap single words in terminal punctuation
+                // ("Stayupfront." or "Hello!"). Strip whitespace AND
+                // edge punctuation so the pattern field gets the bare
+                // word. trimmingCharacters only touches the ends —
+                // internal characters like the apostrophe in "don't" are
+                // left alone.
+                let stripSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+                let trimmed = raw.trimmingCharacters(in: stripSet)
                 if trimmed.isEmpty {
                     self.lastError = "No speech detected — try again."
                 } else if let id = capturedRowID {
