@@ -207,9 +207,18 @@ private struct StatusRow: View {
                 .font(.system(size: 22, weight: .semibold))
                 .scaleEffect(pulse ? 1.08 : 0.96)
                 .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-            Text(title)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                // Escape-cancel discoverability hint. Surfaced on every
+                // "waiting" state — same set the EscapeCancelMonitor
+                // listens on — so when something runs slow (or wedges)
+                // the user already knows how to bail.
+                Text("Press Esc to cancel")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
             ProgressView()
                 .controlSize(.small)
