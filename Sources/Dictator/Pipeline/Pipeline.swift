@@ -624,11 +624,57 @@ final class Pipeline {
         return s + " "
     }
 
+    /// Drop the auto-capitalisation and trailing period when the user has
+    /// dictated something short — chat replies, mid-document edits, casual
+    /// IDE input, etc. The threshold (≤ 6 words) is calibrated to catch
+    /// single-utterance messages without catching anything that reads like
+    /// a complete formal sentence. Skipped when the text contains a
+    /// strong sentence break ("." mid-text, "?" or "!" anywhere), since
+    /// those signal the user is dictating multiple sentences. The first
+    /// word is left untouched if it starts with "I" / "I'…" so the
+    /// pronoun keeps its proper case.
+    static func relaxShortMessage(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return text }
+        let words = trimmed.split(whereSeparator: { $0.isWhitespace })
+        guard words.count <= 6 else { return text }
+        // Internal "." or any "?"/"!" → formal multi-sentence content;
+        // leave alone. `dropLast` ignores a single trailing period when
+        // checking for an *internal* one.
+        let body = trimmed.dropLast()
+        if body.contains(".") || trimmed.contains("?") || trimmed.contains("!") {
+            return text
+        }
+        var result = trimmed
+        // Strip a single trailing period, but not an ellipsis ("...").
+        if result.hasSuffix(".") && !result.hasSuffix("..") {
+            result = String(result.dropLast())
+        }
+        // Lowercase the first letter unless the first word is "I" or a
+        // contraction like "I'm", "I'll", "I've", "I'd".
+        let firstWord = result
+            .split(separator: " ", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+        let isIWord = firstWord == "I" || firstWord.hasPrefix("I'") || firstWord.hasPrefix("I’")
+        if !isIWord, let firstChar = result.first, firstChar.isUppercase {
+            result = String(firstChar).lowercased() + result.dropFirst()
+        }
+        // Restore the original trailing whitespace/newline so the
+        // delivery path's `withTrailingSpace` stays a no-op when we
+        // already had one (and doesn't need to know we touched anything).
+        if let lastChar = text.last, lastChar.isWhitespace, !result.hasSuffix(String(lastChar)) {
+            result.append(lastChar)
+        }
+        return result
+    }
+
     private func finish(text: String, warning: String?) async {
         // Trailing space so the next dictation/keystroke doesn't glue itself to this
         // chunk. Particularly important when piping dictation straight into chat apps
         // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
         var text = text
+        text = Self.relaxShortMessage(text)
         if currentMode.spokenCuesEnabled {
             // Strip LLM-introduced separators between adjacent emojis
             // ("🔥, 🎉" → "🔥 🎉"). Apple Foundation in particular tends to
