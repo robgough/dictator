@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Settings → Dictionary rows now have a small mic button. Tap it, say a word, and Dictator fills the "Heard" field with what Whisper or Parakeet actually produced. Useful when you know how a word should be spelled but don't know the misspelling the transcriber lands on — close the loop without leaving Settings.
 - The Settings → General → "Vocabulary file" option is now "Synced folder" and controls one location for everything that travels between your Macs — settings, modes, prompts, vocabulary, recent dictations and assistant conversations. Default is ~/Documents/Dictator/. Pick any folder; existing files are copied across. Recent dictations and conversations now live in the synced folder too (previously per-Mac), so they follow you between machines.
 - Settings tabs are cleaner: the "Syncs" cloud badge is gone everywhere. The only sync indicator is a small "This Mac" chip next to genuinely per-Mac sections (Performance), plus an italic footnote at the bottom of the Models and Modes tabs explaining their sync status.
 - Custom URL scheme `dictator://` opens internal surfaces from anywhere on the Mac. `dictator://settings` opens the Settings window without going through the menu bar; `dictator://onboarding` re-shows the first-run wizard. Useful as a deep-link target in scripts, Raycast / Alfred snippets, support docs.

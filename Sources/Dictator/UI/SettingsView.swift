@@ -391,10 +391,32 @@ private struct DictionaryPane: View {
     /// one to pulse-highlight + focus on next render.
     @FocusState private var focusedFieldID: VocabularyEntry.ID?
 
+    @State private var tester = DictionaryTester.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             toolbar(vocabBinding)
+            if let err = tester.lastError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Button("Dismiss") {
+                        tester.dismissError()
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderless)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.10))
+                )
+            }
             list(vocabBinding)
         }
     }
@@ -711,11 +733,14 @@ private struct CompactDictionaryRow: View {
 
     @State private var hovering: Bool = false
     @FocusState private var localFocus: FocusedField?
+    /// Shared across all rows so only one row can hold the mic at a time.
+    @State private var tester = DictionaryTester.shared
 
     private enum FocusedField: Hashable { case pattern, replacement }
 
     var body: some View {
         HStack(spacing: 8) {
+            micButton
             TextField("Heard", text: $entry.pattern)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -779,6 +804,58 @@ private struct CompactDictionaryRow: View {
                 .fill(rowBackground)
         )
         .onHover { hovering = $0 }
+        // When the tester finishes a session for this row, drop the
+        // transcript into the pattern field. Watching the rowID rather
+        // than the whole struct keeps the onChange firing only when a
+        // new result arrives.
+        .onChange(of: tester.pendingResult?.rowID) { _, newID in
+            guard newID == entry.id, let result = tester.pendingResult else { return }
+            entry.pattern = result.text
+            tester.consumePendingResult()
+            onChange()
+        }
+    }
+
+    /// Mic button that records a short clip and runs it through the
+    /// configured ASR engine, populating this row's pattern field with
+    /// whatever was heard. Useful when you know how a word should be
+    /// spelled but don't know what Whisper or Parakeet actually
+    /// produces — close the loop without leaving Settings.
+    @ViewBuilder
+    private var micButton: some View {
+        let isThisRowActive = tester.activeRowID == entry.id
+        Button {
+            if isThisRowActive {
+                tester.stop()
+            } else {
+                tester.start(for: entry.id)
+            }
+        } label: {
+            micButtonIcon(isThisRowActive: isThisRowActive)
+        }
+        .buttonStyle(.borderless)
+        .frame(width: 18)
+        .help(isThisRowActive
+              ? "Listening — click to stop"
+              : "Record what Dictator hears and fill the Heard field")
+    }
+
+    @ViewBuilder
+    private func micButtonIcon(isThisRowActive: Bool) -> some View {
+        switch tester.state {
+        case .warmingUp where isThisRowActive,
+             .transcribing where isThisRowActive:
+            ProgressView()
+                .controlSize(.mini)
+        case .recording where isThisRowActive:
+            Image(systemName: "stop.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.red)
+        default:
+            Image(systemName: "mic")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
     }
 
     /// Subtle hover state so the row reads as interactive without
