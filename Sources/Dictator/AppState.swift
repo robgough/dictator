@@ -50,6 +50,7 @@ final class AppState {
         // so they pick up the synced location on initial load.
         SyncedStorage.migrateFromAppSupport(filename: "history.json")
         SyncedStorage.migrateFromAppSupport(filename: "conversations.json")
+        SyncedStorage.cleanupLegacyBackups()
 
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy

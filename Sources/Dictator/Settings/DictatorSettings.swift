@@ -1109,10 +1109,12 @@ struct DictatorSettings: Codable, Equatable {
         Self.writeEnvelope(local, to: Self.localFileURL())
     }
 
-    /// Writes a `{schemaVersion: 1, settings: {…}}` envelope atomically,
-    /// with a one-slot rolling `.previous` backup. NSFileCoordinator wraps
-    /// the write so two Dictator processes (or a sync daemon) can't corrupt
-    /// each other.
+    /// Writes a `{schemaVersion: 1, settings: {…}}` envelope atomically.
+    /// NSFileCoordinator wraps the write so two Dictator processes (or a
+    /// sync daemon mid-flight) can't corrupt each other. No `.previous`
+    /// backup — the atomic rename means a reader never sees a half-written
+    /// file, and a corrupt-bytes scenario is caught on load() (where the
+    /// original is preserved under `settings.recovered-<timestamp>.json`).
     private static func writeEnvelope(_ inner: [String: Any], to url: URL) {
         let envelope: [String: Any] = ["schemaVersion": 1, "settings": inner]
         guard let data = try? JSONSerialization.data(
@@ -1131,11 +1133,6 @@ struct DictatorSettings: Codable, Equatable {
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordError: NSError?
         coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { coordURL in
-            let backup = coordURL.appendingPathExtension("previous")
-            if FileManager.default.fileExists(atPath: coordURL.path) {
-                try? FileManager.default.removeItem(at: backup)
-                try? FileManager.default.copyItem(at: coordURL, to: backup)
-            }
             do {
                 try data.write(to: coordURL, options: .atomic)
             } catch {

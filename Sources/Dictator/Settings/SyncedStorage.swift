@@ -85,6 +85,24 @@ enum SyncedStorage {
         }
     }
 
+    /// One-time cleanup of stranded `.previous` backups from an earlier
+    /// version of the store. The atomic-rename write guarantees readers
+    /// never see a half-written file, and decode-failure recovery now
+    /// preserves bytes under `<filename>.recovered-<timestamp>.json`, so
+    /// the rolling `.previous` slot is just visible clutter. Idempotent:
+    /// no-ops on a freshly-installed setup.
+    @MainActor
+    static func cleanupLegacyBackups() {
+        let names = ["settings.json", "vocabulary.json", "history.json", "conversations.json"]
+        let dir = directory
+        for name in names {
+            let url = dir.appendingPathComponent("\(name).previous")
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     /// Copies every known synced file from `old` to `new` when the user
     /// picks a different folder, so their data follows the picker action
     /// instead of leaving behind stranded copies in the old location.

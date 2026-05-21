@@ -14,9 +14,6 @@ import Combine
 ///   see the previous content or the new content, never a half-written file.
 /// - **NSFileCoordinator** wraps reads and writes so two Dictator processes
 ///   on the same Mac (or a sync daemon mid-flight) can't corrupt each other.
-/// - **Backup-on-write**: the previous file is copied to
-///   `vocabulary.json.previous` before every successful save. One-slot rolling
-///   backup; cheap insurance.
 /// - **Tolerant decode**: missing fields fall through to defaults via
 ///   `VocabularyEntry`'s synthesised decoder + `decodeIfPresent` on the
 ///   envelope. A schema mismatch preserves the original bytes under a dated
@@ -64,7 +61,6 @@ final class VocabularyStore {
     private let ioQueue = DispatchQueue(label: "net.robgough.Dictator.VocabularyStore.io", qos: .userInitiated)
 
     private static let filename = "vocabulary.json"
-    private static let backupSuffix = ".previous"
     private static let schemaVersion = 1
 
     private init() {}
@@ -155,10 +151,14 @@ final class VocabularyStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500), execute: work)
     }
 
-    /// Immediate write — used during bootstrap and relocate. Performs
-    /// backup-on-write, atomic file write, and NSFileCoordinator wrapping.
-    /// All synchronous on a background queue so the main actor doesn't sit
-    /// on a sync-provider stall.
+    /// Immediate write — used during bootstrap and relocate. Atomic file
+    /// write inside an NSFileCoordinator block, on a background queue so
+    /// the main actor doesn't sit on a sync-provider stall. No
+    /// backup-on-write: the atomic rename guarantees readers never see a
+    /// half-written file, and the only corruption path we've actually seen
+    /// (a Swift Codable decoder regression) is handled by the
+    /// recover-on-load path below, which preserves the original bytes
+    /// under a `vocabulary.recovered-<timestamp>.json` filename.
     private func writeNow(entries: [VocabularyEntry], to url: URL) {
         let envelope = Envelope(schemaVersion: Self.schemaVersion, entries: entries)
         let encoder = JSONEncoder()
@@ -176,13 +176,6 @@ final class VocabularyStore {
             let coordinator = NSFileCoordinator(filePresenter: nil)
             var coordError: NSError?
             coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { coordURL in
-                // Backup-on-write: copy the current file (if any) aside before
-                // overwriting. Single rolling slot.
-                let backupURL = coordURL.appendingPathExtension(String(VocabularyStore.backupSuffix.dropFirst()))
-                if FileManager.default.fileExists(atPath: coordURL.path) {
-                    try? FileManager.default.removeItem(at: backupURL)
-                    try? FileManager.default.copyItem(at: coordURL, to: backupURL)
-                }
                 do {
                     try data.write(to: coordURL, options: .atomic)
                     Task { @MainActor in self.lastError = nil }
