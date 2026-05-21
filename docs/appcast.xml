@@ -133,6 +133,31 @@
                 type="application/octet-stream"
                 sparkle:edSignature="7oNL3JL4qTOA57+FDFcpL4oxYJaM4u/6JVyqcDW6uLuywns2WiW6AT1/AdtnHPmA5GfwRgZd7gC8IMKy9Pv7AQ==" />
         </item>
+        <item>
+            <title>Version 2026.5.9</title>
+            <pubDate>Thu, 21 May 2026 03:55:28 +0000</pubDate>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>2026.5.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dictation modes. Two ship by default — Quick (no LLM polish, fastest path) and Write (all three LLM passes). Hold the dictation hotkey and tap Tab to cycle mid-recording; the HUD shows the active mode and what&#x27;s next. Pick a default from the menu bar. Add custom modes in Settings → Modes — each gets its own pass toggles, prompt addenda, and an &quot;Auto-activate for apps&quot; list so the right mode kicks in when you start dictating into Mail, Slack, or a code editor.</li>
+  <li>Dictionary rows have a mic button. Tap it, say a word, Dictator fills the &quot;Heard&quot; field with what Whisper or Parakeet actually produced — handy when you know how a word should be spelled but not the misspelling Dictator hears.</li>
+  <li>A bigger set of spoken-punctuation cues. New single-word: &quot;hyphen&quot; (-), &quot;em dash&quot; (—), &quot;en dash&quot; (–), &quot;tilde&quot; (~), &quot;asterisk&quot; (*), &quot;ampersand&quot; (&amp;), &quot;underscore&quot; (_), &quot;backtick&quot; (`), &quot;caret&quot; (^), &quot;ellipsis&quot; (…), &quot;backslash&quot; (\). New multi-word: &quot;at sign&quot; (@), &quot;hash sign&quot; / &quot;pound sign&quot; (#), &quot;dollar sign&quot; ($), &quot;forward slash&quot; (/), &quot;open bracket&quot; / &quot;close bracket&quot; ([]), &quot;open brace&quot; / &quot;close brace&quot; ({}).</li>
+  <li>Numbers in speech now turn into digits in three useful situations: arithmetic (&quot;5 plus 3&quot; → &quot;5 + 3&quot;, &quot;five percent&quot; → &quot;5%&quot;, &quot;twenty-five plus three&quot; → &quot;25 + 3&quot;, &quot;5 plus 6 equals 2&quot; → &quot;5 + 6 = 2&quot;; same for &quot;minus&quot;, &quot;times&quot;, &quot;divided by&quot;, &quot;equals&quot;, &quot;slash&quot;, &quot;pipe&quot;); composite word-form numbers anywhere (&quot;twenty thousand and sixty two&quot; → &quot;20062&quot;, &quot;one hundred and three percent&quot; → &quot;103%&quot; — the &quot;and&quot; is optional); and runs of single-digit words (&quot;four four seven seven seven five five five one two three four&quot; → &quot;7775551234&quot;, handy for phone and card numbers). &quot;Plus N&quot; / &quot;minus N&quot; with no number on its left becomes &quot;+N&quot; / &quot;-N&quot;, so &quot;plus forty-four seven seven seven…&quot; → &quot;+44 7775551234&quot;. Small lone numbers (&quot;five apples&quot;, &quot;twenty pages&quot;) stay as words.</li>
+  <li>Your data lives in JSON files now, not in UserDefaults. Modes, prompts, hotkeys, vocabulary, recent dictations, and assistant threads sit in `~/Documents/Dictator/`; model picks and onboarding state stay per-Mac in `~/Library/Application Support/Dictator/local-settings.json`. If your Documents folder syncs (iCloud Drive, Dropbox, etc.) the shared bits follow you between Macs. Settings → General → Synced folder retargets the synced location. Existing settings migrate automatically.</li>
+  <li>`dictator://settings` and `dictator://onboarding` URL schemes — deep-link Settings or the first-run wizard from scripts, Raycast / Alfred, or anywhere else.</li>
+  <li>New &quot;Tidy and tighten&quot; grammar pass (Settings → Modes → Pass 2). Removes filler words, false starts, and self-corrections so the output reads more like writing than speech. The original &quot;Tidy grammar&quot; stays as the conservative option. New installs default to Tidy and tighten on the Write mode; existing users keep their previous setting.</li>
+  <li>Short messages (six words or fewer with no internal sentence break) skip auto-capitalisation and the trailing period — natural for chat replies, mid-document edits, IDE input. &quot;Hey.&quot; becomes &quot;hey&quot;, &quot;thanks for the heads up.&quot; becomes &quot;thanks for the heads up&quot;. The pronoun &quot;I&quot; and its contractions (&quot;I&#x27;m&quot;, &quot;I&#x27;ll&quot;, etc.) keep their capital. Longer messages and anything with mid-text &quot;?&quot;, &quot;!&quot;, or &quot;.&quot; stay formally formatted.</li>
+  <li>Saying &quot;question mark&quot;, &quot;exclamation mark&quot;, or &quot;full stop&quot; no longer leaves a stray period or comma in the output.</li>
+  <li>HUD input-level meter is taller and more responsive — AirPods and lower-gain USB inputs now show useful motion instead of pinning to the floor.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.9/Dictator.dmg"
+                length="20919130"
+                type="application/octet-stream"
+                sparkle:edSignature="jBQZRxyEaTNlciZ2gPG7I+/QAb5GB/cl9oepUNtBbTOmLsqyreIa+G07UsSi9d9gSNC1CVwHdRvLVRztZnWwCg==" />
+        </item>
+    
     
     
     

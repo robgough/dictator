@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.5.9 — 2026-05-21
+
 - Dictation modes. Two ship by default — Quick (no LLM polish, fastest path) and Write (all three LLM passes). Hold the dictation hotkey and tap Tab to cycle mid-recording; the HUD shows the active mode and what's next. Pick a default from the menu bar. Add custom modes in Settings → Modes — each gets its own pass toggles, prompt addenda, and an "Auto-activate for apps" list so the right mode kicks in when you start dictating into Mail, Slack, or a code editor.
 - Dictionary rows have a mic button. Tap it, say a word, Dictator fills the "Heard" field with what Whisper or Parakeet actually produced — handy when you know how a word should be spelled but not the misspelling Dictator hears.
 - A bigger set of spoken-punctuation cues. New single-word: "hyphen" (-), "em dash" (—), "en dash" (–), "tilde" (~), "asterisk" (*), "ampersand" (&), "underscore" (_), "backtick" (`), "caret" (^), "ellipsis" (…), "backslash" (\). New multi-word: "at sign" (@), "hash sign" / "pound sign" (#), "dollar sign" ($), "forward slash" (/), "open bracket" / "close bracket" ([]), "open brace" / "close brace" ({}).
