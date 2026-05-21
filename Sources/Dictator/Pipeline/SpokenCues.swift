@@ -16,6 +16,7 @@ enum SpokenCues {
         guard !text.isEmpty else { return text }
         var s = text
         s = applyMultiWordPunctuation(to: s)
+        s = applyTimes(to: s)
         s = applyArithmetic(to: s)
         s = applySingleWordPunctuation(to: s)
         s = applyEmojis(to: s)
@@ -71,6 +72,11 @@ enum SpokenCues {
         s = s.replacing(/\b(?:hash|pound|number)[ \t]+sign\b/.ignoresCase(), with: "#")
         s = s.replacing(/\bdollar[ \t]+sign\b/.ignoresCase(), with: "$")
         s = s.replacing(/\bforward[ \t]+slash\b/.ignoresCase(), with: "/")
+        // "etcetera" / "et cetera" → the conventional "etc." abbreviation.
+        // The optional trailing `\.?` absorbs a transcript-provided period
+        // so we don't end up with "etc..".
+        s = s.replacing(/\betcetera\b\.?/.ignoresCase(), with: "etc.")
+        s = s.replacing(/\bet[ \t]+cetera\b\.?/.ignoresCase(), with: "etc.")
         return s
     }
 
@@ -359,6 +365,86 @@ enum SpokenCues {
         }
 
         return s
+    }
+
+    // MARK: - Times
+    //
+    // Digitise spoken clock times where the hour is followed by an AM/PM
+    // suffix or "o'clock". Two shapes:
+    //   "ten AM"          → "10 AM"
+    //   "ten o'clock"     → "10 o'clock"
+    //   "ten thirty PM"   → "10:30 PM"
+    //   "two fifteen AM"  → "2:15 AM"
+    // We deliberately require the marker word to fire — bare "ten thirty"
+    // is left alone because it's often a quantity, not a time
+    // ("ten thirty-dollar items"). The marker preserves whatever case /
+    // dot style Whisper produced ("AM", "am", "a.m.", "o'clock"). The
+    // hour-minute shape always renders minutes as two digits so "two
+    // fifteen" becomes "2:15", not "2:5".
+
+    private static func applyTimes(to text: String) -> String {
+        var s = text
+        // Hour + minute + marker has to run before the hour-only pattern,
+        // otherwise the hour-only regex would consume "ten AM" out of
+        // "ten thirty AM" before we ever saw the minute.
+        s = applyHourMinuteWithMarker(s)
+        s = applyHourWithMarker(s)
+        return s
+    }
+
+    /// Hours 1–24 in word form. Includes the "twenty-one" … "twenty-four"
+    /// composites so the regex can pull them in one match. Deliberately
+    /// excludes "thirty" / "forty" etc. — those only make sense as
+    /// minute values, and including them as hours would let "ten thirty
+    /// AM" match starting at "thirty" instead of "ten".
+    private static let hourWordFragment: String = {
+        let single = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let twenties = "(?:twenty(?:[ \\t-]+(?:one|two|three|four))?)"
+        return "(?:\(twenties)|\(single))"
+    }()
+
+    /// Minutes 0–59 in word form. Tens restricted to twenty–fifty so we
+    /// don't admit "sixty" / "seventy" as minute values.
+    private static let minuteWordFragment: String = {
+        let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
+        let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let tens = "(?:twenty|thirty|forty|fifty)"
+        return "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+    }()
+
+    /// Matches "AM" / "am" / "PM" / "pm" / "a.m." / "p.m." and "o'clock"
+    /// (straight or curly apostrophe). The non-word lookahead after the
+    /// alternation guards against accidental matches inside longer words
+    /// like "ample" — `\b` alone is unreliable when the marker ends in a
+    /// dot (boundary between two non-word chars never fires).
+    private static let timeMarkerFragment = "(?:[ap]m|[ap]\\.m\\.|o['\u{2019}]clock)"
+
+    private static func applyHourWithMarker(_ text: String) -> String {
+        let pattern = "\\b(\(hourWordFragment))([ \\t]+)(\(timeMarkerFragment))(?![A-Za-z])"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            guard let hour = match.output[1].substring,
+                  let space = match.output[2].substring,
+                  let marker = match.output[3].substring,
+                  let n = parseWordNumber(String(hour))
+            else { return String(match.output[0].substring ?? "") }
+            return "\(n)\(space)\(marker)"
+        }
+    }
+
+    private static func applyHourMinuteWithMarker(_ text: String) -> String {
+        let pattern = "\\b(\(hourWordFragment))[ \\t]+(\(minuteWordFragment))([ \\t]+)(\(timeMarkerFragment))(?![A-Za-z])"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            guard let hour = match.output[1].substring,
+                  let minute = match.output[2].substring,
+                  let space = match.output[3].substring,
+                  let marker = match.output[4].substring,
+                  let h = parseWordNumber(String(hour)),
+                  let m = parseWordNumber(String(minute))
+            else { return String(match.output[0].substring ?? "") }
+            return "\(h):\(String(format: "%02d", m))\(space)\(marker)"
+        }
     }
 
     private static func applySingleWordPunctuation(to text: String) -> String {

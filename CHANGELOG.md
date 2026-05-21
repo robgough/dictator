@@ -13,7 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Spoken clock times now turn into digits when a marker word follows: "ten AM" → "10 AM", "ten o'clock" → "10 o'clock", "ten thirty PM" → "10:30 PM", "two fifteen am" → "2:15 am". Bare "ten thirty" with no marker stays as words, so quantities like "ten thirty-dollar items" aren't mangled.
+- "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21
 
