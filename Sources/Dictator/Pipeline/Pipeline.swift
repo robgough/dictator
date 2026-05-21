@@ -674,6 +674,14 @@ final class Pipeline {
         // chunk. Particularly important when piping dictation straight into chat apps
         // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
         var text = text
+        if currentMode.spokenCuesEnabled {
+            // Re-apply SpokenCues after the LLM pass. The formatter
+            // prompt forbids it, but small local models still sometimes
+            // revert substitutions — most visibly the unary "+44" being
+            // rewritten back to "Plus 44". apply() is idempotent, so
+            // re-running on text that's already clean is a no-op.
+            text = SpokenCues.apply(to: text)
+        }
         text = Self.relaxShortMessage(text)
         if currentMode.spokenCuesEnabled {
             // Strip LLM-introduced separators between adjacent emojis
