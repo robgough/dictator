@@ -370,20 +370,30 @@ enum SpokenCues {
     // MARK: - Times
     //
     // Digitise spoken clock times where the hour is followed by an AM/PM
-    // suffix or "o'clock". Two shapes:
+    // suffix, "o'clock", or military "hours". Civilian shapes:
     //   "ten AM"          → "10 AM"
     //   "ten o'clock"     → "10 o'clock"
     //   "ten thirty PM"   → "10:30 PM"
     //   "two fifteen AM"  → "2:15 AM"
+    // Military shapes:
+    //   "sixteen hundred hours"     → "1600 hours"
+    //   "oh eight hundred hours"    → "0800 hours"
+    //   "fourteen forty-five hours" → "1445 hours"
     // We deliberately require the marker word to fire — bare "ten thirty"
     // is left alone because it's often a quantity, not a time
     // ("ten thirty-dollar items"). The marker preserves whatever case /
-    // dot style Whisper produced ("AM", "am", "a.m.", "o'clock"). The
-    // hour-minute shape always renders minutes as two digits so "two
-    // fifteen" becomes "2:15", not "2:5".
+    // dot style Whisper produced ("AM", "am", "a.m.", "o'clock",
+    // "hours"). The hour-minute shape always renders minutes as two
+    // digits so "two fifteen" becomes "2:15", not "2:5".
 
     private static func applyTimes(to text: String) -> String {
         var s = text
+        // Military "<hour> <minute> hours" before "<hour> hundred hours"
+        // for the same reason as the civilian ordering below — and both
+        // military passes before civilian to keep the marker sets
+        // independent.
+        s = applyMilitaryHourMinute(s)
+        s = applyMilitaryHundred(s)
         // Hour + minute + marker has to run before the hour-only pattern,
         // otherwise the hour-only regex would consume "ten AM" out of
         // "ten thirty AM" before we ever saw the minute.
@@ -444,6 +454,61 @@ enum SpokenCues {
                   let m = parseWordNumber(String(minute))
             else { return String(match.output[0].substring ?? "") }
             return "\(h):\(String(format: "%02d", m))\(space)\(marker)"
+        }
+    }
+
+    /// Military-time hour: deliberately restricted to forms with no
+    /// civilian counterpart. 0 ("zero"), 13–19, 20–23, or "oh N" for
+    /// 01–09. Plain "one" … "twelve" are EXCLUDED so quantity phrases
+    /// like "five hundred hours of work" don't get rewritten as
+    /// "0500 hours of work". Users who want a low military hour use
+    /// the "oh" prefix, which is the convention anyway.
+    private static let militaryHourFragment: String = {
+        let single = "(?:one|two|three|four|five|six|seven|eight|nine)"
+        let teen = "(?:thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let twenties = "(?:twenty(?:[ \\t-]+(?:one|two|three))?)"
+        let ohN = "(?:oh[ \\t]+\(single))"
+        return "(?:\(twenties)|\(teen)|\(ohN)|zero)"
+    }()
+
+    /// Like `parseWordNumber` but also accepts the "oh N" shape used
+    /// in military speech ("oh eight" → 8).
+    private static func parseMilitaryHour(_ raw: String) -> Int? {
+        let tokens = raw.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        if tokens.count == 2 && tokens[0] == "oh" {
+            return parseWordNumber(tokens[1])
+        }
+        return parseWordNumber(raw)
+    }
+
+    private static func applyMilitaryHundred(_ text: String) -> String {
+        let pattern = "\\b(\(militaryHourFragment))[ \\t]+hundred([ \\t]+)(hours)\\b"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            guard let hour = match.output[1].substring,
+                  let space = match.output[2].substring,
+                  let suffix = match.output[3].substring,
+                  let h = parseMilitaryHour(String(hour))
+            else { return String(match.output[0].substring ?? "") }
+            return "\(String(format: "%02d", h))00\(space)\(suffix)"
+        }
+    }
+
+    private static func applyMilitaryHourMinute(_ text: String) -> String {
+        let pattern = "\\b(\(militaryHourFragment))[ \\t]+(\(minuteWordFragment))([ \\t]+)(hours)\\b"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            guard let hour = match.output[1].substring,
+                  let minute = match.output[2].substring,
+                  let space = match.output[3].substring,
+                  let suffix = match.output[4].substring,
+                  let h = parseMilitaryHour(String(hour)),
+                  let m = parseWordNumber(String(minute))
+            else { return String(match.output[0].substring ?? "") }
+            return "\(String(format: "%02d", h))\(String(format: "%02d", m))\(space)\(suffix)"
         }
     }
 

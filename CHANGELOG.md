@@ -14,6 +14,7 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Spoken clock times now turn into digits when a marker word follows: "ten AM" → "10 AM", "ten o'clock" → "10 o'clock", "ten thirty PM" → "10:30 PM", "two fifteen am" → "2:15 am". Bare "ten thirty" with no marker stays as words, so quantities like "ten thirty-dollar items" aren't mangled.
+- Military times now digitise too when the speaker says "hours": "sixteen hundred hours" → "1600 hours", "oh eight hundred hours" → "0800 hours", "fourteen forty-five hours" → "1445 hours". Plain hours 1–12 without the "oh" prefix are left alone so quantities like "five hundred hours of work" stay as quantities.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21
