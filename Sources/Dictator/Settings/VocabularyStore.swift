@@ -279,12 +279,19 @@ final class VocabularyStore {
             eventMask: [.write, .delete, .rename, .extend],
             queue: watcherQueue
         )
-        source.setEventHandler { [weak self] in
+        // `@Sendable` on these closures matters: without it Swift 6 infers
+        // them to inherit the @MainActor isolation of the enclosing
+        // method, then traps when they fire on `watcherQueue`. The cancel
+        // handler in particular is what crashed adding a vocab entry —
+        // stopWatching → source.cancel → cancel handler runs on the
+        // dispatch queue, isolation check fails, EXC_BREAKPOINT in
+        // _dispatch_assert_queue_fail.
+        source.setEventHandler { @Sendable [weak self] in
             Task { @MainActor [weak self] in
                 self?.handleExternalChange()
             }
         }
-        source.setCancelHandler { [fd] in close(fd) }
+        source.setCancelHandler { @Sendable [fd] in close(fd) }
         source.resume()
         fileWatcher = source
     }
