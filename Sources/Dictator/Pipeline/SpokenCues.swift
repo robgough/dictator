@@ -97,12 +97,100 @@ enum SpokenCues {
         // can't spin forever.
         for _ in 0..<8 {
             let prev = s
+            s = digitiseCompositeWordNumbers(s)
+            s = unifyAdjacentDigitWords(s)
             s = digitiseWordNumbersInArithmeticContext(s)
             s = applyDigitArithmetic(to: s)
+            s = applyUnaryArithmeticPrefix(s)
             if s == prev { break }
         }
         return s
     }
+
+    /// Concatenate runs of 2+ adjacent single-digit number words into a
+    /// digit string: "four four seven seven seven" → "44777". Phone
+    /// numbers, credit-card numbers, postcodes, area codes — anything
+    /// people read out digit-by-digit. Single isolated words ("I have
+    /// five apples") aren't touched.
+    private static func unifyAdjacentDigitWords(_ text: String) -> String {
+        guard let regex = digitWordRunRegex else { return text }
+        return text.replacing(regex) { match in
+            guard let phrase = match.output[1].substring else {
+                return String(match.output[0].substring ?? "")
+            }
+            let words = phrase.lowercased()
+                .split(whereSeparator: { $0.isWhitespace })
+            let digits = words
+                .compactMap { onesMap[String($0)] }
+                .map(String.init)
+                .joined()
+            return digits
+        }
+    }
+
+    nonisolated(unsafe) private static let digitWordRunRegex: Regex<AnyRegexOutput>? = {
+        let ones = "(?:zero|one|two|three|four|five|six|seven|eight|nine)"
+        // {1,} = one or more *additional* ones words after the first, so
+        // we need 2+ total. Single bare "five" doesn't match.
+        let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){1,})\\b"
+        return try? Regex(pattern).ignoresCase()
+    }()
+
+    /// Unary "plus N" / "minus N" at the start of a numeric token:
+    /// "plus 44" → "+44", "minus 3" → "-3". Negative lookbehind keeps the
+    /// binary case ("5 plus 3" → "5 + 3", which has already fired by the
+    /// time we run) from being re-interpreted as "5 +3". `\d` here means
+    /// the *immediately* preceding char isn't a digit — adequate because
+    /// `applyDigitArithmetic` runs first inside the iteration loop, so
+    /// any "<digit> plus <digit>" has already collapsed to "<digit> + <digit>".
+    private static func applyUnaryArithmeticPrefix(_ text: String) -> String {
+        guard let regex = unaryArithmeticRegex else { return text }
+        return text.replacing(regex) { match in
+            guard let op = match.output[1].substring,
+                  let n = match.output[2].substring
+            else { return String(match.output[0].substring ?? "") }
+            let glyph = op.lowercased() == "minus" ? "-" : "+"
+            return "\(glyph)\(n)"
+        }
+    }
+
+    nonisolated(unsafe) private static let unaryArithmeticRegex: Regex<AnyRegexOutput>? = {
+        let pattern = "(?<![0-9])\\b(plus|minus)[ \\t]+(\\d+(?:\\.\\d+)?)\\b"
+        return try? Regex(pattern).ignoresCase()
+    }()
+
+    /// Convert composite word-numbers to digits anywhere they appear,
+    /// regardless of surrounding context. "Composite" = anything with
+    /// "hundred" or "thousand", or a tens-ones combo like "twenty-five".
+    /// Single-word small numbers ("five", "twenty") deliberately stay as
+    /// words because the natural prose style for small numbers is to
+    /// spell them out — `I have five apples` reads better than `I have 5
+    /// apples`. The threshold is: if you said more than one word for
+    /// the number, you almost certainly want digits.
+    private static func digitiseCompositeWordNumbers(_ text: String) -> String {
+        guard let regex = compositeStandaloneRegex else { return text }
+        return text.replacing(regex) { match in
+            guard let wn = match.output[1].substring,
+                  let n = parseWordNumber(String(wn))
+            else { return String(match.output[0].substring ?? "") }
+            return String(n)
+        }
+    }
+
+    nonisolated(unsafe) private static let compositeStandaloneRegex: Regex<AnyRegexOutput>? = {
+        let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
+        let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+        let hundreds = "(?:\(one)[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
+        let thousands = "(?:(?:\(hundreds)|\(zero99))[ \\t]+thousand(?:[ \\t]+(?:and[ \\t]+)?(?:\(hundreds)|\(zero99)))?)"
+        // Crucially excludes the single-token cases. tensOnes requires the
+        // ones suffix (so "twenty" alone doesn't match, but "twenty-five"
+        // does). hundreds and thousands always contain a scale word.
+        let tensOnes = "(?:\(tens)[ \\t-]+\(one))"
+        let pattern = "\\b((?:\(thousands)|\(hundreds)|\(tensOnes)))\\b"
+        return try? Regex(pattern).ignoresCase()
+    }()
 
     private static func applyDigitArithmetic(to text: String) -> String {
         var s = text
