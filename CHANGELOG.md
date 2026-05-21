@@ -17,6 +17,9 @@ entries as plain bullet lines.
 - Military times now digitise too when the speaker says "hours": "sixteen hundred hours" → "1600 hours", "ten hundred hours" → "1000 hours", "oh eight hundred hours" → "0800 hours", "fourteen forty-five hours" → "1445 hours". Plain hours 1–9 without the "oh" prefix are left alone so quantities like "five hundred hours of work" stay as quantities.
 - Spoken currency amounts now pick up the right symbol: "five dollars" → "$5", "twenty euros" → "€20", "sixteen hundred pounds" → "£1600", "five thousand yen" → "¥5000". Works on word-form numbers and existing digit numbers alike.
 - Teen-hundreds in speech now turn into digits like the smaller forms already did: "sixteen hundred" → "1600", "nineteen hundred and four" → "1904". Previously only "one" through "nine hundred" were digitised.
+- "M dash" and "N dash" now turn into em-dash (—) and en-dash (–) like "em dash" / "en dash" already did. Whisper sometimes transcribes the spoken cue as the letter name instead of the word, which used to leave a stray "M" or "N" sitting in front of the dash.
+- Spoken cues are now five independent toggles per mode — punctuation, numbers, times, currency, and emojis — instead of a single "spoken cues" switch. Mix and match in Settings → Modes. Existing settings carry over: if you'd turned spoken cues off in a mode, all five families stay off; otherwise they all start on.
+- Quick mode now exposes the pre-processing toggles too. The mode itself is still locked (no LLM passes — that's the point), but you can pick which cue families run in it.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21

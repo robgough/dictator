@@ -337,10 +337,12 @@ final class Pipeline {
         // local models — especially Apple Foundation's ~3 B — are unreliable
         // at the cue rules in the formatter prompt, so we don't depend on
         // them. The formatter prompt keeps the rules as a backstop for
-        // anything the curated map misses. Per-mode gate so users can have
-        // a "raw" mode where "comma" and "period" stay literal words.
-        if currentMode.spokenCuesEnabled {
-            trimmed = SpokenCues.apply(to: trimmed)
+        // anything the curated map misses. Per-mode gates pick which cue
+        // families run — a mode can keep punctuation on while disabling
+        // emojis, or only run currency substitution, etc.
+        let cueOptions = spokenCuesOptions(for: currentMode)
+        if cueOptions.anyEnabled {
+            trimmed = SpokenCues.apply(to: trimmed, options: cueOptions)
         }
 
         var formatted: String
@@ -615,6 +617,20 @@ final class Pipeline {
         "why", "how", "what", "who", "when", "where", "which"
     ]
 
+    /// Project the mode's five spoken-cue toggles onto the struct
+    /// SpokenCues consumes. Kept here (rather than as a convenience init
+    /// on `SpokenCues.Options`) so SpokenCues itself stays unaware of
+    /// `DictationMode`.
+    private func spokenCuesOptions(for mode: DictationMode) -> SpokenCues.Options {
+        SpokenCues.Options(
+            punctuation: mode.punctuationCuesEnabled,
+            numbers: mode.numberCuesEnabled,
+            times: mode.timeCuesEnabled,
+            currency: mode.currencyCuesEnabled,
+            emojis: mode.emojiCuesEnabled
+        )
+    }
+
     /// Ensures the delivered text ends with a single trailing whitespace so that
     /// continuing to type (or starting another dictation right after) doesn't glue
     /// the next character onto the end of this chunk. No-op if the text already
@@ -674,19 +690,22 @@ final class Pipeline {
         // chunk. Particularly important when piping dictation straight into chat apps
         // (Claude, Slack, …) where back-to-back dictations would otherwise mash.
         var text = text
-        if currentMode.spokenCuesEnabled {
+        let cueOptions = spokenCuesOptions(for: currentMode)
+        if cueOptions.anyEnabled {
             // Re-apply SpokenCues after the LLM pass. The formatter
             // prompt forbids it, but small local models still sometimes
             // revert substitutions — most visibly the unary "+44" being
             // rewritten back to "Plus 44". apply() is idempotent, so
             // re-running on text that's already clean is a no-op.
-            text = SpokenCues.apply(to: text)
+            text = SpokenCues.apply(to: text, options: cueOptions)
         }
         text = Self.relaxShortMessage(text)
-        if currentMode.spokenCuesEnabled {
+        if cueOptions.emojis {
             // Strip LLM-introduced separators between adjacent emojis
             // ("🔥, 🎉" → "🔥 🎉"). Apple Foundation in particular tends to
-            // list-format substituted emojis.
+            // list-format substituted emojis. Gated by the emoji toggle
+            // specifically — punctuation/numbers/etc. can be off without
+            // skipping this cleanup.
             text = SpokenCues.tidyDelivery(text)
         }
         text = Self.withTrailingSpace(text)

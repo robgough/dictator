@@ -10,17 +10,42 @@ import Foundation
 /// involvement, so even the "No LLM" path gets emojis and punctuation cues
 /// for free.
 enum SpokenCues {
-    /// Apply every substitution stage. Order matters within a stage but the
-    /// stages are independent. Empty input returns empty.
-    static func apply(to text: String) -> String {
+    /// Per-feature gates. Each toggle stops one family of substitutions
+    /// from firing. Defaults are all on; the caller composes whatever
+    /// subset matches the active dictation mode.
+    struct Options: Equatable, Sendable {
+        var punctuation: Bool = true
+        var numbers: Bool = true
+        var times: Bool = true
+        var currency: Bool = true
+        var emojis: Bool = true
+
+        static let all = Options()
+        static let none = Options(
+            punctuation: false, numbers: false, times: false,
+            currency: false, emojis: false
+        )
+
+        /// True when at least one feature is enabled.
+        var anyEnabled: Bool {
+            punctuation || numbers || times || currency || emojis
+        }
+    }
+
+    /// Apply every substitution stage. Order matters within a stage but
+    /// the stages are independent — disabling one doesn't break the
+    /// others. Empty input returns empty. `cleanup` always runs because
+    /// it's pure whitespace/punctuation normalisation and is idempotent
+    /// on already-clean text.
+    static func apply(to text: String, options: Options = .all) -> String {
         guard !text.isEmpty else { return text }
         var s = text
-        s = applyMultiWordPunctuation(to: s)
-        s = applyTimes(to: s)
-        s = applyArithmetic(to: s)
-        s = applyCurrency(to: s)
-        s = applySingleWordPunctuation(to: s)
-        s = applyEmojis(to: s)
+        if options.punctuation { s = applyMultiWordPunctuation(to: s) }
+        if options.times       { s = applyTimes(to: s) }
+        if options.numbers     { s = applyArithmetic(to: s) }
+        if options.currency    { s = applyCurrency(to: s) }
+        if options.punctuation { s = applySingleWordPunctuation(to: s) }
+        if options.emojis      { s = applyEmojis(to: s) }
         s = cleanup(s)
         return s
     }
@@ -55,10 +80,13 @@ enum SpokenCues {
         s = s.replacing(/\bfull[ \t]+stop\b/.ignoresCase(), with: ".")
         // Typographic dash variants. Whisper may transcribe the spoken cue
         // with a space ("em dash") or a literal hyphen between the words
-        // ("em-dash"); `[ \t-]+` accepts either. Runs BEFORE the single-
-        // word "dash" → em-dash substitution below.
-        s = s.replacing(/\bem[ \t-]+dash\b/.ignoresCase(), with: "\u{2014}")  // —
-        s = s.replacing(/\ben[ \t-]+dash\b/.ignoresCase(), with: "\u{2013}")  // –
+        // ("em-dash"); `[ \t-]+` accepts either. The `(?:em|m)` / `(?:en|n)`
+        // alternation also catches Whisper hearing the cue as the letter
+        // name — "M dash" / "N dash" — which would otherwise fall through
+        // to the single-word "dash" substitution below and leave the lone
+        // letter sitting in front of the em-dash.
+        s = s.replacing(/\b(?:em|m)[ \t-]+dash\b/.ignoresCase(), with: "\u{2014}")  // —
+        s = s.replacing(/\b(?:en|n)[ \t-]+dash\b/.ignoresCase(), with: "\u{2013}")  // –
         // Bracket / brace pairs. "open bracket" defaults to [ ] (square)
         // and "open brace" to { } (curly) — { } is the more common
         // alternative when people mean parens they say "paren".

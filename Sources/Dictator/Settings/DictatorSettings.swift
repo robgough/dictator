@@ -288,10 +288,11 @@ struct DictatorSettings: Codable, Equatable {
             return .tighten  // matches the pre-modes default
         }()
 
-        // Pre-modes installs persisted `spokenCuesEnabled` at the top level.
-        // Inherit it onto the migrated Write mode so people who'd explicitly
-        // turned off spoken cues don't get them silently re-enabled. Defaults
-        // to on for blobs that never had the field.
+        // Pre-modes installs persisted a single `spokenCuesEnabled` at the
+        // top level. Inherit it onto every cue sub-toggle in the migrated
+        // Write mode so people who'd explicitly turned off spoken cues
+        // don't get them silently re-enabled. Defaults to on for blobs
+        // that never had the field.
         let legacySpokenCues = read(.spokenCuesEnabled, Bool.self, true)
 
         let write = DictationMode(
@@ -300,7 +301,11 @@ struct DictatorSettings: Codable, Equatable {
             isLocked: false,
             includeInCycle: true,
             appBundleIDs: [],
-            spokenCuesEnabled: legacySpokenCues,
+            punctuationCuesEnabled: legacySpokenCues,
+            numberCuesEnabled: legacySpokenCues,
+            timeCuesEnabled: legacySpokenCues,
+            currencyCuesEnabled: legacySpokenCues,
+            emojiCuesEnabled: legacySpokenCues,
             vocabularyEnabled: true,
             formattingPassEnabled: true,
             grammarPassMode: legacyGrammarMode,

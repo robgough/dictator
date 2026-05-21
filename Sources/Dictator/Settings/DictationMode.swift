@@ -35,11 +35,17 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// mode higher in the list to give its bindings precedence.
     var appBundleIDs: [String]
 
-    /// Whether the deterministic spoken-cue substitution runs ("comma" → ",",
-    /// "fire emoji" → 🔥, etc.). Off makes the mode behave as a closer-to-raw
-    /// transcript — useful when the user is dictating something where the
-    /// words "comma" and "period" should appear literally.
-    var spokenCuesEnabled: Bool
+    /// Spoken-cue substitution is split into five independent families so
+    /// users can keep punctuation cues on while disabling, say, emoji
+    /// insertion. Pre-modes installs had a single `spokenCuesEnabled`
+    /// flag — that's read by the decoder and used as the default for any
+    /// of these five fields that aren't present in the persisted blob.
+    var punctuationCuesEnabled: Bool
+    var numberCuesEnabled: Bool
+    var timeCuesEnabled: Bool
+    var currencyCuesEnabled: Bool
+    var emojiCuesEnabled: Bool
+
     /// Whether the user's vocabulary list (deterministic whole-word
     /// substitutions in `settings.vocabulary`) is applied in this mode. The
     /// list itself stays global — this is just an on/off per mode.
@@ -81,12 +87,22 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// the next save silently overwrites the user's data on disk.
     enum CodingKeys: String, CodingKey {
         case id, name, isLocked, includeInCycle, appBundleIDs
-        case spokenCuesEnabled, vocabularyEnabled
+        case punctuationCuesEnabled, numberCuesEnabled, timeCuesEnabled
+        case currencyCuesEnabled, emojiCuesEnabled, vocabularyEnabled
         case formattingPassEnabled, grammarPassMode, grammarPassMaxEditFraction
         case structuralPassEnabled, structuralPassMinWords
         case formattingPromptAddendum, formattingPromptOverride
         case grammarPromptAddendum, grammarPromptOverride
         case structuralPromptAddendum, structuralPromptOverride
+    }
+
+    /// Side container for the legacy single `spokenCuesEnabled` toggle.
+    /// Kept off the main CodingKeys enum so Swift's synthesised encoder
+    /// doesn't try to write a property that no longer exists; we just
+    /// peek at the field on decode and use its value as the default for
+    /// the new sub-toggles.
+    private enum LegacyCueKey: String, CodingKey {
+        case spokenCuesEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -102,7 +118,18 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         self.includeInCycle = try c.decodeIfPresent(Bool.self, forKey: .includeInCycle) ?? true
         self.appBundleIDs = try c.decodeIfPresent([String].self, forKey: .appBundleIDs) ?? []
-        self.spokenCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .spokenCuesEnabled) ?? true
+        // The pre-split `spokenCuesEnabled` flag, if present in this blob,
+        // seeds whatever new sub-toggles are absent. A user who'd turned
+        // spoken cues off entirely shouldn't have them silently re-enabled
+        // just because we added more knobs.
+        let legacyCues = (try? decoder.container(keyedBy: LegacyCueKey.self)
+            .decodeIfPresent(Bool.self, forKey: .spokenCuesEnabled)) ?? nil
+        let cueDefault = legacyCues ?? true
+        self.punctuationCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .punctuationCuesEnabled) ?? cueDefault
+        self.numberCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .numberCuesEnabled) ?? cueDefault
+        self.timeCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .timeCuesEnabled) ?? cueDefault
+        self.currencyCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .currencyCuesEnabled) ?? cueDefault
+        self.emojiCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .emojiCuesEnabled) ?? cueDefault
         self.vocabularyEnabled = try c.decodeIfPresent(Bool.self, forKey: .vocabularyEnabled) ?? true
         self.formattingPassEnabled = try c.decodeIfPresent(Bool.self, forKey: .formattingPassEnabled) ?? true
         self.grammarPassMode = try c.decodeIfPresent(GrammarPassMode.self, forKey: .grammarPassMode) ?? .tighten
@@ -126,7 +153,11 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         isLocked: Bool,
         includeInCycle: Bool,
         appBundleIDs: [String],
-        spokenCuesEnabled: Bool,
+        punctuationCuesEnabled: Bool,
+        numberCuesEnabled: Bool,
+        timeCuesEnabled: Bool,
+        currencyCuesEnabled: Bool,
+        emojiCuesEnabled: Bool,
         vocabularyEnabled: Bool,
         formattingPassEnabled: Bool,
         grammarPassMode: GrammarPassMode,
@@ -145,7 +176,11 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.isLocked = isLocked
         self.includeInCycle = includeInCycle
         self.appBundleIDs = appBundleIDs
-        self.spokenCuesEnabled = spokenCuesEnabled
+        self.punctuationCuesEnabled = punctuationCuesEnabled
+        self.numberCuesEnabled = numberCuesEnabled
+        self.timeCuesEnabled = timeCuesEnabled
+        self.currencyCuesEnabled = currencyCuesEnabled
+        self.emojiCuesEnabled = emojiCuesEnabled
         self.vocabularyEnabled = vocabularyEnabled
         self.formattingPassEnabled = formattingPassEnabled
         self.grammarPassMode = grammarPassMode
@@ -206,7 +241,11 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         isLocked: true,
         includeInCycle: true,
         appBundleIDs: [],
-        spokenCuesEnabled: true,
+        punctuationCuesEnabled: true,
+        numberCuesEnabled: true,
+        timeCuesEnabled: true,
+        currencyCuesEnabled: true,
+        emojiCuesEnabled: true,
         vocabularyEnabled: true,
         formattingPassEnabled: false,
         grammarPassMode: .off,
@@ -230,7 +269,11 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         isLocked: false,
         includeInCycle: true,
         appBundleIDs: [],
-        spokenCuesEnabled: true,
+        punctuationCuesEnabled: true,
+        numberCuesEnabled: true,
+        timeCuesEnabled: true,
+        currencyCuesEnabled: true,
+        emojiCuesEnabled: true,
         vocabularyEnabled: true,
         formattingPassEnabled: true,
         grammarPassMode: .tighten,

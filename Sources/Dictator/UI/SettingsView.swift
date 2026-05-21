@@ -2823,6 +2823,8 @@ private struct ModeDetail: View {
                 header
                 if mode.isLocked {
                     lockedExplanation
+                    Divider()
+                    preProcessingSection
                 } else {
                     cycleAndDefaultSection
                     appBindingsSection
@@ -2870,10 +2872,10 @@ private struct ModeDetail: View {
 
     private var lockedExplanation: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Quick mode skips every LLM pass. Whisper's raw transcript still flows through your spoken-cue substitutions (\"comma\" → \",\", \"fire emoji\" → 🔥) and your vocabulary list before landing at your cursor — useful when you want speed over polish, or when you don't want any AI rewriting.")
+            Text("Quick mode skips every LLM pass. Whisper's raw transcript flows through the pre-processing toggles below — spoken-cue substitutions and your vocabulary list — before landing at your cursor. Useful when you want speed over polish, or when you don't want any AI rewriting.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text("Quick is locked because that's the whole point — it's the fastest LLM-less path Dictator ships with. If you want a truly raw mode that also skips spoken cues and vocabulary, duplicate Quick and turn those toggles off in the copy.")
+            Text("The mode itself is locked because the no-LLM identity is the whole point, but each pre-processing toggle is editable so you can shape Quick the way you want it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -2926,10 +2928,41 @@ private struct ModeDetail: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pre-processing")
                 .font(.headline)
+            Text("Deterministic substitutions that run on the raw transcript before any LLM pass. Each family can be toggled independently — turn off the ones you don't want.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥)", isOn: $mode.spokenCuesEnabled)
-                    .onChange(of: mode.spokenCuesEnabled) { _, _ in onChange() }
-                Text("Substitutes spoken punctuation, line breaks, and named emojis before any LLM pass. Works without an LLM. Turn off in a mode if your dictations frequently use words like \"comma\" and \"period\" literally.")
+                Toggle("Punctuation cues (\"comma\" → \",\", \"question mark\" → \"?\")", isOn: $mode.punctuationCuesEnabled)
+                    .onChange(of: mode.punctuationCuesEnabled) { _, _ in onChange() }
+                Text("Spoken punctuation, line breaks, brackets, dashes, symbol names. Turn off if your dictations frequently use words like \"comma\" and \"period\" literally.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Number cues (\"twenty-five\" → \"25\", \"5 plus 3\" → \"5 + 3\")", isOn: $mode.numberCuesEnabled)
+                    .onChange(of: mode.numberCuesEnabled) { _, _ in onChange() }
+                Text("Word-form numbers turn into digits when composite, in arithmetic context, or in adjacent runs (phone numbers, postcodes). Single small numbers like \"five apples\" stay as words.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Time cues (\"ten thirty PM\" → \"10:30 PM\", \"sixteen hundred hours\" → \"1600 hours\")", isOn: $mode.timeCuesEnabled)
+                    .onChange(of: mode.timeCuesEnabled) { _, _ in onChange() }
+                Text("Civilian and military times digitise when followed by an AM/PM/o'clock or \"hours\" marker. Turn off if you want times written as words in formal prose.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Currency cues (\"five dollars\" → \"$5\", \"twenty euros\" → \"€20\")", isOn: $mode.currencyCuesEnabled)
+                    .onChange(of: mode.currencyCuesEnabled) { _, _ in onChange() }
+                Text("Adds the currency symbol when a recognised currency word follows a number. Handles dollars, pounds, euros, and yen. Turn off if \"pounds\" routinely means weight in your dictations, not money.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Emoji cues (\"fire emoji\" → 🔥, \"thumbs up emoji\" → 👍)", isOn: $mode.emojiCuesEnabled)
+                    .onChange(of: mode.emojiCuesEnabled) { _, _ in onChange() }
+                Text("Named emojis turn into their glyph. The lookup recognises ~3700 Unicode names plus a curated alias list (smile, heart, fire, etc.). Turn off if you'd rather emojis never sneak into your output.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
