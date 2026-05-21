@@ -471,10 +471,12 @@ enum SpokenCues {
     //   "fourteen forty-five hours" → "1445 hours"
     // We deliberately require the marker word to fire — bare "ten thirty"
     // is left alone because it's often a quantity, not a time
-    // ("ten thirty-dollar items"). The marker preserves whatever case /
-    // dot style Whisper produced ("AM", "am", "a.m.", "o'clock",
-    // "hours"). The hour-minute shape always renders minutes as two
-    // digits so "two fifteen" becomes "2:15", not "2:5".
+    // ("ten thirty-dollar items"). AM/PM markers come out without
+    // dots regardless of how Whisper punctuated the utterance — "a.m."
+    // and "p.m." normalise to "am" / "pm" — but the case the speaker
+    // (or Whisper) used is preserved. "o'clock" and "hours" pass
+    // through unchanged. The hour-minute shape always renders minutes
+    // as two digits so "two fifteen" becomes "2:15", not "2:5".
 
     private static func applyTimes(to text: String) -> String {
         var s = text
@@ -512,12 +514,23 @@ enum SpokenCues {
         return "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
     }()
 
-    /// Matches "AM" / "am" / "PM" / "pm" / "a.m." / "p.m." and "o'clock"
-    /// (straight or curly apostrophe). The non-word lookahead after the
-    /// alternation guards against accidental matches inside longer words
-    /// like "ample" — `\b` alone is unreliable when the marker ends in a
-    /// dot (boundary between two non-word chars never fires).
-    private static let timeMarkerFragment = "(?:[ap]m|[ap]\\.m\\.|o['\u{2019}]clock)"
+    /// Matches every spoken form of the AM/PM marker — fully un-dotted
+    /// ("am" / "PM"), partially dotted ("a.m" or "am."), or fully
+    /// dotted ("a.m." / "P.M.") — plus "o'clock" (straight or curly
+    /// apostrophe). The non-word lookahead after the alternation
+    /// guards against accidental matches inside longer words like
+    /// "ample" — `\b` alone is unreliable when the marker ends in a
+    /// dot (boundary between two non-word chars never fires). The
+    /// substitution callers strip any dots from the captured marker
+    /// so output is consistently "AM" / "PM" regardless of how
+    /// Whisper happened to punctuate it on a given utterance.
+    private static let timeMarkerFragment = "(?:[ap]\\.?m\\.?|o['\u{2019}]clock)"
+
+    /// Normalise an AM/PM marker by stripping any dots Whisper added.
+    /// Case is preserved. `o'clock` (no dots) passes through unchanged.
+    private static func normalizeTimeMarker(_ raw: String) -> String {
+        raw.replacingOccurrences(of: ".", with: "")
+    }
 
     private static func applyHourWithMarker(_ text: String) -> String {
         let pattern = "\\b(\(hourWordFragment))([ \\t]+)(\(timeMarkerFragment))(?![A-Za-z])"
@@ -528,7 +541,7 @@ enum SpokenCues {
                   let marker = match.output[3].substring,
                   let n = parseWordNumber(String(hour))
             else { return String(match.output[0].substring ?? "") }
-            return "\(n)\(space)\(marker)"
+            return "\(n)\(space)\(normalizeTimeMarker(String(marker)))"
         }
     }
 
@@ -543,7 +556,7 @@ enum SpokenCues {
                   let h = parseWordNumber(String(hour)),
                   let m = parseWordNumber(String(minute))
             else { return String(match.output[0].substring ?? "") }
-            return "\(h):\(String(format: "%02d", m))\(space)\(marker)"
+            return "\(h):\(String(format: "%02d", m))\(space)\(normalizeTimeMarker(String(marker)))"
         }
     }
 
