@@ -20,6 +20,7 @@ entries as plain bullet lines.
 - "M dash" and "N dash" now turn into em-dash (—) and en-dash (–) like "em dash" / "en dash" already did. Whisper sometimes transcribes the spoken cue as the letter name instead of the word, which used to leave a stray "M" or "N" sitting in front of the dash.
 - Spoken cues are now five independent toggles per mode — punctuation, numbers, times, currency, and emojis — instead of a single "spoken cues" switch. Mix and match in Settings → Modes. Existing settings carry over: if you'd turned spoken cues off in a mode, all five families stay off; otherwise they all start on.
 - Quick mode now exposes the pre-processing toggles too. The mode itself is still locked (no LLM passes — that's the point), but you can pick which cue families run in it.
+- The HUD now reliably appears on whichever virtual desktop (Space) you're currently on. Previously it sometimes stayed pinned to the desktop where Dictator was first launched, leaving you staring at no HUD when you triggered dictation from a different Space.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21

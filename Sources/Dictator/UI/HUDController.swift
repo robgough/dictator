@@ -114,6 +114,12 @@ final class HUDController {
 
     private func show() {
         guard positionPanel() else { return }
+        // Re-assert cross-Space behavior every time. Setting it once at
+        // init isn't always enough — macOS sometimes binds the panel to
+        // the Space it first lived in and ignores the canJoinAllSpaces
+        // flag on subsequent orderFronts. Re-applying right before the
+        // order-front is cheap and makes the binding stick.
+        panel.collectionBehavior = HUDPanel.crossSpaceBehavior
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
@@ -183,6 +189,24 @@ private final class ResumedFlag: @unchecked Sendable {
 }
 
 final class HUDPanel: NSPanel {
+    /// Collection behavior recipe for a HUD that should follow the user
+    /// across every Space (including fullscreen ones) without forcing a
+    /// Space switch when it appears. Surfaced as a static constant so
+    /// `HUDController.show()` can re-apply it right before each
+    /// `orderFront` — macOS occasionally appears to bind the panel to
+    /// whichever Space it first lived in, and re-asserting the flags
+    /// before each show defeats that.
+    ///
+    /// `.stationary` is deliberately omitted: Apple's docs note it's
+    /// unnecessary alongside `.canJoinAllSpaces`, and empirically the
+    /// combination has caused the HUD to anchor to the Space where the
+    /// app launched instead of following the user.
+    static let crossSpaceBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces,
+        .fullScreenAuxiliary,
+        .ignoresCycle,
+    ]
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 96),
@@ -192,7 +216,7 @@ final class HUDPanel: NSPanel {
         )
         isFloatingPanel = true
         level = .statusBar
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
+        collectionBehavior = Self.crossSpaceBehavior
         isMovableByWindowBackground = false
         // Native shadow is back ON because the SwiftUI content now uses
         // .thinMaterial in a clipped shape — macOS samples the rounded alpha
