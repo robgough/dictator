@@ -461,10 +461,10 @@ enum SpokenCues {
     //
     // Digitise spoken clock times where the hour is followed by an AM/PM
     // suffix, "o'clock", or military "hours". Civilian shapes:
-    //   "ten AM"          → "10 AM"
+    //   "ten AM"          → "10am"
     //   "ten o'clock"     → "10 o'clock"
-    //   "ten thirty PM"   → "10:30 PM"
-    //   "two fifteen AM"  → "2:15 AM"
+    //   "ten thirty PM"   → "10:30pm"
+    //   "two fifteen AM"  → "2:15am"
     // Military shapes:
     //   "sixteen hundred hours"     → "1600 hours"
     //   "oh eight hundred hours"    → "0800 hours"
@@ -473,10 +473,13 @@ enum SpokenCues {
     // is left alone because it's often a quantity, not a time
     // ("ten thirty-dollar items"). AM/PM markers always render as
     // lowercase "am" / "pm" regardless of how Whisper punctuated or
-    // cased the utterance — "A.M." and "p.m." both normalise to "am".
-    // "o'clock" also lowercases. "Hours" (military marker) passes
-    // through unchanged. The hour-minute shape always renders minutes
-    // as two digits so "two fifteen" becomes "2:15", not "2:5".
+    // cased the utterance — "A.M." and "p.m." both normalise to "am"
+    // — and glue directly onto the digits with no space ("10am" not
+    // "10 am") to match the dictation convention. "o'clock" also
+    // lowercases but keeps its leading space because it's a word, not
+    // an abbreviation. "Hours" (military marker) passes through
+    // unchanged. The hour-minute shape always renders minutes as two
+    // digits so "two fifteen" becomes "2:15", not "2:5".
 
     private static func applyTimes(to text: String) -> String {
         var s = text
@@ -536,31 +539,46 @@ enum SpokenCues {
         raw.replacingOccurrences(of: ".", with: "").lowercased()
     }
 
+    /// Spacing between the hour digits and the marker. AM/PM glue
+    /// directly onto the digits (the common dictation convention —
+    /// "10am" reads cleaner than "10 am"); the word-form "o'clock"
+    /// keeps the space because it's a word, not an abbreviation.
+    private static func spacingBeforeMarker(_ normalisedMarker: String) -> String {
+        switch normalisedMarker {
+        case "am", "pm": ""
+        default: " "
+        }
+    }
+
     private static func applyHourWithMarker(_ text: String) -> String {
-        let pattern = "\\b(\(hourWordFragment))([ \\t]+)(\(timeMarkerFragment))(?![A-Za-z])"
+        // Space between hour and marker is matched but not captured —
+        // we glue the marker straight onto the digits in the output
+        // ("10am" not "10 am") because that's the dictation convention
+        // most users prefer for casual times.
+        let pattern = "\\b(\(hourWordFragment))[ \\t]+(\(timeMarkerFragment))(?![A-Za-z])"
         guard let regex = try? Regex(pattern).ignoresCase() else { return text }
         return text.replacing(regex) { match in
             guard let hour = match.output[1].substring,
-                  let space = match.output[2].substring,
-                  let marker = match.output[3].substring,
+                  let marker = match.output[2].substring,
                   let n = parseWordNumber(String(hour))
             else { return String(match.output[0].substring ?? "") }
-            return "\(n)\(space)\(normalizeTimeMarker(String(marker)))"
+            let clean = normalizeTimeMarker(String(marker))
+            return "\(n)\(spacingBeforeMarker(clean))\(clean)"
         }
     }
 
     private static func applyHourMinuteWithMarker(_ text: String) -> String {
-        let pattern = "\\b(\(hourWordFragment))[ \\t]+(\(minuteWordFragment))([ \\t]+)(\(timeMarkerFragment))(?![A-Za-z])"
+        let pattern = "\\b(\(hourWordFragment))[ \\t]+(\(minuteWordFragment))[ \\t]+(\(timeMarkerFragment))(?![A-Za-z])"
         guard let regex = try? Regex(pattern).ignoresCase() else { return text }
         return text.replacing(regex) { match in
             guard let hour = match.output[1].substring,
                   let minute = match.output[2].substring,
-                  let space = match.output[3].substring,
-                  let marker = match.output[4].substring,
+                  let marker = match.output[3].substring,
                   let h = parseWordNumber(String(hour)),
                   let m = parseWordNumber(String(minute))
             else { return String(match.output[0].substring ?? "") }
-            return "\(h):\(String(format: "%02d", m))\(space)\(normalizeTimeMarker(String(marker)))"
+            let clean = normalizeTimeMarker(String(marker))
+            return "\(h):\(String(format: "%02d", m))\(spacingBeforeMarker(clean))\(clean)"
         }
     }
 
