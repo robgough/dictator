@@ -93,6 +93,21 @@ final class VocabularyStore {
 
         if FileManager.default.fileExists(atPath: url.path) {
             loadFromDisk()
+            // Multi-Mac iCloud Drive edge case: another Mac upgraded first
+            // and synced its `vocabulary.json` into this Mac's Documents
+            // folder *before* this Mac upgraded. Without a merge step,
+            // this Mac would find the file, skip the UserDefaults
+            // migration path, and silently lose any vocab entries that
+            // were unique to it. Union by id — entries already in the
+            // file win on conflict (which can only happen if the same
+            // entry was duplicated across Macs before the sync arrived).
+            if let legacyEntries, !legacyEntries.isEmpty {
+                let existingIDs = Set(entries.map(\.id))
+                let extras = legacyEntries.filter { !existingIDs.contains($0.id) }
+                if !extras.isEmpty {
+                    entries.append(contentsOf: extras)  // didSet schedules a save
+                }
+            }
         } else if let legacyEntries, !legacyEntries.isEmpty {
             // One-time migration. We don't immediately delete the legacy
             // settings.vocabulary on the caller side — the caller (AppState)
