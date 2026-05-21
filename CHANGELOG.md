@@ -22,7 +22,7 @@ entries as plain bullet lines.
 - Quick mode now exposes the pre-processing toggles too. The mode itself is still locked (no LLM passes — that's the point), but you can pick which cue families run in it.
 - The HUD now reliably appears on whichever virtual desktop (Space) you're currently on. Previously it sometimes stayed pinned to the desktop where Dictator was first launched, leaving you staring at no HUD when you triggered dictation from a different Space.
 - A wedged transcription no longer leaves the HUD spinning forever. If the engine doesn't return within a sensible budget (1–5 minutes scaled to the clip length), Dictator surfaces an error in the HUD and returns to idle so you can retry — previously the only way out was Escape (if you knew about it) or quitting the app.
-- The HUD now shows a "Press Esc to cancel" hint underneath the status label whenever a stage is in progress, so it's clear how to bail out of a long-running transcription or LLM pass.
+- The HUD now shows a "Press Esc to cancel" hint while recording and during every later stage (transcribing through structuring), so it's clear how to bail out of a recording or a long-running LLM pass.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21

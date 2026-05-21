@@ -125,6 +125,13 @@ struct HUDView: View {
                             nextName: canCycle ? state.pipeline.nextCycleMode?.name : nil
                         )
                     }
+                    // Same Esc-cancel discoverability hint as the
+                    // StatusRow states. Sits below the mode chip so it
+                    // doesn't separate the chip from its subtitle.
+                    Text("Press Esc to cancel")
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 1)
                 }
                 .frame(maxWidth: 200, alignment: .trailing)
             }
