@@ -16,6 +16,7 @@ enum SpokenCues {
         guard !text.isEmpty else { return text }
         var s = text
         s = applyMultiWordPunctuation(to: s)
+        s = applyArithmetic(to: s)
         s = applySingleWordPunctuation(to: s)
         s = applyEmojis(to: s)
         s = cleanup(s)
@@ -50,6 +51,225 @@ enum SpokenCues {
         s = s.replacing(/\bclose[ \t]+quote\b/.ignoresCase(), with: "\u{201D}")
         // "full stop" is the British way of saying period; same outcome.
         s = s.replacing(/\bfull[ \t]+stop\b/.ignoresCase(), with: ".")
+        // Typographic dash variants. Whisper may transcribe the spoken cue
+        // with a space ("em dash") or a literal hyphen between the words
+        // ("em-dash"); `[ \t-]+` accepts either. Runs BEFORE the single-
+        // word "dash" → em-dash substitution below.
+        s = s.replacing(/\bem[ \t-]+dash\b/.ignoresCase(), with: "\u{2014}")  // —
+        s = s.replacing(/\ben[ \t-]+dash\b/.ignoresCase(), with: "\u{2013}")  // –
+        // Bracket / brace pairs. "open bracket" defaults to [ ] (square)
+        // and "open brace" to { } (curly) — { } is the more common
+        // alternative when people mean parens they say "paren".
+        s = s.replacing(/\bopen[ \t]+(?:square[ \t]+)?bracket\b/.ignoresCase(), with: "[")
+        s = s.replacing(/\bclose[ \t]+(?:square[ \t]+)?bracket\b/.ignoresCase(), with: "]")
+        s = s.replacing(/\bopen[ \t]+(?:curly[ \t]+)?brace\b/.ignoresCase(), with: "{")
+        s = s.replacing(/\bclose[ \t]+(?:curly[ \t]+)?brace\b/.ignoresCase(), with: "}")
+        // Symbol-name cues. The "sign" / "symbol" qualifier is what makes
+        // these safe — "at", "hash", "pound", "dollar" are all common
+        // English words otherwise.
+        s = s.replacing(/\bat[ \t]+(?:sign|symbol)\b/.ignoresCase(), with: "@")
+        s = s.replacing(/\b(?:hash|pound|number)[ \t]+sign\b/.ignoresCase(), with: "#")
+        s = s.replacing(/\bdollar[ \t]+sign\b/.ignoresCase(), with: "$")
+        s = s.replacing(/\bforward[ \t]+slash\b/.ignoresCase(), with: "/")
+        return s
+    }
+
+    // MARK: - Arithmetic
+    //
+    // Substitute operators only when surrounded by digits ("5 plus 3" →
+    // "5 + 3"), so common English usage of these words elsewhere ("plus
+    // side", "minus the budget", "5 times a day") stays as written.
+    // Numbers can be integers or decimals; signed forms aren't worth the
+    // ambiguity (we'd misclassify "minus 3").
+
+    private static func applyArithmetic(to text: String) -> String {
+        var s = text
+        // Each round runs the word-number digitisation pass and then the
+        // digit-form substitution pass. Chained expressions like
+        // "5 plus 6 equals 2" need more than one round: round 1 matches
+        // "5 plus 6" (consuming positions for the second 6), so the
+        // regex's next scan resumes past it and "equals 2" has no
+        // digit-LHS yet. Round 2 sees "5 + 6 equals 2" and matches
+        // "6 equals 2" → "6 = 2". Termination is guaranteed because every
+        // round replaces operator *words* with glyphs (a strict reduction
+        // in the set of operator words present); the loop ends as soon
+        // as a round produces no change. Capped so a pathological input
+        // can't spin forever.
+        for _ in 0..<8 {
+            let prev = s
+            s = digitiseWordNumbersInArithmeticContext(s)
+            s = applyDigitArithmetic(to: s)
+            if s == prev { break }
+        }
+        return s
+    }
+
+    private static func applyDigitArithmetic(to text: String) -> String {
+        var s = text
+        // <num> plus|minus|equals|times <num>
+        let arithmetic = /\b(\d+(?:\.\d+)?)[ \t]+(plus|minus|equals|times)[ \t]+(\d+(?:\.\d+)?)\b/.ignoresCase()
+        s = s.replacing(arithmetic) { match in
+            let glyph: String
+            switch match.2.lowercased() {
+            case "plus":   glyph = "+"
+            case "minus":  glyph = "-"
+            case "equals": glyph = "="
+            case "times":  glyph = "\u{00D7}"  // ×
+            default:       glyph = String(match.2)
+            }
+            return "\(match.1) \(glyph) \(match.3)"
+        }
+        // <num> divided by <num> → /
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+divided[ \t]+by[ \t]+(\d+(?:\.\d+)?)\b/.ignoresCase()) { match in
+            "\(match.1) / \(match.2)"
+        }
+        // <num> slash <num> — fractions and dates ("5 slash 3" → "5/3")
+        s = s.replacing(/\b(\d+)[ \t]+slash[ \t]+(\d+)\b/.ignoresCase()) { match in
+            "\(match.1)/\(match.2)"
+        }
+        // <num> pipe <num> — niche but unambiguous
+        s = s.replacing(/\b(\d+)[ \t]+pipe[ \t]+(\d+)\b/.ignoresCase()) { match in
+            "\(match.1) | \(match.2)"
+        }
+        // <num> percent → number%
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+percent\b/.ignoresCase()) { match in
+            "\(match.1)%"
+        }
+        return s
+    }
+
+    // MARK: - Word-number digitisation
+    //
+    // Supports 0–999999 in word form, including hundreds and thousands
+    // with the natural "and" connective. Examples that parse:
+    //   "five", "twenty-five", "one hundred and three",
+    //   "five thousand and four", "twenty thousand and sixty two",
+    //   "one hundred twenty-three thousand four hundred fifty-six".
+    // The optional "and" before the final group is honoured but ignored —
+    // British vs American style, both work. Anything outside this
+    // vocabulary returns nil so the regex match is left untouched.
+
+    private static let onesMap: [String: Int] = [
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    ]
+    private static let tensMap: [String: Int] = [
+        "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+        "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    ]
+
+    /// Parse word-form numbers up to 999999. Returns nil on anything not
+    /// in the vocabulary. The token loop accumulates a "current" chunk
+    /// (everything below the next scale word — "hundred" or "thousand"),
+    /// multiplies / promotes when it hits a scale word, and adds to a
+    /// running result when the scale word is "thousand".
+    private static func parseWordNumber(_ raw: String) -> Int? {
+        let normalized = raw.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+        let tokens = normalized
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !tokens.isEmpty else { return nil }
+
+        var result = 0
+        var current = 0
+        var sawDigitToken = false
+
+        for token in tokens {
+            if token == "and" {
+                continue  // "one hundred AND three" — connector, ignored
+            }
+            if let n = onesMap[token] {
+                current += n
+                sawDigitToken = true
+            } else if let n = tensMap[token] {
+                current += n
+                sawDigitToken = true
+            } else if token == "hundred" {
+                // "hundred" multiplies the current chunk by 100.
+                // "a hundred" (current == 0) → treat as 1 hundred so the
+                // regex's mandatory DIGIT_ONE prefix isn't the only path
+                // in; in practice the regex won't admit this without a
+                // digit prefix so current > 0.
+                current = max(current, 1) * 100
+                sawDigitToken = true
+            } else if token == "thousand" {
+                result += max(current, 1) * 1000
+                current = 0
+                sawDigitToken = true
+            } else {
+                // Unrecognised token inside what the regex thought was a
+                // word-number — abandon the parse so the caller leaves
+                // the input alone.
+                return nil
+            }
+        }
+        guard sawDigitToken else { return nil }
+        return result + current
+    }
+
+    /// Regex fragment matching 0–999999 in word form. Built from sub-
+    /// fragments so the grammar reads top-down: digits → tens → hundreds
+    /// → thousands. The "and" before a trailing chunk is optional so both
+    /// "one hundred three" and "one hundred AND three" match.
+    private static let wordNumberFragment: String = {
+        let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
+        let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+        // 0–99: tens optionally + ones, or a teen, or a bare one, or zero.
+        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+        // 100–999: "<one> hundred (and? <zero99>)?". Hundreds prefix is
+        // restricted to the ones list (not tens) because "twenty hundred"
+        // isn't natural English.
+        let hundreds = "(?:\(one)[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
+        // 1000–999999: "<HUNDREDS or 0-99> thousand (and? <HUNDREDS or 0-99>)?".
+        let thousands = "(?:(?:\(hundreds)|\(zero99))[ \\t]+thousand(?:[ \\t]+(?:and[ \\t]+)?(?:\(hundreds)|\(zero99)))?)"
+        return "(?:\(thousands)|\(hundreds)|\(zero99))"
+    }()
+
+    /// Words that take a number on their LEFT and on their RIGHT.
+    private static let twoSidedOps = "plus|minus|equals|times|slash|pipe|divided[ \\t]+by"
+    /// Words that take a number only on their LEFT (currently just percent).
+    private static let leftOnlyOps = "percent"
+
+    /// Pre-substitute word-numbers in arithmetic positions to digits, so
+    /// the digit-based regexes in `applyArithmetic` pick them up.
+    private static func digitiseWordNumbersInArithmeticContext(_ text: String) -> String {
+        var s = text
+
+        // word-number BEFORE an operator: "<word> <op>" → "<digit> <op>".
+        // The trailing operator can be one of the two-sided set or the
+        // left-only set (percent).
+        let beforePattern = "\\b(\(wordNumberFragment))([ \\t]+)(\(twoSidedOps)|\(leftOnlyOps))\\b"
+        if let beforeRegex = try? Regex(beforePattern).ignoresCase() {
+            s = s.replacing(beforeRegex) { match in
+                // Indexed access on AnyRegexOutput: [0] whole match,
+                // [1] word-number, [2] whitespace, [3] operator.
+                guard let wn = match.output[1].substring,
+                      let space = match.output[2].substring,
+                      let op = match.output[3].substring,
+                      let n = parseWordNumber(String(wn))
+                else { return String(match.output[0].substring ?? "") }
+                return "\(n)\(space)\(op)"
+            }
+        }
+
+        // word-number AFTER a two-sided operator: "<op> <word>" → "<op> <digit>".
+        // Percent isn't here because it has no right-hand operand.
+        let afterPattern = "\\b(\(twoSidedOps))([ \\t]+)(\(wordNumberFragment))\\b"
+        if let afterRegex = try? Regex(afterPattern).ignoresCase() {
+            s = s.replacing(afterRegex) { match in
+                guard let op = match.output[1].substring,
+                      let space = match.output[2].substring,
+                      let wn = match.output[3].substring,
+                      let n = parseWordNumber(String(wn))
+                else { return String(match.output[0].substring ?? "") }
+                return "\(op)\(space)\(n)"
+            }
+        }
+
         return s
     }
 
@@ -65,7 +285,22 @@ enum SpokenCues {
         s = s.replacing(/\bperiod\b/.ignoresCase(), with: ".")
         s = s.replacing(/\bsemicolon\b/.ignoresCase(), with: ";")
         s = s.replacing(/\bcolon\b/.ignoresCase(), with: ":")
-        s = s.replacing(/\bdash\b/.ignoresCase(), with: "—")
+        s = s.replacing(/\bhyphen\b/.ignoresCase(), with: "-")
+        // "dash" stays mapped to em-dash for backward compat — anyone who
+        // wants a literal hyphen says "hyphen", anyone who wants an
+        // en-dash says "en dash" (handled above).
+        s = s.replacing(/\bdash\b/.ignoresCase(), with: "\u{2014}")  // —
+        // Tech-y / typographic symbols. Each word is rare in normal English
+        // speech so substituting unconditionally is safe; "ampersand" /
+        // "asterisk" etc. don't show up in everyday conversation.
+        s = s.replacing(/\btilde\b/.ignoresCase(),     with: "~")
+        s = s.replacing(/\basterisk\b/.ignoresCase(),  with: "*")
+        s = s.replacing(/\bampersand\b/.ignoresCase(), with: "&")
+        s = s.replacing(/\bunderscore\b/.ignoresCase(), with: "_")
+        s = s.replacing(/\bbacktick\b/.ignoresCase(),  with: "`")
+        s = s.replacing(/\bcaret\b/.ignoresCase(),     with: "^")
+        s = s.replacing(/\bellipsis\b/.ignoresCase(),  with: "\u{2026}")  // …
+        s = s.replacing(/\bbackslash\b/.ignoresCase(), with: "\\")
         return s
     }
 
