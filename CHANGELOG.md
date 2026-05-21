@@ -14,7 +14,9 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Spoken clock times now turn into digits when a marker word follows: "ten AM" → "10 AM", "ten o'clock" → "10 o'clock", "ten thirty PM" → "10:30 PM", "two fifteen am" → "2:15 am". Bare "ten thirty" with no marker stays as words, so quantities like "ten thirty-dollar items" aren't mangled.
-- Military times now digitise too when the speaker says "hours": "sixteen hundred hours" → "1600 hours", "oh eight hundred hours" → "0800 hours", "fourteen forty-five hours" → "1445 hours". Plain hours 1–12 without the "oh" prefix are left alone so quantities like "five hundred hours of work" stay as quantities.
+- Military times now digitise too when the speaker says "hours": "sixteen hundred hours" → "1600 hours", "ten hundred hours" → "1000 hours", "oh eight hundred hours" → "0800 hours", "fourteen forty-five hours" → "1445 hours". Plain hours 1–9 without the "oh" prefix are left alone so quantities like "five hundred hours of work" stay as quantities.
+- Spoken currency amounts now pick up the right symbol: "five dollars" → "$5", "twenty euros" → "€20", "sixteen hundred pounds" → "£1600", "five thousand yen" → "¥5000". Works on word-form numbers and existing digit numbers alike.
+- Teen-hundreds in speech now turn into digits like the smaller forms already did: "sixteen hundred" → "1600", "nineteen hundred and four" → "1904". Previously only "one" through "nine hundred" were digitised.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21

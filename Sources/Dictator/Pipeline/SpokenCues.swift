@@ -18,6 +18,7 @@ enum SpokenCues {
         s = applyMultiWordPunctuation(to: s)
         s = applyTimes(to: s)
         s = applyArithmetic(to: s)
+        s = applyCurrency(to: s)
         s = applySingleWordPunctuation(to: s)
         s = applyEmojis(to: s)
         s = cleanup(s)
@@ -188,7 +189,12 @@ enum SpokenCues {
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
         let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
-        let hundreds = "(?:\(one)[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
+        // Hundreds prefix admits ones AND teens: "five hundred" → 500,
+        // "sixteen hundred" → 1600. The teen-hundred shape is common
+        // for years and round-ish prices ("the nineteen hundreds",
+        // "sixteen hundred dollars"). Tens stay excluded — "twenty
+        // hundred" isn't natural English.
+        let hundreds = "(?:(?:\(one)|\(teen))[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
         let thousands = "(?:(?:\(hundreds)|\(zero99))[ \\t]+thousand(?:[ \\t]+(?:and[ \\t]+)?(?:\(hundreds)|\(zero99)))?)"
         // Crucially excludes the single-token cases. tensOnes requires the
         // ones suffix (so "twenty" alone doesn't match, but "twenty-five"
@@ -228,6 +234,60 @@ enum SpokenCues {
         // <num> percent → number%
         s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+percent\b/.ignoresCase()) { match in
             "\(match.1)%"
+        }
+        return s
+    }
+
+    // MARK: - Currency
+    //
+    // Glue a currency symbol onto a digit number when a currency word
+    // follows: "5 dollars" → "$5", "1600 dollars" → "$1600", "twenty
+    // euros" → "€20", "five pounds" → "£5". Runs after the arithmetic
+    // pass so composite word-numbers ("sixteen hundred") are already
+    // digits by the time we look. A small pre-pass digitises single-
+    // word amounts ("five" → "5") that the arithmetic pass doesn't
+    // touch on its own.
+    //
+    // "Pound" is treated as currency even though it could be weight —
+    // UK dictators say "pounds" for money far more often than for
+    // weight (kg dominates), and US dictators use "dollars" for
+    // money. The false-positive cost is small enough to accept.
+
+    private static let currencyWordFragment = "(?:dollars?|pounds?|euros?|yen)"
+
+    private static func applyCurrency(to text: String) -> String {
+        var s = text
+        s = digitiseWordNumbersBeforeCurrency(s)
+        s = applyCurrencySymbols(s)
+        return s
+    }
+
+    private static func digitiseWordNumbersBeforeCurrency(_ text: String) -> String {
+        let pattern = "\\b(\(wordNumberFragment))([ \\t]+)(\(currencyWordFragment))\\b"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            guard let wn = match.output[1].substring,
+                  let space = match.output[2].substring,
+                  let cur = match.output[3].substring,
+                  let n = parseWordNumber(String(wn))
+            else { return String(match.output[0].substring ?? "") }
+            return "\(n)\(space)\(cur)"
+        }
+    }
+
+    private static func applyCurrencySymbols(_ text: String) -> String {
+        var s = text
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+dollars?\b/.ignoresCase()) { match in
+            "$\(match.1)"
+        }
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+pounds?\b/.ignoresCase()) { match in
+            "£\(match.1)"
+        }
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+euros?\b/.ignoresCase()) { match in
+            "€\(match.1)"
+        }
+        s = s.replacing(/\b(\d+(?:\.\d+)?)[ \t]+yen\b/.ignoresCase()) { match in
+            "¥\(match.1)"
         }
         return s
     }
@@ -304,21 +364,23 @@ enum SpokenCues {
         return result + current
     }
 
-    /// Regex fragment matching 0–999999 in word form. Built from sub-
-    /// fragments so the grammar reads top-down: digits → tens → hundreds
-    /// → thousands. The "and" before a trailing chunk is optional so both
-    /// "one hundred three" and "one hundred AND three" match.
+    /// Regex fragment matching word-form numbers from 0 up through
+    /// the millions range. Built from sub-fragments so the grammar
+    /// reads top-down: digits → tens → hundreds → thousands. The
+    /// "and" before a trailing chunk is optional so both "one hundred
+    /// three" and "one hundred AND three" match.
     private static let wordNumberFragment: String = {
         let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
         // 0–99: tens optionally + ones, or a teen, or a bare one, or zero.
         let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
-        // 100–999: "<one> hundred (and? <zero99>)?". Hundreds prefix is
-        // restricted to the ones list (not tens) because "twenty hundred"
-        // isn't natural English.
-        let hundreds = "(?:\(one)[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
-        // 1000–999999: "<HUNDREDS or 0-99> thousand (and? <HUNDREDS or 0-99>)?".
+        // 100–1999 via "<one|teen> hundred (and? <zero99>)?". Teens
+        // are admitted so "sixteen hundred" and friends parse — common
+        // for years and round prices. "Twenty hundred" stays out
+        // because it isn't natural English.
+        let hundreds = "(?:(?:\(one)|\(teen))[ \\t]+hundred(?:[ \\t]+(?:and[ \\t]+)?\(zero99))?)"
+        // "<HUNDREDS or 0-99> thousand (and? <HUNDREDS or 0-99>)?".
         let thousands = "(?:(?:\(hundreds)|\(zero99))[ \\t]+thousand(?:[ \\t]+(?:and[ \\t]+)?(?:\(hundreds)|\(zero99)))?)"
         return "(?:\(thousands)|\(hundreds)|\(zero99))"
     }()
@@ -457,15 +519,16 @@ enum SpokenCues {
         }
     }
 
-    /// Military-time hour: deliberately restricted to forms with no
-    /// civilian counterpart. 0 ("zero"), 13–19, 20–23, or "oh N" for
-    /// 01–09. Plain "one" … "twelve" are EXCLUDED so quantity phrases
-    /// like "five hundred hours of work" don't get rewritten as
-    /// "0500 hours of work". Users who want a low military hour use
-    /// the "oh" prefix, which is the convention anyway.
+    /// Military-time hour: 0 ("zero"), 10–23, or "oh N" for 01–09.
+    /// Plain 1–9 without the "oh" prefix are EXCLUDED so quantity
+    /// phrases like "five hundred hours of work" don't get rewritten
+    /// as "0500 hours of work" — users wanting a low military hour
+    /// use the "oh" prefix, which is the convention anyway. 10–12
+    /// are admitted because the quantity reading is unnatural in
+    /// English ("a thousand hours", not "ten hundred hours").
     private static let militaryHourFragment: String = {
         let single = "(?:one|two|three|four|five|six|seven|eight|nine)"
-        let teen = "(?:thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
+        let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let twenties = "(?:twenty(?:[ \\t-]+(?:one|two|three))?)"
         let ohN = "(?:oh[ \\t]+\(single))"
         return "(?:\(twenties)|\(teen)|\(ohN)|zero)"
