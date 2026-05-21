@@ -88,7 +88,14 @@
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
-        html { background: var(--bg); }
+        html {
+            background: var(--bg);
+            scroll-behavior: smooth;
+            scroll-padding-top: 24px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
             color: var(--fg);
@@ -116,6 +123,53 @@
             max-width: 720px;
             margin: 0 auto;
             padding: 64px 28px 96px;
+        }
+        /* Sticky left-side TOC. Position-fixed in the empty gutter to the
+           left of the centred .wrap column. Hidden below 1180px viewport
+           width — there isn't enough room outside the 720px column to
+           fit it without overlapping content. */
+        .toc {
+            position: fixed;
+            top: 96px;
+            left: 32px;
+            width: 180px;
+            z-index: 10;
+        }
+        @media (max-width: 1180px) {
+            .toc { display: none; }
+        }
+        .toc-label {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--fg-faint);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin: 0 0 12px;
+            padding-left: 14px;
+        }
+        .toc ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            border-left: 1px solid var(--border);
+        }
+        .toc a {
+            display: block;
+            padding: 7px 0 7px 14px;
+            margin-left: -1px;
+            border-left: 1px solid transparent;
+            color: var(--fg-faint);
+            text-decoration: none;
+            font-size: 13.5px;
+            line-height: 1.35;
+            transition: color 0.12s ease, border-color 0.12s ease;
+        }
+        .toc a:hover { color: var(--fg-dim); }
+        .toc a.active {
+            color: var(--accent);
+            border-left-color: var(--accent);
+            font-weight: 500;
         }
         header { margin-bottom: 56px; }
         .brand-row {
@@ -640,6 +694,19 @@
     <!-- / Fathom -->
 </head>
 <body>
+<nav class="toc" aria-label="On this page">
+    <p class="toc-label">On this page</p>
+    <ul>
+        <li><a href="#hotkeys">Two hotkeys</a></li>
+        <li><a href="#pipeline">The pipeline</a></li>
+        <li><a href="#modes">Dictation modes</a></li>
+        <li><a href="#assistant">Assistant mode</a></li>
+        <li><a href="#models">Choose your models</a></li>
+        <li><a href="#tradeoff">Local-first, honestly</a></li>
+        <li><a href="#why">Why I built this</a></li>
+        <li><a href="#requirements">Requirements</a></li>
+    </ul>
+</nav>
 <div class="wrap">
     <header>
         <div class="brand-row">
@@ -678,7 +745,24 @@
         </div>
     </section>
 
-    <section class="pipeline">
+    <section id="hotkeys">
+        <h2>Two hotkeys</h2>
+        <p class="lede">Two hotkeys, two jobs. Dictation drops new text where the cursor is. Assistant edits the text that's already there.</p>
+        <p>You bind each hotkey in Settings — typically a Fn key for dictation, a different chord for assistant. The menu-bar HUD tells you which one is live while you hold the key, and which pipeline stage it's currently working on.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #007AFF;">
+                <h3>Dictation</h3>
+                <p>Hold the dictation hotkey, speak, release — the transcript (plus any cleanup passes you've enabled) lands at your cursor. Works in any text field, in any app. The next section walks through the pipeline.</p>
+            </div>
+            <div class="mode" style="--mode-color: #5e5ce6;">
+                <h3>Assistant</h3>
+                <p>A separate hotkey, optionally with text selected. Speak an instruction — Dictator either replaces the selection in place ("tighten this") or drafts something new to the clipboard ("reply with a polite no").</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="pipeline" class="pipeline">
         <h2>The pipeline</h2>
         <p class="lede">From audio to written text — and the cleanup that makes it readable — all on your Mac.</p>
         <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts.</p>
@@ -710,7 +794,28 @@
         <p class="pipeline-footnote">A deterministic vocabulary substitution step runs between Format and Grammar — case-insensitive whole-word replacements for names, jargon, and the words your accent always trips up. No model, just your list. The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
     </section>
 
-    <section class="assistant">
+    <section id="modes">
+        <h2>Dictation modes</h2>
+        <p class="lede">Not every dictation needs the full cleanup. Modes let you keep a stripped-back Quick option alongside the full pipeline — and add your own for the contexts you reach for.</p>
+        <p>A mode bundles which of the optional passes run, the prompts they use, and whether spoken cues and your vocabulary apply. Two come seeded; you can add your own from Settings.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #f59e0b;">
+                <h3>Quick</h3>
+                <p>Every LLM pass off. Raw transcript only — with spoken cues ("comma", "new paragraph", "fire emoji") and your vocabulary substitutions still applied. The fastest path from speech to pasted text. Built-in and locked, so it's always there as the floor.</p>
+            </div>
+            <div class="mode" style="--mode-color: #10b981;">
+                <h3>Write</h3>
+                <p>Every pass on, default prompts — punctuation, grammar, paragraph and bullet structure. The full pipeline. Edit its prompts, or duplicate it as the starting point for a custom mode.</p>
+            </div>
+        </div>
+
+        <p style="margin-top: 18px;">Add your own for the contexts you reach for — an Email mode with a more formal prompt, a Slack mode that keeps things terse, a Code Comments mode that skips structure. Each pass takes either a prompt addendum (appended under the built-in) or a full override, so you can tune one pass without losing the scaffolding on the others.</p>
+
+        <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Write, decide partway through it should've been Quick, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind Email mode to Mail.app, Slack mode to Slack, and Dictator picks the right one as you start to record.</p>
+    </section>
+
+    <section id="assistant" class="assistant">
         <h2>Assistant mode</h2>
         <p class="lede">A second hotkey for editing text by speaking to it.</p>
         <p>Hold the assistant hotkey, speak an instruction, release. If you had text selected when you triggered it, Dictator sees both — the selection and the instruction — and the local LLM decides what kind of response you want.</p>
@@ -729,7 +834,7 @@
         <p style="margin-top: 18px;">Conversations are multi-turn: follow-ups extend the same thread, with automatic compaction once the model's context window starts filling. Recent conversations are one click away in the menu-bar dropdown.</p>
     </section>
 
-    <section class="models">
+    <section id="models" class="models">
         <h2>Choose your models</h2>
         <p class="lede">Two engines for speech-to-text, four small instruction-tuned LLMs for the cleanup passes — or no LLM at all.</p>
         <p>All weights are downloaded on first use and stored in <code>~/Library/Application Support/Dictator/Models/</code>. You can mix and match: smaller transcription model with a bigger LLM, or vice versa.</p>
@@ -795,7 +900,7 @@
         <p class="table-footnote">All language models are 4-bit quantised via MLX. The <strong>RAM</strong> column is how much the loaded model itself consumes at steady-state, with modest context lengths; long Assistant-mode conversations grow as the KV cache fills. The <strong>Min Mac RAM</strong> column is the total physical memory we'd want your <em>whole machine</em> to have before recommending the model — enough to keep the LLM resident and still leave headroom for the OS, your browser, and whatever else you have open.</p>
     </section>
 
-    <section class="tradeoff">
+    <section id="tradeoff" class="tradeoff">
         <h2>Local-first, honestly</h2>
         <p class="lede">Running everything on your Mac is a real trade-off. Worth being clear about both sides.</p>
 
@@ -823,7 +928,7 @@
         </div>
     </section>
 
-    <section class="author">
+    <section id="why" class="author">
         <h2>Why I built this</h2>
         <div class="author-row">
             <img class="author-avatar" src="media/rob-avatar.jpg" alt="Rob Gough" width="130" height="130">
@@ -841,7 +946,7 @@
         </div>
     </section>
 
-    <section>
+    <section id="requirements">
         <h2>Requirements</h2>
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
@@ -860,5 +965,37 @@
         <a href="https://robgough.net">robgough.net</a>
     </footer>
 </div>
+<script>
+    // Highlight the TOC entry for whichever section is currently in the
+    // upper third of the viewport. The wide rootMargin (negative top + bottom)
+    // means a section is only "active" once its top crosses ~25% down the
+    // viewport, which feels right when reading — you're past the heading, into
+    // the body of that section.
+    (function () {
+        var sections = document.querySelectorAll('section[id]');
+        var links = document.querySelectorAll('.toc a');
+        if (!sections.length || !links.length) return;
+        var linkById = {};
+        links.forEach(function (a) {
+            linkById[a.getAttribute('href').slice(1)] = a;
+        });
+        var visible = new Set();
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (e) {
+                if (e.isIntersecting) visible.add(e.target.id);
+                else visible.delete(e.target.id);
+            });
+            // Pick the first section (in document order) that's currently in
+            // the active band. Falls back to the last visible if none are.
+            var orderedIds = Array.from(sections).map(function (s) { return s.id; });
+            var activeId = orderedIds.find(function (id) { return visible.has(id); });
+            links.forEach(function (a) { a.classList.remove('active'); });
+            if (activeId && linkById[activeId]) {
+                linkById[activeId].classList.add('active');
+            }
+        }, { rootMargin: '-25% 0px -65% 0px', threshold: 0 });
+        sections.forEach(function (s) { observer.observe(s); });
+    })();
+</script>
 </body>
 </html>
