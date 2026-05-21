@@ -52,13 +52,18 @@ final class VocabularyStore {
     /// schedule a write of the just-read data.
     private var isReloadingFromDisk = false
 
-    private var saveDebounce: DispatchWorkItem?
+    /// In-flight debounce task. Cancelled when a new edit lands or `stop()`
+    /// is called, so a stream of keystrokes coalesces into one write.
+    private var saveDebounceTask: Task<Void, Never>?
     private var fileWatcher: DispatchSourceFileSystemObject?
     private var watchedFD: Int32 = -1
 
-    /// Serial queue for file I/O so coordinated reads/writes don't block the
-    /// main actor for the full duration of a sync-provider stall.
-    private let ioQueue = DispatchQueue(label: "net.robgough.Dictator.VocabularyStore.io", qos: .userInitiated)
+    /// Background queue the file watcher delivers events on. Reads/writes
+    /// themselves use `Task.detached` rather than this queue — Swift
+    /// concurrency expresses isolation more clearly than DispatchQueue +
+    /// `Task { @MainActor in ... }` hops, which were tripping up runtime
+    /// actor-isolation checks under load.
+    private let watcherQueue = DispatchQueue(label: "net.robgough.Dictator.VocabularyStore.watcher", qos: .userInitiated)
 
     private static let filename = "vocabulary.json"
     private static let schemaVersion = 1
@@ -91,18 +96,22 @@ final class VocabularyStore {
         } else if let legacyEntries, !legacyEntries.isEmpty {
             // One-time migration. We don't immediately delete the legacy
             // settings.vocabulary on the caller side — the caller (AppState)
-            // handles that once this write has succeeded.
+            // handles that once this write has succeeded. Skip the debounce
+            // — we want the file on disk before the caller clears its
+            // legacy array.
+            saveDebounceTask?.cancel()
+            saveDebounceTask = nil
             self.entries = legacyEntries
-            // Skip the debounce — we want the file on disk before the
-            // settings object's vocabulary array gets cleared.
-            saveDebounce?.cancel()
-            saveDebounce = nil
-            writeNow(entries: legacyEntries, to: url)
+            Task { @MainActor [weak self] in
+                await self?.writeNow(entries: legacyEntries, to: url)
+            }
         } else {
             // Fresh install: empty store, write the envelope so the file
             // exists and external-edit detection has something to watch.
             self.entries = []
-            writeNow(entries: [], to: url)
+            Task { @MainActor [weak self] in
+                await self?.writeNow(entries: [], to: url)
+            }
         }
 
         startWatching(url: url)
@@ -122,7 +131,9 @@ final class VocabularyStore {
         let snapshot = entries
         stopWatching()
         fileURL = newURL
-        writeNow(entries: snapshot, to: newURL)
+        Task { @MainActor [weak self] in
+            await self?.writeNow(entries: snapshot, to: newURL)
+        }
         startWatching(url: newURL)
     }
 
@@ -135,31 +146,30 @@ final class VocabularyStore {
 
     // MARK: - Save (debounced)
 
-    /// Schedules a save ~500ms in the future, coalescing rapid edits.
-    /// Cancels any previously-scheduled save so a stream of keystrokes
+    /// Schedules a save ~500ms in the future, coalescing rapid edits. Each
+    /// new edit cancels the in-flight task so a stream of keystrokes
     /// results in exactly one write at the end.
     private func scheduleSave() {
-        saveDebounce?.cancel()
+        saveDebounceTask?.cancel()
         let snapshot = entries
         guard let url = fileURL else { return }
-        let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.writeNow(entries: snapshot, to: url)
-            }
+        saveDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            if Task.isCancelled { return }
+            await self?.writeNow(entries: snapshot, to: url)
+            self?.saveDebounceTask = nil
         }
-        saveDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(500), execute: work)
     }
 
-    /// Immediate write — used during bootstrap and relocate. Atomic file
-    /// write inside an NSFileCoordinator block, on a background queue so
-    /// the main actor doesn't sit on a sync-provider stall. No
-    /// backup-on-write: the atomic rename guarantees readers never see a
-    /// half-written file, and the only corruption path we've actually seen
-    /// (a Swift Codable decoder regression) is handled by the
-    /// recover-on-load path below, which preserves the original bytes
-    /// under a `vocabulary.recovered-<timestamp>.json` filename.
-    private func writeNow(entries: [VocabularyEntry], to url: URL) {
+    /// Atomic file write inside an NSFileCoordinator block. The encode +
+    /// coordinator + Data.write all run off-main via `Task.detached` so a
+    /// sync-provider stall can't block the UI, then we hop back to main
+    /// only to update the published `lastError` and restart the file
+    /// watcher. No backup-on-write: the atomic rename guarantees readers
+    /// never see a half-written file, and the load-time recovery path
+    /// preserves bytes under `vocabulary.recovered-<timestamp>.json` if
+    /// decode ever fails.
+    private func writeNow(entries: [VocabularyEntry], to url: URL) async {
         let envelope = Envelope(schemaVersion: Self.schemaVersion, entries: entries)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -171,24 +181,34 @@ final class VocabularyStore {
         // the bytes we just authored.
         let resumeWatch = fileWatcher != nil
         if resumeWatch { stopWatching() }
-        ioQueue.async { [weak self] in
-            guard let self else { return }
+
+        // Off-main: file IO. Captures only Sendable values (Data, URL).
+        // Returns an optional error message rather than the Error itself —
+        // arbitrary Errors aren't Sendable, but a String is.
+        let errorMessage = await Task.detached(priority: .userInitiated) {
+            () -> String? in
             let coordinator = NSFileCoordinator(filePresenter: nil)
             var coordError: NSError?
+            var writeError: Error?
             coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { coordURL in
                 do {
                     try data.write(to: coordURL, options: .atomic)
-                    Task { @MainActor in self.lastError = nil }
                 } catch {
-                    Task { @MainActor in self.lastError = "Write failed: \(error.localizedDescription)" }
+                    writeError = error
                 }
             }
-            if let coordError {
-                Task { @MainActor in self.lastError = "Coordination failed: \(coordError.localizedDescription)" }
+            if let writeError {
+                return "Write failed: \(writeError.localizedDescription)"
+            } else if let coordError {
+                return "Coordination failed: \(coordError.localizedDescription)"
             }
-            if resumeWatch {
-                Task { @MainActor in self.startWatching(url: url) }
-            }
+            return nil
+        }.value
+
+        // Back on MainActor for state updates.
+        lastError = errorMessage
+        if resumeWatch {
+            startWatching(url: url)
         }
     }
 
@@ -257,7 +277,7 @@ final class VocabularyStore {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
             eventMask: [.write, .delete, .rename, .extend],
-            queue: ioQueue
+            queue: watcherQueue
         )
         source.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
@@ -275,20 +295,18 @@ final class VocabularyStore {
         watchedFD = -1
     }
 
-    private var pendingReloadWork: DispatchWorkItem?
+    private var pendingReloadTask: Task<Void, Never>?
 
     private func handleExternalChange() {
-        pendingReloadWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.loadFromDisk()
-                self?.pendingReloadWork = nil
-            }
-        }
-        pendingReloadWork = work
+        pendingReloadTask?.cancel()
         // 250ms debounce smooths out fsevent storms from sync providers
         // without making external hand-edits feel laggy.
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250), execute: work)
+        pendingReloadTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return }
+            self?.loadFromDisk()
+            self?.pendingReloadTask = nil
+        }
     }
 
     // MARK: - On-disk envelope
