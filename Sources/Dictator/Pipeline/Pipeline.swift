@@ -118,6 +118,38 @@ final class Pipeline {
         }
     }
 
+    /// Compute a per-recording transcribe budget: 60-second floor plus
+    /// 3× the audio duration, capped at five minutes. Generous enough
+    /// for slow models on long clips, short enough that a real hang
+    /// doesn't keep the HUD spinner up all afternoon.
+    private static func transcribeBudgetSeconds(audioSamples: Int) -> Double {
+        let audioSeconds = Double(audioSamples) / 16_000
+        return min(300, max(60, audioSeconds * 3))
+    }
+
+    /// Watchdog that flips the pipeline from `.transcribing` to
+    /// `.failed` if the engine doesn't return within `budget` seconds.
+    /// Cancellation upstream is cooperative — WhisperKit / FluidAudio
+    /// may not check it — so we treat the engine call as fire-and-
+    /// forget on timeout: cancel the in-flight pipeline task so its
+    /// post-transcribe code bails on `Task.isCancelled`, surface a
+    /// clear error to the user via the HUD, and let the orphaned
+    /// transcribe drain in the background. The guard on `state` is
+    /// what stops the watchdog from clobbering a subsequent dictation
+    /// — if the user has already moved past the transcribing phase,
+    /// the timeout is moot.
+    private func startTranscribeWatchdog(budget: Double) -> Task<Void, Never> {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(budget))
+            guard let self, !Task.isCancelled else { return }
+            guard case .transcribing = self.state else { return }
+            self.inFlightTask?.cancel()
+            self.inFlightAssistant = nil
+            self.nextAssistantIsContinuation = false
+            self.fail("Transcription took longer than \(Int(budget))s and was aborted. Try again, and if it keeps happening switch transcription engine or model in Settings.")
+        }
+    }
+
     /// Resolves the currently-selected LLM engine. Thin wrapper around
     /// `settings.activeLLMEngine()` — kept private to Pipeline because the
     /// dispatch needs to happen on the *current* settings snapshot, not whatever
@@ -315,6 +347,10 @@ final class Pipeline {
             // — likely a runtime-detected previous segment, or a much shorter
             // hint — without re-plumbing.
             let asr = activeASR
+            let watchdog = startTranscribeWatchdog(
+                budget: Self.transcribeBudgetSeconds(audioSamples: samples.count)
+            )
+            defer { watchdog.cancel() }
             raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             if Task.isCancelled { return }
@@ -950,6 +986,10 @@ final class Pipeline {
         let instructionRaw: String
         do {
             let asr = activeASR
+            let watchdog = startTranscribeWatchdog(
+                budget: Self.transcribeBudgetSeconds(audioSamples: samples.count)
+            )
+            defer { watchdog.cancel() }
             instructionRaw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             if Task.isCancelled { return }
