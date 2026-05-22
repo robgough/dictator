@@ -116,12 +116,39 @@ final class AudioRecorder {
         startInFlight = true
         startGeneration &+= 1
         let device = Self.resolveCaptureDevice()
+        // Pick a timeout (and retry policy) based on device type. Bluetooth
+        // legitimately takes 3–5 s for HFP negotiation on the first open,
+        // so it gets the generous budget. Wired devices (USB, built-in)
+        // should be sub-second; a multi-second wait there usually means
+        // CoreAudio is wedged on a transient glitch — those clear cleanly
+        // on a same-device retry, which is much more user-visible than
+        // falling straight back to the system default.
+        let isBT = Self.isBluetoothDevice(device)
+        let timeout: Double = isBT ? 6 : Self.wiredWarmupTimeoutSeconds
+        let sameDeviceRetries = isBT ? 0 : 1
         startSessionAsync(
             device: device,
             allowDefaultFallback: true,
+            sameDeviceRetriesRemaining: sameDeviceRetries,
             generation: startGeneration,
-            timeoutSeconds: 10
+            timeoutSeconds: timeout
         )
+    }
+
+    /// Timeout budget for wired devices (USB, built-in). Short because a
+    /// healthy `startRunning()` on those returns in well under a second;
+    /// the sub-3-second window catches genuine hangs while still allowing
+    /// some headroom for first-touch CoreAudio bring-up.
+    private static let wiredWarmupTimeoutSeconds: Double = 2.5
+
+    /// True when the AVCaptureDevice's underlying CoreAudio device reports
+    /// a Bluetooth transport. We bridge via the device UID since
+    /// AVCaptureDevice itself doesn't expose transport type for audio.
+    private static func isBluetoothDevice(_ device: AVCaptureDevice?) -> Bool {
+        guard let device,
+              let coreAudioID = AudioDeviceEnumerator.deviceID(forUID: device.uniqueID)
+        else { return false }
+        return AudioDeviceEnumerator.isBluetooth(deviceID: coreAudioID)
     }
 
     /// Abort an in-flight startup. The async setup task still runs to
@@ -161,6 +188,7 @@ final class AudioRecorder {
     private func startSessionAsync(
         device: AVCaptureDevice?,
         allowDefaultFallback: Bool,
+        sameDeviceRetriesRemaining: Int,
         generation: Int,
         timeoutSeconds: Double
     ) {
@@ -260,7 +288,9 @@ final class AudioRecorder {
         // inside startRunning — USB device claimed exclusively by another
         // app, device in power-state limbo, coreaudiod stuck after a
         // recent input swap. After `timeoutSeconds` of no progress treat
-        // the in-flight attempt as failed.
+        // the in-flight attempt as a timeout — different path from a
+        // hard failure (config error, no device) because timeouts on
+        // wired devices typically clear on a same-device retry.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(timeoutSeconds))
             guard let self else { return }
@@ -272,10 +302,13 @@ final class AudioRecorder {
                     NSLocalizedDescriptionKey: "\(device.localizedName) didn't respond. Another app may be using it — try a different input in Settings."
                 ]
             )
-            self.handleStartFailure(
+            self.handleStartTimeout(
                 error: err,
+                device: device,
+                sameDeviceRetriesRemaining: sameDeviceRetriesRemaining,
                 allowDefaultFallback: allowDefaultFallback,
-                generation: generation
+                generation: generation,
+                timeoutSeconds: timeoutSeconds
             )
         }
     }
@@ -302,6 +335,10 @@ final class AudioRecorder {
         onReady?()
     }
 
+    /// Called on hard configuration errors (no device, can't add input /
+    /// output to the session). Skips the same-device retry path because
+    /// these errors are repeatable — retrying the same device just hits
+    /// the same wall.
     private func handleStartFailure(
         error: Error,
         allowDefaultFallback: Bool,
@@ -310,17 +347,57 @@ final class AudioRecorder {
         guard generation == startGeneration else { return }
         if allowDefaultFallback {
             // Bump the generation so any still-pending detached task
-            // becomes stale on completion (matters when the warmup
-            // watchdog routed us here — the original startRunning() may
-            // still be blocked deep in CoreAudio). Then retry against the
-            // system default with a tighter watchdog; if that hangs too,
-            // there's nothing we can do but tell the user.
+            // becomes stale on completion. Retry against the system
+            // default with a short watchdog; if that fails too, surface
+            // the error.
             startGeneration &+= 1
             startSessionAsync(
                 device: AVCaptureDevice.default(for: .audio),
                 allowDefaultFallback: false,
+                sameDeviceRetriesRemaining: 0,
                 generation: startGeneration,
-                timeoutSeconds: 4
+                timeoutSeconds: 3
+            )
+        } else {
+            startInFlight = false
+            onStartFailed?(error)
+        }
+    }
+
+    /// Called when the warmup watchdog fires. Distinct from
+    /// `handleStartFailure` because a wedged `startRunning()` on a wired
+    /// device — the common case the user actually sees — almost always
+    /// clears on a same-device retry; that's much closer to what the
+    /// user wanted (their picked input) than the silent fallback to the
+    /// system default that the old code did. We bump the generation
+    /// before the retry so the original hung detached task's eventual
+    /// completion gets discarded by `adoptSession`'s generation guard.
+    private func handleStartTimeout(
+        error: Error,
+        device: AVCaptureDevice,
+        sameDeviceRetriesRemaining: Int,
+        allowDefaultFallback: Bool,
+        generation: Int,
+        timeoutSeconds: Double
+    ) {
+        guard generation == startGeneration else { return }
+        if sameDeviceRetriesRemaining > 0 {
+            startGeneration &+= 1
+            startSessionAsync(
+                device: device,
+                allowDefaultFallback: allowDefaultFallback,
+                sameDeviceRetriesRemaining: sameDeviceRetriesRemaining - 1,
+                generation: startGeneration,
+                timeoutSeconds: timeoutSeconds
+            )
+        } else if allowDefaultFallback {
+            startGeneration &+= 1
+            startSessionAsync(
+                device: AVCaptureDevice.default(for: .audio),
+                allowDefaultFallback: false,
+                sameDeviceRetriesRemaining: 0,
+                generation: startGeneration,
+                timeoutSeconds: 3
             )
         } else {
             startInFlight = false

@@ -24,6 +24,7 @@ entries as plain bullet lines.
 - The HUD now reliably appears on whichever virtual desktop (Space) you're currently on. Previously it sometimes stayed pinned to the desktop where Dictator was first launched, leaving you staring at no HUD when you triggered dictation from a different Space.
 - A wedged transcription no longer leaves the HUD spinning forever. If the engine doesn't return within a sensible budget (1–5 minutes scaled to the clip length), Dictator surfaces an error in the HUD and returns to idle so you can retry — previously the only way out was Escape (if you knew about it) or quitting the app.
 - The HUD now shows a "Press Esc to cancel" hint while recording and during every later stage (transcribing through structuring), so it's clear how to bail out of a recording or a long-running LLM pass.
+- Wired microphones (USB, built-in) that wedge during startup now recover much faster. CoreAudio occasionally hangs `startRunning()` for several seconds on USB devices — Dictator now gives wired mics 2.5 seconds, then silently retries the same device once, before falling back to the system default. Bluetooth keeps its longer 6-second budget since HFP negotiation legitimately takes that long. Net result: a wedged wired mic recovers in ~5 seconds instead of the previous 14, and the retry usually lands on a clean second attempt.
 - "etcetera" (or "et cetera") now becomes the conventional "etc." abbreviation.
 
 ## v2026.5.9 — 2026-05-21
