@@ -157,6 +157,34 @@
                 type="application/octet-stream"
                 sparkle:edSignature="jBQZRxyEaTNlciZ2gPG7I+/QAb5GB/cl9oepUNtBbTOmLsqyreIa+G07UsSi9d9gSNC1CVwHdRvLVRztZnWwCg==" />
         </item>
+        <item>
+            <title>Version 2026.5.10</title>
+            <pubDate>Fri, 22 May 2026 00:45:11 +0000</pubDate>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>2026.5.10</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Spoken clock times now turn into digits when a marker word follows: &quot;ten AM&quot; → &quot;10 AM&quot;, &quot;ten o&#x27;clock&quot; → &quot;10 o&#x27;clock&quot;, &quot;ten thirty PM&quot; → &quot;10:30 PM&quot;, &quot;two fifteen am&quot; → &quot;2:15 am&quot;. Bare &quot;ten thirty&quot; with no marker stays as words, so quantities like &quot;ten thirty-dollar items&quot; aren&#x27;t mangled.</li>
+  <li>AM/PM markers in transcribed times now always come out as lowercase &quot;am&quot; / &quot;pm&quot; with no space and no dots, regardless of how Whisper rendered the marker on the utterance: &quot;10 AM&quot; / &quot;10 A.M.&quot; / &quot;10 p.m.&quot; all become &quot;10am&quot; / &quot;10am&quot; / &quot;10pm&quot;. &quot;o&#x27;clock&quot; lowercases but keeps its leading space (&quot;10 o&#x27;clock&quot;) because it&#x27;s a word, not an abbreviation.</li>
+  <li>Military times now digitise too when the speaker says &quot;hours&quot;: &quot;sixteen hundred hours&quot; → &quot;1600 hours&quot;, &quot;ten hundred hours&quot; → &quot;1000 hours&quot;, &quot;oh eight hundred hours&quot; → &quot;0800 hours&quot;, &quot;fourteen forty-five hours&quot; → &quot;1445 hours&quot;. Plain hours 1–9 without the &quot;oh&quot; prefix are left alone so quantities like &quot;five hundred hours of work&quot; stay as quantities.</li>
+  <li>Spoken currency amounts now pick up the right symbol: &quot;five dollars&quot; → &quot;$5&quot;, &quot;twenty euros&quot; → &quot;€20&quot;, &quot;sixteen hundred pounds&quot; → &quot;£1600&quot;, &quot;five thousand yen&quot; → &quot;¥5000&quot;. Works on word-form numbers and existing digit numbers alike.</li>
+  <li>Teen-hundreds in speech now turn into digits like the smaller forms already did: &quot;sixteen hundred&quot; → &quot;1600&quot;, &quot;nineteen hundred and four&quot; → &quot;1904&quot;. Previously only &quot;one&quot; through &quot;nine hundred&quot; were digitised.</li>
+  <li>&quot;M dash&quot; and &quot;N dash&quot; now turn into em-dash (—) and en-dash (–) like &quot;em dash&quot; / &quot;en dash&quot; already did. Whisper sometimes transcribes the spoken cue as the letter name instead of the word, which used to leave a stray &quot;M&quot; or &quot;N&quot; sitting in front of the dash.</li>
+  <li>Spoken cues are now five independent toggles per mode — punctuation, numbers, times, currency, and emojis — instead of a single &quot;spoken cues&quot; switch. Mix and match in Settings → Modes. Existing settings carry over: if you&#x27;d turned spoken cues off in a mode, all five families stay off; otherwise they all start on.</li>
+  <li>Quick mode now exposes the pre-processing toggles too. The mode itself is still locked (no LLM passes — that&#x27;s the point), but you can pick which cue families run in it.</li>
+  <li>The HUD now reliably appears on whichever virtual desktop (Space) you&#x27;re currently on. Previously it sometimes stayed pinned to the desktop where Dictator was first launched, leaving you staring at no HUD when you triggered dictation from a different Space.</li>
+  <li>A wedged transcription no longer leaves the HUD spinning forever. If the engine doesn&#x27;t return within a sensible budget (1–5 minutes scaled to the clip length), Dictator surfaces an error in the HUD and returns to idle so you can retry — previously the only way out was Escape (if you knew about it) or quitting the app.</li>
+  <li>The HUD now shows a &quot;Press Esc to cancel&quot; hint while recording and during every later stage (transcribing through structuring), so it&#x27;s clear how to bail out of a recording or a long-running LLM pass.</li>
+  <li>Wired microphones (USB, built-in) that wedge during startup now recover much faster. CoreAudio occasionally hangs `startRunning()` for several seconds on USB devices — Dictator now gives wired mics 2.5 seconds, then silently retries the same device once, before falling back to the system default. Bluetooth keeps its longer 6-second budget since HFP negotiation legitimately takes that long. Net result: a wedged wired mic recovers in ~5 seconds instead of the previous 14, and the retry usually lands on a clean second attempt.</li>
+  <li>&quot;etcetera&quot; (or &quot;et cetera&quot;) now becomes the conventional &quot;etc.&quot; abbreviation.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.10/Dictator.dmg"
+                length="20947417"
+                type="application/octet-stream"
+                sparkle:edSignature="Y2IZ6sP+SaD1DvZTMYQF/gjJIOUnGIm5SsxOT76voW3qOjxrjYFM70eIbLe+nYT5txHSrkRi26a/bAY6gzgcCQ==" />
+        </item>
+    
     
     
     

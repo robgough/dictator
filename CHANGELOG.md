@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.5.10 — 2026-05-22
+
 - Spoken clock times now turn into digits when a marker word follows: "ten AM" → "10 AM", "ten o'clock" → "10 o'clock", "ten thirty PM" → "10:30 PM", "two fifteen am" → "2:15 am". Bare "ten thirty" with no marker stays as words, so quantities like "ten thirty-dollar items" aren't mangled.
 - AM/PM markers in transcribed times now always come out as lowercase "am" / "pm" with no space and no dots, regardless of how Whisper rendered the marker on the utterance: "10 AM" / "10 A.M." / "10 p.m." all become "10am" / "10am" / "10pm". "o'clock" lowercases but keeps its leading space ("10 o'clock") because it's a word, not an abbreviation.
 - Military times now digitise too when the speaker says "hours": "sixteen hundred hours" → "1600 hours", "ten hundred hours" → "1000 hours", "oh eight hundred hours" → "0800 hours", "fourteen forty-five hours" → "1445 hours". Plain hours 1–9 without the "oh" prefix are left alone so quantities like "five hundred hours of work" stay as quantities.
