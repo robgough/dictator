@@ -195,37 +195,6 @@
             font-weight: 600;
             letter-spacing: -0.005em;
         }
-        .badge-preview {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            padding: 5px 12px 5px 13px;
-            border-radius: 999px;
-            background: #fde047;
-            color: #713f12;
-            border: 1px solid #facc15;
-        }
-        .badge-preview::before {
-            content: "";
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: #92400e;
-            display: inline-block;
-            animation: badge-pulse 2.2s ease-in-out infinite;
-        }
-        @keyframes badge-pulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(146, 64, 14, 0.45); }
-            50%      { box-shadow: 0 0 0 5px rgba(146, 64, 14, 0); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-            .badge-preview::before { animation: none; }
-        }
         .preview-note {
             margin: 24px 0 0;
             padding: 14px 16px;
@@ -571,81 +540,217 @@
             }
             .author-avatar { width: 96px; height: 96px; }
         }
-        .stages {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            display: grid;
-            gap: 12px;
-            counter-reset: stage;
-        }
-        .stages li {
-            position: relative;
-            padding: 20px 22px 20px 80px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            counter-increment: stage;
-        }
-        .stages li {
-            /* Each stage sets its own --stage-color via inline style — the
-               number badge tints to match the colour the running app uses
-               for that pipeline state in the HUD. Falls back to the page
-               accent so removing the inline style still looks fine. */
-            --stage-color: var(--accent);
-        }
-        .stages li::before {
-            content: counter(stage);
-            position: absolute;
-            left: 22px;
-            top: 20px;
-            width: 40px;
-            height: 40px;
-            background: color-mix(in oklab, var(--stage-color) 16%, transparent);
-            color: var(--stage-color);
-            border-radius: 50%;
-            display: grid;
-            place-items: center;
-            font-family: "SF Pro Rounded", system-ui, sans-serif;
-            font-weight: 700;
-            font-size: 17px;
-        }
-        .stages h3 {
-            font-size: 16px;
-            margin: 0 0 4px;
-            font-weight: 600;
-            display: flex;
-            align-items: baseline;
-            gap: 10px;
-        }
-        .stages h3 .optional {
-            color: var(--fg-faint);
-            font-weight: 500;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-        }
-        .stages p {
-            margin: 0;
-            color: var(--fg-dim);
-            font-size: 14.5px;
-        }
-        .stages .guard {
-            display: inline-block;
-            margin-top: 8px;
-            color: var(--fg-faint);
-            font-size: 13px;
-        }
-        .stages .guard strong {
-            color: var(--fg-dim);
-            font-weight: 600;
-        }
         .pipeline-footnote {
             margin: 24px 0 0;
             color: var(--fg-faint);
             font-size: 14px;
             line-height: 1.55;
         }
+        /* ============================================================
+           Alternative compact pipeline diagram. Sits below the detailed
+           waterfall so the two designs can be compared. Each stage is a
+           compact tile; clicking a tile loads its description into the
+           single detail panel below. JS handles the active state and
+           detail-panel content swap.
+           ============================================================ */
+        .pipe-flow {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin: 0 0 24px;
+        }
+        @media (max-width: 720px) {
+            .pipe-flow { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 460px) {
+            .pipe-flow { grid-template-columns: repeat(2, 1fr); }
+        }
+        .pipe-tile {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 18px 10px 14px;
+            background: var(--card);
+            border: 1.5px solid var(--border);
+            border-radius: 14px;
+            cursor: pointer;
+            font-family: inherit;
+            color: var(--fg);
+            text-align: center;
+            transition: transform 0.14s ease, border-color 0.14s ease,
+                        background 0.14s ease, box-shadow 0.14s ease;
+            --stage-color: var(--accent);
+        }
+        .pipe-tile:hover {
+            transform: translateY(-2px);
+            border-color: color-mix(in oklab, var(--stage-color) 45%, var(--border));
+        }
+        .pipe-tile:focus-visible {
+            outline: 2px solid var(--stage-color);
+            outline-offset: 3px;
+        }
+        .pipe-tile.active {
+            border-color: var(--stage-color);
+            background: color-mix(in oklab, var(--stage-color) 7%, var(--card));
+            box-shadow: 0 6px 18px -10px color-mix(in oklab, var(--stage-color) 70%, transparent);
+        }
+        /* Stage-index badge in the top-left corner — communicates the
+           pipeline order at a glance even when tiles wrap onto multiple
+           grid rows. */
+        .pipe-tile::before {
+            content: attr(data-step);
+            position: absolute;
+            top: 8px;
+            left: 10px;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--fg-faint);
+            letter-spacing: 0.04em;
+        }
+        .pipe-icon-lg {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            background: color-mix(in oklab, var(--stage-color) 16%, transparent);
+            color: var(--stage-color);
+            box-shadow: 0 0 0 1px color-mix(in oklab, var(--stage-color) 18%, transparent);
+        }
+        .pipe-icon-lg svg { width: 22px; height: 22px; }
+        .pipe-name {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--fg);
+        }
+        .pipe-meta {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 4px;
+        }
+        .tile-pill {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 2px 7px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+        .tile-pill.stt   { background: color-mix(in oklab, #007AFF 14%, transparent); color: #007AFF; }
+        .tile-pill.det   { background: color-mix(in oklab, #34C759 14%, transparent); color: #34C759; }
+        .tile-pill.llm   { background: color-mix(in oklab, #AF52DE 14%, transparent); color: #AF52DE; }
+        .tile-pill.opt   { background: color-mix(in oklab, var(--fg-faint) 14%, transparent); color: var(--fg-faint); }
+        /* Detail panel — single slot that swaps content based on the
+           clicked tile. No coloured-stripe-on-the-side chrome (too
+           dashboard-y); the cloned stage icon in the head carries the
+           identity, plus a faint stage-tinted drop shadow for depth that
+           matches the active tile treatment. */
+        .pipe-detail {
+            position: relative;
+            padding: 22px 24px 24px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            --stage-color: var(--accent);
+            box-shadow: 0 12px 30px -22px color-mix(in oklab, var(--stage-color) 65%, transparent);
+            transition: box-shadow 0.2s ease;
+        }
+        .pipe-detail-head {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin: 0 0 14px;
+        }
+        /* Icon cloned from the active tile into the panel head — same
+           component, sized down a touch so it sits beside the title
+           rather than dominating it. */
+        .pipe-detail-head .pipe-icon-lg {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+        }
+        .pipe-detail-head .pipe-icon-lg svg {
+            width: 19px;
+            height: 19px;
+        }
+        .pipe-detail-title {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 19px;
+            font-weight: 600;
+            color: var(--fg);
+            margin: 0;
+        }
+        .pipe-detail-desc {
+            margin: 0;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+            line-height: 1.55;
+        }
+        .pipe-detail-guard {
+            display: block;
+            margin-top: 14px;
+            color: var(--fg-faint);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .pipe-detail-guard strong {
+            color: var(--fg-dim);
+            font-weight: 600;
+        }
+        /* Spoken-cue category breakdown — used inside the Substitute stage's
+           detail description. Two-column grid: label | examples. Picks up
+           the active stage colour from the detail panel's --stage-color. */
+        .cue-list {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 10px 20px;
+            margin: 16px 0 4px;
+            padding: 16px 18px 15px;
+            background: color-mix(in oklab, var(--stage-color) 5%, var(--bg));
+            border: 1px solid color-mix(in oklab, var(--stage-color) 20%, var(--border));
+            border-radius: 10px;
+            align-items: baseline;
+        }
+        .cue-list dt {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: color-mix(in oklab, var(--stage-color) 85%, var(--fg));
+            margin: 0;
+        }
+        .cue-list dd {
+            margin: 0;
+            font-size: 13.5px;
+            color: var(--fg-dim);
+            line-height: 1.55;
+        }
+        @media (max-width: 460px) {
+            .cue-list {
+                grid-template-columns: 1fr;
+                gap: 2px;
+            }
+            .cue-list dt {
+                margin-top: 8px;
+            }
+            .cue-list dt:first-of-type {
+                margin-top: 0;
+            }
+        }
+        /* Followup paragraph after the cue-list — slightly tighter top
+           margin than a standalone <p> would have, so the visual rhythm
+           between the list and the closing prose is right. */
+        .pipe-detail-desc + .cue-list { margin-top: 14px; }
+        .cue-list + .pipe-detail-desc { margin-top: 12px; }
         .features {
             display: grid;
             gap: 14px;
@@ -674,6 +779,107 @@
             font-size: 14px;
         }
         .reqs strong { color: var(--fg); font-weight: 600; }
+        /* Hero feature chips — quick-scan summary for skimmers between the
+           release-row and the demo. Subtle pill row with an accent dot for
+           visual rhythm; intentionally lighter weight than the download CTA
+           so it doesn't compete for the click. */
+        .feature-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 22px 0 0;
+            padding: 0;
+            list-style: none;
+            max-width: 620px;
+        }
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            color: var(--fg-dim);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 6px 12px 6px 11px;
+            line-height: 1.2;
+        }
+        .chip::before {
+            content: "";
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
+            flex-shrink: 0;
+        }
+        /* FAQ — collapsible <details> blocks styled to match the rest of
+           the card-based sections. Native disclosure triangle is hidden;
+           a plus/minus marker on ::after gives a clearer affordance. */
+        .faq details {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 20px;
+            margin-bottom: 10px;
+        }
+        .faq details summary {
+            font-weight: 600;
+            cursor: pointer;
+            list-style: none;
+            padding-right: 28px;
+            position: relative;
+            color: var(--fg);
+            font-size: 15px;
+        }
+        .faq details summary::-webkit-details-marker { display: none; }
+        .faq details summary::after {
+            content: "+";
+            position: absolute;
+            right: 0;
+            top: -2px;
+            font-size: 20px;
+            font-weight: 400;
+            color: var(--fg-faint);
+            line-height: 1;
+        }
+        .faq details[open] summary::after { content: "−"; }
+        .faq details p {
+            margin: 10px 0 0;
+            color: var(--fg-dim);
+            font-size: 14.5px;
+            line-height: 1.55;
+        }
+        .faq details p code {
+            background: color-mix(in oklab, var(--fg) 6%, transparent);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 12.5px;
+        }
+        /* Final CTA — centred card right before the footer, so a reader
+           who's scrolled the whole page doesn't have to bounce back to
+           the hero to download. */
+        .final-cta {
+            text-align: center;
+            margin-top: 64px;
+            padding: 36px 24px 38px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+        }
+        .final-cta h2 {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 26px;
+            font-weight: 600;
+            color: var(--fg);
+            text-transform: none;
+            letter-spacing: -0.01em;
+            margin: 0 0 8px;
+        }
+        .final-cta p {
+            color: var(--fg-dim);
+            margin: 0 0 22px;
+            font-size: 15px;
+        }
         footer {
             margin-top: 80px;
             padding-top: 24px;
@@ -704,6 +910,7 @@
         <li><a href="#models">Choose your models</a></li>
         <li><a href="#tradeoff">Local-first, honestly</a></li>
         <li><a href="#why">Why I built this</a></li>
+        <li><a href="#faq">FAQ</a></li>
         <li><a href="#requirements">Requirements</a></li>
     </ul>
 </nav>
@@ -712,7 +919,6 @@
         <div class="brand-row">
             <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
             <span class="logo">Dictator</span>
-            <span class="badge-preview">Early preview</span>
         </div>
         <h1>Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
         <p class="tagline">A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
@@ -724,8 +930,16 @@
             · <a href="https://github.com/robgough/dictator/releases">All releases</a>
         </p>
 
+        <ul class="feature-chips" aria-label="At a glance">
+            <li class="chip">Fully on-device</li>
+            <li class="chip">Custom modes, per app</li>
+            <li class="chip">Multi-turn assistant</li>
+            <li class="chip">Spoken cues + vocabulary</li>
+            <li class="chip">Free &amp; open source</li>
+        </ul>
+
         <p class="preview-note">
-            <strong>Early preview.</strong> Dictator is in active development — things will be rough, and some behaviour may change between versions. Feedback (bugs, papercuts, "this should do X") is genuinely welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
+            <strong>Active development.</strong> Things may still be rough in spots, and some behaviour will change between versions. Feedback (bugs, papercuts, "this should do X") is genuinely welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
         </p>
     </header>
 
@@ -765,33 +979,66 @@
     <section id="pipeline" class="pipeline">
         <h2>The pipeline</h2>
         <p class="lede">From audio to written text — and the cleanup that makes it readable — all on your Mac.</p>
-        <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts.</p>
+        <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts. Click any stage below to see what happens there.</p>
 
-        <ol class="stages">
-            <!-- Colours match the running app's HUD: blue/purple/pink/teal for
-                 transcribe/format/grammar/structure. See HUDView.swift. -->
-            <li style="--stage-color: #007AFF;">
-                <h3>Transcribe</h3>
-                <p>WhisperKit or Parakeet (FluidAudio on the Apple Neural Engine) turns your audio into a raw transcript. Both engines run locally; models download once and stay on disk. Pick the one that matches the trade-off you want between accuracy and latency.</p>
-            </li>
-            <li style="--stage-color: #AF52DE;">
-                <h3>Format</h3>
-                <p>An on-device LLM punctuates, capitalises, and tidies obvious grammar slips. Uses Apple's on-device foundation model when Apple Intelligence is enabled, or a bundled MLX checkpoint as an alternative. Spoken punctuation, line breaks, and named emojis are substituted deterministically before this pass, so they're reliable regardless of which model you pick. Skipped entirely for question-shaped input, where the transcript is already well-punctuated.</p>
-                <span class="guard"><strong>Guard:</strong> 60% of input anchor words must survive, and the word count can't grow by more than 15% + 3. Otherwise the raw transcript is used.</span>
-            </li>
-            <li style="--stage-color: #FF2D55;">
-                <h3>Grammar <span class="optional">optional</span></h3>
-                <p>Fixes contractions, subject-verb agreement, duplicate words — the small things you'd tidy by hand. Off by default; toggle from Settings.</p>
-                <span class="guard"><strong>Guard:</strong> word-level edit distance from the input. Reverts if drift exceeds your threshold (15% by default).</span>
-            </li>
-            <li style="--stage-color: #30B0C7;">
-                <h3>Structure <span class="optional">optional</span></h3>
-                <p>Paragraph breaks and bullet lists for longer dictations — useful when you're talking out an email or a memo, not a one-liner.</p>
-                <span class="guard"><strong>Guard:</strong> strict word-sequence equality after lowercasing. Reverts on any word change — bullets and breaks only, never rewording.</span>
-            </li>
-        </ol>
+        <div class="pipe-flow" role="tablist" aria-label="Pipeline stages">
+            <button class="pipe-tile active" type="button" role="tab" data-step="01" data-stage-index="0" aria-selected="true" aria-controls="pipe-detail" style="--stage-color: #007AFF;">
+                <div class="pipe-icon-lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+                </div>
+                <div class="pipe-name">Transcribe</div>
+                <div class="pipe-meta">
+                    <span class="tile-pill stt">STT</span>
+                </div>
+            </button>
+            <button class="pipe-tile" type="button" role="tab" data-step="02" data-stage-index="1" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #34C759;">
+                <div class="pipe-icon-lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                </div>
+                <div class="pipe-name">Substitute</div>
+                <div class="pipe-meta">
+                    <span class="tile-pill det">Det</span>
+                    <span class="tile-pill opt">Opt</span>
+                </div>
+            </button>
+            <button class="pipe-tile" type="button" role="tab" data-step="03" data-stage-index="2" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #AF52DE;">
+                <div class="pipe-icon-lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 5.4L19 9l-5.4 1.6L12 16l-1.6-5.4L5 9l5.4-1.6z"/><path d="M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7z" opacity="0.7"/></svg>
+                </div>
+                <div class="pipe-name">Format</div>
+                <div class="pipe-meta">
+                    <span class="tile-pill llm">LLM</span>
+                    <span class="tile-pill opt">Opt</span>
+                </div>
+            </button>
+            <button class="pipe-tile" type="button" role="tab" data-step="04" data-stage-index="3" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #FF2D55;">
+                <div class="pipe-icon-lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
+                </div>
+                <div class="pipe-name">Grammar</div>
+                <div class="pipe-meta">
+                    <span class="tile-pill llm">LLM</span>
+                    <span class="tile-pill opt">Opt</span>
+                </div>
+            </button>
+            <button class="pipe-tile" type="button" role="tab" data-step="05" data-stage-index="4" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #30B0C7;">
+                <div class="pipe-icon-lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
+                </div>
+                <div class="pipe-name">Structure</div>
+                <div class="pipe-meta">
+                    <span class="tile-pill llm">LLM</span>
+                    <span class="tile-pill opt">Opt</span>
+                </div>
+            </button>
+        </div>
 
-        <p class="pipeline-footnote">A deterministic vocabulary substitution step runs between Format and Grammar — case-insensitive whole-word replacements for names, jargon, and the words your accent always trips up. No model, just your list. The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
+        <div class="pipe-detail" id="pipe-detail" role="tabpanel" aria-live="polite">
+            <!-- Populated by JS on click. Initial render also handled by JS to keep the
+                 content source single. -->
+        </div>
+
+        <p class="pipeline-footnote">The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
     </section>
 
     <section id="modes">
@@ -857,7 +1104,7 @@
         </div>
 
         <h3>Language model — used for the cleanup passes and Assistant mode</h3>
-        <p>By default — when Apple Intelligence is enabled — Dictator routes its language-model passes through Apple's on-device foundation model. It's shared with Apple Intelligence (system-resident), so the in-process RAM cost is effectively zero and there's no per-app language-model download. The bundled MLX models below are an alternative if you'd rather pick a specific checkpoint, or aren't using Apple Intelligence; the RAM tiers and table on the rest of this section refer to them.</p>
+        <p>By default — when Apple Intelligence is enabled — Dictator routes its language-model passes through Apple's on-device foundation model. It's shared with Apple Intelligence (system-resident), so the in-process RAM cost is effectively zero and there's no per-app language-model download. The MLX models listed below are an alternative if you'd rather pick a specific model, or aren't using Apple Intelligence; the RAM tiers and table on the rest of this section refer to them.</p>
         <div class="callout warn">
             <strong>RAM matters if you pick MLX.</strong> Running an MLX language model
             alongside the transcription model eats a real chunk of memory. The first-run
@@ -918,10 +1165,10 @@
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>RAM.</strong> With Apple's foundation model handling the LLM passes, any Apple Intelligence–capable Mac is fine. With bundled MLX models, 16 GB minimum for the 1B option; 24 GB+ for the 3B; more for the larger checkpoints.</li>
+                    <li><strong>RAM.</strong> With Apple's foundation model handling the LLM passes, any Apple Intelligence–capable Mac is fine. With an MLX model instead, 16 GB minimum for the 1B option; 24 GB+ for the 3B; more for the larger ones.</li>
                     <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
                     <li><strong>Ceiling.</strong> Apple's foundation model and a 3B MLX model are not Claude. For dictation cleanup they're plenty; for genuinely hard text massaging the frontier still wins.</li>
-                    <li><strong>First run.</strong> The transcription model (~500 MB) downloads on first dictation. If you opt for a bundled MLX language model in place of Apple's, that's another 0.8–2 GB depending on size.</li>
+                    <li><strong>First run.</strong> The transcription model (~500 MB) downloads on first dictation. If you opt for an MLX language model in place of Apple's, that's another 0.8–2 GB depending on size.</li>
                     <li><strong>Heat.</strong> Sustained inference uses the GPU and Apple Neural Engine. Your Mac will get warm under repeated use.</li>
                 </ul>
             </div>
@@ -946,15 +1193,56 @@
         </div>
     </section>
 
+    <section id="faq" class="faq">
+        <h2>FAQ</h2>
+        <p class="lede">A few common questions before you commit a few hundred MB of disk.</p>
+
+        <details>
+            <summary>Does it work in my favourite app?</summary>
+            <p>Almost certainly. Dictator pastes via a synthetic ⌘V, so anywhere you can paste from the clipboard — Mail, Slack, Notion, Apple Notes, Google Docs in the browser, VS Code, Xcode, terminals — Dictator can drop text. The handful of apps that explicitly block paste won't accept it. If you haven't granted Accessibility permission, Dictator falls back to clipboard-only and tells you why in the HUD.</p>
+        </details>
+
+        <details>
+            <summary>What languages does it transcribe?</summary>
+            <p>English by default. Swap engines in Settings for multilingual: Whisper Large v3 Turbo covers around 100 languages, Parakeet TDT v3 covers 25 European languages on the Apple Neural Engine. The LLM cleanup passes are English-centric, so for other languages you'll usually want Quick mode (no LLM polish) — the raw transcript ships through with your spoken cues and vocabulary still applied.</p>
+        </details>
+
+        <details>
+            <summary>Can I integrate it with Raycast, Shortcuts, or a script?</summary>
+            <p>Partly. There are <code>dictator://settings</code> and <code>dictator://onboarding</code> URL schemes you can deep-link from anywhere that opens URLs — Raycast, Alfred, Shortcuts, a Bash script. The macOS Services menu also has a "Learn Word in Dictator…" entry, so right-click → Services on a selected word adds a custom-dictionary rule without leaving the app you're in. Triggering a recording itself is still hotkey-driven — there's no scripting API to start one today.</p>
+        </details>
+
+        <details>
+            <summary>What about my second Mac?</summary>
+            <p>Modes, prompts, hotkeys, vocabulary, recent dictations, and assistant threads live in <code>~/Documents/Dictator/</code>. If your Documents folder syncs through iCloud Drive, Dropbox, or anything similar, those settings follow you between Macs. Model picks and onboarding state stay per-Mac in Application Support — every machine has its own RAM budget, and you'd usually want different defaults on a 16 GB MacBook Air vs a 64 GB Studio.</p>
+        </details>
+
+        <details>
+            <summary>Will my Mac get hot?</summary>
+            <p>For a quick dictation, no — transcription is fast and each LLM pass takes a couple of seconds. Sustained use (long Assistant-mode conversations, back-to-back long dictations) uses the GPU and Apple Neural Engine meaningfully; your Mac warms up like it does during any heavy local inference. The Apple Foundation Model option offloads the LLM passes to a system-shared model, which keeps Dictator's own footprint smaller if heat or battery is your main concern.</p>
+        </details>
+
+        <details>
+            <summary>How accurate is the transcription?</summary>
+            <p>Whisper Small (the default) is solid for short utterances and conversational speech in clean audio. Step up to Whisper Large v3 Turbo for the best accuracy and multilingual support; switch to Parakeet TDT v3 or v2 if you want ANE-accelerated transcription that runs 60–70× realtime with comparable accuracy. The "Choose your models" section above has concrete sizes and RAM numbers for each option.</p>
+        </details>
+    </section>
+
     <section id="requirements">
         <h2>Requirements</h2>
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
             <span><strong>macOS 26</strong> or newer</span>
-            <span><strong>Apple Intelligence</strong> enabled — or 16 GB+ RAM to run a bundled MLX language model instead</span>
+            <span><strong>Apple Intelligence</strong> enabled — or 16 GB+ RAM to run an MLX language model instead</span>
             <span><strong>~500 MB</strong> of disk for the transcription model</span>
         </p>
-        <p class="table-footnote">With Apple Intelligence enabled, Dictator routes its language-model passes through Apple's on-device foundation model — system-resident, shared across every app that uses the framework, so the in-process RAM cost is effectively zero. The bundled MLX models are available in Settings if you'd rather not use Apple Intelligence: the 1B option fits a 16 GB Mac comfortably, the 3B option wants 24 GB+, and there's a "Fits / Tight / Too large" chip per row so the cost is visible before you switch.</p>
+        <p class="table-footnote">With Apple Intelligence enabled, Dictator routes its language-model passes through Apple's on-device foundation model — system-resident, shared across every app that uses the framework, so the in-process RAM cost is effectively zero. The MLX models are available in Settings if you'd rather not use Apple Intelligence: the 1B option fits a 16 GB Mac comfortably, the 3B option wants 24 GB+, and there's a "Fits / Tight / Too large" chip per row so the cost is visible before you switch.</p>
+    </section>
+
+    <section class="final-cta" aria-label="Download">
+        <h2>Try it</h2>
+        <p>Free, open source, runs locally on Apple Silicon. macOS 26+.</p>
+        <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
     </section>
 
     <footer>
@@ -971,6 +1259,126 @@
     // means a section is only "active" once its top crosses ~25% down the
     // viewport, which feels right when reading — you're past the heading, into
     // the body of that section.
+    // Compact pipeline diagram — click a tile to render its details into
+    // the single detail panel below. Stage content lives in JS so the source
+    // of truth is one place; tile DOM only holds the visual chrome.
+    (function () {
+        // Stage descriptions are trusted HTML (we author them, not user input),
+        // so render injects them raw. Lets Substitute use a <dl> category
+        // breakdown without having to mark up via JS string concatenation.
+        var stages = [
+            {
+                title: 'Transcribe',
+                color: '#007AFF',
+                kindLabel: 'Speech-to-text',
+                kindClass: 'stt',
+                optional: false,
+                desc: '<p class="pipe-detail-desc">WhisperKit or Parakeet (FluidAudio on the Apple Neural Engine) turns your audio into a raw transcript. Both engines run locally; models download once and stay on disk. Pick the one that matches the trade-off you want between accuracy and latency.</p>',
+                guard: null
+            },
+            {
+                title: 'Substitute',
+                color: '#34C759',
+                kindLabel: 'Deterministic',
+                kindClass: 'det',
+                optional: true,
+                desc:
+                    '<p class="pipe-detail-desc">Spoken cues become symbols, deterministically — no model involved. Five independent toggles per mode let you mix and match exactly what gets substituted; turn all five off and the raw transcript flows through unchanged.</p>' +
+                    '<dl class="cue-list">' +
+                        '<dt>Punctuation</dt>' +
+                        '<dd>"comma" → ",", "new paragraph" → ↵, "question mark" → "?", "em dash" → "—"</dd>' +
+                        '<dt>Numbers</dt>' +
+                        '<dd>"twenty thousand and sixty two" → "20062", "five plus three" → "5 + 3"</dd>' +
+                        '<dt>Times</dt>' +
+                        '<dd>"ten AM" → "10am", "fourteen forty-five hours" → "1445 hours"</dd>' +
+                        '<dt>Currency</dt>' +
+                        '<dd>"five dollars" → "$5", "twenty euros" → "€20", "sixteen hundred pounds" → "£1600"</dd>' +
+                        '<dt>Emojis</dt>' +
+                        '<dd>"fire emoji" → 🔥, "thumbs up emoji" → 👍 — every standard emoji by name (~3,700)</dd>' +
+                    '</dl>' +
+                    '<p class="pipe-detail-desc">Your custom dictionary plugs in here too — case-insensitive whole-word replacements for names, jargon, and the words your accent always trips up. Runs in Quick mode too, so even with every LLM pass off, what you say is what you get.</p>',
+                guard: null
+            },
+            {
+                title: 'Format',
+                color: '#AF52DE',
+                kindLabel: 'Language model',
+                kindClass: 'llm',
+                optional: true,
+                desc: '<p class="pipe-detail-desc">An on-device LLM punctuates, capitalises, and tidies obvious grammar slips. Uses Apple\'s on-device foundation model when Apple Intelligence is enabled, or one of the supported MLX models as an alternative. Skipped entirely for question-shaped input.</p>',
+                guard: '60% of input anchor words must survive, and the word count can\'t grow by more than 15% + 3. Otherwise the substituted transcript is passed through unchanged.'
+            },
+            {
+                title: 'Grammar',
+                color: '#FF2D55',
+                kindLabel: 'Language model',
+                kindClass: 'llm',
+                optional: true,
+                desc: '<p class="pipe-detail-desc">Fixes contractions, subject-verb agreement, duplicate words — the small things you\'d tidy by hand. Off by default; toggle from Settings.</p>',
+                guard: 'Word-level edit distance from the input. Reverts if drift exceeds your threshold (15% by default).'
+            },
+            {
+                title: 'Structure',
+                color: '#30B0C7',
+                kindLabel: 'Language model',
+                kindClass: 'llm',
+                optional: true,
+                desc: '<p class="pipe-detail-desc">Paragraph breaks and bullet lists for longer dictations — useful when you\'re talking out an email or a memo, not a one-liner.</p>',
+                guard: 'Strict word-sequence equality after lowercasing. Reverts on any word change — bullets and breaks only, never rewording.'
+            }
+        ];
+        var tiles = document.querySelectorAll('.pipe-tile');
+        var detail = document.getElementById('pipe-detail');
+        if (!tiles.length || !detail) return;
+
+        function escapeHTML(s) {
+            return s
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function render(index) {
+            var s = stages[index];
+            var tile = tiles[index];
+            // Clone the tile's icon so we don't keep a second copy of the
+            // SVG markup in JS. The detail panel's --stage-color cascades
+            // down to the cloned .pipe-icon-lg, so colours stay consistent.
+            var iconEl = tile && tile.querySelector('.pipe-icon-lg');
+            var iconHTML = iconEl ? iconEl.outerHTML : '';
+            detail.style.setProperty('--stage-color', s.color);
+            var optionalHTML = s.optional
+                ? '<span class="tile-pill opt">Optional</span>'
+                : '';
+            var guardHTML = s.guard
+                ? '<div class="pipe-detail-guard"><strong>Guard:</strong> ' + escapeHTML(s.guard) + '</div>'
+                : '';
+            detail.innerHTML =
+                '<div class="pipe-detail-head">' +
+                    iconHTML +
+                    '<h3 class="pipe-detail-title">' + escapeHTML(s.title) + '</h3>' +
+                    '<span class="tile-pill ' + s.kindClass + '">' + escapeHTML(s.kindLabel) + '</span>' +
+                    optionalHTML +
+                '</div>' +
+                s.desc +
+                guardHTML;
+        }
+
+        tiles.forEach(function (tile, i) {
+            tile.addEventListener('click', function () {
+                tiles.forEach(function (t) {
+                    t.classList.remove('active');
+                    t.setAttribute('aria-selected', 'false');
+                });
+                tile.classList.add('active');
+                tile.setAttribute('aria-selected', 'true');
+                render(i);
+            });
+        });
+
+        render(0);
+    })();
+
     (function () {
         var sections = document.querySelectorAll('section[id]');
         var links = document.querySelectorAll('.toc a');
