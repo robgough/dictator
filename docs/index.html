@@ -284,6 +284,62 @@
             width: 100%;
             height: auto;
         }
+        /* "Watch the walkthrough" link under the demo. Plain anchor with
+           an inline SVG play glyph — no YouTube thumbnail or iframe, so
+           the page doesn't reach out to youtube.com until someone actually
+           clicks. Matches the site's "no third-party tracking" framing. */
+        .walkthrough-wrap {
+            margin: 14px 0 0;
+            text-align: center;
+        }
+        .walkthrough-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 11px;
+            padding: 8px 16px 8px 9px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--fg);
+            text-decoration: none;
+            font-size: 14px;
+            line-height: 1.2;
+            transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+        }
+        .walkthrough-link:hover {
+            transform: translateY(-1px);
+            border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+            background: color-mix(in oklab, var(--accent) 4%, var(--card));
+        }
+        .walkthrough-link .play-icon {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: color-mix(in oklab, var(--accent) 16%, transparent);
+            color: var(--accent);
+            display: grid;
+            place-items: center;
+            flex-shrink: 0;
+        }
+        .walkthrough-link .play-icon svg {
+            width: 11px;
+            height: 11px;
+            /* Slight optical nudge — the triangle's visual centre is
+               right of its geometric centre. */
+            margin-left: 1px;
+        }
+        .walkthrough-link .walkthrough-meta {
+            color: var(--fg-faint);
+            font-size: 13px;
+        }
+        .walkthrough-link .walkthrough-arrow {
+            color: var(--fg-faint);
+            transition: transform 0.12s ease, color 0.12s ease;
+        }
+        .walkthrough-link:hover .walkthrough-arrow {
+            transform: translateX(2px);
+            color: var(--accent);
+        }
         section { margin-top: 56px; }
         h2 {
             font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
@@ -957,6 +1013,17 @@
                 aria-label="A short screen recording of Dictator transcribing and pasting speech in real time."
             ></video>
         </div>
+
+        <p class="walkthrough-wrap">
+            <a class="walkthrough-link" href="https://youtu.be/LOt1wUNqxM4" target="_blank" rel="noopener">
+                <span class="play-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </span>
+                <span>Watch the walkthrough</span>
+                <span class="walkthrough-meta">3:47 · YouTube</span>
+                <span class="walkthrough-arrow" aria-hidden="true">→</span>
+            </a>
+        </p>
     </section>
 
     <section id="hotkeys">
