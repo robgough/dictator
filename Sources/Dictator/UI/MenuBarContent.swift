@@ -111,7 +111,12 @@ struct MenuBarContent: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
-            HStack(spacing: 6) {
+            // WrapLayout wraps chips onto a second row when the popover
+            // can't fit them all horizontally. Previously a plain HStack
+            // squeezed each pill below its natural width, which made
+            // SwiftUI break the labels mid-word ("Writ\ne", "Mess\nages")
+            // as soon as the user added a longer mode name.
+            WrapLayout(spacing: 6, lineSpacing: 6) {
                 ForEach(state.settings.modes) { mode in
                     Button {
                         state.settings.defaultModeID = mode.id
@@ -119,6 +124,16 @@ struct MenuBarContent: View {
                     } label: {
                         Text(mode.name)
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            // fixedSize on the label so each pill sizes
+                            // to its own natural width — WrapLayout only
+                            // wraps to a new row, it doesn't shrink the
+                            // children. Without this, very long mode
+                            // names that exceed the popover width would
+                            // still truncate; the alternative (let them
+                            // truncate with `…`) reads worse than a
+                            // slightly-wider-than-popover pill.
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
                             .background(
@@ -144,7 +159,6 @@ struct MenuBarContent: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Spacer()
             }
         }
     }
@@ -377,6 +391,66 @@ private struct RecentRow: View {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// A simple left-aligned flow layout that places each subview at its
+/// intrinsic size and wraps onto a new row whenever the next subview
+/// would exceed the proposed width. Used by the menu-bar mode picker so
+/// adding a long mode name pushes chips to a second row instead of
+/// squashing all the chips below their natural width (which made
+/// SwiftUI break the labels mid-word).
+private struct WrapLayout: Layout {
+    var spacing: CGFloat
+    var lineSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        let rows = computeRows(maxWidth: maxWidth, subviews: subviews)
+        let height = rows.reduce(0) { $0 + $1.height } + CGFloat(max(0, rows.count - 1)) * lineSpacing
+        let width = rows.map(\.width).max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = computeRows(maxWidth: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        for row in rows {
+            var x = bounds.minX
+            for entry in row.entries {
+                subviews[entry.index].place(
+                    at: CGPoint(x: x, y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(entry.size)
+                )
+                x += entry.size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Row {
+        var entries: [(index: Int, size: CGSize)] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func computeRows(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+        for (i, sub) in subviews.enumerated() {
+            let size = sub.sizeThatFits(.unspecified)
+            let projected = current.entries.isEmpty ? size.width : current.width + spacing + size.width
+            if !current.entries.isEmpty, projected > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+            current.entries.append((i, size))
+            current.width = current.entries.count == 1 ? size.width : current.width + spacing + size.width
+            current.height = max(current.height, size.height)
+        }
+        if !current.entries.isEmpty { rows.append(current) }
+        return rows
     }
 }
 
