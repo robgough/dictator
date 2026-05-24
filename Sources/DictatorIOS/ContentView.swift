@@ -319,6 +319,18 @@ struct ContentView: View {
                 focus: $transcriptFocused
             )
             .frame(maxHeight: .infinity)
+            // Floating undo button at the bottom-left of the
+            // transcript card. Visible only when there's a snapshot
+            // to swap to (after a dictation or assist run). Tapping
+            // toggles current ↔ previous so it doubles as redo.
+            .overlay(alignment: .bottomLeading) {
+                if viewModel.canUndo {
+                    UndoButton(action: viewModel.undo)
+                        .padding(12)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.78), value: viewModel.canUndo)
 
             if transcriptFocused {
                 compactControls
@@ -336,8 +348,9 @@ struct ContentView: View {
         }
     }
 
-    /// Default layout: big circular mic centred, copy as a wide bar
-    /// above it, status label underneath.
+    /// Default layout: red mic + purple assist button (when AI is
+    /// available) side by side, Copy as a wide bar above, status label
+    /// + health warning underneath.
     private var fullControls: some View {
         VStack(spacing: 16) {
             Button {
@@ -351,37 +364,77 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.transcript.isEmpty)
 
-            MicButton(status: viewModel.status, compact: false) {
-                viewModel.startRecording()
-            } onRelease: {
-                Task { await viewModel.stopRecording() }
+            HStack(spacing: 28) {
+                HoldButton(
+                    status: viewModel.status,
+                    tint: .red,
+                    restingIcon: "mic.fill",
+                    isMyTurn: viewModel.recordingMode == .dictation,
+                    compact: false,
+                    onPress: { viewModel.startRecording() },
+                    onRelease: { Task { await viewModel.stopRecording() } }
+                )
+                .disabled(otherButtonBusy(for: .dictation))
+                .opacity(otherButtonBusy(for: .dictation) ? 0.4 : 1)
+
+                if AppleFoundationAssist.isAvailable {
+                    HoldButton(
+                        status: viewModel.status,
+                        tint: .purple,
+                        restingIcon: "wand.and.stars",
+                        isMyTurn: viewModel.recordingMode == .assist,
+                        compact: false,
+                        onPress: { viewModel.startAssistRecording() },
+                        onRelease: { Task { await viewModel.stopAssistRecording() } }
+                    )
+                    .disabled(assistDisabled)
+                    .opacity(assistDisabled ? 0.35 : 1)
+                }
             }
 
-            StatusLabel(status: viewModel.status)
+            StatusLabel(status: viewModel.status, mode: viewModel.recordingMode)
                 .frame(height: 22)
+
+            healthWarning
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
-    /// Keyboard-up layout: mic shrinks to a small circle on the left,
-    /// copy collapses to a square button on the right. Both share the
-    /// available row width so the controls stay reachable just above
-    /// the keyboard.
+    /// Keyboard-up layout: mic + assist + copy in one row, all compact.
+    /// Health warning hidden in this state — vertical space is at a
+    /// premium and the warning is already visible whenever the
+    /// keyboard isn't up.
     private var compactControls: some View {
-        HStack(spacing: 12) {
-            MicButton(status: viewModel.status, compact: true) {
-                // Deliberately NOT dismissing the keyboard here —
-                // doing so on press triggers the layout transition
-                // mid-touch, the mic button's frame reflows, and
-                // SwiftUI's gesture system loses the press,
-                // immediately firing `onRelease` and aborting the
-                // recording. The compact layout is designed for
-                // keyboard-up use; recording works fine in place.
-                // The user can dismiss the keyboard manually
-                // (tap outside / swipe the transcript) when ready.
-                viewModel.startRecording()
-            } onRelease: {
-                Task { await viewModel.stopRecording() }
+        HStack(spacing: 10) {
+            HoldButton(
+                status: viewModel.status,
+                tint: .red,
+                restingIcon: "mic.fill",
+                isMyTurn: viewModel.recordingMode == .dictation,
+                compact: true,
+                onPress: {
+                    // See full-layout note above — keyboard stays up
+                    // during recording on purpose, otherwise the layout
+                    // reflows mid-press and SwiftUI loses the gesture.
+                    viewModel.startRecording()
+                },
+                onRelease: { Task { await viewModel.stopRecording() } }
+            )
+            .disabled(otherButtonBusy(for: .dictation))
+            .opacity(otherButtonBusy(for: .dictation) ? 0.4 : 1)
+
+            if AppleFoundationAssist.isAvailable {
+                HoldButton(
+                    status: viewModel.status,
+                    tint: .purple,
+                    restingIcon: "wand.and.stars",
+                    isMyTurn: viewModel.recordingMode == .assist,
+                    compact: true,
+                    onPress: { viewModel.startAssistRecording() },
+                    onRelease: { Task { await viewModel.stopAssistRecording() } }
+                )
+                .disabled(assistDisabled)
+                .opacity(assistDisabled ? 0.35 : 1)
             }
 
             Button {
@@ -396,6 +449,38 @@ struct ContentView: View {
             .disabled(viewModel.transcript.isEmpty)
         }
         .transition(.opacity)
+    }
+
+    /// Subtle footer reminding the user that on-device AI cleanup +
+    /// assist output is best-effort. Sits below the status label in
+    /// the full layout; deliberately quiet (caption2, tertiary) so it
+    /// reads as a footnote, not a chyron.
+    private var healthWarning: some View {
+        Text("The on-device assistant runs locally and can make mistakes. Always read the result back before relying on it.")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 28)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// True when the assist (purple) button should be disabled —
+    /// either Apple Intelligence isn't on, there's no transcript to
+    /// transform, or the dictation flow is currently busy.
+    private var assistDisabled: Bool {
+        !AppleFoundationAssist.isAvailable
+            || viewModel.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || otherButtonBusy(for: .assist)
+    }
+
+    /// `true` when the OTHER recording mode is currently in flight, so
+    /// this button shouldn't accept a press. Prevents starting an
+    /// assist while a dictation is mid-transcribe and vice versa.
+    private func otherButtonBusy(for mine: RecordingViewModel.RecordingMode) -> Bool {
+        guard viewModel.status.isCapturing
+                || { if case .transcribing = viewModel.status { return true } else { return false } }()
+        else { return false }
+        return viewModel.recordingMode != mine
     }
 }
 
@@ -442,12 +527,48 @@ private struct TranscriptCard: View {
     }
 }
 
-// MARK: - Mic button
+// MARK: - Undo button
 
-private struct MicButton: View {
+/// Small floating undo button overlaid on the bottom-left of the
+/// transcript card. `.thinMaterial` background so it reads cleanly
+/// over the transcript text, which can scroll behind it.
+private struct UndoButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.uturn.backward")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(.thinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Undo")
+    }
+}
+
+// MARK: - Hold-to-talk button
+
+/// Round press-and-hold button shared between the red mic (records
+/// dictation) and the purple assist wand (records an instruction to
+/// apply to the current transcript). Same gesture shape, different
+/// tint + icon + action.
+///
+/// `isMyTurn` is set by the parent based on `viewModel.recordingMode`
+/// — it lets the active button show the level-driven outer ring while
+/// the other button stays still. The active button also swaps its
+/// icon to "hourglass" during the transcribing/transforming stage so
+/// the user knows which button's flow is in progress.
+private struct HoldButton: View {
     let status: RecordingViewModel.Status
-    /// When true, render at a smaller size suitable for sitting on the
-    /// same row as the Copy button while the keyboard is up.
+    let tint: Color
+    let restingIcon: String
+    let isMyTurn: Bool
     let compact: Bool
     let onPress: () -> Void
     let onRelease: () -> Void
@@ -456,25 +577,27 @@ private struct MicButton: View {
 
     private var diameter: CGFloat { compact ? 52 : 96 }
 
-    /// Level-driven outer glow. When the user is actively recording the
-    /// button gets a faint, pulsing ring proportional to mic input — gives
-    /// the prototype the same "yes, I'm hearing you" feedback the macOS
-    /// HUD provides via its waveform.
+    /// Level-driven ring only shown around the button whose press is
+    /// currently driving the recording. Without the `isMyTurn` gate
+    /// both buttons would pulse on every dictation.
     private var level: Float {
-        if case let .recording(level) = status { return level }
+        if isMyTurn, case let .recording(level) = status { return level }
         return 0
     }
 
+    private var displayedIcon: String {
+        if isMyTurn, case .transcribing = status {
+            return "hourglass"
+        }
+        return restingIcon
+    }
+
     var body: some View {
-        // Compact ring growth is tight — the button shares its row
-        // with the Copy button so a large `ringMax` (matching the
-        // full-layout 80) would visually bleed into it at peak
-        // volume.
-        let ringMax: CGFloat = compact ? 14 : 80
+        let ringMax: CGFloat = compact ? 14 : 60
         let iconSize: CGFloat = compact ? 22 : 36
         ZStack {
             Circle()
-                .fill(.tint.opacity(0.18))
+                .fill(tint.opacity(0.18))
                 .frame(
                     width: diameter + CGFloat(level) * ringMax,
                     height: diameter + CGFloat(level) * ringMax
@@ -482,10 +605,10 @@ private struct MicButton: View {
                 .animation(.easeOut(duration: 0.08), value: level)
 
             Circle()
-                .fill(buttonFill)
+                .fill(tint)
                 .frame(width: diameter, height: diameter)
                 .overlay(
-                    Image(systemName: iconName)
+                    Image(systemName: displayedIcon)
                         .font(.system(size: iconSize, weight: .semibold))
                         .foregroundStyle(.white)
                 )
@@ -493,22 +616,14 @@ private struct MicButton: View {
                 .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
                 .contentShape(Circle())
         }
-        // In compact mode the button shares its row with the Copy
-        // button — drop the wide horizontal padding ring so the
-        // level-glow doesn't bleed into the Copy button.
         .frame(
-            width: compact ? diameter + 8 : diameter + 80,
+            width: diameter + (compact ? 8 : 20),
             height: diameter + 12,
             alignment: .center
         )
-        // onLongPressGesture with minimumDuration: 0 is the SwiftUI idiom
-        // for press-and-hold: onPressingChanged fires immediately on touch
-        // down and again on touch up. DragGesture works too but adds drift
-        // semantics we don't need here.
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
-            // Tap-completion handler — fires after release. Unused; press
-            // and release are wired through onPressingChanged so the
-            // recorder mirrors the physical press.
+            // Tap-completion — unused; press/release fire via
+            // onPressingChanged so the recorder mirrors the touch.
         } onPressingChanged: { pressing in
             if pressing, !isPressed {
                 isPressed = true
@@ -518,29 +633,6 @@ private struct MicButton: View {
                 onRelease()
             }
         }
-        .disabled(disabled)
-        .opacity(disabled ? 0.5 : 1)
-    }
-
-    private var iconName: String {
-        switch status {
-        case .transcribing: "hourglass"
-        default: "mic.fill"
-        }
-    }
-
-    private var buttonFill: Color {
-        switch status {
-        case .recording, .warmingUp: .red
-        default: .accentColor
-        }
-    }
-
-    private var disabled: Bool {
-        switch status {
-        case .transcribing: true
-        default: false
-        }
     }
 }
 
@@ -548,6 +640,7 @@ private struct MicButton: View {
 
 private struct StatusLabel: View {
     let status: RecordingViewModel.Status
+    let mode: RecordingViewModel.RecordingMode
 
     var body: some View {
         HStack(spacing: 8) {
@@ -566,11 +659,14 @@ private struct StatusLabel: View {
         switch status {
         case .idle: "Hold to talk"
         case .warmingUp: "Warming up…"
-        case .recording: "Listening — release to transcribe"
-        case .transcribing: "Transcribing…"
+        case .recording:
+            mode == .assist
+                ? "Listening — release to apply the instruction"
+                : "Listening — release to transcribe"
+        case .transcribing:
+            mode == .assist ? "Applying…" : "Transcribing…"
         // No prompt in the ready state — the transcript itself is the
-        // result, and the mic + copy buttons read clearly without a
-        // caption. Keeps the layout from feeling instruction-heavy.
+        // result, and the buttons read clearly without a caption.
         case .ready: ""
         case .error: "Something went wrong"
         }

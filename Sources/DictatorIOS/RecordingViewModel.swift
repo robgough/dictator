@@ -41,6 +41,16 @@ final class RecordingViewModel {
         case denied
     }
 
+    /// Tracks which physical button kicked off the current recording.
+    /// `.dictation` is the red mic — output replaces the transcript.
+    /// `.assist` is the purple wand — output is fed back into
+    /// `AppleFoundationAssist.transform(text:instruction:)` as the
+    /// INSTRUCTION applied to the current transcript.
+    enum RecordingMode: Equatable {
+        case dictation
+        case assist
+    }
+
     /// Disk presence of the Parakeet model files. Independent of the
     /// in-memory `isModelLoaded` flag — a model can be on disk but not
     /// yet loaded into memory.
@@ -54,11 +64,21 @@ final class RecordingViewModel {
 
     private(set) var status: Status = .idle
     private(set) var modelDiskStatus: ModelDiskStatus = .checking
+    /// Which button is driving the current capture. Defaults to
+    /// dictation; set by `startRecording` / `startAssistRecording` at
+    /// the moment of press. The UI uses this to render the level ring
+    /// around the active button only.
+    private(set) var recordingMode: RecordingMode = .dictation
     /// User-editable. Bound from `TextEditor` so the user can tweak the
     /// transcribed result before copying. The view model only writes it on
     /// transcribe-complete and on press-to-start (clearing the previous
     /// result); everything else is the user typing.
     var transcript: String = ""
+    /// One-step undo target. Snapshotted at the start of each
+    /// dictation or assist press — i.e. just before a programmatic
+    /// overwrite of `transcript`. The undo button toggles current /
+    /// previous, so a second tap acts as redo.
+    private(set) var previousTranscript: String?
     private(set) var permission: Permission
 
     /// True while a model prewarm task is in flight. Drives the header
@@ -159,6 +179,11 @@ final class RecordingViewModel {
         guard case .downloaded = modelDiskStatus else { return }
         switch status {
         case .idle, .ready, .error:
+            recordingMode = .dictation
+            // Snapshot the current transcript BEFORE clearing, so the
+            // undo button can restore what the user had before they
+            // started this dictation cycle.
+            previousTranscript = transcript
             transcript = ""
             status = .warmingUp
             pressFeedback.impactOccurred()
@@ -168,6 +193,82 @@ final class RecordingViewModel {
             // Already capturing or busy.
             return
         }
+    }
+
+    /// Hold-to-talk handler for the purple Assist button — applies a
+    /// spoken instruction to the current transcript. No-op if there's
+    /// no transcript to operate on (the UI disables the button in that
+    /// state, but guarded here too in case of races).
+    func startAssistRecording() {
+        guard permission == .granted else { return }
+        guard case .downloaded = modelDiskStatus else { return }
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard AppleFoundationAssist.isAvailable else { return }
+        switch status {
+        case .idle, .ready, .error:
+            recordingMode = .assist
+            // Snapshot the transcript so undo can restore it after
+            // the transformation lands. We don't clear here — assist
+            // transforms the existing content rather than replacing
+            // it wholesale.
+            previousTranscript = transcript
+            status = .warmingUp
+            pressFeedback.impactOccurred()
+            prewarmModelIfNeeded()
+            recorder.start()
+        default:
+            return
+        }
+    }
+
+    /// Counterpart to `startAssistRecording`. Drains the recorder,
+    /// transcribes via Parakeet (the spoken INSTRUCTION), then feeds
+    /// it together with the existing transcript into Apple Foundation
+    /// Models. Result replaces the transcript; the prior version is
+    /// saved as the history entry's `raw` so the user can compare /
+    /// roll back via the long-press menu.
+    func stopAssistRecording() async {
+        guard status.isCapturing else { return }
+        let samples = recorder.stop()
+        pressFeedback.impactOccurred()
+        guard !samples.isEmpty else {
+            status = .idle
+            recordingMode = .dictation
+            return
+        }
+        status = .transcribing
+        let originalText = transcript
+        do {
+            let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            // Resolve spoken cues in the instruction itself ("comma",
+            // "new paragraph" etc. should map to their glyphs) before
+            // handing to the foundation model, but skip the Vocabulary
+            // pass — the user's vocab is for their dictation output,
+            // not for transformation instructions.
+            let instruction = SpokenCues.apply(to: rawInstruction, options: DictatorIOSSettings.cueOptions)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instruction.isEmpty else {
+                status = .ready
+                recordingMode = .dictation
+                return
+            }
+            let result = try await AppleFoundationAssist.transform(
+                text: originalText,
+                instruction: instruction
+            )
+            transcript = result
+            DictationHistoryStore.shared.append(result, raw: originalText)
+            status = .ready
+            resultFeedback.notificationOccurred(.success)
+        } catch {
+            // Keep the user's original text on failure — they spoke
+            // an instruction expecting a transformation; reverting to
+            // raw would lose their intent and confuse the rollback.
+            transcript = originalText
+            status = .error(error.localizedDescription)
+            resultFeedback.notificationOccurred(.error)
+        }
+        recordingMode = .dictation
     }
 
     /// Stage the Parakeet model onto disk — explicit, with progress.
@@ -310,6 +411,27 @@ final class RecordingViewModel {
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
         }
+    }
+
+    /// True when there's a meaningful snapshot to swap to. Used by
+    /// the UI to show / hide the floating undo button on the
+    /// transcript card.
+    var canUndo: Bool {
+        guard let prev = previousTranscript else { return false }
+        return prev != transcript
+    }
+
+    /// Toggle current ↔ previous transcript. First tap behaves as
+    /// undo (restore the snapshot taken at the start of the last
+    /// recording); a second tap returns the post-recording text,
+    /// effectively acting as redo. Light haptic so the user knows
+    /// something happened — the visual change is the only other cue.
+    func undo() {
+        guard let prev = previousTranscript, prev != transcript else { return }
+        let current = transcript
+        transcript = prev
+        previousTranscript = current
+        pressFeedback.impactOccurred()
     }
 
     /// One-tap clipboard copy. The mainstream "navigate to your destination
