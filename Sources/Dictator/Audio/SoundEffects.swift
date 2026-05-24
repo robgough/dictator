@@ -1,13 +1,29 @@
 import Foundation
 @preconcurrency import AVFoundation
 
-@MainActor
-final class SoundEffects {
+/// Plays the arm / start / stop / done audio cues. Public methods are
+/// fire-and-forget and never block the caller: all `AVAudioEngine` and
+/// `AVAudioPlayerNode` work serialises through a private background
+/// queue.
+///
+/// Why the queue? `AVAudioEngine.start()` can block on the calling thread
+/// for hundreds of milliseconds (occasionally seconds) immediately after
+/// an output-device reconfiguration — AirPods reconnect, USB DAC
+/// power-cycle, hub flap. The class used to be `@MainActor` and called
+/// `engine.start()` synchronously from the hotkey path; when that
+/// blocked, the main actor wedged, the `AudioRecorder` warmup watchdog
+/// couldn't fire, and the user was stuck staring at "Connecting
+/// microphone" until they killed the app. Marking the class
+/// `@unchecked Sendable` + serialising on `queue` guarantees the
+/// hotkey path returns to main in microseconds; if the engine is slow
+/// to come up the user just doesn't hear that one cue.
+final class SoundEffects: @unchecked Sendable {
     static let shared = SoundEffects()
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let format: AVAudioFormat
+    /// All reads + writes happen on `queue`.
     private var started = false
     private var configChangeObserver: NSObjectProtocol?
 
@@ -15,6 +31,11 @@ final class SoundEffects {
     private let startBuffer: AVAudioPCMBuffer
     private let stopBuffer: AVAudioPCMBuffer
     private let doneBuffer: AVAudioPCMBuffer
+
+    /// Serial queue isolating `started` and ordering every
+    /// engine/player call. Anything that touches the audio graph hops
+    /// onto this queue first.
+    private let queue = DispatchQueue(label: "Dictator.SoundEffects", qos: .userInitiated)
 
     private init() {
         // Mono player straight into mainMixerNode. mainMixer has a built-in
@@ -54,15 +75,29 @@ final class SoundEffects {
         // / external interface, AVAudioEngine stops itself and fires this
         // notification (per Apple's spec). Without handling it, our `started`
         // flag goes stale and every subsequent play() silently no-ops.
-        // AudioRecorder and InputLevelMonitor follow the same pattern.
+        // AudioRecorder follows the same pattern.
+        //
+        // `queue: nil` means the callback runs on whichever thread posts
+        // the notification — we don't care, because we immediately hop
+        // onto our serial queue from inside the block.
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.handleConfigurationChange()
+            self?.queue.async {
+                self?.handleConfigurationChangeLocked()
             }
+        }
+    }
+
+    /// Start the output engine ahead of the first cue so the user doesn't
+    /// miss the arm tone on the very first dictation. Best-effort; if the
+    /// engine refuses to start (no output device, weird state) we just
+    /// silently skip cues until the next configuration change retries.
+    func prewarm() {
+        queue.async { [weak self] in
+            self?.startEngineLocked()
         }
     }
 
@@ -72,27 +107,31 @@ final class SoundEffects {
     func playDone()  { play(doneBuffer)  }
 
     private func play(_ buffer: AVAudioPCMBuffer) {
-        startEngineIfNeeded()
-        // If the engine wouldn't come up at all (no output device available,
-        // for instance) scheduling a buffer and asking the player to play
-        // throws on the audio thread. Skip silently — the user just doesn't
-        // hear this cue; the rest of the pipeline carries on.
-        guard started else { return }
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
-        if !player.isPlaying { player.play() }
+        // Hop onto the engine queue. Returns to the caller immediately —
+        // critical for the hotkey path, which must not block on engine
+        // startup regardless of how slow CoreAudio is being.
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.startEngineLocked()
+            guard self.started else { return }
+            self.player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
+            if !self.player.isPlaying { self.player.play() }
+        }
     }
 
-    private func startEngineIfNeeded() {
+    /// Bring the engine up if it isn't already. Must run on `queue`.
+    /// Retries once with a fresh graph connection on first-attempt
+    /// failure — useful when AVAudioEngine has been invalidated by a
+    /// hardware change we didn't catch via the configuration-change
+    /// notification.
+    private func startEngineLocked() {
         guard !started else { return }
         engine.prepare()
         do {
             try engine.start()
             started = true
         } catch {
-            // Recovery: rebuild the player→mixer connection in case the
-            // graph was invalidated by hardware churn we didn't catch via
-            // the configuration-change notification, then retry once.
-            connectGraph()
+            connectGraphLocked()
             do {
                 try engine.start()
                 started = true
@@ -103,22 +142,26 @@ final class SoundEffects {
     }
 
     /// (Re)builds the `player → mainMixerNode` connection. Idempotent —
-    /// disconnects any existing input on the mixer first. Called from init
-    /// and from the configuration-change handler / recovery path.
-    private func connectGraph() {
+    /// disconnects any existing input on the mixer first. Must run on
+    /// `queue`. Called from `startEngineLocked()`'s retry path and from
+    /// the configuration-change handler.
+    private func connectGraphLocked() {
         if player.engine == nil { engine.attach(player) }
         engine.disconnectNodeInput(engine.mainMixerNode)
         engine.connect(player, to: engine.mainMixerNode, format: format)
     }
 
-    private func handleConfigurationChange() {
-        // AVAudioEngine stops itself before dispatching the notification.
-        // Drop the started flag so the next play() restarts the engine, and
-        // rebuild the connection because the mixer's downstream format may
-        // have changed (its SRC will sort the rest).
+    /// AVAudioEngine stops itself before dispatching the configuration-
+    /// change notification. Drop `started` so the next play() restarts
+    /// the engine, and rebuild the connection because the mixer's
+    /// downstream format may have changed (its SRC will sort the rest).
+    /// Also eagerly restart so we don't lose the *next* cue to first-
+    /// touch start latency on the new device. Must run on `queue`.
+    private func handleConfigurationChangeLocked() {
         started = false
         if player.isPlaying { player.stop() }
-        connectGraph()
+        connectGraphLocked()
+        startEngineLocked()
     }
 
     // MARK: - Synthesis

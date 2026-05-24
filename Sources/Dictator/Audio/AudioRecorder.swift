@@ -102,11 +102,13 @@ final class AudioRecorder {
 
     init() {}
 
-    /// Kick off session startup. Returns immediately — the AVCaptureSession
-    /// build and `startRunning()` call both run off-main because the latter
-    /// can block for seconds on Bluetooth devices while macOS negotiates HFP.
-    /// Caller is notified via `onReady` (success) or `onStartFailed`
-    /// (failure), both on the main actor.
+    /// Kick off session startup. Returns immediately — every CoreAudio /
+    /// AVFoundation touch (device resolution, BT probe, session build,
+    /// `startRunning()`) runs off-main. Keeping the main actor free is
+    /// load-bearing for the warmup watchdog: it's an async `Task @MainActor`
+    /// that needs to actually run when its sleep ends, which it can't do
+    /// if main is mid-CoreAudio query. Caller is notified via `onReady`
+    /// (success) or `onStartFailed` (failure), both on the main actor.
     func start() {
         guard !running, !startInFlight else { return }
         rawBuffer.removeAll(keepingCapacity: true)
@@ -115,7 +117,30 @@ final class AudioRecorder {
 
         startInFlight = true
         startGeneration &+= 1
-        let device = Self.resolveCaptureDevice()
+        let generation = startGeneration
+
+        // Snapshot the user's preferred device on main (cheap dict read on
+        // an @Observable @MainActor object — has to happen here). Everything
+        // expensive — `AVCaptureDevice(uniqueID:)`, the UID→AudioDeviceID
+        // translation, the BT-transport query — moves to the detached task.
+        // Those CoreAudio touches can briefly block when coreaudiod is busy
+        // (USB / Thunderbolt mic just woke, recent default-input swap), and
+        // when they blocked on main, the warmup watchdog couldn't fire —
+        // that was the "Connecting microphone" hang we couldn't shake.
+        let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let device = Self.resolveCaptureDevice(preferred: preferred)
+            let isBT = Self.isBluetoothDevice(device)
+            await self?.continueStartOnMain(device: device, isBT: isBT, generation: generation)
+        }
+    }
+
+    /// Main-actor continuation of `start()` after off-main device resolution.
+    /// Bails if the generation has moved on (user released the hotkey, or a
+    /// concurrent start raced us). Picks the timeout / retry policy from the
+    /// device's BT-ness, then hands off to the existing per-attempt setup.
+    private func continueStartOnMain(device: AVCaptureDevice?, isBT: Bool, generation: Int) {
+        guard generation == startGeneration else { return }
         // Pick a timeout (and retry policy) based on device type. Bluetooth
         // legitimately takes 3–5 s for HFP negotiation on the first open,
         // so it gets the generous budget. Wired devices (USB, built-in)
@@ -123,14 +148,13 @@ final class AudioRecorder {
         // CoreAudio is wedged on a transient glitch — those clear cleanly
         // on a same-device retry, which is much more user-visible than
         // falling straight back to the system default.
-        let isBT = Self.isBluetoothDevice(device)
         let timeout: Double = isBT ? 6 : Self.wiredWarmupTimeoutSeconds
         let sameDeviceRetries = isBT ? 0 : 1
         startSessionAsync(
             device: device,
             allowDefaultFallback: true,
             sameDeviceRetriesRemaining: sameDeviceRetries,
-            generation: startGeneration,
+            generation: generation,
             timeoutSeconds: timeout
         )
     }
@@ -144,7 +168,10 @@ final class AudioRecorder {
     /// True when the AVCaptureDevice's underlying CoreAudio device reports
     /// a Bluetooth transport. We bridge via the device UID since
     /// AVCaptureDevice itself doesn't expose transport type for audio.
-    private static func isBluetoothDevice(_ device: AVCaptureDevice?) -> Bool {
+    /// Nonisolated so the detached startup task can run it off-main —
+    /// the underlying CoreAudio property query is one of the calls that
+    /// previously froze main on a busy coreaudiod.
+    private nonisolated static func isBluetoothDevice(_ device: AVCaptureDevice?) -> Bool {
         guard let device,
               let coreAudioID = AudioDeviceEnumerator.deviceID(forUID: device.uniqueID)
         else { return false }
@@ -585,21 +612,23 @@ final class AudioRecorder {
         return ProcessedBuffer(mono: mono, level: level, sampleRate: sampleRate)
     }
 
-    /// Resolve the user's preferred input through to a live
-    /// `AVCaptureDevice`. The "System default" sentinel — and any
-    /// fall-through case — resolves to `AVCaptureDevice.default(for: .audio)`,
-    /// which is whatever macOS currently has set as the system input.
-    /// `AVCaptureDevice.uniqueID` matches CoreAudio's device UID for real
-    /// hardware, so the look-up just works.
-    private static func resolveCaptureDevice() -> AVCaptureDevice? {
-        let mgr = AudioDeviceManager.shared
-        guard let pref = mgr.preferredConnectedDevice() else {
+    /// Resolve a preferred entry through to a live `AVCaptureDevice`. The
+    /// "System default" sentinel — and any fall-through case — resolves to
+    /// `AVCaptureDevice.default(for: .audio)`, which is whatever macOS
+    /// currently has set as the system input. `AVCaptureDevice.uniqueID`
+    /// matches CoreAudio's device UID for real hardware, so the look-up
+    /// just works. Nonisolated and takes the preferred entry as a parameter
+    /// (rather than reading `AudioDeviceManager.shared` itself) so the
+    /// caller can do the cheap dict read on main and hand the heavy
+    /// `AVCaptureDevice(uniqueID:)` lookup off to a background task.
+    private nonisolated static func resolveCaptureDevice(preferred: AudioDevice?) -> AVCaptureDevice? {
+        guard let preferred else {
             return AVCaptureDevice.default(for: .audio)
         }
-        if pref.isSystemDefault {
+        if preferred.isSystemDefault {
             return AVCaptureDevice.default(for: .audio)
         }
-        return AVCaptureDevice(uniqueID: pref.uid)
+        return AVCaptureDevice(uniqueID: preferred.uid)
             ?? AVCaptureDevice.default(for: .audio)
     }
 
