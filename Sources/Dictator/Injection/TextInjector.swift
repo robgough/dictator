@@ -20,7 +20,7 @@ final class TextInjector {
     /// afterwards to cover the just-inserted text — so the user can immediately
     /// reprompt or tweak what the assistant produced.
     @discardableResult
-    func deliver(text: String, selectAfterPaste: Bool = false) -> DeliveryResult {
+    func deliver(text: String, selectAfterPaste: Bool = false, pressReturnAfter: Bool = false) -> DeliveryResult {
         let pasteboard = NSPasteboard.general
 
         // Capture previous clipboard so we can restore it after a successful paste.
@@ -54,6 +54,17 @@ final class TextInjector {
                 // its text storage before we set the selection range.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     Self.setSelectedRange(pre.element, location: pre.location, length: pastedLength)
+                }
+            }
+            if pressReturnAfter {
+                // 150 ms after the paste fires gives the host app time to
+                // process ⌘V and update its text storage / send-on-Return
+                // state. Shorter than that and apps like Slack and Discord
+                // occasionally swallow the Return (paste hasn't landed
+                // yet, so Return is interpreted in a state where the
+                // input field doesn't exist or is still empty).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    Self.synthesizeReturn()
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -165,6 +176,24 @@ final class TextInjector {
 
         let up = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
         up?.flags = .maskCommand
+        up?.post(tap: .cghidEventTap)
+    }
+
+    /// Posts a bare Return key event. Used by the per-mode "press Return
+    /// after pasting" toggle so dictation into chat apps / search fields
+    /// auto-submits. No modifiers — `.maskCommand` is explicitly cleared
+    /// so a held modifier from somewhere else can't promote this into
+    /// ⌘↩ (which means very different things app-to-app).
+    private static func synthesizeReturn() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let returnKey: CGKeyCode = 0x24 // ANSI Return
+
+        let down = CGEvent(keyboardEventSource: source, virtualKey: returnKey, keyDown: true)
+        down?.flags = []
+        down?.post(tap: .cghidEventTap)
+
+        let up = CGEvent(keyboardEventSource: source, virtualKey: returnKey, keyDown: false)
+        up?.flags = []
         up?.post(tap: .cghidEventTap)
     }
 }

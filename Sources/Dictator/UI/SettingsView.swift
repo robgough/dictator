@@ -2834,12 +2834,14 @@ private struct ModeDetail: View {
                     lockedExplanation
                     Divider()
                     preProcessingSection
+                    deliverySection
                 } else {
                     cycleAndDefaultSection
                     appBindingsSection
                     Divider()
                     preProcessingSection
                     passSettingsSection
+                    deliverySection
                 }
             }
             .padding(.trailing, 4)
@@ -2979,6 +2981,23 @@ private struct ModeDetail: View {
                 Toggle("Apply vocabulary list", isOn: $mode.vocabularyEnabled)
                     .onChange(of: mode.vocabularyEnabled) { _, _ in onChange() }
                 Text("When on, your custom vocabulary substitutions from the Dictionary tab are applied. The list itself is shared across modes — only the toggle is per-mode, so you can keep one dictionary and switch it off in a \"raw\" mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var deliverySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Delivery")
+                .font(.headline)
+            Text("What happens after the final text is pasted into the focused app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Press Return after pasting", isOn: $mode.pressReturnAfterPaste)
+                    .onChange(of: mode.pressReturnAfterPaste) { _, _ in onChange() }
+                Text("Sends a Return keypress once the paste lands. Useful for chat apps (Slack, iMessage, Discord), search boxes, and form fields where Return submits. Pair with an app binding so it only fires where you actually want auto-send — in a multi-line editor (TextEdit, VS Code, an email body) this just inserts a blank line. Only fires when the text was actually pasted; if Accessibility permission is missing and the text fell back to clipboard-only, no Return is sent.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -66,6 +66,14 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     var structuralPromptAddendum: String
     var structuralPromptOverride: String?
 
+    /// When true, after a successful paste the pipeline synthesises a
+    /// Return key press. Useful for chat apps (Slack, iMessage, Discord)
+    /// and search fields where Return submits — pair with `appBundleIDs`
+    /// so it only fires in apps that treat Return as send. Off by
+    /// default because in any multi-line editor (TextEdit, VS Code, an
+    /// email body) Return is just an unwanted blank line.
+    var pressReturnAfterPaste: Bool
+
     // MARK: - Stable IDs for the built-ins
 
     /// Hard-coded UUID for the built-in Quick mode. Stable across launches so
@@ -94,6 +102,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case formattingPromptAddendum, formattingPromptOverride
         case grammarPromptAddendum, grammarPromptOverride
         case structuralPromptAddendum, structuralPromptOverride
+        case pressReturnAfterPaste
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
@@ -142,6 +151,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.grammarPromptOverride = try c.decodeIfPresent(String.self, forKey: .grammarPromptOverride)
         self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? ""
         self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride)
+        self.pressReturnAfterPaste = try c.decodeIfPresent(Bool.self, forKey: .pressReturnAfterPaste) ?? false
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -169,7 +179,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         grammarPromptAddendum: String,
         grammarPromptOverride: String?,
         structuralPromptAddendum: String,
-        structuralPromptOverride: String?
+        structuralPromptOverride: String?,
+        pressReturnAfterPaste: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -193,6 +204,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.grammarPromptOverride = grammarPromptOverride
         self.structuralPromptAddendum = structuralPromptAddendum
         self.structuralPromptOverride = structuralPromptOverride
+        self.pressReturnAfterPaste = pressReturnAfterPaste
     }
 
     // MARK: - Effective prompts

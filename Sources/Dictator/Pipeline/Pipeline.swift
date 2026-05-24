@@ -757,7 +757,7 @@ final class Pipeline {
         var note: String? = warning
 
         if settings.pasteAutomatically {
-            switch injector.deliver(text: text) {
+            switch injector.deliver(text: text, pressReturnAfter: currentMode.pressReturnAfterPaste) {
             case .pasted:
                 pasted = true
             case .copiedOnly(let reason):
