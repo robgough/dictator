@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.5.11 — 2026-05-24
+
 - New per-mode toggle in Settings → Modes → Delivery: "Press Return after pasting". When on, Dictator synthesises a Return keypress once the paste lands. Useful for chat apps (Slack, iMessage, Discord), search boxes, and form fields — pair with an app binding so it only fires where you actually want auto-send. Off by default; in any multi-line editor it would just insert a blank line.
 - New Settings → General → Other audio setting to quiet other apps while you're dictating. Two options: Lower volume (dips the system output for the length of each recording, then restores) and Pause (asks Spotify or Music to pause for the length of each recording, then resumes if they were playing when you started). Pause is the one to pick if you've got an external audio interface that owns its own volume — the macOS slider is greyed out on those and Lower volume has no effect. Pause asks for one-time Automation permission per app the first time it runs.
 - Fewer "Connecting microphone" hangs. The hotkey-press path no longer performs CoreAudio device probes or audio-engine startup on the main thread, so a busy coreaudiod (USB / Thunderbolt mic just woke, output device swap in flight) can't freeze the warmup watchdog. If the mic genuinely doesn't respond you now reliably see the timeout retry kick in instead of staring at the spinner.

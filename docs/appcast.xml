@@ -184,6 +184,25 @@
                 type="application/octet-stream"
                 sparkle:edSignature="Y2IZ6sP+SaD1DvZTMYQF/gjJIOUnGIm5SsxOT76voW3qOjxrjYFM70eIbLe+nYT5txHSrkRi26a/bAY6gzgcCQ==" />
         </item>
+        <item>
+            <title>Version 2026.5.11</title>
+            <pubDate>Sun, 24 May 2026 01:55:31 +0000</pubDate>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>2026.5.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>New per-mode toggle in Settings → Modes → Delivery: &quot;Press Return after pasting&quot;. When on, Dictator synthesises a Return keypress once the paste lands. Useful for chat apps (Slack, iMessage, Discord), search boxes, and form fields — pair with an app binding so it only fires where you actually want auto-send. Off by default; in any multi-line editor it would just insert a blank line.</li>
+  <li>New Settings → General → Other audio setting to quiet other apps while you&#x27;re dictating. Two options: Lower volume (dips the system output for the length of each recording, then restores) and Pause (asks Spotify or Music to pause for the length of each recording, then resumes if they were playing when you started). Pause is the one to pick if you&#x27;ve got an external audio interface that owns its own volume — the macOS slider is greyed out on those and Lower volume has no effect. Pause asks for one-time Automation permission per app the first time it runs.</li>
+  <li>Fewer &quot;Connecting microphone&quot; hangs. The hotkey-press path no longer performs CoreAudio device probes or audio-engine startup on the main thread, so a busy coreaudiod (USB / Thunderbolt mic just woke, output device swap in flight) can&#x27;t freeze the warmup watchdog. If the mic genuinely doesn&#x27;t respond you now reliably see the timeout retry kick in instead of staring at the spinner.</li>
+  <li>Menu-bar default-mode chips now wrap onto a second row when they don&#x27;t all fit, instead of squashing each pill below its natural width (which made the labels break mid-word and pushed the Settings/Quit row off the bottom of the menu).</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.11/Dictator.dmg"
+                length="21091259"
+                type="application/octet-stream"
+                sparkle:edSignature="vazIS/VG4hthaHHHWJNi4g+P3r8VAELRIrHNXkPfSInGR+QdI0uaydgA5CElGmHkBImIAZtCqRgFpJr4t8x2Bg==" />
+        </item>
+    
     
     
     
