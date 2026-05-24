@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: net.robgough
   deploymentTarget:
     macOS: "26.0"
+    iOS: "26.0"
   createIntermediateGroups: true
   schemePathPrefix: ""
 
@@ -18,6 +19,14 @@ schemes:
     profile:
       config: Release
     analyze:
+      config: Debug
+    archive:
+      config: Release
+  DictatorIOS:
+    build:
+      targets:
+        DictatorIOS: all
+    run:
       config: Debug
     archive:
       config: Release
@@ -54,6 +63,7 @@ targets:
     platform: macOS
     sources:
       - path: Sources/Dictator
+      - path: Sources/DictatorCore
     postBuildScripts:
       - script: |
           # Install a stable copy of the built .app at ~/Applications. macOS TCC
@@ -226,3 +236,73 @@ targets:
         product: FluidAudio
       - package: Sparkle
         product: Sparkle
+
+  # iOS prototype. Currently a bare SwiftUI skeleton — recording, Parakeet,
+  # vocab substitution, and the press-to-talk UI land in subsequent phases.
+  # No code sharing with the macOS target yet; Sources/DictatorCore moves
+  # over in Phase 1 once we know the skeleton actually builds and runs.
+  DictatorIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/DictatorIOS
+      - path: Sources/DictatorCore
+    info:
+      path: Sources/DictatorIOS/Info.plist
+      properties:
+        CFBundleName: Dictator
+        CFBundleDisplayName: Dictator
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSMicrophoneUsageDescription: "Dictator transcribes your voice on-device to turn speech into text you can copy or paste."
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: LaunchGlyph
+          UIImageRespectsSafeAreaInsets: false
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Simulator runs don't need a team — no signing required, no
+        # provisioning profile to fetch. So `DEVELOPMENT_TEAM` is empty
+        # by default, which keeps Xcode from trying to auto-fetch an iOS
+        # provisioning profile and failing in the Issues navigator.
+        #
+        # Intentionally NOT inheriting `${DICTATOR_TEAM_ID}` from the
+        # macOS target — that team is set up for a macOS Developer ID
+        # cert (notarized DMG distribution), which doesn't grant iOS
+        # provisioning rights. Devs who want to deploy to a real iPhone:
+        # in Xcode → DictatorIOS target → Signing & Capabilities, pick
+        # an Apple ID + team that has iOS provisioning enabled. Or
+        # override on the xcodebuild command line: DEVELOPMENT_TEAM=...
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES
+        # Asset catalog names — Xcode picks up the matching asset
+        # catalog entries at build time. The 1024×1024 source in
+        # AppIcon.appiconset is enough for iOS to derive every
+        # required size; AccentColor mirrors the macOS tint so the
+        # iOS UI uses the same purple-ish accent.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorIOS/DictatorIOS.Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorIOS/DictatorIOS.entitlements
+    dependencies:
+      - package: FluidAudio
+        product: FluidAudio

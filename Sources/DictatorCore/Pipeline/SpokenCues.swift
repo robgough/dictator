@@ -134,12 +134,90 @@ enum SpokenCues {
             let prev = s
             s = digitiseCompositeWordNumbers(s)
             s = unifyAdjacentDigitWords(s)
+            s = applyDecimalPoint(s)
             s = digitiseWordNumbersInArithmeticContext(s)
             s = applyDigitArithmetic(to: s)
             s = applyUnaryArithmeticPrefix(s)
             if s == prev { break }
         }
         return s
+    }
+
+    /// Spoken decimals: "<LHS> point <RHS>" → "<LHS>.<RHS>". After "point",
+    /// each digit word is read individually and concatenated:
+    ///   "33 point three"           → "33.3"
+    ///   "three point one four"     → "3.14"
+    ///   "naught point five"        → "0.5"
+    ///   "three point one oh four"  → "3.104"      ("oh" → 0 in this position)
+    ///   "10 point 25"              → "10.25"      (already-digit RHS passes through)
+    ///
+    /// LHS accepts a digit-form number or a single-word small number — the
+    /// arithmetic loop's `digitiseCompositeWordNumbers` pass converts things
+    /// like "thirty-three" → "33" upstream, so by the time this runs the
+    /// only word-form LHS still standing is the bare single-word kind that
+    /// digitiseCompositeWordNumbers deliberately leaves alone.
+    ///
+    /// We deliberately don't bind without a LHS — bare "point five" is
+    /// ambiguous prose ("at point five PM tomorrow") and false-positives
+    /// would be worse than the loss.
+    private static func applyDecimalPoint(_ text: String) -> String {
+        guard let regex = decimalPointRegex else { return text }
+        return text.replacing(regex) { match in
+            let full = String(match.output[0].substring ?? "")
+            guard let lhsCap = match.output[1].substring,
+                  let rhsCap = match.output[2].substring
+            else { return full }
+            let lhs = String(lhsCap)
+            let rhs = String(rhsCap)
+
+            let lhsDigits: String
+            if lhs.first?.isNumber == true {
+                lhsDigits = lhs
+            } else if let d = singleDigitWordValue(lhs.lowercased()) {
+                lhsDigits = d
+            } else {
+                return full
+            }
+
+            if rhs.first?.isNumber == true {
+                return "\(lhsDigits).\(rhs)"
+            }
+            let words = rhs.lowercased().split(whereSeparator: { $0.isWhitespace })
+            let digits = words.compactMap { singleDigitWordValue(String($0)) }
+            guard digits.count == words.count else { return full }
+            return "\(lhsDigits).\(digits.joined())"
+        }
+    }
+
+    nonisolated(unsafe) private static let decimalPointRegex: Regex<AnyRegexOutput>? = {
+        // "oh" is included only inside the digit-by-digit RHS context, not
+        // in the LHS or in the general onesMap, because "oh dear" / sentence-
+        // initial "Oh, …" would otherwise turn into "0 dear" / "0, …".
+        // Following "point" the disambiguation is implicit — nobody says
+        // "point oh dear" meaning anything other than ".0…".
+        let digitWord = "(?:zero|naught|nought|oh|one|two|three|four|five|six|seven|eight|nine)"
+        let lhsToken = "(?:\\d+|\(digitWord))"
+        let pattern = "\\b(\(lhsToken))[ \\t]+point[ \\t]+(\(digitWord)(?:[ \\t]+\(digitWord))*|\\d+)\\b"
+        return try? Regex(pattern).ignoresCase()
+    }()
+
+    /// Mapping for single-digit number words used only by `applyDecimalPoint`.
+    /// Kept separate from `onesMap` so "oh" / "naught" / "nought" don't leak
+    /// into other contexts where they'd mangle ordinary prose.
+    private static func singleDigitWordValue(_ word: String) -> String? {
+        switch word {
+        case "zero", "naught", "nought", "oh": "0"
+        case "one":   "1"
+        case "two":   "2"
+        case "three": "3"
+        case "four":  "4"
+        case "five":  "5"
+        case "six":   "6"
+        case "seven": "7"
+        case "eight": "8"
+        case "nine":  "9"
+        default: nil
+        }
     }
 
     /// Concatenate runs of 2+ adjacent single-digit number words into a
@@ -164,7 +242,7 @@ enum SpokenCues {
     }
 
     nonisolated(unsafe) private static let digitWordRunRegex: Regex<AnyRegexOutput>? = {
-        let ones = "(?:zero|one|two|three|four|five|six|seven|eight|nine)"
+        let ones = "(?:zero|naught|nought|one|two|three|four|five|six|seven|eight|nine)"
         // {1,} = one or more *additional* ones words after the first, so
         // we need 2+ total. Single bare "five" doesn't match.
         let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){1,})\\b"
@@ -216,7 +294,7 @@ enum SpokenCues {
         let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
-        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero|naught|nought)"
         // Hundreds prefix admits ones AND teens: "five hundred" → 500,
         // "sixteen hundred" → 1600. The teen-hundred shape is common
         // for years and round-ish prices ("the nineteen hundreds",
@@ -332,7 +410,16 @@ enum SpokenCues {
     // vocabulary returns nil so the regex match is left untouched.
 
     private static let onesMap: [String: Int] = [
-        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        // `naught` / `nought` are the British synonyms for zero. They're rare
+        // outside numerical contexts ("naught to fear" is the only common
+        // figurative use), and including them here means the digit-run pass
+        // ("two naught one" → "201") and the currency pre-pass ("naught
+        // dollars" → "$0") get them for free without further plumbing.
+        // `oh` is NOT here — it's too overloaded with prose ("oh dear",
+        // "Oh, hi") and only safe in the after-"point" position handled
+        // by `applyDecimalPoint`.
+        "zero": 0, "naught": 0, "nought": 0,
+        "one": 1, "two": 2, "three": 3, "four": 4,
         "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
         "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
         "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
@@ -402,7 +489,7 @@ enum SpokenCues {
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let tens = "(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
         // 0–99: tens optionally + ones, or a teen, or a bare one, or zero.
-        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+        let zero99 = "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero|naught|nought)"
         // 100–1999 via "<one|teen> hundred (and? <zero99>)?". Teens
         // are admitted so "sixteen hundred" and friends parse — common
         // for years and round prices. "Twenty hundred" stays out
@@ -514,7 +601,7 @@ enum SpokenCues {
         let one  = "(?:one|two|three|four|five|six|seven|eight|nine)"
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let tens = "(?:twenty|thirty|forty|fifty)"
-        return "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero)"
+        return "(?:\(tens)(?:[ \\t-]+\(one))?|\(teen)|\(one)|zero|naught|nought)"
     }()
 
     /// Matches every spoken form of the AM/PM marker — fully un-dotted
@@ -594,7 +681,7 @@ enum SpokenCues {
         let teen = "(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)"
         let twenties = "(?:twenty(?:[ \\t-]+(?:one|two|three))?)"
         let ohN = "(?:oh[ \\t]+\(single))"
-        return "(?:\(twenties)|\(teen)|\(ohN)|zero)"
+        return "(?:\(twenties)|\(teen)|\(ohN)|zero|naught|nought)"
     }()
 
     /// Like `parseWordNumber` but also accepts the "oh N" shape used
@@ -673,20 +760,61 @@ enum SpokenCues {
 
     private static func applyEmojis(to text: String) -> String {
         var s = text
-        // `WORD emoji` and `emoji WORD` — match a single word adjacent to
-        // "emoji". WORD can be multiple words ("smiling face emoji") but
-        // matching one alphanumeric token at a time covers ~95% of how
-        // people dictate emojis. Multi-word emoji names ("smiling face")
-        // are handled via the alias map's pre-flattened entries.
-        s = s.replacing(/\b([A-Za-z][A-Za-z0-9]*)[ \t]+emoji\b/.ignoresCase()) { match in
-            let name = String(match.1).lowercased()
-            return EmojiLookup.lookup(name).map { String($0) } ?? "\(match.1) emoji"
+        // Multi-word names ("thumbs up emoji", "broken heart emoji",
+        // "rolling eyes emoji") are how people actually talk. Whisper
+        // rarely collapses them into single tokens, so a one-word regex
+        // would capture "up emoji" out of "thumbs up emoji" and look up
+        // an unrelated arrow glyph.
+        //
+        // Strategy: try the longest prefix first (up to 3 words before
+        // "emoji"). Each pass leaves text unchanged when the lookup
+        // misses, letting shorter passes still pick up the emoji the
+        // user intended. So "I want a thumbs up emoji" tries "a thumbs
+        // up" (miss) → "thumbs up" (hits "thumbsup" alias via
+        // EmojiLookup's join-form fallback) → 👍.
+        //
+        // Capped at 3 words because longer names ("rolling on the floor
+        // laughing emoji") get a useful match via the shorter "rolling
+        // emoji" / "laughing emoji" forms, and widening further raises
+        // the chance of consuming unrelated prose preceding "emoji".
+        for wordCount in [3, 2, 1] {
+            s = substituteEmojiPhrase(in: s, wordCount: wordCount, isPrefix: true)
         }
-        s = s.replacing(/\bemoji[ \t]+([A-Za-z][A-Za-z0-9]*)\b/.ignoresCase()) { match in
-            let name = String(match.1).lowercased()
-            return EmojiLookup.lookup(name).map { String($0) } ?? "emoji \(match.1)"
+        for wordCount in [3, 2, 1] {
+            s = substituteEmojiPhrase(in: s, wordCount: wordCount, isPrefix: false)
         }
         return s
+    }
+
+    /// One pass of the emoji-name substitution. `wordCount` controls how
+    /// many alphanumeric tokens precede (or follow, when `isPrefix:
+    /// false`) the literal "emoji". Lookup tries the exact captured
+    /// phrase first, then the space-stripped form so a captured
+    /// "thumbs up" hits the curated `"thumbsup"` alias.
+    private static func substituteEmojiPhrase(in text: String, wordCount: Int, isPrefix: Bool) -> String {
+        let word = "[A-Za-z][A-Za-z0-9]*"
+        let wordsPattern = (1...wordCount).map { _ in word }.joined(separator: "[ \\t]+")
+        // `isPrefix: true` matches `<words> emoji`; `false` matches
+        // `emoji <words>` — both shapes are supported because Whisper
+        // sometimes flips the order.
+        let pattern = isPrefix
+            ? "\\b(\(wordsPattern))[ \\t]+emoji\\b"
+            : "\\bemoji[ \\t]+(\(wordsPattern))\\b"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            let full = String(match.output[0].substring ?? "")
+            guard let captured = match.output[1].substring else { return full }
+            // Normalise to single-space separation so multiple-tab /
+            // multiple-space transcripts hit the same lookup key.
+            let normalised = captured
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+                .lowercased()
+            if let emoji = EmojiLookup.lookup(normalised) {
+                return String(emoji)
+            }
+            return full
+        }
     }
 
     /// Post-LLM tidy-up of delivered text. The LLM formatter passes
@@ -739,6 +867,31 @@ enum SpokenCues {
 
     private static func cleanup(_ text: String) -> String {
         var s = text
+        // Promote sentence-terminal punctuation (`.`, `?`, `!`) that landed
+        // after a line/paragraph break BACK across the break, dropping
+        // any soft punctuation orphaned at the end of the previous line.
+        //
+        // Whisper consistently places sentence-terminal punctuation after
+        // a spoken "new paragraph" cue rather than before it, because the
+        // rising intonation of the question is heard as separator-then-
+        // punct rather than punct-then-separator. The user said:
+        //   "How you doing today? <pause> You know I think I'm doing OK."
+        // Whisper transcribes:
+        //   "How you doing today, new paragraph? You know I think..."
+        // After "new paragraph" substitutes to \n\n we're left with the
+        // comma trailing the first line and the `?` stranded at the start
+        // of the second.
+        //
+        // The leading soft-punct capture is optional, covering the case
+        // where Whisper dropped the comma entirely ("today\n\n? You").
+        // The trailing-position lookahead `(?=\s|$)` keeps "0.5" /
+        // ".5 percent off" intact when they sit at the top of a fresh
+        // paragraph — a digit after `.` means it isn't a stranded
+        // terminator, just a decimal.
+        s = s.replacing(/([,;:]?)[ \t]*(\n+)[ \t]*([.?!])(?=\s|$)/) { match in
+            "\(String(match.3))\(String(match.2))"
+        }
+
         // Pull punctuation back against the preceding word. " comma" became
         // "," but the leading space is still there; collapse it so we get
         // "hi, there" not "hi , there".
@@ -796,8 +949,28 @@ enum EmojiLookup {
 
     /// Look up an emoji by lowercased name. Returns nil when no entry exists,
     /// so the caller can leave the original phrase intact.
+    ///
+    /// Lookup order matters when the user dictates the spaced form but a
+    /// stored alias uses a different separator:
+    ///   1. exact key — covers Unicode-scan keys and explicit aliases
+    ///   2. space-stripped — "thumbs up" → "thumbsup" hits the curated
+    ///      `("thumbsup", "👍")` alias
+    ///   3. space-as-hyphen — "heart eyes" → "heart-eyes" hits the
+    ///      Unicode-derived key (Unicode uses hyphens between modifier
+    ///      words: "HEART-EYES", "STAR-STRUCK")
     static func lookup(_ name: String) -> Character? {
-        map[name]
+        if let direct = map[name] {
+            return direct
+        }
+        let joined = name.replacingOccurrences(of: " ", with: "")
+        if joined != name, let alt = map[joined] {
+            return alt
+        }
+        let hyphenated = name.replacingOccurrences(of: " ", with: "-")
+        if hyphenated != name, let alt = map[hyphenated] {
+            return alt
+        }
+        return nil
     }
 
     private static func buildMap() -> [String: Character] {
@@ -1141,9 +1314,82 @@ enum EmojiLookup {
             ("crossed", "🤞"),
             ("victory", "✌️"),
             ("peace", "✌️"),
+            // Multi-word dictation patterns the Unicode-name scan + prefix
+            // derivation below doesn't reliably cover. Most "FACE WITH X"
+            // emojis get a useful 2-word alias from the derivation step,
+            // but emojis with idiosyncratic Unicode names (ROLLING ON THE
+            // FLOOR LAUGHING, STAR-STRUCK, PLEADING FACE) only resolve
+            // when an explicit alias is added.
+            ("rolling eyes", "🙄"),
+            ("laughing crying", "🤣"),
+            ("crying laughing", "🤣"),
+            ("rofl", "🤣"),
+            ("star eyes", "🤩"),
+            ("starry eyes", "🤩"),
+            ("starstruck", "🤩"),
+            ("pleading eyes", "🥺"),
+            ("puppy eyes", "🥺"),
+            ("pleading", "🥺"),
+            ("begging", "🥺"),
+            ("heart eyes", "😍"),
+            ("upside down", "🙃"),
+            ("upside-down", "🙃"),
+            ("hot face", "🥵"),
+            ("cold face", "🥶"),
+            ("party face", "🥳"),
+            ("partying", "🥳"),
+            ("woozy", "🥴"),
+            ("nauseated", "🤢"),
+            ("face palm", "🤦"),
+            ("thumbs up", "👍"),
+            ("thumbs down", "👎"),
+            ("broken heart", "💔"),
+            ("on fire", "🔥"),
         ]
         for (alias, emoji) in aliases {
             m[alias] = emoji
+        }
+
+        // Auto-derive multi-word aliases by stripping common framing
+        // words from Unicode names. "FACE WITH ROLLING EYES" yields the
+        // additional key "rolling eyes" → 🙄; "WEARY FACE" yields "weary".
+        // Iteration uses a sorted snapshot so the derivation is
+        // deterministic — if two Unicode names strip to the same key,
+        // the alphabetically-first one wins. Only fills gaps; the
+        // curated aliases above keep their values.
+        //
+        // Crucially handles the most common dictation phrasing: people
+        // say the action ("rolling eyes"), not the Unicode framing
+        // ("face with rolling eyes").
+        let stripPrefixes = [
+            "smiling face with ",
+            "face with ",
+            "person ",
+            "people ",
+            "man ",
+            "woman ",
+        ]
+        let stripSuffixes = [
+            " face",
+            " sign",
+            " symbol",
+        ]
+        for key in m.keys.sorted() {
+            guard let char = m[key], key.contains(" ") else { continue }
+            for prefix in stripPrefixes where key.hasPrefix(prefix) {
+                let stripped = String(key.dropFirst(prefix.count))
+                if !stripped.isEmpty && m[stripped] == nil {
+                    m[stripped] = char
+                }
+                break
+            }
+            for suffix in stripSuffixes where key.hasSuffix(suffix) {
+                let stripped = String(key.dropLast(suffix.count))
+                if !stripped.isEmpty && m[stripped] == nil {
+                    m[stripped] = char
+                }
+                break
+            }
         }
 
         return m

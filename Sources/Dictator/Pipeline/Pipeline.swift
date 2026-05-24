@@ -424,16 +424,17 @@ final class Pipeline {
             if formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 formatted = trimmed
                 inFlight.formatted = nil
-            } else if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
-                // Model drifted into "helpful assistant" mode and answered the user
-                // instead of transcribing them. Detected by checking that input
-                // anchor words actually survive in the output. Fall back to Whisper's
-                // raw transcript — already capitalised and punctuated — and surface
-                // a one-line note in the HUD so the user knows what happened.
-                formatted = trimmed
-                inFlight.formatted = nil
-                pendingNote = "Pass 1 (Formatter) answered the question instead of transcribing it. Used the raw Whisper transcript instead."
             } else {
+                // Gate disabled: the anchor-word check used to revert to
+                // the raw transcript when "answered the question" drift
+                // was detected, but short transcripts trip it with even
+                // one or two legitimate edits. Log the would-be result
+                // so we can pick a sensible threshold later, then accept
+                // unconditionally. Empty-output protection above still
+                // catches actual broken returns.
+                if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
+                    NSLog("[Dictator] Pass 1 anchor check below threshold — accepted anyway (gate disabled).")
+                }
                 inFlight.formatted = formatted
             }
         }
@@ -482,28 +483,27 @@ final class Pipeline {
             guard !tidied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
             }
-            // Tidy uses raw word-Levenshtein with the user-tunable ceiling.
-            // Tighten is allowed to delete disfluencies, so we strip a known
-            // filler set from both sides before measuring — otherwise dropping
-            // 4 ums in a 20-word sentence would look like 20% drift and get
-            // rejected. The 0.30 ceiling on the stripped comparison still
-            // catches actual paraphrase / hallucination.
-            let accepted: Bool
+            // Gate disabled. Previously this branch enforced a
+            // word-Levenshtein drift ceiling (0.15 for `.tidy`, 0.30
+            // for `.tighten` with fillers stripped) and reverted to
+            // `formatted` if exceeded. In practice the ceiling was
+            // rejecting legitimate cleanups on short inputs — losing
+            // two anchors out of ten reads as 20% drift even when the
+            // pass did exactly what it was meant to. We now log the
+            // measured drift for observability and accept the output
+            // unconditionally. Empty-output revert above still applies.
+            let drift: Double
             switch currentMode.grammarPassMode {
             case .off:
-                accepted = false // unreachable — short-circuit above
+                drift = 0 // unreachable — short-circuit above
             case .tidy:
-                let drift = Self.wordEditFraction(from: formatted, to: tidied)
-                accepted = drift <= currentMode.grammarPassMaxEditFraction
+                drift = Self.wordEditFraction(from: formatted, to: tidied)
             case .tighten:
-                let drift = Self.wordEditFractionStrippingFillers(from: formatted, to: tidied)
-                accepted = drift <= 0.30
+                drift = Self.wordEditFractionStrippingFillers(from: formatted, to: tidied)
             }
-            if accepted {
-                inFlight.tidied = tidied
-                return tidied
-            }
-            return formatted
+            NSLog("[Dictator] Pass 2 drift=\(String(format: "%.3f", drift)) — accepted (gate disabled).")
+            inFlight.tidied = tidied
+            return tidied
         } catch {
             return formatted
         }
@@ -524,11 +524,17 @@ final class Pipeline {
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
             }
-            if Self.wordSequence(restructured) == Self.wordSequence(formatted) {
-                inFlight.restructured = restructured
-                return restructured
+            // Gate disabled. Previously enforced strict word-sequence
+            // equality — the structural pass's contract was "add
+            // bullets/breaks, never change words". With the gate off
+            // that contract is no longer machine-checked; if the
+            // model invents content here, it lands. Logged so we can
+            // see when it happens.
+            if Self.wordSequence(restructured) != Self.wordSequence(formatted) {
+                NSLog("[Dictator] Pass 3 word sequence changed — accepted anyway (gate disabled).")
             }
-            return formatted
+            inFlight.restructured = restructured
+            return restructured
         } catch {
             return formatted
         }

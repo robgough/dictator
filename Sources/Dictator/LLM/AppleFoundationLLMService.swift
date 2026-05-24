@@ -89,8 +89,13 @@ final class AppleFoundationLLMService: LLMEngine {
         try await ensureReady()
         let session = LanguageModelSession(instructions: Instructions(systemPrompt))
         let approxInputTokens = max(8, text.count / 4)
+        // Floor at 256 so a model that goes off-script (writes a joke
+        // instead of formatting the request to write one) produces a
+        // complete-looking response we can definitively reject via the
+        // length check below. Capping tight just yielded truncated
+        // jokes in the HUD.
         let maxTokens = min(2048,
-                            max(24,
+                            max(256,
                                 Int(Double(approxInputTokens) * maxTokenMultiplier) + maxTokenConstant))
         let options = GenerationOptions(
             sampling: .greedy,
@@ -101,7 +106,77 @@ final class AppleFoundationLLMService: LLMEngine {
             to: LLMTextUtilities.wrapAsData(text),
             options: options
         )
-        return LLMTextUtilities.clean(response.content)
+        let cleaned = LLMTextUtilities.clean(response.content)
+
+        // Length sanity check. Each deterministic pass should produce
+        // output the same order of magnitude as the input — format
+        // shrinks or stays equal, grammar mostly equal, structure
+        // grows ~10-20% with bullets/breaks. Anything beyond 2× + 50c
+        // is the model having written new prose. Throwing here lets
+        // the pipeline revert to the previous stage's text.
+        let allowedMaxChars = text.count * 2 + 50
+        if cleaned.count > allowedMaxChars {
+            throw NSError(
+                domain: "Dictator",
+                code: 43,
+                userInfo: [NSLocalizedDescriptionKey: "Apple foundation model output was too long for cleanup (\(cleaned.count) chars vs \(text.count) in) — reverted to previous stage."]
+            )
+        }
+        // Refusal guard. Apple's foundation model occasionally declines
+        // the prompt and returns "I'm sorry, I cannot…" even when the
+        // input is benign — guardrails firing on words in the dictation
+        // it's been asked to format. Input-aware: we only flag when the
+        // raw transcript didn't ALSO start with the same shape, so a
+        // legitimate dictation like "I'm sorry I can't make it" doesn't
+        // false-positive.
+        if Self.looksLikeRefusal(input: text, output: cleaned) {
+            throw NSError(
+                domain: "Dictator",
+                code: 42,
+                userInfo: [NSLocalizedDescriptionKey: "Apple foundation model refused to process the input — reverted to previous stage."]
+            )
+        }
+        return cleaned
+    }
+
+    /// Standard refusal openings used by Apple's (and most other)
+    /// foundation models when declining a prompt.
+    private static let refusalPrefixes: [String] = [
+        "i cannot",
+        "i can't",
+        "i'm sorry",
+        "i am sorry",
+        "sorry, i",
+        "sorry. i",
+        "as an ai",
+        "as a language model",
+        "i won't",
+        "i will not",
+        "i'm unable",
+        "i am unable",
+        "i'm not able",
+        "unfortunately, i",
+    ]
+
+    /// Input-aware refusal detector: only flags when the output starts
+    /// with a refusal-shape AND the input didn't. Keeps legitimate
+    /// dictation that happens to open with "I'm sorry" / "I cannot"
+    /// from being mistakenly reverted.
+    private static func looksLikeRefusal(input: String, output: String) -> Bool {
+        let outputHead = output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .prefix(48)
+        let inputHead = input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .prefix(48)
+        for prefix in refusalPrefixes {
+            if outputHead.hasPrefix(prefix) && !inputHead.hasPrefix(prefix) {
+                return true
+            }
+        }
+        return false
     }
 
     func assist(

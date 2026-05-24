@@ -20,9 +20,15 @@ import Foundation
 /// another using the default). Putting the path on the synced side would be
 /// self-defeating.
 enum SyncedStorage {
+#if canImport(AppKit)
     /// Resolves the synced folder URL. Reads `AppState.shared.settings.syncedDirectoryPath`
     /// from the main actor — callers from background contexts should hop
     /// to main before calling.
+    ///
+    /// macOS-only: the synced-folder picker (`Settings → General → Synced
+    /// folder`) lives behind `AppState`, which is itself macOS-only. iOS
+    /// always uses `defaultDirectory`; when iOS grows a custom-folder
+    /// picker the platform conditional comes off.
     @MainActor
     static var directory: URL {
         let custom = AppState.shared.settings.syncedDirectoryPath
@@ -31,20 +37,24 @@ enum SyncedStorage {
         }
         return defaultDirectory
     }
+#endif
 
     /// Default location, `~/Documents/Dictator/`. User-visible in Finder
     /// under Documents; if that folder is in iCloud Drive (or any other
     /// sync provider) the contents sync automatically. `nonisolated` so
     /// the settings loader can use it before AppState is ready.
     nonisolated static var defaultDirectory: URL {
+        // `homeDirectoryForCurrentUser` is macOS-only; `NSHomeDirectory()`
+        // works on both platforms and returns the sandbox home on iOS.
         let documents = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)
             .first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                 .appendingPathComponent("Documents")
         return documents.appendingPathComponent("Dictator", isDirectory: true)
     }
 
+#if canImport(AppKit)
     /// Build a file URL inside the synced folder. Creates the folder
     /// lazily on first request so callers don't have to remember.
     @MainActor
@@ -52,6 +62,7 @@ enum SyncedStorage {
         ensureDirectory(at: directory)
         return directory.appendingPathComponent(filename)
     }
+#endif
 
     /// Same as `fileURL(for:)` but for use during the early bootstrap path
     /// where AppState may not yet be initialised. Caller passes in the
@@ -61,6 +72,7 @@ enum SyncedStorage {
         return directory.appendingPathComponent(filename)
     }
 
+#if canImport(AppKit)
     /// One-time migration: if `filename` lives in the legacy App Support
     /// location and a copy doesn't already exist in the synced folder,
     /// copy it over. Idempotent — once the synced copy exists, subsequent
@@ -118,6 +130,7 @@ enum SyncedStorage {
             try? FileManager.default.copyItem(at: src, to: dst)
         }
     }
+#endif
 
     private nonisolated static func ensureDirectory(at url: URL) {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
