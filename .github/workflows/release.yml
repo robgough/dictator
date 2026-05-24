@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Need the full history so the appcast commit-back doesn't fail with
           # a shallow-clone push error.
