@@ -1592,6 +1592,15 @@ private struct GeneralPane: View {
                 SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant. Per-Mac because RAM cost differs by machine.")
             } header: { ThisMacHeader("Performance") }
             Section {
+                Picker("While dictating", selection: $s.settings.audioInterruption) {
+                    ForEach(AudioInterruption.allCases, id: \.self) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .onChange(of: s.settings.audioInterruption) { _, _ in state.save() }
+                SectionFootnote("**Lower volume** dips the system output for the length of each dictation, then restores. Doesn't work on USB / Thunderbolt audio interfaces whose driver owns the volume (the macOS slider is greyed out for those) — use **Pause** instead, which tells Spotify or Music to pause regardless of how audio is routed. Pause asks for one-time Automation permission the first time it fires for each app. Per-Mac because the right choice depends on this machine's output device.")
+            } header: { ThisMacHeader("Other audio") }
+            Section {
                 SyncedFolderRow()
             } header: { Text("Synced folder") }
         }

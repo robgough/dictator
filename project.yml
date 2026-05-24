@@ -122,7 +122,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
-        NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app."
+        NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app, and (if you turn on \"Pause other audio\" in Settings) tells Spotify or Music to pause while you're dictating."
         # Sparkle auto-updates. The appcast lives at the URL below (served by
         # GitHub Pages from docs/appcast.xml). SUPublicEDKey is the EdDSA
         # public key used to verify each release's signature; generate the

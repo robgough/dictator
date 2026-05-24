@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- New Settings → General → Other audio setting to quiet other apps while you're dictating. Two options: Lower volume (dips the system output for the length of each recording, then restores) and Pause (asks Spotify or Music to pause for the length of each recording, then resumes if they were playing when you started). Pause is the one to pick if you've got an external audio interface that owns its own volume — the macOS slider is greyed out on those and Lower volume has no effect. Pause asks for one-time Automation permission per app the first time it runs.
 
 ## v2026.5.10 — 2026-05-22
 

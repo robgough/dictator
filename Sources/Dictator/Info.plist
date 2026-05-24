@@ -36,7 +36,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Dictator pastes transcribed text into the focused app.</string>
+	<string>Dictator pastes transcribed text into the focused app, and (if you turn on "Pause other audio" in Settings) tells Spotify or Music to pause while you're dictating.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dictator needs microphone access to listen and transcribe your speech.</string>
 	<key>NSServices</key>

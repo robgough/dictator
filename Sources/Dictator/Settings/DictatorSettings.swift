@@ -53,6 +53,34 @@ enum GrammarPassMode: String, Codable, Sendable, Hashable, CaseIterable {
     }
 }
 
+/// How Dictator should quiet other audio while it's actively listening.
+///
+/// - `off`: don't touch other audio. Default.
+/// - `lowerVolume`: temporarily lower the system output volume to a soft
+///   level for the duration of the recording, then restore. Works on the
+///   built-in speakers, headphones, and most Bluetooth outputs — but is a
+///   no-op on USB / Thunderbolt audio interfaces whose driver owns the gain
+///   stage (the macOS volume slider is greyed out for those).
+/// - `pauseMedia`: tell the system Now Playing app to pause for the
+///   duration of the recording, then resume if it was playing when we
+///   started. Bypasses the output-device gain question entirely — works
+///   regardless of the routing — but only affects apps that publish a Now
+///   Playing session (Music, Spotify, Podcasts, YouTube in Safari, …).
+///   The escape hatch for users on external interfaces.
+enum AudioInterruption: String, Codable, Sendable, Hashable, CaseIterable {
+    case off
+    case lowerVolume
+    case pauseMedia
+
+    var label: String {
+        switch self {
+        case .off: return "Don't change"
+        case .lowerVolume: return "Lower volume"
+        case .pauseMedia: return "Pause"
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
@@ -64,6 +92,12 @@ struct DictatorSettings: Codable, Equatable {
     var llmModelID: String
     var pasteAutomatically: Bool
     var playSounds: Bool
+    /// What to do with other apps' audio while a dictation is in flight.
+    /// Per-Mac because the right choice depends on this machine's output
+    /// device — `lowerVolume` is a no-op on external interfaces whose
+    /// driver owns the gain stage, so people with those typically want
+    /// `pauseMedia` on that Mac and `lowerVolume` on others.
+    var audioInterruption: AudioInterruption
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
     /// One-shot migration scratch space. Pre-VocabularyStore installs persisted
@@ -126,6 +160,7 @@ struct DictatorSettings: Codable, Equatable {
         llmModelID: ModelCatalog.defaultLLM.id,
         pasteAutomatically: true,
         playSounds: true,
+        audioInterruption: .off,
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
         vocabulary: [],
@@ -147,6 +182,7 @@ struct DictatorSettings: Codable, Equatable {
         llmModelID: String,
         pasteAutomatically: Bool,
         playSounds: Bool,
+        audioInterruption: AudioInterruption,
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
         vocabulary: [VocabularyEntry],
@@ -166,6 +202,7 @@ struct DictatorSettings: Codable, Equatable {
         self.llmModelID = llmModelID
         self.pasteAutomatically = pasteAutomatically
         self.playSounds = playSounds
+        self.audioInterruption = audioInterruption
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
         self.vocabulary = vocabulary
@@ -206,6 +243,7 @@ struct DictatorSettings: Codable, Equatable {
         }
         self.pasteAutomatically     = try c.decodeIfPresent(Bool.self,        forKey: .pasteAutomatically)     ?? d.pasteAutomatically
         self.playSounds             = try c.decodeIfPresent(Bool.self,        forKey: .playSounds)             ?? d.playSounds
+        self.audioInterruption      = try c.decodeIfPresent(AudioInterruption.self, forKey: .audioInterruption) ?? d.audioInterruption
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
@@ -862,6 +900,7 @@ struct DictatorSettings: Codable, Equatable {
         case transcriptionEngine, whisperModelID, parakeetModelID
         case llmEngine, llmModelID
         case pasteAutomatically, playSounds
+        case audioInterruption
         case triggerMode, preloadModelsOnLaunch
         case vocabulary, syncedDirectoryPath
         case assistantTriggerMode, userName
@@ -908,6 +947,7 @@ struct DictatorSettings: Codable, Equatable {
         "llmEngine",
         "llmModelID",
         "preloadModelsOnLaunch",
+        "audioInterruption",
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
         "hasCompletedOnboarding",

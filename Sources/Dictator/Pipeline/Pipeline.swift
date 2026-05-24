@@ -104,6 +104,7 @@ final class Pipeline {
     private let whisper = TranscriptionServiceHolder.shared
     private let parakeet = ParakeetServiceHolder.shared
     private let injector = TextInjector()
+    private let audioInterrupter = AudioInterrupter()
 
     /// Resolves the currently-selected engine to the concrete service plus
     /// the model ID it should run with. Both call sites in the pipeline
@@ -227,6 +228,10 @@ final class Pipeline {
         guard case .warmingUp(let isAssistant) = state else { return }
         state = .recording(level: 0, isAssistant: isAssistant)
         if settings.playSounds { SoundEffects.shared.playStart() }
+        // Engaged after the start sound so the chime itself isn't dipped
+        // by the very ducking it announces. Mode is snapshotted inside
+        // start(); the matching stop() restores whatever was applied.
+        audioInterrupter.start(mode: settings.audioInterruption)
     }
 
     private func handleRecorderStartFailed(error: Error) {
@@ -240,6 +245,7 @@ final class Pipeline {
     private func handleUnexpectedStop(note: String) {
         guard case .recording = state else { return }
         let samples = recorder.stop()
+        audioInterrupter.stop()
         guard samples.count > 8_000 else {
             fail(note)
             return
@@ -323,6 +329,7 @@ final class Pipeline {
         }
         guard case .recording = state else { return }
         let samples = recorder.stop()
+        audioInterrupter.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
         guard samples.count > 8_000 else { // <0.5s of audio @ 16kHz
             state = .idle
@@ -927,6 +934,9 @@ final class Pipeline {
         } else if case .warmingUp = state {
             recorder.cancelStart()
         }
+        // Idempotent — start() only engages from .recording, so this is a
+        // no-op on the .warmingUp branch but a real restore on .recording.
+        audioInterrupter.stop()
         inFlightTask?.cancel()
         inFlightTask = nil
         inFlightAssistant = nil
@@ -965,6 +975,7 @@ final class Pipeline {
         }
         guard case .recording = state else { return }
         let samples = recorder.stop()
+        audioInterrupter.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
         guard samples.count > 8_000 else {
             inFlightAssistant = nil
