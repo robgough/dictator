@@ -16,6 +16,7 @@ entries as plain bullet lines.
 - Settings → About now shows lifetime usage in two colour-coded cards: Dictation (transcriptions, average words per transcription, words spoken, words delivered) and Assistant (turns, average words per instruction, instruction words, reply words). Counts live alongside your other synced settings, so a folder shared via iCloud Drive shows the combined totals across every Mac.
 - A third card below those shows total tokens generated locally by the LLM (across both the dictation cleanup passes and assistant turns), with input/output breakdown. Exact counts when MLX is the engine; approximate when Apple's foundation model handled the call.
 - When more than one Mac is contributing to a shared stats file (via iCloud Drive), the LLM token card splits into a side-by-side comparison of this Mac vs. all Macs.
+- The Stats footer now reflects whether your synced folder is actually in iCloud Drive instead of describing it conditionally — and points to Settings → General → Synced folder when it isn't.
 
 ## v2026.5.11 — 2026-05-24
 

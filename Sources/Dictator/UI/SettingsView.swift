@@ -161,6 +161,7 @@ private struct AboutStats: View {
     @State private var stats: UsageStats = .zero
     @State private var thisDeviceStats: UsageStats = .zero
     @State private var deviceCount: Int = 0
+    @State private var syncedFolderInICloud: Bool = false
 
     var body: some View {
         AboutSection(title: "Your usage") {
@@ -202,7 +203,7 @@ private struct AboutStats: View {
                         showsPerDevice: deviceCount > 1
                     )
                 }
-                Text("Counted on-device with no telemetry. When your synced folder lives in iCloud Drive, totals add up across every Mac sharing it.")
+                Text(footerText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -213,6 +214,20 @@ private struct AboutStats: View {
             stats = UsageStatsStore.shared.totals
             thisDeviceStats = UsageStatsStore.shared.thisDeviceStats
             deviceCount = UsageStatsStore.shared.deviceCount
+            syncedFolderInICloud = SyncedStorage.isInICloudDrive
+        }
+    }
+
+    /// Footer copy is concrete instead of conditional — we know
+    /// whether the synced folder is in iCloud Drive, so we say so
+    /// rather than asking the user to figure it out. The "Move it…"
+    /// nudge is a one-line pointer to the existing General-pane
+    /// picker so the user has somewhere to act if they want to.
+    private var footerText: String {
+        if syncedFolderInICloud {
+            return "Counted on-device with no telemetry. Your synced folder is in iCloud Drive — totals add up across every Mac sharing it."
+        } else {
+            return "Counted on-device with no telemetry. Your synced folder is local to this Mac — move it into iCloud Drive in Settings → General → Synced folder to combine totals across Macs."
         }
     }
 }
