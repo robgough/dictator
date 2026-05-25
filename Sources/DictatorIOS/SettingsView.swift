@@ -29,11 +29,6 @@ struct SettingsView: View {
     /// etc.). Shown inline so the user sees why it didn't connect.
     @State private var sharedFolderError: String?
 
-    @AppStorage(DictatorIOSSettings.cuePunctuationKey) private var punctuationEnabled = true
-    @AppStorage(DictatorIOSSettings.cueNumbersKey) private var numbersEnabled = true
-    @AppStorage(DictatorIOSSettings.cueTimesKey) private var timesEnabled = true
-    @AppStorage(DictatorIOSSettings.cueCurrencyKey) private var currencyEnabled = true
-    @AppStorage(DictatorIOSSettings.cueEmojisKey) private var emojisEnabled = true
     @AppStorage(DictatorIOSSettings.foundationCleanupKey) private var foundationCleanupEnabled = false
 
     /// Snapshotted once on view appear — `SystemLanguageModel.default.availability`
@@ -105,18 +100,6 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Punctuation cues", isOn: $punctuationEnabled)
-                Toggle("Numbers & arithmetic", isOn: $numbersEnabled)
-                Toggle("Clock times", isOn: $timesEnabled)
-                Toggle("Currency", isOn: $currencyEnabled)
-                Toggle("Emoji names", isOn: $emojisEnabled)
-            } header: {
-                Text("Deterministic Substitutions")
-            } footer: {
-                Text("Punctuation: \"comma\", \"new paragraph\", \"open quote\", \"em dash\", etc.\nNumbers: \"five plus three\" → \"5 + 3\", \"twenty-five\" → 25.\nTimes: \"ten thirty PM\" → \"10:30pm\", \"sixteen hundred hours\" → \"1600 hours\".\nCurrency: \"five dollars\" → \"$5\", \"twenty pounds\" → \"£20\".\nEmoji: \"fire emoji\" → 🔥, \"vulcan emoji\" → 🖖. Covers the full Unicode emoji set by name plus hundreds of curated aliases.")
-            }
-
-            Section {
                 if let sharedFolderPath {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -162,6 +145,11 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    SubstitutionsView()
+                } label: {
+                    Label("Substitutions", systemImage: "arrow.left.arrow.right")
+                }
                 NavigationLink {
                     VocabularyView()
                 } label: {

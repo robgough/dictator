@@ -23,3 +23,4 @@ listing — keep entries as plain bullet lines.
 - About screen now shows a Your usage section: dictations, assistant turns, words spoken, words delivered, counted on-device.
 - New Settings → Shared folder option. Pick a folder in iCloud Drive (typically iCloud Drive › Documents › Dictator on a Mac with Desktop & Documents syncing on) to share your custom vocabulary and usage stats with the Mac app or another iPhone signed into the same iCloud account. Dictation history and assistant conversations stay on this device only.
 - Vocabulary editor moves into its own pushed page from Settings, with an entry-count badge on the link, so the Settings screen stops scrolling past the substitution toggles.
+- Spoken-cue toggles (Punctuation, Numbers, Clock times, Currency, Emoji names) move to their own Substitutions page reached from Settings.
