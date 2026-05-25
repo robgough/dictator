@@ -102,9 +102,14 @@ final class AppleFoundationLLMService: LLMEngine {
             temperature: 0.0,
             maximumResponseTokens: maxTokens
         )
+        let promptText = LLMTextUtilities.wrapAsData(text)
         let response = try await session.respond(
-            to: LLMTextUtilities.wrapAsData(text),
+            to: promptText,
             options: options
+        )
+        Self.recordTokenUsage(
+            promptCharCount: systemPrompt.count + promptText.count,
+            responseCharCount: response.content.count
         )
         let cleaned = LLMTextUtilities.clean(response.content)
 
@@ -208,6 +213,10 @@ final class AppleFoundationLLMService: LLMEngine {
         if cancellation() {
             throw CancellationError()
         }
+        Self.recordTokenUsage(
+            promptCharCount: systemPrompt.count + prompt.count,
+            responseCharCount: response.content.count
+        )
         return LLMTextUtilities.parseAssistant(response.content)
     }
 
@@ -259,6 +268,10 @@ final class AppleFoundationLLMService: LLMEngine {
         if cancellation() {
             throw CancellationError()
         }
+        Self.recordTokenUsage(
+            promptCharCount: LLMTextUtilities.summariserSystemPrompt.count + userText.count,
+            responseCharCount: response.content.count
+        )
         let cleaned = LLMTextUtilities.clean(response.content)
         guard !cleaned.isEmpty else {
             throw NSError(domain: "Dictator", code: 3,
@@ -268,6 +281,21 @@ final class AppleFoundationLLMService: LLMEngine {
     }
 
     // MARK: - Helpers
+
+    /// Approximate LLM token accounting for the just-completed
+    /// respond call. The Apple Foundation Models exact tokeniser
+    /// (`SystemLanguageModel.tokenCount(for:)`) is only available on
+    /// macOS / iOS 26.4+, and the app's deployment target is 26.0,
+    /// so we fall back to the industry-standard 4-chars-per-token
+    /// approximation for English BPE — accurate to within ~10–15%
+    /// for typical dictation and assistant text. Good enough for a
+    /// stats line on the About surface. Swap for the exact call
+    /// when the deployment target moves to 26.4.
+    private static func recordTokenUsage(promptCharCount: Int, responseCharCount: Int) {
+        let approxIn = max(0, promptCharCount) / 4
+        let approxOut = max(0, responseCharCount) / 4
+        UsageStatsStore.shared.recordLLMTokens(in: approxIn, out: approxOut)
+    }
 
     private static func map(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> Unavailable {
         switch reason {

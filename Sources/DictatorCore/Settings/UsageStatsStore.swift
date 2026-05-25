@@ -35,6 +35,15 @@ public struct UsageStats: Equatable, Sendable {
     public var assistantWordsIn: Int = 0
     public var assistantWordsOut: Int = 0
 
+    /// Combined LLM token usage across every on-device call — the
+    /// dictation cleanup passes (format / grammar / structure) and
+    /// every assistant turn. Kept as a single combined count rather
+    /// than split per-pass because the user-facing story is "tokens
+    /// generated locally", not "tokens per pass". Always zero when no
+    /// LLM engine is selected.
+    public var llmTokensIn: Int = 0
+    public var llmTokensOut: Int = 0
+
     public static let zero = UsageStats()
 
     /// Total words across both flows. Kept as a derived value rather
@@ -67,7 +76,9 @@ public struct UsageStats: Equatable, Sendable {
             dictationWordsIn: lhs.dictationWordsIn + rhs.dictationWordsIn,
             dictationWordsOut: lhs.dictationWordsOut + rhs.dictationWordsOut,
             assistantWordsIn: lhs.assistantWordsIn + rhs.assistantWordsIn,
-            assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut
+            assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut,
+            llmTokensIn: lhs.llmTokensIn + rhs.llmTokensIn,
+            llmTokensOut: lhs.llmTokensOut + rhs.llmTokensOut
         )
     }
 }
@@ -77,6 +88,7 @@ extension UsageStats: Codable {
         case dictationCount, assistantCount
         case dictationWordsIn, dictationWordsOut
         case assistantWordsIn, assistantWordsOut
+        case llmTokensIn, llmTokensOut
         // Legacy flat fields from the v1 schema (one combined wordsIn /
         // wordsOut per device). When present on decode we fold them
         // into the dictation buckets — dictation is the dominant flow,
@@ -106,6 +118,8 @@ extension UsageStats: Codable {
             assistantWordsIn = 0
             assistantWordsOut = 0
         }
+        llmTokensIn = try c.decodeIfPresent(Int.self, forKey: .llmTokensIn) ?? 0
+        llmTokensOut = try c.decodeIfPresent(Int.self, forKey: .llmTokensOut) ?? 0
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -116,6 +130,8 @@ extension UsageStats: Codable {
         try c.encode(dictationWordsOut, forKey: .dictationWordsOut)
         try c.encode(assistantWordsIn, forKey: .assistantWordsIn)
         try c.encode(assistantWordsOut, forKey: .assistantWordsOut)
+        try c.encode(llmTokensIn, forKey: .llmTokensIn)
+        try c.encode(llmTokensOut, forKey: .llmTokensOut)
     }
 }
 
@@ -199,6 +215,25 @@ public final class UsageStatsStore {
             recomputeTotals()
             persist()
         }
+    }
+
+    /// Add LLM token usage to this device's running totals. Called by
+    /// the LLM services after every completed generate / respond call.
+    /// Tokens land in a combined bucket — across format / grammar /
+    /// structure / assistant passes — because the user story is
+    /// "tokens generated locally", not per-pass accounting. Zero or
+    /// negative inputs are coerced to zero; we don't want a failed
+    /// detached-task accounting hop to drive the total backwards.
+    public func recordLLMTokens(in tokensIn: Int, out tokensOut: Int) {
+        ensureLoaded()
+        guard tokensIn > 0 || tokensOut > 0 else { return }
+        var record = records[deviceID] ?? freshRecord()
+        record.stats.llmTokensIn += max(0, tokensIn)
+        record.stats.llmTokensOut += max(0, tokensOut)
+        record.lastUpdated = Date()
+        records[deviceID] = record
+        recomputeTotals()
+        persist()
     }
 
     /// Increment this device's counters by the supplied amounts. Loads
@@ -326,7 +361,9 @@ public final class UsageStatsStore {
             dictationWordsIn: max(existing.stats.dictationWordsIn, incoming.stats.dictationWordsIn),
             dictationWordsOut: max(existing.stats.dictationWordsOut, incoming.stats.dictationWordsOut),
             assistantWordsIn: max(existing.stats.assistantWordsIn, incoming.stats.assistantWordsIn),
-            assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut)
+            assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut),
+            llmTokensIn: max(existing.stats.llmTokensIn, incoming.stats.llmTokensIn),
+            llmTokensOut: max(existing.stats.llmTokensOut, incoming.stats.llmTokensOut)
         )
         return UsageStatsDeviceRecord(
             deviceName: incoming.deviceName,

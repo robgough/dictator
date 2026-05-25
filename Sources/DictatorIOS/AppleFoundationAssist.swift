@@ -65,6 +65,10 @@ enum AppleFoundationAssist {
         """
 
         let response = try await session.respond(to: prompt, options: options)
+        AppleFoundationTokenAccounting.record(
+            promptCharCount: systemPrompt.count + prompt.count,
+            responseCharCount: response.content.count
+        )
         var result = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Strip echoed wrappers if the model included them.

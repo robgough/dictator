@@ -99,6 +99,10 @@ enum AppleFoundationCleanup {
         // output.
         let wrapped = "<TRANSCRIPT>\(text)</TRANSCRIPT>"
         let response = try await session.respond(to: wrapped, options: options)
+        AppleFoundationTokenAccounting.record(
+            promptCharCount: systemPrompt.count + wrapped.count,
+            responseCharCount: response.content.count
+        )
         var cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Strip the wrapper tags in case the model echoes them.

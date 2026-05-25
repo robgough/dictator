@@ -191,6 +191,12 @@ private struct AboutStats: View {
                         wordsOutLabel: "reply words"
                     )
                 }
+                if stats.llmTokensIn + stats.llmTokensOut > 0 {
+                    LLMTokenCard(
+                        tokensIn: stats.llmTokensIn,
+                        tokensOut: stats.llmTokensOut
+                    )
+                }
                 Text("Counted on-device with no telemetry. When your synced folder lives in iCloud Drive, totals add up across every Mac sharing it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -288,6 +294,66 @@ private struct StatLine: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Combined LLM token total — sits below the two main flow cards.
+/// Cross-cuts both dictation cleanup passes and assistant turns, so
+/// it doesn't belong inside either flow card. Teal so it reads as
+/// related-but-different from the accent + purple above. Hidden when
+/// both counts are zero (no LLM engine selected, or no LLM activity
+/// yet) so an empty card doesn't take up visual space.
+private struct LLMTokenCard: View {
+    let tokensIn: Int
+    let tokensOut: Int
+
+    private static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f
+    }()
+
+    private static func formatted(_ value: Int) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Local LLM")
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+            }
+            .foregroundStyle(.teal)
+
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(Self.formatted(tokensIn + tokensOut))
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text("tokens generated on-device")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 18) {
+                StatLine(value: Self.formatted(tokensIn), label: "input")
+                StatLine(value: Self.formatted(tokensOut), label: "output")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.teal.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.teal.opacity(0.18), lineWidth: 1)
+        )
     }
 }
 

@@ -159,7 +159,7 @@ final class MLXLLMService: LLMEngine {
         // defensively.
         let userText = LLMTextUtilities.wrapAsData(text)
 
-        let raw = try await container.perform { (ctx: ModelContext) -> String in
+        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             let userInput = UserInput(chat: [
                 .system(systemPrompt),
                 .user(userText)
@@ -176,10 +176,11 @@ final class MLXLLMService: LLMEngine {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return result.output
+            return (result.output, result.promptTokenCount, result.generationTokenCount)
         }
 
-        return LLMTextUtilities.clean(raw)
+        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        return LLMTextUtilities.clean(generated.output)
     }
 
     /// Assistant Mode: takes an optional snippet of text the user had selected plus
@@ -208,7 +209,7 @@ final class MLXLLMService: LLMEngine {
 
         let currentUserText = LLMTextUtilities.renderAssistantUserMessage(selection: selection, instruction: instruction)
 
-        let raw = try await container.perform { (ctx: ModelContext) -> String in
+        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             var messages: [Chat.Message] = [.system(systemPrompt)]
 
             if let summary, !summary.isEmpty {
@@ -246,10 +247,11 @@ final class MLXLLMService: LLMEngine {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return result.output
+            return (result.output, result.promptTokenCount, result.generationTokenCount)
         }
 
-        return LLMTextUtilities.parseAssistant(raw)
+        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        return LLMTextUtilities.parseAssistant(generated.output)
     }
 
     /// Compacts a slice of conversation turns plus any pre-existing summary
@@ -299,7 +301,7 @@ final class MLXLLMService: LLMEngine {
         >>>
         """
 
-        let raw = try await container.perform { (ctx: ModelContext) -> String in
+        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             let userInput = UserInput(chat: [
                 .system(LLMTextUtilities.summariserSystemPrompt),
                 .user(userText)
@@ -312,10 +314,11 @@ final class MLXLLMService: LLMEngine {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return result.output
+            return (result.output, result.promptTokenCount, result.generationTokenCount)
         }
 
-        let cleaned = LLMTextUtilities.clean(raw)
+        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        let cleaned = LLMTextUtilities.clean(generated.output)
         guard !cleaned.isEmpty else {
             throw NSError(domain: "Dictator", code: 3, userInfo: [NSLocalizedDescriptionKey: "Summariser returned no text"])
         }
