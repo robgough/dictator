@@ -72,11 +72,43 @@ struct AboutView: View {
                 .listRowBackground(Color.clear)
             }
 
+            // Two cards, one per flow. The colour-coded layout makes
+            // the dictation/assistant split scannable at a glance —
+            // dropping the old flat row of four labels that conflated
+            // the two flows.
             Section {
-                StatRow(label: "Dictations", value: stats.dictationCount)
-                StatRow(label: "Assistant turns", value: stats.assistantCount)
-                StatRow(label: "Words spoken", value: stats.wordsIn)
-                StatRow(label: "Words delivered", value: stats.wordsOut)
+                StatsCard(
+                    title: "Dictation",
+                    systemImage: "waveform",
+                    tint: .accentColor,
+                    primaryValue: stats.dictationCount,
+                    primaryLabel: stats.dictationCount == 1 ? "transcription" : "transcriptions",
+                    averageValue: stats.averageDictationWords,
+                    averageLabel: "avg words per transcription",
+                    wordsIn: stats.dictationWordsIn,
+                    wordsInLabel: "words spoken",
+                    wordsOut: stats.dictationWordsOut,
+                    wordsOutLabel: "words delivered"
+                )
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                StatsCard(
+                    title: "Assistant",
+                    systemImage: "wand.and.stars",
+                    tint: .purple,
+                    primaryValue: stats.assistantCount,
+                    primaryLabel: stats.assistantCount == 1 ? "turn" : "turns",
+                    averageValue: stats.averageAssistantInstructionWords,
+                    averageLabel: "avg words per instruction",
+                    wordsIn: stats.assistantWordsIn,
+                    wordsInLabel: "instruction words",
+                    wordsOut: stats.assistantWordsOut,
+                    wordsOutLabel: "reply words"
+                )
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             } header: {
                 Text("Your usage")
             } footer: {
@@ -170,9 +202,18 @@ struct AboutView: View {
     }
 }
 
-private struct StatRow: View {
-    let label: String
-    let value: Int
+private struct StatsCard: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let primaryValue: Int
+    let primaryLabel: String
+    let averageValue: Int?
+    let averageLabel: String
+    let wordsIn: Int
+    let wordsInLabel: String
+    let wordsOut: Int
+    let wordsOutLabel: String
 
     private static let formatter: NumberFormatter = {
         let f = NumberFormatter()
@@ -181,14 +222,63 @@ private struct StatRow: View {
         return f
     }()
 
+    private static func formatted(_ value: Int) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
     var body: some View {
-        HStack {
-            Text(label)
-                .font(.callout)
-            Spacer()
-            Text(Self.formatter.string(from: NSNumber(value: value)) ?? "\(value)")
-                .font(.callout.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+            }
+            .foregroundStyle(tint)
+
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(Self.formatted(primaryValue))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(primaryLabel)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let avg = averageValue {
+                    StatLine(value: Self.formatted(avg), label: averageLabel)
+                }
+                StatLine(value: Self.formatted(wordsIn), label: wordsInLabel)
+                StatLine(value: Self.formatted(wordsOut), label: wordsOutLabel)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(tint.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct StatLine: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
                 .monospacedDigit()
+            Text(label)
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }

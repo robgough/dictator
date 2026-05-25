@@ -152,17 +152,44 @@ private struct CheckForUpdatesButton: View {
 /// which sums every device record in `stats.json` — so a user on
 /// iCloud Drive sees the combined "across all my Macs" numbers, not
 /// just this machine's contribution.
+///
+/// Layout: two cards side by side (dictation + assistant), each with
+/// a featured count, an average, and the per-mode word totals. Colour
+/// codes — accent for dictation (the dominant flow), purple for the
+/// assistant — let the eye pick a card without reading every label.
 private struct AboutStats: View {
     @State private var stats: UsageStats = .zero
 
     var body: some View {
         AboutSection(title: "Your usage") {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    StatTile(label: "Dictations", value: stats.dictationCount)
-                    StatTile(label: "Assistant turns", value: stats.assistantCount)
-                    StatTile(label: "Words spoken", value: stats.wordsIn)
-                    StatTile(label: "Words delivered", value: stats.wordsOut)
+                HStack(alignment: .top, spacing: 12) {
+                    StatsCard(
+                        title: "Dictation",
+                        systemImage: "waveform",
+                        tint: .accentColor,
+                        primaryValue: stats.dictationCount,
+                        primaryLabel: stats.dictationCount == 1 ? "transcription" : "transcriptions",
+                        averageValue: stats.averageDictationWords,
+                        averageLabel: "avg words per transcription",
+                        wordsIn: stats.dictationWordsIn,
+                        wordsInLabel: "words spoken",
+                        wordsOut: stats.dictationWordsOut,
+                        wordsOutLabel: "words delivered"
+                    )
+                    StatsCard(
+                        title: "Assistant",
+                        systemImage: "wand.and.stars",
+                        tint: .purple,
+                        primaryValue: stats.assistantCount,
+                        primaryLabel: stats.assistantCount == 1 ? "turn" : "turns",
+                        averageValue: stats.averageAssistantInstructionWords,
+                        averageLabel: "avg words per instruction",
+                        wordsIn: stats.assistantWordsIn,
+                        wordsInLabel: "instruction words",
+                        wordsOut: stats.assistantWordsOut,
+                        wordsOutLabel: "reply words"
+                    )
                 }
                 Text("Counted on-device with no telemetry. When your synced folder lives in iCloud Drive, totals add up across every Mac sharing it.")
                     .font(.caption)
@@ -177,9 +204,18 @@ private struct AboutStats: View {
     }
 }
 
-private struct StatTile: View {
-    let label: String
-    let value: Int
+private struct StatsCard: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let primaryValue: Int
+    let primaryLabel: String
+    let averageValue: Int?
+    let averageLabel: String
+    let wordsIn: Int
+    let wordsInLabel: String
+    let wordsOut: Int
+    let wordsOutLabel: String
 
     private static let formatter: NumberFormatter = {
         let f = NumberFormatter()
@@ -188,18 +224,70 @@ private struct StatTile: View {
         return f
     }()
 
+    private static func formatted(_ value: Int) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(Self.formatter.string(from: NSNumber(value: value)) ?? "\(value)")
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
+        VStack(alignment: .leading, spacing: 12) {
+            // Heading: small icon + title in the card's accent colour
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+            }
+            .foregroundStyle(tint)
+
+            // Featured count + its label
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                Text(Self.formatted(primaryValue))
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(primaryLabel)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Supporting rows. Average only renders once the user has
+            // at least one record on this side — empty divisions read
+            // as 0 which would be misleading.
+            VStack(alignment: .leading, spacing: 4) {
+                if let avg = averageValue {
+                    StatLine(value: "\(Self.formatted(avg))", label: averageLabel)
+                }
+                StatLine(value: Self.formatted(wordsIn), label: wordsInLabel)
+                StatLine(value: Self.formatted(wordsOut), label: wordsOutLabel)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(tint.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct StatLine: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
                 .monospacedDigit()
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
     }
 }
 

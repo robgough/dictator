@@ -20,21 +20,102 @@ import UIKit
 /// iOS has no cross-device sync today (the file lives in the app
 /// sandbox, not Files.app), but uses the same schema so a future
 /// sync story drops in without a migration.
-public struct UsageStats: Codable, Equatable, Sendable {
+public struct UsageStats: Equatable, Sendable {
     public var dictationCount: Int = 0
     public var assistantCount: Int = 0
-    public var wordsIn: Int = 0
-    public var wordsOut: Int = 0
+
+    /// Words the user spoke during plain dictations (raw transcript
+    /// count) and words actually delivered (final, post-pass count).
+    /// Tracked separately from the assistant counters because the two
+    /// flows answer different questions: dictation in/out tells you
+    /// how much the cleanup passes trimmed; assistant in/out tells you
+    /// how much the model expanded a short instruction into reply text.
+    public var dictationWordsIn: Int = 0
+    public var dictationWordsOut: Int = 0
+    public var assistantWordsIn: Int = 0
+    public var assistantWordsOut: Int = 0
 
     public static let zero = UsageStats()
+
+    /// Total words across both flows. Kept as a derived value rather
+    /// than a stored field so the per-mode counts are always the
+    /// single source of truth.
+    public var wordsIn: Int { dictationWordsIn + assistantWordsIn }
+    public var wordsOut: Int { dictationWordsOut + assistantWordsOut }
+
+    /// Average words per dictation, rounded to the nearest integer.
+    /// `nil` when there are no dictations yet — divide-by-zero on
+    /// an empty data set is meaningless; the UI just hides the row.
+    public var averageDictationWords: Int? {
+        guard dictationCount > 0 else { return nil }
+        return Int((Double(dictationWordsOut) / Double(dictationCount)).rounded())
+    }
+
+    /// Average length of the user's spoken assistant instructions —
+    /// "how chatty are my prompts". Output-side average (reply length)
+    /// would be more about the model than the user, so we surface the
+    /// input side instead.
+    public var averageAssistantInstructionWords: Int? {
+        guard assistantCount > 0 else { return nil }
+        return Int((Double(assistantWordsIn) / Double(assistantCount)).rounded())
+    }
 
     public static func + (lhs: UsageStats, rhs: UsageStats) -> UsageStats {
         UsageStats(
             dictationCount: lhs.dictationCount + rhs.dictationCount,
             assistantCount: lhs.assistantCount + rhs.assistantCount,
-            wordsIn: lhs.wordsIn + rhs.wordsIn,
-            wordsOut: lhs.wordsOut + rhs.wordsOut
+            dictationWordsIn: lhs.dictationWordsIn + rhs.dictationWordsIn,
+            dictationWordsOut: lhs.dictationWordsOut + rhs.dictationWordsOut,
+            assistantWordsIn: lhs.assistantWordsIn + rhs.assistantWordsIn,
+            assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut
         )
+    }
+}
+
+extension UsageStats: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case dictationCount, assistantCount
+        case dictationWordsIn, dictationWordsOut
+        case assistantWordsIn, assistantWordsOut
+        // Legacy flat fields from the v1 schema (one combined wordsIn /
+        // wordsOut per device). When present on decode we fold them
+        // into the dictation buckets — dictation is the dominant flow,
+        // and the inaccuracy is one-time per upgrade and visually
+        // small once new counts accumulate on top.
+        case wordsIn, wordsOut
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dictationCount = try c.decodeIfPresent(Int.self, forKey: .dictationCount) ?? 0
+        assistantCount = try c.decodeIfPresent(Int.self, forKey: .assistantCount) ?? 0
+
+        if let dIn = try c.decodeIfPresent(Int.self, forKey: .dictationWordsIn) {
+            dictationWordsIn = dIn
+            dictationWordsOut = try c.decodeIfPresent(Int.self, forKey: .dictationWordsOut) ?? 0
+            assistantWordsIn = try c.decodeIfPresent(Int.self, forKey: .assistantWordsIn) ?? 0
+            assistantWordsOut = try c.decodeIfPresent(Int.self, forKey: .assistantWordsOut) ?? 0
+        } else {
+            // v1 file: only flat wordsIn / wordsOut. Credit them to
+            // dictation so the user's lifetime word total survives the
+            // upgrade.
+            let legacyIn = try c.decodeIfPresent(Int.self, forKey: .wordsIn) ?? 0
+            let legacyOut = try c.decodeIfPresent(Int.self, forKey: .wordsOut) ?? 0
+            dictationWordsIn = legacyIn
+            dictationWordsOut = legacyOut
+            assistantWordsIn = 0
+            assistantWordsOut = 0
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(dictationCount, forKey: .dictationCount)
+        try c.encode(assistantCount, forKey: .assistantCount)
+        try c.encode(dictationWordsIn, forKey: .dictationWordsIn)
+        try c.encode(dictationWordsOut, forKey: .dictationWordsOut)
+        try c.encode(assistantWordsIn, forKey: .assistantWordsIn)
+        try c.encode(assistantWordsOut, forKey: .assistantWordsOut)
     }
 }
 
@@ -126,14 +207,18 @@ public final class UsageStatsStore {
     public func record(mode: UsageStatsMode, wordsIn: Int, wordsOut: Int) {
         ensureLoaded()
         var record = records[deviceID] ?? freshRecord()
+        let safeIn = max(0, wordsIn)
+        let safeOut = max(0, wordsOut)
         switch mode {
         case .dictation:
             record.stats.dictationCount += 1
+            record.stats.dictationWordsIn += safeIn
+            record.stats.dictationWordsOut += safeOut
         case .assistant:
             record.stats.assistantCount += 1
+            record.stats.assistantWordsIn += safeIn
+            record.stats.assistantWordsOut += safeOut
         }
-        record.stats.wordsIn += max(0, wordsIn)
-        record.stats.wordsOut += max(0, wordsOut)
         record.lastUpdated = Date()
         records[deviceID] = record
         recomputeTotals()
@@ -238,8 +323,10 @@ public final class UsageStatsStore {
         let stats = UsageStats(
             dictationCount: max(existing.stats.dictationCount, incoming.stats.dictationCount),
             assistantCount: max(existing.stats.assistantCount, incoming.stats.assistantCount),
-            wordsIn: max(existing.stats.wordsIn, incoming.stats.wordsIn),
-            wordsOut: max(existing.stats.wordsOut, incoming.stats.wordsOut)
+            dictationWordsIn: max(existing.stats.dictationWordsIn, incoming.stats.dictationWordsIn),
+            dictationWordsOut: max(existing.stats.dictationWordsOut, incoming.stats.dictationWordsOut),
+            assistantWordsIn: max(existing.stats.assistantWordsIn, incoming.stats.assistantWordsIn),
+            assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut)
         )
         return UsageStatsDeviceRecord(
             deviceName: incoming.deviceName,
