@@ -165,6 +165,11 @@ struct SettingsView: View {
                     }
                 }
                 NavigationLink {
+                    StatsView()
+                } label: {
+                    Label("Stats", systemImage: "chart.bar")
+                }
+                NavigationLink {
                     AboutView()
                 } label: {
                     Label("About Dictator", systemImage: "info.circle")
