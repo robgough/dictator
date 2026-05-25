@@ -2,19 +2,68 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
+    /// Optional keyboard-extension hand-off. When non-nil, the
+    /// granted-content view shows a "Keyboard mode" banner and the
+    /// view model will write the next successful transcript to the
+    /// shared App Group container for the keyboard to insert.
+    @Binding var keyboardRequest: KeyboardBridge.Request?
+
     @State private var viewModel = RecordingViewModel()
     /// True while the transcript `TextEditor` holds focus (i.e. the
     /// system keyboard is up). Drives the layout collapse — when
     /// editing, the keyboard eats ~half the screen on phones, so the
     /// mic/copy controls compress to a single row.
     @FocusState private var transcriptFocused: Bool
+    /// Mirrored to the bridge so the keyboard extension can both
+    /// self-dismiss inside the Dictator app and freshness-check the
+    /// model readiness chip (we only trust `loaded` while the host
+    /// is actively heartbeating; a backgrounded or killed host ages
+    /// out of the "ready" state).
+    @Environment(\.scenePhase) private var scenePhase
     /// Shows the model-info sheet (status, unload). Driven by a tap
     /// on the persistent model-status chip in `grantedContent`.
     @State private var showingModelSheet = false
+    /// Shows the "return to your app" hint alert in keyboard mode.
+    @State private var showingReturnHint = false
+    /// Shows the keyboard-setup walkthrough sheet from the onboarding
+    /// card on the main view.
+    @State private var showingKeyboardSetup = false
+    /// Persistent dismissal of the onboarding card. Flips to true
+    /// once the user either taps the card's X or — handled in the
+    /// onChange handler — actually uses the keyboard.
+    @AppStorage(DictatorIOSSettings.keyboardOnboardingDismissedKey) private var keyboardOnboardingDismissed = false
+    /// Drives the unified first-launch sheet. Flipped to true when
+    /// the user either walks through every step (auto-dismisses on
+    /// step 4 completion) or taps "Skip for now". Supersedes the
+    /// older keyboard-card flag — the existing scattered cards stay
+    /// around as fallback re-prompts, but the sheet is one-and-done.
+    @AppStorage(DictatorIOSSettings.onboardingCompletedKey) private var onboardingCompleted = false
+
+    /// Default initialiser for non-keyboard use — wraps a non-bound
+    /// constant nil so existing call sites keep working.
+    init(keyboardRequest: Binding<KeyboardBridge.Request?> = .constant(nil)) {
+        self._keyboardRequest = keyboardRequest
+    }
 
     var body: some View {
+        // Screenshot-capture hook. Replaces the entire UI with the
+        // standalone keyboard mockup when the harness asks for it —
+        // the real Dictator keyboard is an app extension that only
+        // shows in a host app after Settings setup, which we can't
+        // drive automatically in the simulator.
+        if ProcessInfo.processInfo.environment["DICTATOR_SCREENSHOT_STATE"] == "keyboard"
+            || CommandLine.arguments.contains("-DictatorScreenshotState_keyboard") {
+            return AnyView(KeyboardShowcase())
+        }
+        return AnyView(mainContent)
+    }
+
+    private var mainContent: some View {
         NavigationStack {
             VStack(spacing: 16) {
+                if keyboardRequest != nil {
+                    keyboardModeBanner
+                }
                 switch viewModel.permission {
                 case .undetermined:
                     permissionPrompt
@@ -29,6 +78,54 @@ struct ContentView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
+            .onChange(of: keyboardRequest, initial: true) { _, new in
+                // Cold-launch and warm-launch both flow through here.
+                // Hand the active session to the view model so the
+                // next successful transcript writes back to the
+                // App Group container.
+                viewModel.activeKeyboardSession = new?.session
+                // First successful arrival from the keyboard means
+                // the user has clearly enabled it — hide the
+                // onboarding card from now on without them having to
+                // tap dismiss.
+                if new != nil {
+                    keyboardOnboardingDismissed = true
+                }
+                // Auto-start the appropriate flow when arriving via
+                // the keyboard. The user already pressed the
+                // corresponding tile in the keyboard — making them
+                // tap again once the host opens would feel broken.
+                if let req = new, viewModel.permission == .granted {
+                    switch req.mode {
+                    case .record:
+                        viewModel.startRecording()
+                    case .assist:
+                        // Pre-populate the transcript with the field
+                        // contents the keyboard captured, then start
+                        // recording the instruction the user is
+                        // about to speak.
+                        viewModel.transcript = req.surroundingText ?? ""
+                        viewModel.startAssistRecording()
+                    }
+                }
+            }
+            .onChange(of: viewModel.activeKeyboardSession) { _, current in
+                // View model cleared the session after writing the
+                // result — clear the binding too so the banner
+                // disappears and a subsequent dictation behaves as
+                // a regular in-app one.
+                if current == nil { keyboardRequest = nil }
+            }
+            .onChange(of: scenePhase, initial: true) { _, new in
+                // Drives two pieces of state at once:
+                //   1. The keyboard's auto-dismiss check (don't summon
+                //      the Dictator keyboard inside the Dictator app).
+                //   2. The keyboard's model-readiness freshness gate —
+                //      the view model heartbeats readiness while
+                //      foregrounded so a stale `loaded: true` claim
+                //      can't outlive the host.
+                viewModel.applyForegroundState(new == .active)
+            }
             // Whole-screen tap target with a low-priority tap gesture so
             // any tap outside an actual interactive element (TextEditor,
             // Copy button, mic button) dismisses the keyboard. SwiftUI
@@ -58,7 +155,91 @@ struct ContentView: View {
                 }
             }
         }
+        // First-launch onboarding sheet. Full-screen on iPhone via
+        // the default sheet behaviour at the root of the
+        // NavigationStack. Suppressed when the host was opened by
+        // the keyboard extension — the user is mid-dictation flow,
+        // not in setup-mode, and a sheet would block the recording
+        // UI underneath. They'll see the sheet on the next plain
+        // launch instead. Suppressed in the permission-denied state
+        // too, since the denial wall already tells them what to do
+        // and the sheet's first step would be unactionable.
+        .sheet(isPresented: onboardingSheetBinding) {
+            OnboardingSheet(viewModel: viewModel)
+        }
         .task { await viewModel.requestPermissionIfNeeded() }
+    }
+
+    /// Hoisted out of `body` to keep the type-checker happy — Swift
+    /// gets sluggish when a `Binding(get:set:)` lives inline next to
+    /// half a dozen other view modifiers, and times out on the
+    /// surrounding expression rather than this one. Putting it here
+    /// also makes the suppression rules easier to read at a glance.
+    private var onboardingSheetBinding: Binding<Bool> {
+        Binding(
+            get: {
+                let denied = viewModel.permission == .denied
+                let inKeyboardMode = keyboardRequest != nil
+                return !onboardingCompleted && !inKeyboardMode && !denied
+            },
+            set: { newValue in
+                // Mirror dismiss into persistence so a swipe-down
+                // (if iOS ever bypasses interactiveDismissDisabled)
+                // treats the sheet as "Skip for now" rather than
+                // re-presenting on next launch.
+                if newValue == false { onboardingCompleted = true }
+            }
+        )
+    }
+
+    /// Banner shown when the host was launched by the Dictator
+    /// keyboard extension. Lets the user know why the app jumped to
+    /// the front, that the result will fly back to the keyboard once
+    /// they finish dictating, AND gives them an X to bail out — used
+    /// when iOS leaves us stuck in keyboard mode (the previous-app
+    /// link is gone, or they decided to keep using Dictator standalone).
+    private var keyboardModeBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "keyboard")
+                .foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Keyboard mode")
+                    .font(.footnote.weight(.semibold))
+                Text("Dictate, then switch back to your previous app — the result will land where you were typing.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button {
+                exitKeyboardMode()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Exit keyboard mode")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    /// Tear down keyboard mode and abandon any in-flight recording.
+    /// Calling `cancelRecording` rather than just clearing the
+    /// session means tapping X while mid-dictation cleanly stops
+    /// the recorder without firing transcription — otherwise a
+    /// half-finished transcript would land in the local field a
+    /// few seconds later, which the user described as confusing.
+    private func exitKeyboardMode() {
+        viewModel.cancelRecording()
+        keyboardRequest = nil
+        KeyboardBridge.clearRequest()
     }
 
     /// Resigns first responder app-wide. Cheaper than threading a
@@ -111,10 +292,16 @@ struct ContentView: View {
                         .frame(width: 7, height: 7)
                     Text("Model loaded")
                 } else {
+                    // Orange "unloaded" rather than green "ready" —
+                    // the model is on disk but a first press has to
+                    // warm it up, so calling it "ready" mis-sells the
+                    // user on instant response. Three distinct
+                    // colours map to three distinct states across the
+                    // app and the keyboard.
                     Circle()
-                        .fill(.secondary)
+                        .fill(.orange)
                         .frame(width: 7, height: 7)
-                    Text("Model ready")
+                    Text("Model unloaded")
                 }
                 Image(systemName: "chevron.right")
                     .font(.caption2)
@@ -180,7 +367,7 @@ struct ContentView: View {
                 .padding(.top, -8)
 
             Button {
-                Task { await viewModel.downloadModel() }
+                Task { await viewModel.confirmAndDownloadModel() }
             } label: {
                 Text("Download (~460 MB)")
                     .frame(maxWidth: .infinity)
@@ -190,6 +377,23 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .padding(.horizontal)
             Spacer()
+        }
+        // Cellular confirmation. Presented when `confirmAndDownloadModel`
+        // detects the device is on cellular (or the link is unknown) so
+        // we don't kick off a ~460 MB download against the user's data
+        // plan without their say-so. "Download anyway" is destructive-
+        // styled to flag the data-plan consequence; "Wait for Wi-Fi" is
+        // the default cancel.
+        .alert(
+            "Download over cellular?",
+            isPresented: $viewModel.cellularConfirmationPending
+        ) {
+            Button("Wait for Wi-Fi", role: .cancel) {}
+            Button("Download anyway", role: .destructive) {
+                Task { await viewModel.downloadModel() }
+            }
+        } message: {
+            Text("The Parakeet speech model is about 460 MB. You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
         }
     }
 
@@ -313,10 +517,20 @@ struct ContentView: View {
                 Spacer()
             }
 
+            if !keyboardOnboardingDismissed && !viewModel.isKeyboardMode {
+                keyboardOnboardingCard
+            }
+
             TranscriptCard(
                 text: $viewModel.transcript,
                 status: viewModel.status,
-                focus: $transcriptFocused
+                focus: $transcriptFocused,
+                // In keyboard mode the user is here from the keyboard
+                // extension, mid-dictation flow — tapping into the
+                // transcript would summon the system keyboard on top
+                // of our UI and confuse the recording state. Lock the
+                // field down until they exit keyboard mode via the X.
+                isReadOnly: viewModel.isKeyboardMode
             )
             .frame(maxHeight: .infinity)
             // Floating undo button at the bottom-left of the
@@ -346,49 +560,127 @@ struct ContentView: View {
         .sheet(isPresented: $showingModelSheet) {
             ModelStatusSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $showingKeyboardSetup) {
+            KeyboardSetupSheet()
+        }
+    }
+
+    /// Dismissible onboarding card pointing the user at the Dictator
+    /// keyboard. Visible only when the user hasn't dismissed it and
+    /// isn't already in keyboard mode (no point nagging them about
+    /// enabling something they're currently using). Auto-dismisses
+    /// the first time a keyboard request arrives in `onChange` above.
+    private var keyboardOnboardingCard: some View {
+        Button {
+            showingKeyboardSetup = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "keyboard.fill")
+                    .font(.title3)
+                    .foregroundStyle(.purple)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Circle().fill(Color.purple.opacity(0.15))
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Type with your voice anywhere")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Enable the Dictator keyboard")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Button {
+                    keyboardOnboardingDismissed = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide this card")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     /// Default layout: red mic + purple assist button (when AI is
     /// available) side by side, Copy as a wide bar above, status label
-    /// + health warning underneath.
+    /// + health warning underneath. In keyboard mode the upper button
+    /// becomes "Switch back to your app" instead of Copy, and the
+    /// mic uses tap-to-stop instead of hold-to-talk.
     private var fullControls: some View {
         VStack(spacing: 16) {
-            Button {
-                viewModel.copyTranscriptToClipboard()
-            } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .font(.body.weight(.semibold))
+            if viewModel.isKeyboardMode {
+                switchBackButton
+            } else {
+                Button {
+                    viewModel.copyTranscriptToClipboard()
+                } label: {
+                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .font(.body.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.transcript.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.transcript.isEmpty)
 
             HStack(spacing: 28) {
-                HoldButton(
-                    status: viewModel.status,
-                    tint: .red,
-                    restingIcon: "mic.fill",
-                    isMyTurn: viewModel.recordingMode == .dictation,
-                    compact: false,
-                    onPress: { viewModel.startRecording() },
-                    onRelease: { Task { await viewModel.stopRecording() } }
-                )
-                .disabled(otherButtonBusy(for: .dictation))
-                .opacity(otherButtonBusy(for: .dictation) ? 0.4 : 1)
-
-                if AppleFoundationAssist.isAvailable {
+                if viewModel.isKeyboardMode {
+                    // Dispatch to the matching stop method —
+                    // stopRecording finishes a normal dictation,
+                    // stopAssistRecording runs the foundation-model
+                    // transform on the surrounding text the keyboard
+                    // captured. The single TapStopButton can't tell
+                    // them apart, so the controller has to.
+                    TapStopButton(status: viewModel.status) {
+                        Task {
+                            if viewModel.recordingMode == .assist {
+                                await viewModel.stopAssistRecording()
+                            } else {
+                                await viewModel.stopRecording()
+                            }
+                        }
+                    }
+                } else {
                     HoldButton(
                         status: viewModel.status,
-                        tint: .purple,
-                        restingIcon: "wand.and.stars",
-                        isMyTurn: viewModel.recordingMode == .assist,
+                        tint: .red,
+                        restingIcon: "mic.fill",
+                        isMyTurn: viewModel.recordingMode == .dictation,
                         compact: false,
-                        onPress: { viewModel.startAssistRecording() },
-                        onRelease: { Task { await viewModel.stopAssistRecording() } }
+                        onPress: { viewModel.startRecording() },
+                        onRelease: { Task { await viewModel.stopRecording() } }
                     )
-                    .disabled(assistDisabled)
-                    .opacity(assistDisabled ? 0.35 : 1)
+                    .disabled(otherButtonBusy(for: .dictation))
+                    .opacity(otherButtonBusy(for: .dictation) ? 0.4 : 1)
+
+                    if AppleFoundationAssist.isAvailable {
+                        HoldButton(
+                            status: viewModel.status,
+                            tint: .purple,
+                            restingIcon: "wand.and.stars",
+                            isMyTurn: viewModel.recordingMode == .assist,
+                            compact: false,
+                            onPress: { viewModel.startAssistRecording() },
+                            onRelease: { Task { await viewModel.stopAssistRecording() } }
+                        )
+                        .disabled(assistDisabled)
+                        .opacity(assistDisabled ? 0.35 : 1)
+                    }
                 }
             }
 
@@ -398,6 +690,36 @@ struct ContentView: View {
             healthWarning
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// Replaces the Copy button when the host was opened from the
+    /// keyboard. Tapping shows a brief popover-style hint pointing
+    /// the user at the system "← [App]" link in the top-left status
+    /// bar — iOS doesn't expose a public API to programmatically
+    /// return to the calling app, but it does render that link
+    /// automatically when one app opens another via URL.
+    private var switchBackButton: some View {
+        Button {
+            showingReturnHint = true
+        } label: {
+            Label("Switch back to your app", systemImage: "arrow.up.left.circle.fill")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .font(.body.weight(.semibold))
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.purple)
+        .alert("Tap the link in the top-left", isPresented: $showingReturnHint) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("iOS doesn't allow Dictator to switch you back automatically. Tap the system \"← \(callingAppHint)\" link in the top-left of the status bar — your transcribed text will land in the field you were typing in.")
+        }
+    }
+
+    private var callingAppHint: String {
+        // We don't know the calling app's display name (iOS doesn't
+        // surface it), so use a generic placeholder.
+        "previous app"
     }
 
     /// Keyboard-up layout: mic + assist + copy in one row, all compact.
@@ -493,6 +815,11 @@ private struct TranscriptCard: View {
     /// to the TextEditor gaining/losing focus. SwiftUI's `@FocusState`
     /// is scoped to its declaring view, hence the `Binding` plumbing.
     @FocusState.Binding var focus: Bool
+    /// When true the TextEditor is disabled — tapping it won't summon
+    /// the system keyboard, and the field can't accept new keystrokes.
+    /// Used during keyboard-extension flows to keep the system
+    /// keyboard from popping up over Dictator's own recording UI.
+    let isReadOnly: Bool
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -508,6 +835,7 @@ private struct TranscriptCard: View {
                 .scrollDismissesKeyboard(.interactively)
                 .padding(12)
                 .font(.body)
+                .disabled(isReadOnly)
 
             if text.isEmpty {
                 Text(placeholder)
@@ -549,6 +877,117 @@ private struct UndoButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Undo")
+    }
+}
+
+// MARK: - Tap-to-stop button (keyboard mode)
+
+/// Tap variant used in keyboard mode. Recording is auto-started when
+/// Rotating dashed ring drawn around the active listening button.
+/// Sits outside the button face so it stays visible even when a
+/// thumb is covering the button itself — the soft level-driven
+/// pulse is great for audio-feedback texture but reads as little
+/// more than a halo under most hands.
+///
+/// Driven by `TimelineView(.animation)` rather than a `@State`
+/// rotation + repeatForever animation: the latter has a known
+/// SwiftUI footgun where the rotation desynchronises after a view
+/// re-instantiation. The timeline approach is purely a function
+/// of `Date()`, so the ring picks up exactly where it should
+/// regardless of how SwiftUI is recomposing the tree.
+private struct ActiveListeningRing: View {
+    let tint: Color
+    /// Outer diameter of the ring — should sit outside the button
+    /// the caller is decorating so a thumb-on-button doesn't occlude
+    /// it.
+    let diameter: CGFloat
+    /// Stroke thickness. 3 pt reads cleanly at the button sizes used
+    /// throughout the app; bump up for very large buttons.
+    let lineWidth: CGFloat
+    /// Seconds per full revolution. 4 s feels alive without looking
+    /// frantic; slower than 6 s makes the motion easy to miss.
+    let period: Double
+
+    init(tint: Color, diameter: CGFloat, lineWidth: CGFloat = 3, period: Double = 4) {
+        self.tint = tint
+        self.diameter = diameter
+        self.lineWidth = lineWidth
+        self.period = period
+    }
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let rotation = (elapsed.truncatingRemainder(dividingBy: period) / period) * 360
+            Circle()
+                .strokeBorder(
+                    tint,
+                    style: StrokeStyle(
+                        lineWidth: lineWidth,
+                        lineCap: .round,
+                        dash: [6, 10]
+                    )
+                )
+                .frame(width: diameter, height: diameter)
+                .rotationEffect(.degrees(rotation))
+        }
+    }
+}
+
+/// the host receives a keyboard request, so the user shouldn't have
+/// to hold anything down — they just tap once to STOP. Single
+/// instance, no assist sibling.
+private struct TapStopButton: View {
+    let status: RecordingViewModel.Status
+    let onTap: () -> Void
+
+    private var level: Float {
+        if case let .recording(level) = status { return level }
+        return 0
+    }
+
+    private var icon: String {
+        switch status {
+        case .transcribing: "hourglass"
+        case .recording, .warmingUp: "stop.fill"
+        default: "mic.fill"
+        }
+    }
+
+    private var disabled: Bool {
+        switch status {
+        case .transcribing: true
+        default: false
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(Color.red.opacity(0.18))
+                    .frame(width: 96 + CGFloat(level) * 60, height: 96 + CGFloat(level) * 60)
+                    .animation(.easeOut(duration: 0.08), value: level)
+                // Spinning dashed ring sits just outside the button
+                // face so it stays visible under a thumb — the pulse
+                // is too soft to read while held.
+                if status.isCapturing {
+                    ActiveListeningRing(tint: .red, diameter: 120)
+                }
+                Circle()
+                    .fill(.red)
+                    .frame(width: 96, height: 96)
+                    .overlay(
+                        Image(systemName: icon)
+                            .font(.system(size: 32, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+            }
+            .frame(width: 96 + 60, height: 96 + 60)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.7 : 1)
     }
 }
 
@@ -595,6 +1034,8 @@ private struct HoldButton: View {
     var body: some View {
         let ringMax: CGFloat = compact ? 14 : 60
         let iconSize: CGFloat = compact ? 22 : 36
+        let ringDiameter: CGFloat = diameter + (compact ? 14 : 24)
+        let ringLineWidth: CGFloat = compact ? 2 : 3
         ZStack {
             Circle()
                 .fill(tint.opacity(0.18))
@@ -603,6 +1044,14 @@ private struct HoldButton: View {
                     height: diameter + CGFloat(level) * ringMax
                 )
                 .animation(.easeOut(duration: 0.08), value: level)
+
+            // Spinning dashed listening ring — sits just outside the
+            // button so the thumb doesn't occlude it. Only shows on
+            // the active side via `isMyTurn` so the inactive button
+            // stays calm.
+            if isMyTurn, status.isCapturing {
+                ActiveListeningRing(tint: tint, diameter: ringDiameter, lineWidth: ringLineWidth)
+            }
 
             Circle()
                 .fill(tint)

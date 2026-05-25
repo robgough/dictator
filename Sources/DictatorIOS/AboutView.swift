@@ -104,7 +104,7 @@ struct AboutView: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("The iPhone version is the same idea on the phone in your pocket. Talk to it, get text out, no cloud round-trip. I hope you find it useful — and thank you for giving it a try.")
+                    Text("This is the same idea on the device in your pocket. Talk to it, get text out, no cloud round-trip. I hope you find it useful — and thank you for giving it a try.")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
 

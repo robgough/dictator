@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Dictator — Privacy</title>
-    <meta name="description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your Mac.">
+    <meta name="description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your device.">
     <link rel="canonical" href="https://dictator.robgough.net/privacy.html">
     <link rel="icon" type="image/png" href="media/dictator-icon.png">
     <link rel="apple-touch-icon" href="media/dictator-icon.png">
@@ -16,7 +16,7 @@
     <meta property="og:site_name" content="Dictator">
     <meta property="og:url" content="https://dictator.robgough.net/privacy.html">
     <meta property="og:title" content="Dictator — Privacy">
-    <meta property="og:description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your Mac.">
+    <meta property="og:description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your device.">
     <meta property="og:image" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:secure_url" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:type" content="image/png">
@@ -28,7 +28,7 @@
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Dictator — Privacy">
-    <meta name="twitter:description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your Mac.">
+    <meta name="twitter:description" content="How Dictator handles your data. Short version: it doesn't. Audio, transcripts, and models all stay on your device.">
     <meta name="twitter:image" content="https://dictator.robgough.net/media/og-card.png">
     <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 26+.">
 
@@ -79,24 +79,26 @@
 <div class="wrap">
     <a class="back" href="index.html">&larr; Dictator</a>
     <h1>Privacy</h1>
-    <p class="updated">Last updated: 11 May 2026</p>
+    <p class="updated">Last updated: 24 May 2026</p>
 
-    <p>Dictator runs entirely on your Mac. The short version: your audio, your transcripts, and your settings never leave the device.</p>
+    <p>Dictator runs entirely on your device — Mac or iPhone. The short version: your audio, your transcripts, and your settings never leave the device.</p>
 
-    <h2>What stays on your Mac</h2>
-    <p>Audio captured from the microphone is held in memory for the duration of a recording and then discarded. The transcript is produced locally by WhisperKit or Parakeet, optionally tidied by a local language model running through MLX, and pasted into the focused app. Dictation history, conversations, vocabulary, custom prompts, and input-device preferences are stored in plain JSON files under <code>~/Library/Application Support/Dictator/</code> — only on your machine.</p>
+    <h2>What stays on your device</h2>
+    <p>Audio captured from the microphone is held in memory for the duration of a recording and then discarded. The transcript is produced locally by WhisperKit or Parakeet (on macOS) or Parakeet (on iOS), optionally tidied by a local language model — MLX on macOS, Apple Intelligence on iOS — and pasted into the focused app. Dictation history, conversations, vocabulary, custom prompts, and input-device preferences are stored in plain JSON files in the app's own container — on macOS at <code>~/Library/Application Support/Dictator/</code>, on iOS in the app's sandbox (also visible to the Dictator keyboard extension via a shared App Group so it can collect a dictation result for the field you were typing in). Everything stays on the device.</p>
 
-    <h2>What leaves your Mac</h2>
-    <p>Two things, both initiated by you:</p>
-    <p><strong>Model downloads.</strong> When you pick a Whisper or LLM model from Settings → Models, Dictator downloads the weights from Hugging Face. Hugging Face will see those requests; Dictator doesn't add anything to them.</p>
-    <p><strong>Update checks.</strong> Dictator periodically asks <code>dictator.robgough.net</code> whether a newer version is available, via the <a href="https://sparkle-project.org">Sparkle</a> updater. The request includes your operating system version and the running app version — what any auto-updater needs to compare. The site is hosted on GitHub Pages; standard GitHub access logs apply. You can disable update checks in Settings.</p>
+    <h2>What leaves your device</h2>
+    <p>One thing on iOS, two on macOS, all initiated by you:</p>
+    <p><strong>Model downloads.</strong> When you first set up the app (or pick a different Whisper / LLM model from Settings → Models on macOS), Dictator downloads the weights from Hugging Face. Hugging Face will see those requests; Dictator doesn't add anything to them.</p>
+    <p><strong>Update checks (macOS only).</strong> The macOS app periodically asks <code>dictator.robgough.net</code> whether a newer version is available, via the <a href="https://sparkle-project.org">Sparkle</a> updater. The request includes your operating system version and the running app version — what any auto-updater needs to compare. The site is hosted on GitHub Pages; standard GitHub access logs apply. You can disable update checks in Settings. The iOS app receives updates through the App Store instead and makes no update-check requests of its own.</p>
 
     <h2>No analytics, no telemetry</h2>
-    <p>The Dictator app does not send analytics, crash reports, or usage data to the author or anyone else. There is no account, no sign-in, and no server-side component beyond the static update feed.</p>
-    <p>This marketing website uses <a href="https://usefathom.com/">Fathom Analytics</a> to count page views. Fathom is cookieless, doesn't track individuals across sites, and doesn't collect personal data. It's only used on the website — it has no presence inside the app.</p>
+    <p>The Dictator apps do not send analytics, crash reports, or usage data to the author or anyone else. There is no account, no sign-in, and no server-side component beyond the static macOS update feed.</p>
+    <p>This marketing website uses <a href="https://usefathom.com/">Fathom Analytics</a> to count page views. Fathom is cookieless, doesn't track individuals across sites, and doesn't collect personal data. It's only used on the website — it has no presence inside either app.</p>
 
     <h2>Permissions</h2>
-    <p>macOS asks you to grant Microphone (to record) and Accessibility (to paste into the focused app via synthetic ⌘V) the first time you use the relevant feature. Both can be revoked at any time from System Settings → Privacy &amp; Security.</p>
+    <p><strong>macOS.</strong> macOS asks you to grant Microphone (to record) and Accessibility (to paste into the focused app via synthetic ⌘V) the first time you use the relevant feature.</p>
+    <p><strong>iOS.</strong> iOS asks you to grant Microphone access the first time you press a record button. The Dictator keyboard extension also needs you to enable Allow Full Access (Settings → General → Keyboard → Keyboards → Dictator) so it can talk to the host app's container and open the host app to start a recording. Full Access is only used for that local communication — the keyboard does not transmit anything off the device.</p>
+    <p>All permissions can be revoked at any time from System Settings (macOS) or Settings (iOS).</p>
 
     <h2>Contact</h2>
     <p>Questions: <a href="mailto:hello@robgough.net">hello@robgough.net</a>.</p>

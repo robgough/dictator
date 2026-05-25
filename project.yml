@@ -26,8 +26,13 @@ schemes:
     build:
       targets:
         DictatorIOS: all
+        DictatorIOSUITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - DictatorIOSUITests
     archive:
       config: Release
 
@@ -255,6 +260,14 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator transcribes your voice on-device to turn speech into text you can copy or paste."
+        # Dictator only uses encryption via the standard HTTPS stack
+        # (the one-time Hugging Face model download). That qualifies
+        # for the App Store's exempt-encryption category, and setting
+        # this flag to false lets the build skip the Export Compliance
+        # prompt App Store Connect shows on every fresh upload. The
+        # self-declaration is what Apple wants for apps that use only
+        # iOS-provided crypto; no additional paperwork is needed.
+        ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
         UILaunchScreen:
           UIColorName: LaunchBackground
@@ -266,28 +279,47 @@ targets:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # Keep the AVAudioSession (and the engine driving the mic)
+        # alive while the app is in the background. Without this iOS
+        # suspends the audio session the moment the keyboard sends
+        # the user back to their original app, the recorder stops
+        # receiving sample buffers, and everything spoken after the
+        # return is silently dropped. The audio background mode is
+        # the standard way for recording apps to keep capturing
+        # while the user is elsewhere; it's a documented App Store
+        # category and requires the NSMicrophoneUsageDescription
+        # above (which is already present).
+        UIBackgroundModes:
+          - audio
+        # Custom URL scheme — the Dictator keyboard extension calls
+        # `dictator://keyboard?mode=record` or `mode=assist` to wake
+        # the host app, which then records / transforms and stages
+        # the result in the shared App Group container for the
+        # keyboard to read on return.
+        CFBundleURLTypes:
+          - CFBundleURLName: net.robgough.DictatorIOS
+            CFBundleURLSchemes:
+              - dictator
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "2026.5.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         TARGETED_DEVICE_FAMILY: "1"
-        # Simulator runs don't need a team — no signing required, no
-        # provisioning profile to fetch. So `DEVELOPMENT_TEAM` is empty
-        # by default, which keeps Xcode from trying to auto-fetch an iOS
-        # provisioning profile and failing in the Issues navigator.
+        # Team ID drives signing on real devices and App Store builds.
+        # Read from `${DICTATOR_IOS_TEAM_ID}` so the value stays out of
+        # the repo (the .env file is gitignored). Falls back to empty
+        # for Simulator-only builds — no signing required, no
+        # provisioning profile fetch, no Issues-navigator noise.
         #
-        # Intentionally NOT inheriting `${DICTATOR_TEAM_ID}` from the
-        # macOS target — that team is set up for a macOS Developer ID
-        # cert (notarized DMG distribution), which doesn't grant iOS
-        # provisioning rights. Devs who want to deploy to a real iPhone:
-        # in Xcode → DictatorIOS target → Signing & Capabilities, pick
-        # an Apple ID + team that has iOS provisioning enabled. Or
-        # override on the xcodebuild command line: DEVELOPMENT_TEAM=...
-        DEVELOPMENT_TEAM: ""
+        # A separate env var from the macOS `${DICTATOR_TEAM_ID}` so
+        # devs running both can use one team for both (set both vars
+        # to the same value) or split across teams if their Developer
+        # ID cert lives elsewhere from their iOS provisioning rights.
+        DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         DEAD_CODE_STRIPPING: YES
@@ -306,3 +338,84 @@ targets:
     dependencies:
       - package: FluidAudio
         product: FluidAudio
+      # Embed the keyboard extension into the host .app so installing
+      # the host installs the keyboard. The user still has to enable
+      # it via Settings → General → Keyboard → Keyboards → Add New,
+      # but the keyboard binary ships inside the app bundle.
+      - target: DictatorKeyboard
+
+  # UI test target — primarily used to drive App Store screenshot
+  # capture across simulator sizes. See scripts/take-screenshots.sh.
+  DictatorIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Sources/DictatorIOSUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOSUITests
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: DictatorIOS
+    dependencies:
+      - target: DictatorIOS
+
+  # Custom keyboard extension. Renders two large hold-to-talk buttons
+  # (mic + assist) that launch the host app via custom URL scheme;
+  # the host records / transforms and stages the result in the App
+  # Group container for the keyboard to insert when the user returns
+  # to the original text field. Keyboards CAN'T access the mic
+  # directly — Apple-enforced — hence the host-app dance.
+  DictatorKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/DictatorKeyboard
+      # Shared shuttle between keyboard + host. Both processes need
+      # the same Codable shapes — the file lives under the iOS
+      # target's sources to keep everything in one place, and the
+      # keyboard target pulls it in by explicit path.
+      - path: Sources/DictatorIOS/KeyboardBridge.swift
+    info:
+      path: Sources/DictatorKeyboard/Info.plist
+      properties:
+        CFBundleName: DictatorKeyboard
+        CFBundleDisplayName: Dictator
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            # Required so the keyboard can read the App Group shared
+            # container and launch the host app via URL scheme.
+            # The user has to toggle this in Settings → General →
+            # Keyboard → Keyboards → Dictator → Allow Full Access.
+            RequestsOpenAccess: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.Keyboard
+        MARKETING_VERSION: "2026.5.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Must match the host app's team — extensions are signed
+        # alongside the parent .app. See the host-app comment above.
+        DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorKeyboard/DictatorKeyboard.Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorKeyboard/DictatorKeyboard.entitlements

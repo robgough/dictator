@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Dictator keyboard extension privacy manifest.
+
+      Keyboards on iOS cannot access the microphone — Apple-enforced.
+      This extension just renders two hold-to-talk buttons that launch
+      the host app (via the dictator:// URL scheme) and reads results
+      back from the App Group's shared UserDefaults. It never captures
+      audio, never sees user content beyond the surrounding-text snippet
+      it forwards to the host for the assist transform, and never makes
+      a network call.
+
+      The only Required-Reason API it touches is UserDefaults (the App
+      Group bridge that shuttles requests and results between the
+      keyboard and the host). CA92.1 = access info from same app group,
+      per-user-installation, no tracking.
+
+      No NSPrivacyCollectedDataTypes entries: nothing is collected here.
+      (Microphone is declared by the host app's manifest; this extension
+      has no mic access at all.)
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

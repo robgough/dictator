@@ -58,7 +58,7 @@ struct ModelStatusSheet: View {
         // the ANE, no network involved after the initial download.
         // Surfaces the "your audio doesn't leave the device" promise
         // that matters most for a dictation app.
-        "The Parakeet model runs entirely on-device on the Apple Neural Engine. Your audio never leaves this iPhone."
+        "The Parakeet model runs entirely on-device on the Apple Neural Engine. Your audio never leaves this device."
     }
 
     /// Human-readable label for a Parakeet catalogue ID. Keeps the

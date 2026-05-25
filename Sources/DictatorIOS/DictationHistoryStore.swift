@@ -6,6 +6,14 @@ import Observation
 /// doesn't (yet) run the multi-pass LLM chain — there's nothing
 /// meaningful to record beyond what we ended up with.
 struct DictationHistoryEntry: Codable, Identifiable, Equatable, Hashable, Sendable {
+    /// Which entry point produced this transcript. Persisted so the
+    /// history list can show a leading icon distinguishing plain
+    /// dictation from assistant-mode transformations.
+    enum Mode: String, Codable, Sendable {
+        case dictation
+        case assist
+    }
+
     let id: UUID
     let timestamp: Date
     /// The version delivered to the user / copied to the clipboard
@@ -16,6 +24,25 @@ struct DictationHistoryEntry: Codable, Identifiable, Equatable, Hashable, Sendab
     /// decode cleanly via `decodeIfPresent`. nil means "raw is the same
     /// as `text` — no extra version to show".
     let raw: String?
+    /// Which mode produced this entry. Optional for forward-compat:
+    /// records written before this field shipped decode as nil and are
+    /// treated as `.dictation` by the UI (the only flow that existed
+    /// at the time of writing was, in practice, plain dictation).
+    let mode: Mode?
+
+    init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        text: String,
+        raw: String? = nil,
+        mode: Mode = .dictation
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.text = text
+        self.raw = raw
+        self.mode = mode
+    }
 
     /// True when we have a distinct pre-pass version worth surfacing
     /// in the UI (raw differs meaningfully from final).
@@ -24,6 +51,10 @@ struct DictationHistoryEntry: Codable, Identifiable, Equatable, Hashable, Sendab
         return raw.trimmingCharacters(in: .whitespacesAndNewlines)
             != text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Mode for display purposes — pre-mode records on disk decode
+    /// `mode` as nil; treat those as plain dictation.
+    var resolvedMode: Mode { mode ?? .dictation }
 }
 
 /// Local, sandbox-private history for the iOS prototype. Mirrors the
@@ -68,15 +99,22 @@ final class DictationHistoryStore {
     /// the history list relies on for the empty-state check. `raw`
     /// optionally captures Parakeet's output before any post-processing
     /// so the history detail can show "what I actually heard you say"
-    /// alongside the polished delivered version.
-    func append(_ text: String, raw: String? = nil) {
+    /// alongside the polished delivered version. `mode` distinguishes
+    /// plain dictation from assistant-mode transformations so the
+    /// history list can render an appropriate leading icon.
+    func append(
+        _ text: String,
+        raw: String? = nil,
+        mode: DictationHistoryEntry.Mode = .dictation
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let entry = DictationHistoryEntry(
             id: UUID(),
             timestamp: Date(),
             text: trimmed,
-            raw: raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+            raw: raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+            mode: mode
         )
         entries.insert(entry, at: 0)
         prune()

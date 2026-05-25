@@ -11,6 +11,10 @@ struct SettingsView: View {
     @Bindable var store: VocabularyStore = .shared
     @State private var editingEntry: VocabularyEntry?
     @State private var showingNewSheet = false
+    /// Drives the same `KeyboardSetupSheet` the onboarding card on
+    /// the main view uses, but reachable from Settings so the user
+    /// can find the walkthrough again after dismissing the card.
+    @State private var showingKeyboardSetup = false
 
     @AppStorage(DictatorIOSSettings.cuePunctuationKey) private var punctuationEnabled = true
     @AppStorage(DictatorIOSSettings.cueNumbersKey) private var numbersEnabled = true
@@ -27,6 +31,29 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            Section {
+                Button {
+                    showingKeyboardSetup = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Set up the Dictator keyboard")
+                                .foregroundStyle(.primary)
+                            Text("Voice typing in any app")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "keyboard.fill")
+                            .foregroundStyle(.purple)
+                    }
+                }
+            } header: {
+                Text("Keyboard")
+            } footer: {
+                Text("Walks you through enabling the Dictator keyboard in iOS Settings, with one-tap deep-link to the right page.")
+            }
+
             if foundationAvailable {
                 Section {
                     Toggle("Tidy filler words", isOn: $foundationCleanupEnabled)
@@ -132,6 +159,9 @@ struct SettingsView: View {
                     store.entries[index] = updated
                 }
             }
+        }
+        .sheet(isPresented: $showingKeyboardSetup) {
+            KeyboardSetupSheet()
         }
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import Network
 import UIKit
 
 /// Orchestrates the prototype's record → transcribe → display flow.
@@ -69,6 +70,18 @@ final class RecordingViewModel {
     /// the moment of press. The UI uses this to render the level ring
     /// around the active button only.
     private(set) var recordingMode: RecordingMode = .dictation
+
+    /// Set when the host has been launched by the keyboard extension
+    /// for a single-shot dictation. The next successful transcript
+    /// is written to `KeyboardBridge` so the keyboard can insert it
+    /// when the user returns to the original app, then cleared.
+    /// `nil` for normal in-app use.
+    var activeKeyboardSession: UUID?
+
+    /// True when we're driving a keyboard-extension flow. Switches
+    /// the UI to a tap-to-stop button and a "switch back to your app"
+    /// affordance instead of the press-and-hold + Copy pairing.
+    var isKeyboardMode: Bool { activeKeyboardSession != nil }
     /// User-editable. Bound from `TextEditor` so the user can tweak the
     /// transcribed result before copying. The view model only writes it on
     /// transcribe-complete and on press-to-start (clearing the previous
@@ -91,6 +104,14 @@ final class RecordingViewModel {
     /// prewarm on subsequent presses (we don't — model stays resident).
     private(set) var isModelLoaded: Bool = false
 
+    /// Drives the cellular-download confirmation alert in `ContentView`.
+    /// Set by `confirmAndDownloadModel()` when it detects the device is
+    /// on cellular (or the path is unknown) so we don't blindside the
+    /// user with a ~460 MB download against their data plan. The view
+    /// flips this back to false via the alert's button actions; the
+    /// "Download anyway" path calls `downloadModel()` directly.
+    var cellularConfirmationPending: Bool = false
+
     private let recorder = IOSAudioRecorder()
     private let parakeet = ParakeetService()
     /// User-chosen Parakeet variant. Read from UserDefaults at init so a
@@ -104,6 +125,25 @@ final class RecordingViewModel {
     /// calls. ParakeetService is `@MainActor`, so concurrent calls would
     /// serialise anyway, but doubling the work is wasteful.
     private var prewarmTask: Task<Void, Never>?
+
+    /// Polls `KeyboardBridge.consumeStopRequest` while a
+    /// keyboard-driven recording is in flight, so the user can stop
+    /// from the keyboard after switching back to the original app.
+    /// Cancelled in the cleanup path after `stopRecording`.
+    private var stopWatcherTask: Task<Void, Never>?
+
+    /// Periodic 3-second tick that re-stamps `updatedAt` on the host
+    /// state during long transcriptions (or any phase that doesn't
+    /// naturally produce its own updates). Keyboard side uses the
+    /// timestamp to detect a dead host — without this, transcripts
+    /// longer than the keyboard's staleness window would falsely
+    /// register as "host crashed".
+    private var heartbeatTask: Task<Void, Never>?
+
+    /// Throttled timestamp of the last host-state write — keeps the
+    /// `onLevel` callback from hammering UserDefaults at the audio
+    /// buffer rate (~20 Hz). Caps writes to ~10 Hz instead.
+    private var lastHostStateWrite: Date = .distantPast
 
     /// Lightweight tactile feedback on press/release/result. Generators
     /// are held strongly so they're warm when the user taps — first-use
@@ -131,19 +171,41 @@ final class RecordingViewModel {
             } else if case .warmingUp = self.status {
                 self.status = .recording(level: level)
             }
+            self.publishHostState(phase: .recording, level: level)
         }
         recorder.onReady = { [weak self] in
             guard let self else { return }
             if case .warmingUp = self.status {
                 self.status = .recording(level: 0)
             }
+            self.publishHostState(phase: .recording, level: 0, force: true)
         }
         recorder.onStartFailed = { [weak self] error in
             guard let self else { return }
             self.status = .error(error.localizedDescription)
+            self.tearDownKeyboardHostState()
         }
         pressFeedback.prepare()
         resultFeedback.prepare()
+        // Stamp a fresh readiness snapshot on every host launch so
+        // the keyboard's "fast / warm-up / download" hint reflects
+        // the real disk state immediately, even before any user
+        // action.
+        publishModelReadiness()
+
+        // Screenshot-capture hook. When the env var or launch arg below
+        // is set we synthesise a "mid-recording" state for the App Store
+        // shot: faked level, populated transcript, no real mic or model
+        // touched. Off in every regular build path — checked via
+        // `ProcessInfo` so it costs nothing at runtime unless wired.
+        if ProcessInfo.processInfo.environment["DICTATOR_SCREENSHOT_STATE"] == "recording"
+            || CommandLine.arguments.contains("-DictatorScreenshotState_recording")
+        {
+            recordingMode = .dictation
+            isModelLoaded = true
+            transcript = "Picking up bread, milk, and a couple of those nice apples from the new place on the corner."
+            status = .recording(level: 0.55)
+        }
     }
 
     private static func currentPermission() -> Permission {
@@ -189,6 +251,13 @@ final class RecordingViewModel {
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
             recorder.start()
+            // Drive the keyboard's "in flight" UI as soon as we
+            // start — onLevel/onReady will keep ticking but the
+            // initial .warmingUp lands without waiting for the first
+            // sample buffer.
+            publishHostState(phase: .warmingUp, level: 0, force: true)
+            startStopWatcher()
+            startHeartbeat()
         default:
             // Already capturing or busy.
             return
@@ -216,6 +285,14 @@ final class RecordingViewModel {
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
             recorder.start()
+            // Mirror the dictation-mode keyboard plumbing: publish a
+            // heartbeat + start the stop-request watcher when the
+            // assist flow was kicked off from the keyboard. No-ops
+            // when there's no keyboard session, so calling
+            // unconditionally is cheap.
+            publishHostState(phase: .warmingUp, level: 0, force: true)
+            startStopWatcher()
+            startHeartbeat()
         default:
             return
         }
@@ -240,6 +317,13 @@ final class RecordingViewModel {
         let originalText = transcript
         do {
             let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            // See `stopRecording` — successful transcribe proves the
+            // model loaded, so keep the bridge in sync even when the
+            // prewarm path didn't run or raced.
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
             // Resolve spoken cues in the instruction itself ("comma",
             // "new paragraph" etc. should map to their glyphs) before
             // handing to the foundation model, but skip the Vocabulary
@@ -257,7 +341,24 @@ final class RecordingViewModel {
                 instruction: instruction
             )
             transcript = result
-            DictationHistoryStore.shared.append(result, raw: originalText)
+            DictationHistoryStore.shared.append(result, raw: originalText, mode: .assist)
+
+            // Keyboard-driven assist: write the result back with
+            // replacePrecedingCharacters set to the original
+            // surrounding text length so the keyboard deletes the
+            // old text and inserts the transformed version in
+            // place. Skipped when this wasn't a keyboard flow.
+            if let session = activeKeyboardSession {
+                KeyboardBridge.writeResult(.init(
+                    session: session,
+                    text: result,
+                    replacePrecedingCharacters: originalText.count,
+                    createdAt: Date()
+                ))
+                activeKeyboardSession = nil
+            }
+            tearDownKeyboardHostState()
+
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
@@ -267,8 +368,83 @@ final class RecordingViewModel {
             transcript = originalText
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
+            tearDownKeyboardHostState()
         }
         recordingMode = .dictation
+    }
+
+    /// Gated entry point for the first-launch download CTA. Snapshots
+    /// the current network path via `NWPathMonitor`; if the device is
+    /// on Wi-Fi (the happy path) the download starts immediately, no
+    /// extra friction. If the device is on cellular — or we couldn't
+    /// determine the link in time — we surface a confirmation alert
+    /// via `cellularConfirmationPending` so the view can warn the user
+    /// about the ~460 MB hit to their data plan before kicking it off.
+    ///
+    /// App Review keys on this: a 460 MB silent cellular download is
+    /// well over the historic ~200 MB threshold and would get pushed
+    /// back at submission.
+    func confirmAndDownloadModel() async {
+        guard case .notDownloaded = modelDiskStatus else { return }
+        if await Self.isOnCellular() {
+            cellularConfirmationPending = true
+        } else {
+            await downloadModel()
+        }
+    }
+
+    /// Snapshot the current network path's interface and return true
+    /// if it's cellular (or we couldn't get a path within the 1 s
+    /// budget, in which case the safer choice is to ask the user).
+    /// Deliberately one-shot: instantiate, await first update, cancel.
+    /// A persistent path monitor would be overkill for a check the
+    /// user only cares about at tap-time.
+    private static func isOnCellular() async -> Bool {
+        let monitor = NWPathMonitor()
+        let queue = DispatchQueue(label: "dictator.network.snapshot")
+        // Wrap the callback-shaped API in a continuation. The path
+        // handler can fire more than once on real devices (initial
+        // pessimistic snapshot, then the real result a beat later),
+        // so guard the resume with a flag and always cancel after
+        // the first delivery.
+        let onCellular: Bool = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let state = MonitorState()
+            monitor.pathUpdateHandler = { path in
+                guard state.resumeIfPossible() else { return }
+                let cellular = path.usesInterfaceType(.cellular)
+                monitor.cancel()
+                continuation.resume(returning: cellular)
+            }
+            monitor.start(queue: queue)
+            // Safety net: if no callback lands within 1 s (rare but
+            // possible on a brand-new launch before the framework
+            // has computed a path), assume cellular and let the user
+            // make the call. Cheap defensive bound — 1 s is invisible
+            // tied to a button tap, and the alternative (silent
+            // 460 MB download on cellular) is worse.
+            queue.asyncAfter(deadline: .now() + 1.0) {
+                guard state.resumeIfPossible() else { return }
+                monitor.cancel()
+                continuation.resume(returning: true)
+            }
+        }
+        return onCellular
+    }
+
+    /// Tiny lock around the path-monitor continuation so the timeout
+    /// race and the real callback can't both resume it. Defined as a
+    /// nested final class because Swift's continuations are
+    /// single-shot — double-resume is a crash, not a warning.
+    private final class MonitorState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resumed = false
+        func resumeIfPossible() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if resumed { return false }
+            resumed = true
+            return true
+        }
     }
 
     /// Stage the Parakeet model onto disk — explicit, with progress.
@@ -285,6 +461,7 @@ final class RecordingViewModel {
                 self?.modelDiskStatus = .downloading(progress: fraction)
             }
             modelDiskStatus = .downloaded
+            publishModelReadiness()
         } catch {
             modelDiskStatus = .failed(error.localizedDescription)
         }
@@ -314,6 +491,7 @@ final class RecordingViewModel {
         // the UI transitions to the download CTA when needed (and out
         // of it when the user picks a variant they already have).
         modelDiskStatus = ParakeetService.modelsExist(id: id) ? .downloaded : .notDownloaded
+        publishModelReadiness()
     }
 
     /// Retry path after a failed download — flips the state back to
@@ -332,6 +510,7 @@ final class RecordingViewModel {
     func unloadModel() {
         parakeet.unload(modelID: selectedModelID)
         isModelLoaded = false
+        publishModelReadiness()
     }
 
     /// Idempotent: kicks off `ensureLoaded` if (and only if) we don't
@@ -346,6 +525,7 @@ final class RecordingViewModel {
             do {
                 try await self.parakeet.ensureLoaded(modelID: self.selectedModelID)
                 self.isModelLoaded = true
+                self.publishModelReadiness()
             } catch {
                 // Don't fail the recording — let stopRecording's
                 // transcribe() retry and surface the real error there
@@ -367,13 +547,26 @@ final class RecordingViewModel {
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
+            tearDownKeyboardHostState()
             return
         }
 
         status = .transcribing
+        publishHostState(phase: .transcribing, level: 0, force: true)
 
         do {
             let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            // A successful transcribe proves the model is loaded —
+            // `transcribe` itself calls `ensureLoaded` and would have
+            // thrown if the load failed. The prewarm path also sets
+            // this, but if prewarm got skipped or raced weirdly and
+            // it was actually `transcribe`'s ensureLoaded that did
+            // the load, the flag would otherwise stay false forever
+            // and the keyboard chip would never go green.
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
             // SpokenCues handles all the deterministic substitutions —
             // punctuation/number/time/currency/emoji passes that the
             // macOS app runs out of the box. Then Vocabulary runs LAST
@@ -404,13 +597,163 @@ final class RecordingViewModel {
             // so the history detail can show "what I actually heard"
             // when the user wants to recover something the cleanup
             // pass smoothed over.
-            DictationHistoryStore.shared.append(processed, raw: raw)
+            DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
+
+            // If this dictation was triggered from the keyboard
+            // extension, hand the result back via the App Group so
+            // the keyboard can insert it when the user returns to
+            // the original app. Cleared after writing so a manual
+            // re-record can't accidentally re-fire the same session.
+            if let session = activeKeyboardSession {
+                KeyboardBridge.writeResult(.init(
+                    session: session,
+                    text: processed,
+                    replacePrecedingCharacters: 0,
+                    createdAt: Date()
+                ))
+                activeKeyboardSession = nil
+            }
+            // Clear the in-flight heartbeat + stop watcher whether or
+            // not this run was keyboard-driven — cheap no-op for the
+            // non-keyboard path.
+            tearDownKeyboardHostState()
+
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
+            tearDownKeyboardHostState()
         }
+    }
+
+    /// Publish a host-state heartbeat to the App Group container so
+    /// the Dictator keyboard can render a recording / transcribing
+    /// UI while it's visible. No-op when there's no keyboard session
+    /// driving the recording. Level writes are throttled to ~10 Hz;
+    /// phase changes always go through immediately so transitions
+    /// like .recording -> .transcribing land without lag.
+    private func publishHostState(phase: KeyboardBridge.HostState.Phase, level: Float, force: Bool = false) {
+        guard let session = activeKeyboardSession else { return }
+        let now = Date()
+        if !force, now.timeIntervalSince(lastHostStateWrite) < 0.1 { return }
+        lastHostStateWrite = now
+        KeyboardBridge.writeHostState(.init(
+            session: session,
+            phase: phase,
+            level: level,
+            updatedAt: now
+        ))
+    }
+
+    /// Kick off the background poll that watches for a Stop request
+    /// from the keyboard during a keyboard-driven recording. Cheap —
+    /// just a UserDefaults read every 250 ms. Cancels itself when
+    /// `activeKeyboardSession` clears.
+    private func startStopWatcher() {
+        stopWatcherTask?.cancel()
+        guard let session = activeKeyboardSession else { return }
+        stopWatcherTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
+                guard self.activeKeyboardSession == session else { return }
+                if KeyboardBridge.consumeStopRequest(matching: session) {
+                    // Dispatch to the correct stop method based on
+                    // the current recording mode — assist needs to
+                    // run the transform, dictation just transcribes.
+                    if self.recordingMode == .assist {
+                        await self.stopAssistRecording()
+                    } else {
+                        await self.stopRecording()
+                    }
+                    return
+                }
+            }
+        }
+    }
+
+    /// Liveness heartbeat — re-stamps the host-state entry every 3s
+    /// so the keyboard's "is this still alive?" check sees a fresh
+    /// timestamp during long transcriptions. Without this the
+    /// keyboard would falsely treat any transcription past its
+    /// staleness threshold as a dead host. Lightweight — one
+    /// UserDefaults read + one write per tick.
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        guard let session = activeKeyboardSession else { return }
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self else { return }
+                guard self.activeKeyboardSession == session else { return }
+                // Just bump updatedAt. Phase + level stay as last
+                // written — onLevel re-writes those during recording.
+                if let current = KeyboardBridge.readHostState(), current.session == session {
+                    var fresh = current
+                    fresh.updatedAt = Date()
+                    KeyboardBridge.writeHostState(fresh)
+                }
+            }
+        }
+    }
+
+    /// Cancel the poll + heartbeat tasks and clear the state
+    /// heartbeat the keyboard might be reading.
+    private func tearDownKeyboardHostState() {
+        stopWatcherTask?.cancel()
+        stopWatcherTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        KeyboardBridge.clearHostState()
+    }
+
+    /// Abort a recording mid-flight without transcribing or sending
+    /// anything back. Used by the keyboard-mode banner's X button —
+    /// the user wants out, not a stale transcript landing later.
+    /// Safe to call when nothing's recording (no-op).
+    func cancelRecording() {
+        if status.isCapturing {
+            _ = recorder.stop()
+            status = .idle
+            recordingMode = .dictation
+            resultFeedback.notificationOccurred(.warning)
+        }
+        activeKeyboardSession = nil
+        tearDownKeyboardHostState()
+    }
+
+    /// Drive the bridge's foreground tracking from a scenePhase
+    /// callback. Writes the host-active flag so the keyboard can
+    /// auto-dismiss inside the host's own app, and re-publishes the
+    /// readiness snapshot on a transition to active so the keyboard's
+    /// chip reflects the latest in-process state (which the keyboard
+    /// reads on appear). No timer — the bridge is updated at the
+    /// natural lifecycle points where the readiness can have changed.
+    func applyForegroundState(_ active: Bool) {
+        KeyboardBridge.writeHostActive(active)
+        if active {
+            publishModelReadiness()
+        }
+    }
+
+    /// Publish the model's disk + memory status to the App Group so
+    /// the Dictator keyboard can render a "fast / slow / not yet
+    /// downloaded" hint. Called at every lifecycle transition that
+    /// touches model state. Cheap — single JSON encode + UserDefaults
+    /// write, fires only on transitions, not in any hot path.
+    private func publishModelReadiness() {
+        let disk: KeyboardBridge.ModelReadiness.DiskStatus
+        switch modelDiskStatus {
+        case .downloaded: disk = .downloaded
+        default:          disk = .notDownloaded
+        }
+        KeyboardBridge.writeModelReadiness(.init(
+            diskStatus: disk,
+            modelID: selectedModelID,
+            loaded: isModelLoaded,
+            updatedAt: Date()
+        ))
     }
 
     /// True when there's a meaningful snapshot to swap to. Used by

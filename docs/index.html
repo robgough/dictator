@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Dictator — Local-first dictation for macOS</title>
-    <meta name="description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. Transcription and language models run entirely on your Mac.">
+    <title>Dictator — Local-first dictation for Mac and iPhone</title>
+    <meta name="description" content="Local-first dictation for Mac and iPhone. Hold a hotkey on macOS or tap a key on the iOS keyboard, speak, release — text lands at your cursor. Transcription and language models run entirely on-device.">
     <link rel="canonical" href="https://dictator.robgough.net/">
     <link rel="icon" type="image/png" href="media/dictator-icon.png">
     <link rel="apple-touch-icon" href="media/dictator-icon.png">
@@ -12,25 +12,27 @@
     <meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)">
 
     <!-- Open Graph -->
+    <!-- TODO: og-card.png still visually says "macOS" only. Regenerate from
+         media/og-card.html once we want the social preview to reflect iOS too. -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Dictator">
     <meta property="og:url" content="https://dictator.robgough.net/">
     <meta property="og:title" content="Dictator — Talk to your Mac. Not the cloud.">
-    <meta property="og:description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta property="og:description" content="A free, open-source local-first dictation app for macOS and iOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
     <meta property="og:image" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:secure_url" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 26+.">
+    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS and iOS. Free, open source, runs on Apple Silicon.">
     <meta property="og:locale" content="en_GB">
 
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Dictator — Talk to your Mac. Not the cloud.">
-    <meta name="twitter:description" content="A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta name="twitter:description" content="A free, open-source local-first dictation app for macOS and iOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
     <meta name="twitter:image" content="https://dictator.robgough.net/media/og-card.png">
-    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS. Free, open source, runs on Apple Silicon, macOS 26+.">
+    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS and iOS. Free, open source, runs on Apple Silicon.">
 
     <!-- Structured data -->
     <script type="application/ld+json">
@@ -38,11 +40,11 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "Dictator",
-        "description": "A free, open-source menu-bar dictation app for macOS. Transcription and language models run entirely on-device.",
+        "description": "A free, open-source local-first dictation app for macOS and iOS. Transcription and language models run entirely on-device.",
         "url": "https://dictator.robgough.net/",
         "downloadUrl": "https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg",
         "applicationCategory": "ProductivityApplication",
-        "operatingSystem": "macOS 26+",
+        "operatingSystem": "macOS 26+, iOS",
         "image": "https://dictator.robgough.net/media/og-card.png",
         "offers": {
             "@type": "Offer",
@@ -88,6 +90,56 @@
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
+        /* Platform toggle — content scoping. Both Mac and iPhone copy live
+           in the DOM at all times; <body data-platform="..."> toggles which
+           stream is visible. Default is Mac (set via JS on load, with hash
+           support: /#ios → iPhone, /#mac or no hash → Mac). Using a body
+           attribute (rather than two separate pages) keeps the toggle
+           reactive without a navigation, and lets shared sections render
+           regardless. */
+        body[data-platform="mac"] .platform-ios { display: none !important; }
+        body[data-platform="ios"] .platform-mac { display: none !important; }
+        /* Segmented control modelled on Apple's product-comparison pill
+           switcher. Pill-shaped container, two equal-width segments, the
+           active one carries a filled pill. Sized to read clearly on both
+           desktop and phone; intentionally narrower than the hero so it
+           reads as navigation, not the headline. */
+        .platform-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            margin: 0 0 32px;
+        }
+        .platform-switch button {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0;
+            background: transparent;
+            font: inherit;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--fg-faint);
+            padding: 7px 18px;
+            border-radius: 999px;
+            cursor: pointer;
+            line-height: 1;
+            transition: color 0.12s ease, background 0.12s ease;
+            min-width: 84px;
+        }
+        .platform-switch button:hover { color: var(--fg-dim); }
+        .platform-switch button[aria-selected="true"] {
+            background: var(--fg);
+            color: var(--bg);
+        }
+        .platform-switch button:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
         html {
             background: var(--bg);
             scroll-behavior: smooth;
@@ -252,6 +304,55 @@
             margin-left: 14px;
             color: var(--fg-faint);
             font-size: 13px;
+        }
+        /* Platform download row — Mac (live) and iPhone (App Store, coming
+           soon) sit side by side. On narrow viewports they stack so neither
+           badge gets squashed. The macOS .cta keeps its existing pill shape;
+           the App Store badge is the standard black Apple-style pill, with
+           a 50% opacity treatment + "Coming soon" caption while the iOS app
+           is still in review. */
+        .download-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 16px 18px;
+            margin: 0 0 6px;
+        }
+        .download-col {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .download-col .col-meta {
+            color: var(--fg-faint);
+            font-size: 12.5px;
+            letter-spacing: 0.005em;
+        }
+        /* App Store badge — black rounded rect with "Download on the / App
+           Store" wordmark, modelled on Apple's published marketing badge.
+           Sized to roughly match the macOS .cta height so the two CTAs
+           visually balance. Inline SVG so we don't ship a binary. */
+        .app-store-badge {
+            display: inline-flex;
+            align-items: center;
+            text-decoration: none;
+            border-radius: 10px;
+            overflow: hidden;
+            line-height: 0;
+            transition: transform 0.06s ease, opacity 0.12s ease;
+        }
+        .app-store-badge:hover { transform: translateY(-1px); }
+        .app-store-badge svg { display: block; height: 44px; width: auto; }
+        /* "Coming soon" treatment — desaturate the badge so it doesn't read
+           as a live download, and pair it with a caption next to it. The
+           badge stays clickable as a no-op anchor so screen readers still
+           describe it; aria-disabled communicates the state. */
+        .app-store-badge[data-app-store-pending] {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .app-store-badge[data-app-store-pending]:hover {
+            transform: none;
         }
         .release-row {
             margin: 10px 0 0;
@@ -422,8 +523,11 @@
             font-size: 15px;
             line-height: 1.55;
         }
-        /* Models table */
-        .models h3 {
+        /* Models table — and Requirements per-platform sub-headings, which
+           use the same compact rounded h3 treatment so the visual rhythm
+           between sections is consistent. */
+        .models h3,
+        #requirements h3 {
             font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
             font-size: 15px;
             font-weight: 600;
@@ -431,6 +535,17 @@
             text-transform: none;
             letter-spacing: 0;
             margin: 28px 0 10px;
+        }
+        /* First sub-heading inside Requirements sits directly under the h2
+           and doesn't want the 28px top margin its siblings get. */
+        #requirements h3:first-of-type { margin-top: 0; }
+        /* "— in App Store review" status tag next to the iOS heading. */
+        #requirements h3 .status {
+            font-weight: 500;
+            color: var(--fg-faint);
+            font-size: 13px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
         }
         .table-wrap {
             overflow-x: auto;
@@ -950,13 +1065,89 @@
         footer a { color: var(--fg-dim); text-decoration: none; }
         footer a:hover { color: var(--fg); }
         footer .sep { color: var(--border); }
+
+        /* iPhone screenshot strip — sits between #ios-modes and
+           #ios-pipeline. Horizontal scroll on mobile so phones don't
+           squash; even row on desktop. Each shot is the raw simulator
+           capture at 276×600, with rounded corners + a soft shadow
+           rather than a phone-frame chrome (cleaner, less assets to
+           maintain than chasing Apple's frame kit). */
+        .ios-screens-row {
+            display: flex;
+            gap: 24px;
+            overflow-x: auto;
+            padding: 8px 4px 24px;
+            margin: 0 -4px;
+            scroll-snap-type: x proximity;
+            -webkit-overflow-scrolling: touch;
+        }
+        .ios-screens-row figure {
+            flex: 0 0 276px;
+            margin: 0;
+            scroll-snap-align: start;
+        }
+        .ios-screens-row img {
+            display: block;
+            width: 276px;
+            height: 600px;
+            border-radius: 24px;
+            box-shadow:
+                0 1px 2px rgba(0, 0, 0, 0.08),
+                0 12px 32px rgba(0, 0, 0, 0.14);
+            background: var(--bg);
+        }
+        @media (prefers-color-scheme: dark) {
+            .ios-screens-row img {
+                box-shadow:
+                    0 1px 2px rgba(0, 0, 0, 0.40),
+                    0 12px 32px rgba(0, 0, 0, 0.55);
+            }
+        }
+        .ios-screens-row figcaption {
+            margin-top: 14px;
+            font-size: 13.5px;
+            color: var(--fg-dim);
+            text-align: center;
+            line-height: 1.45;
+            max-width: 276px;
+        }
+        @media (min-width: 920px) {
+            /* On wider screens, hide the scroll affordance and centre
+               the row — desktops fit all four shots comfortably. */
+            .ios-screens-row {
+                overflow-x: visible;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+    <!-- Set body.data-platform before paint so we never flash both
+         content streams together while the deferred script downloads.
+         Inline, synchronous, tiny. Mirrors the logic at the bottom of
+         the file but only sets the attribute on <html> (since <body>
+         isn't parsed yet) — the bottom script then reconciles. -->
+    <script>
+        (function () {
+            var h = (location.hash || '').toLowerCase();
+            var platform = (h === '#ios' || h === '#iphone') ? 'ios' : 'mac';
+            document.documentElement.setAttribute('data-platform', platform);
+        })();
+    </script>
+    <style>
+        /* Mirror the body[data-platform=...] rules on <html> so the
+           pre-paint inline script can already hide the inactive stream
+           without waiting for the body to parse. The deferred script
+           later promotes the attribute to <body>; both selectors stay
+           valid so there's no flash. */
+        html[data-platform="mac"] .platform-ios { display: none !important; }
+        html[data-platform="ios"] .platform-mac { display: none !important; }
     </style>
     <!-- Fathom - beautiful, simple website analytics -->
     <script src="https://cdn.usefathom.com/script.js" data-site="EKDHPBIR" defer></script>
     <!-- / Fathom -->
 </head>
 <body>
-<nav class="toc" aria-label="On this page">
+<nav class="toc platform-mac" aria-label="On this page (Mac)">
     <p class="toc-label">On this page</p>
     <ul>
         <li><a href="#hotkeys">Two hotkeys</a></li>
@@ -970,27 +1161,53 @@
         <li><a href="#requirements">Requirements</a></li>
     </ul>
 </nav>
+<nav class="toc platform-ios" aria-label="On this page (iPhone)">
+    <p class="toc-label">On this page</p>
+    <ul>
+        <li><a href="#ios-keyboard">The keyboard</a></li>
+        <li><a href="#ios-modes">Dictate &amp; Assist</a></li>
+        <li><a href="#ios-screens">Screens</a></li>
+        <li><a href="#ios-pipeline">How it works</a></li>
+        <li><a href="#tradeoff-ios">Local-first, honestly</a></li>
+        <li><a href="#why">Why I built this</a></li>
+        <li><a href="#ios-faq">FAQ</a></li>
+        <li><a href="#ios-requirements">Requirements</a></li>
+    </ul>
+</nav>
 <div class="wrap">
-    <header>
+    <!-- Platform toggle. Real <button>s in an ARIA tablist so screen readers
+         announce the role; hash-routing in JS keeps deep links working
+         (dictator.robgough.net/#ios lands on iPhone). -->
+    <div class="platform-switch" role="tablist" aria-label="Choose platform">
+        <button type="button" role="tab" data-platform-target="mac" aria-selected="true">Mac</button>
+        <button type="button" role="tab" data-platform-target="ios" aria-selected="false">iPhone</button>
+    </div>
+
+    <header class="platform-mac">
         <div class="brand-row">
             <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
             <span class="logo">Dictator</span>
         </div>
         <h1>Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
-        <p class="tagline">A free, open-source menu-bar dictation app for macOS. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
-        <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
-        <span class="cta-meta">Free · No account · Apple Silicon · macOS 26+</span>
+        <p class="tagline">A free, open-source local-first dictation app for the Mac. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
+
+        <div class="download-row">
+            <div class="download-col">
+                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
+            </div>
+        </div>
 
         <p class="release-row">
-            Latest release: <a id="latest-release-link" href="https://github.com/robgough/dictator/releases/tag/v2026.5.11">v2026.5.11</a>
+            Latest macOS release: <a id="latest-release-link" href="https://github.com/robgough/dictator/releases/tag/v2026.5.11">v2026.5.11</a>
             · <a href="https://github.com/robgough/dictator/releases">All releases</a>
         </p>
 
         <ul class="feature-chips" aria-label="At a glance">
             <li class="chip">Fully on-device</li>
+            <li class="chip">Any text field, any app</li>
             <li class="chip">Custom modes, per app</li>
             <li class="chip">Multi-turn assistant</li>
-            <li class="chip">Spoken cues + vocabulary</li>
             <li class="chip">Free &amp; open source</li>
         </ul>
 
@@ -999,7 +1216,49 @@
         </p>
     </header>
 
-    <section class="demo" aria-label="Demo of Dictator in use">
+    <header class="platform-ios">
+        <div class="brand-row">
+            <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
+            <span class="logo">Dictator</span>
+        </div>
+        <h1>Talking to yourself.<br><span class="accent">No cloud.</span></h1>
+        <p class="tagline">A dictation keyboard for iPhone. Tap once to dictate, tap again to reshape what's already there with a spoken instruction. Transcription runs on the Apple Neural Engine; the cleanup pass uses Apple Intelligence. Nothing leaves the device.</p>
+
+        <div class="download-row">
+            <div class="download-col">
+                <!-- Once approved, swap href="#" for https://apps.apple.com/app/idXXXXXXXXX
+                     and remove data-app-store-pending="true" and aria-disabled="true". -->
+                <a class="app-store-badge"
+                   href="#"
+                   data-app-store-pending="true"
+                   aria-disabled="true"
+                   aria-label="Dictator for iPhone — coming soon to the App Store">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 156 52" role="img" aria-hidden="true" focusable="false">
+                        <rect x="0" y="0" width="156" height="52" rx="9" ry="9" fill="#000"/>
+                        <rect x="0.5" y="0.5" width="155" height="51" rx="8.5" ry="8.5" fill="none" stroke="#a6a6a6" stroke-width="1"/>
+                        <path fill="#fff" d="M30.6 27.1c0-3 2.5-4.5 2.6-4.5-1.4-2-3.6-2.3-4.4-2.3-1.9-.2-3.6 1.1-4.6 1.1-.9 0-2.4-1.1-3.9-1-2 0-3.9 1.2-4.9 3-2.1 3.7-.5 9.1 1.5 12.1 1 1.5 2.2 3.1 3.8 3 1.5-.1 2-1 3.9-1 1.8 0 2.3 1 3.9.9 1.6 0 2.6-1.5 3.6-2.9 1.1-1.7 1.6-3.3 1.6-3.4-.1 0-3.1-1.2-3.1-4.7zm-3-8.7c.8-1 1.4-2.5 1.2-3.9-1.2.1-2.7.8-3.6 1.8-.8.9-1.5 2.4-1.3 3.8 1.4.1 2.8-.7 3.7-1.7z"/>
+                        <text x="42" y="18" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="8" letter-spacing="0.2">Download on the</text>
+                        <text x="42" y="38" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" letter-spacing="0.1">App Store</text>
+                    </svg>
+                </a>
+                <span class="col-meta">Coming soon · iPhone with Apple Intelligence · iOS 26+</span>
+            </div>
+        </div>
+
+        <ul class="feature-chips" aria-label="At a glance">
+            <li class="chip">Fully on-device</li>
+            <li class="chip">System keyboard</li>
+            <li class="chip">Dictate &amp; Assist</li>
+            <li class="chip">Apple Neural Engine</li>
+            <li class="chip">~460 MB total</li>
+        </ul>
+
+        <p class="preview-note">
+            <strong>Coming soon.</strong> The iPhone app is built and submitted to Apple. Email <a href="mailto:hello@robgough.net">hello@robgough.net</a> if you'd like a nudge when it lands.
+        </p>
+    </header>
+
+    <section class="demo platform-mac" aria-label="Demo of Dictator in use">
         <div class="demo-frame">
             <!--
                 Autoplay + muted + playsinline is the Safari-compatible recipe.
@@ -1026,7 +1285,7 @@
         </p>
     </section>
 
-    <section id="hotkeys">
+    <section id="hotkeys" class="platform-mac">
         <h2>Two hotkeys</h2>
         <p class="lede">Two hotkeys, two jobs. Dictation drops new text where the cursor is. Assistant edits the text that's already there.</p>
         <p>You bind each hotkey in Settings — typically a Fn key for dictation, a different chord for assistant. The menu-bar HUD tells you which one is live while you hold the key, and which pipeline stage it's currently working on.</p>
@@ -1043,7 +1302,7 @@
         </div>
     </section>
 
-    <section id="pipeline" class="pipeline">
+    <section id="pipeline" class="pipeline platform-mac">
         <h2>The pipeline</h2>
         <p class="lede">From audio to written text — and the cleanup that makes it readable — all on your Mac.</p>
         <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts. Click any stage below to see what happens there.</p>
@@ -1108,7 +1367,7 @@
         <p class="pipeline-footnote">The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
     </section>
 
-    <section id="modes">
+    <section id="modes" class="platform-mac">
         <h2>Dictation modes</h2>
         <p class="lede">Not every dictation needs the full cleanup. Modes let you keep a stripped-back Quick option alongside the full pipeline — and add your own for the contexts you reach for.</p>
         <p>A mode bundles which of the optional passes run, the prompts they use, and whether spoken cues and your vocabulary apply. Two come seeded; you can add your own from Settings.</p>
@@ -1129,7 +1388,7 @@
         <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Write, decide partway through it should've been Quick, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind Email mode to Mail.app, Slack mode to Slack, and Dictator picks the right one as you start to record.</p>
     </section>
 
-    <section id="assistant" class="assistant">
+    <section id="assistant" class="assistant platform-mac">
         <h2>Assistant mode</h2>
         <p class="lede">A second hotkey for editing text by speaking to it.</p>
         <p>Hold the assistant hotkey, speak an instruction, release. If you had text selected when you triggered it, Dictator sees both — the selection and the instruction — and the local LLM decides what kind of response you want.</p>
@@ -1148,7 +1407,7 @@
         <p style="margin-top: 18px;">Conversations are multi-turn: follow-ups extend the same thread, with automatic compaction once the model's context window starts filling. Recent conversations are one click away in the menu-bar dropdown.</p>
     </section>
 
-    <section id="models" class="models">
+    <section id="models" class="models platform-mac">
         <h2>Choose your models</h2>
         <p class="lede">Two engines for speech-to-text, four small instruction-tuned LLMs for the cleanup passes — or no LLM at all.</p>
         <p>All weights are downloaded on first use and stored in <code>~/Library/Application Support/Dictator/Models/</code>. You can mix and match: smaller transcription model with a bigger LLM, or vice versa.</p>
@@ -1214,7 +1473,7 @@
         <p class="table-footnote">All language models are 4-bit quantised via MLX. The <strong>RAM</strong> column is how much the loaded model itself consumes at steady-state, with modest context lengths; long Assistant-mode conversations grow as the KV cache fills. The <strong>Min Mac RAM</strong> column is the total physical memory we'd want your <em>whole machine</em> to have before recommending the model — enough to keep the LLM resident and still leave headroom for the OS, your browser, and whatever else you have open.</p>
     </section>
 
-    <section id="tradeoff" class="tradeoff">
+    <section id="tradeoff" class="tradeoff platform-mac">
         <h2>Local-first, honestly</h2>
         <p class="lede">Running everything on your Mac is a real trade-off. Worth being clear about both sides.</p>
 
@@ -1242,6 +1501,113 @@
         </div>
     </section>
 
+    <!-- ============ iPhone content stream ============ -->
+
+    <section id="ios-keyboard" class="platform-ios">
+        <h2>The keyboard</h2>
+        <p class="lede">A system keyboard with two buttons. Tap the mic to dictate; tap the wand to reshape what's already in the field.</p>
+        <p>Install Dictator from the App Store, add the keyboard in Settings, and switch to it whenever you want voice. It works in any text field, in any app — Mail, Messages, Notes, Slack, Safari, third-party editors. There's nothing for the host app to integrate; the keyboard does its job and gets out of the way.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #007AFF;">
+                <h3>Dictate</h3>
+                <p>Tap the red mic to start, tap to stop. Dictator transcribes locally, tidies the result with one optional Apple Intelligence cleanup pass, and inserts the text at your cursor. Comma, full stop, new paragraph and the other spoken cues are honoured.</p>
+            </div>
+            <div class="mode" style="--mode-color: #5e5ce6;">
+                <h3>Assist</h3>
+                <p>Tap the purple wand and speak an instruction. "Make this less formal." "Translate to French." "Tighten it up." Dictator transforms the field's text in place, with an Undo button on the keyboard for one-tap revert.</p>
+            </div>
+        </div>
+
+        <p style="margin-top: 18px;">Both buttons hand briefly to the main app to record — iOS doesn't let a keyboard hold the microphone — and the result is written back into the field the moment you return. The round-trip takes a beat; the keyboard shows you what's happening while it works.</p>
+    </section>
+
+    <section id="ios-modes" class="platform-ios">
+        <h2>Two modes, one keyboard</h2>
+        <p class="lede">Dictate adds new text. Assist changes the text that's already there. Both use the same on-device pipeline.</p>
+        <p>Same idea as the Mac app's two hotkeys, mapped to two keys on the keyboard. Dictate is for "I need to put something in this field." Assist is for "I've already written something; rewrite it like this." Either is a single tap away wherever you can type.</p>
+        <p>If you'd rather use the app on its own — say you want to dictate without switching keyboards — the main app has the same recorder built in, plus a searchable history of every transcript and assist turn from the last week.</p>
+    </section>
+
+    <section id="ios-screens" class="platform-ios">
+        <h2>What it looks like</h2>
+        <p class="lede">Brief tour. The keyboard, the recorder, the history of every transcript and assist.</p>
+        <div class="ios-screens-row">
+            <figure>
+                <img src="media/ios-screenshots/idle.png"
+                     alt="Dictator's main screen with red Dictate and purple Assist buttons"
+                     width="276" height="600" loading="lazy">
+                <figcaption>The main screen. Hold to dictate or to reshape what's selected.</figcaption>
+            </figure>
+            <figure>
+                <img src="media/ios-screenshots/dictating.png"
+                     alt="Mid-recording: a dashed ring spins around the active button"
+                     width="276" height="600" loading="lazy">
+                <figcaption>The ring confirms you're being heard. Release to transcribe.</figcaption>
+            </figure>
+            <figure>
+                <img src="media/ios-screenshots/keyboard.png"
+                     alt="The Dictator keyboard with two large buttons and a row of secondary keys"
+                     width="276" height="600" loading="lazy">
+                <figcaption>The keyboard. Tap once, talk, the result lands in the field you were typing in.</figcaption>
+            </figure>
+            <figure>
+                <img src="media/ios-screenshots/history.png"
+                     alt="History list showing past dictation and assist entries"
+                     width="276" height="600" loading="lazy">
+                <figcaption>A week's worth of transcripts kept locally. Searchable.</figcaption>
+            </figure>
+        </div>
+    </section>
+
+    <section id="ios-pipeline" class="platform-ios">
+        <h2>How it works</h2>
+        <p class="lede">Audio in, text out, all on the iPhone. Two stages: transcribe, then optionally tidy.</p>
+
+        <div class="features">
+            <div class="feature">
+                <h3>Transcribe (Parakeet, on the Apple Neural Engine)</h3>
+                <p>The audio is transcribed by FluidAudio's Parakeet TDT v3 model running on the Apple Neural Engine — fast, cool, and battery-friendly. The model downloads on first use (~460 MB) and stays on disk. Spoken cues like "comma" and "new paragraph" are honoured deterministically before the model sees the text.</p>
+            </div>
+            <div class="feature">
+                <h3>Tidy (Apple Intelligence, optional)</h3>
+                <p>If Apple Intelligence is enabled, one pass through the system's on-device foundation model removes filler words and "um"s without changing what you said. A guard reverts the pass if the model drifts from the source. Toggle it off in Settings if you'd rather keep the raw transcript.</p>
+            </div>
+            <div class="feature">
+                <h3>Assist (Apple Intelligence)</h3>
+                <p>The wand button feeds the field's text plus your spoken instruction to the same foundation model, which returns a transformed version. The keyboard replaces the original in place and surfaces an Undo so you can step back without thinking about it.</p>
+            </div>
+        </div>
+
+        <p class="pipeline-footnote">Nothing leaves the device. The keyboard talks to the main app over a shared App Group container; the app talks to Parakeet and Apple Intelligence locally. No accounts, no servers, no telemetry.</p>
+    </section>
+
+    <section id="tradeoff-ios" class="tradeoff platform-ios">
+        <h2>Local-first, honestly</h2>
+        <p class="lede">Same trade-off as the Mac app, slightly different shape on iPhone.</p>
+
+        <div class="two-col">
+            <div class="tradeoff-card pros">
+                <h3>What you get</h3>
+                <ul>
+                    <li><strong>Privacy.</strong> Audio, transcripts, and your assist instructions never leave the iPhone. No accounts, no telemetry, no analytics.</li>
+                    <li><strong>Cost.</strong> One-off App Store price, no subscription, no per-token billing.</li>
+                    <li><strong>Offline.</strong> Once the speech model is on disk, it works on a plane or in the Underground.</li>
+                    <li><strong>Speed.</strong> Parakeet on the Apple Neural Engine is fast — typically faster than typing, even on a short utterance.</li>
+                </ul>
+            </div>
+            <div class="tradeoff-card">
+                <h3>What you give up</h3>
+                <ul>
+                    <li><strong>Apple Intelligence required for cleanup.</strong> The tidy and assist passes use Apple's on-device foundation model. Without Apple Intelligence enabled, you still get the raw transcript — just no LLM polish.</li>
+                    <li><strong>Hand-off latency.</strong> iOS doesn't let a keyboard extension hold the microphone, so the keyboard launches the app to record. It's quick, but it's not instant.</li>
+                    <li><strong>Full Access permission.</strong> The keyboard needs Allow Full Access (Settings → General → Keyboard → Keyboards → Dictator) so it can launch the app. It doesn't transmit anything off the device.</li>
+                    <li><strong>First run.</strong> Speech model (~460 MB) downloads on first dictation. The app warns you if you're on cellular.</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
     <section id="why" class="author">
         <h2>Why I built this</h2>
         <div class="author-row">
@@ -1255,12 +1621,12 @@
 
                 <p>Assistant mode is the second piece of magic — the kind that feels obvious the moment you've used it. Select some text, hold a different hotkey, and ask for the change you want out loud. For a one-word fix, typing is still quicker. But for anything substantive, there's no real comparison. You speak the instruction, the rewrite lands in place, and you're already onto the next thing.</p>
 
-                <p>Voice input is going to be a core part of how we use computers — alongside the keyboard and mouse, not replacing them. The big platforms will get there eventually, and when they do it'll feel obvious. Until then, Dictator is a way to live in that future today, on the Mac you already own. I hope you find it useful — and thank you for giving it a try.</p>
+                <p>Voice input is going to be a core part of how we use computers — alongside the keyboard and mouse, not replacing them. The big platforms will get there eventually, and when they do it'll feel obvious. Until then, Dictator is a way to live in that future today, on the device you already own. I hope you find it useful — and thank you for giving it a try.</p>
             </div>
         </div>
     </section>
 
-    <section id="faq" class="faq">
+    <section id="faq" class="faq platform-mac">
         <h2>FAQ</h2>
         <p class="lede">A few common questions before you commit a few hundred MB of disk.</p>
 
@@ -1295,7 +1661,7 @@
         </details>
     </section>
 
-    <section id="requirements">
+    <section id="requirements" class="platform-mac">
         <h2>Requirements</h2>
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
@@ -1306,10 +1672,84 @@
         <p class="table-footnote">With Apple Intelligence enabled, Dictator routes its language-model passes through Apple's on-device foundation model — system-resident, shared across every app that uses the framework, so the in-process RAM cost is effectively zero. The MLX models are available in Settings if you'd rather not use Apple Intelligence: the 1B option fits a 16 GB Mac comfortably, the 3B option wants 24 GB+, and there's a "Fits / Tight / Too large" chip per row so the cost is visible before you switch.</p>
     </section>
 
-    <section class="final-cta" aria-label="Download">
+    <section id="ios-faq" class="faq platform-ios">
+        <h2>FAQ</h2>
+        <p class="lede">A few common questions about the iPhone app.</p>
+
+        <details>
+            <summary>Why does the keyboard need Full Access?</summary>
+            <p>iOS keyboard extensions can't open the microphone themselves, so when you tap the mic button the keyboard launches Dictator's main app to record. That launch requires <code>RequestsOpenAccess</code> — Apple's term for "this keyboard is allowed to talk to its host app." Full Access doesn't grant network access or anything else; Dictator doesn't make network calls.</p>
+        </details>
+
+        <details>
+            <summary>What does the round-trip look like?</summary>
+            <p>Tap the mic on the keyboard. The Dictator app pops to the foreground, captures audio, transcribes locally, then disappears. You return to whatever app you were typing in, and the keyboard inserts the result at your cursor. The whole thing takes a second or two for a short utterance, longer for a paragraph.</p>
+        </details>
+
+        <details>
+            <summary>What if Apple Intelligence isn't enabled?</summary>
+            <p>Dictation still works — you get the raw Parakeet transcript with spoken cues applied. The optional tidy pass and the Assist button both need Apple Intelligence, so those features are hidden when it's off. The app reminds you that it's available in Settings → Apple Intelligence &amp; Siri if you want to flip it on later.</p>
+        </details>
+
+        <details>
+            <summary>Which iPhones does it run on?</summary>
+            <p>Any iPhone with Apple Intelligence support running iOS 26 or newer. As of writing that's iPhone 15 Pro / Pro Max and the iPhone 16 line. Older iPhones don't have the Apple Neural Engine resources Parakeet needs, nor the on-device foundation model Assist relies on.</p>
+        </details>
+
+        <details>
+            <summary>Where do my transcripts live?</summary>
+            <p>In the Dictator app, in a local history scoped to the last seven days. You can browse it, copy any past transcript back to the clipboard, or clear it from Settings. Nothing syncs off the device.</p>
+        </details>
+
+        <details>
+            <summary>Does it work with my AirPods or a wired mic?</summary>
+            <p>Yes. The recorder uses whatever input route iOS hands it — built-in mic, AirPods, USB-C mic, Bluetooth headset. There's no input picker; iOS routes for you.</p>
+        </details>
+    </section>
+
+    <section id="ios-requirements" class="platform-ios">
+        <h2>Requirements</h2>
+        <p class="reqs">
+            <span><strong>iPhone</strong> with Apple Intelligence support</span>
+            <span><strong>iOS 26</strong> or newer</span>
+            <span><strong>Apple Intelligence</strong> enabled (for tidy and Assist passes)</span>
+            <span><strong>~460 MB</strong> of disk for the transcription model</span>
+        </p>
+        <p class="table-footnote">Transcription runs locally via Parakeet on the Apple Neural Engine; the optional tidy pass and Assist use Apple Intelligence's on-device foundation model. The keyboard needs Allow Full Access enabled (Settings → General → Keyboard → Keyboards → Dictator) so it can hand off to the main app for recording — it doesn't transmit anything off the device.</p>
+    </section>
+
+    <section class="final-cta platform-mac" aria-label="Download for Mac">
         <h2>Try it</h2>
-        <p>Free, open source, runs locally on Apple Silicon. macOS 26+.</p>
-        <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
+        <p>Free, open source, runs locally on Apple Silicon.</p>
+        <div class="download-row" style="justify-content: center;">
+            <div class="download-col" style="align-items: center;">
+                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="final-cta platform-ios" aria-label="Coming to the App Store">
+        <h2>Coming soon</h2>
+        <p>Dictator for iPhone is with Apple. It'll appear here the moment the App Store flips it live.</p>
+        <div class="download-row" style="justify-content: center;">
+            <div class="download-col" style="align-items: center;">
+                <a class="app-store-badge"
+                   href="#"
+                   data-app-store-pending="true"
+                   aria-disabled="true"
+                   aria-label="Dictator for iPhone — coming soon to the App Store">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 156 52" role="img" aria-hidden="true" focusable="false">
+                        <rect x="0" y="0" width="156" height="52" rx="9" ry="9" fill="#000"/>
+                        <rect x="0.5" y="0.5" width="155" height="51" rx="8.5" ry="8.5" fill="none" stroke="#a6a6a6" stroke-width="1"/>
+                        <path fill="#fff" d="M30.6 27.1c0-3 2.5-4.5 2.6-4.5-1.4-2-3.6-2.3-4.4-2.3-1.9-.2-3.6 1.1-4.6 1.1-.9 0-2.4-1.1-3.9-1-2 0-3.9 1.2-4.9 3-2.1 3.7-.5 9.1 1.5 12.1 1 1.5 2.2 3.1 3.8 3 1.5-.1 2-1 3.9-1 1.8 0 2.3 1 3.9.9 1.6 0 2.6-1.5 3.6-2.9 1.1-1.7 1.6-3.3 1.6-3.4-.1 0-3.1-1.2-3.1-4.7zm-3-8.7c.8-1 1.4-2.5 1.2-3.9-1.2.1-2.7.8-3.6 1.8-.8.9-1.5 2.4-1.3 3.8 1.4.1 2.8-.7 3.7-1.7z"/>
+                        <text x="42" y="18" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="8" letter-spacing="0.2">Download on the</text>
+                        <text x="42" y="38" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" letter-spacing="0.1">App Store</text>
+                    </svg>
+                </a>
+                <span class="col-meta">Coming soon · iPhone</span>
+            </div>
+        </div>
     </section>
 
     <footer>
@@ -1321,6 +1761,63 @@
     </footer>
 </div>
 <script>
+    // Platform toggle. Mac/iPhone segmented control at the top of the
+    // page; URL hash drives initial state and survives shares. Both
+    // content streams live in the DOM at once — CSS hides the inactive
+    // one via body[data-platform="..."]. pushState keeps the back
+    // button useful between platforms without scrolling away.
+    (function () {
+        var body = document.body;
+        var buttons = document.querySelectorAll('.platform-switch [data-platform-target]');
+        if (!buttons.length) return;
+
+        function apply(platform, options) {
+            options = options || {};
+            // Whitelist — anything else (a stale hash to an old anchor,
+            // a typo) falls back to Mac, which is the mature one.
+            if (platform !== 'ios') platform = 'mac';
+            body.setAttribute('data-platform', platform);
+            document.documentElement.setAttribute('data-platform', platform);
+            buttons.forEach(function (b) {
+                var match = b.getAttribute('data-platform-target') === platform;
+                b.setAttribute('aria-selected', match ? 'true' : 'false');
+            });
+            if (options.updateHash) {
+                // Use '/' for the default to keep the address bar tidy;
+                // pushState so back-button traverses Mac↔iPhone.
+                var target = platform === 'ios' ? '#ios' : '#mac';
+                if (location.hash !== target) {
+                    history.pushState({ platform: platform }, '', target);
+                }
+            }
+        }
+
+        // Read initial state from the URL hash. A bare '/' or any
+        // non-recognised hash → Mac. We also recognise '#mac' explicitly
+        // so people can deep-link both directions.
+        function platformFromHash() {
+            var h = (location.hash || '').toLowerCase();
+            if (h === '#ios' || h === '#iphone') return 'ios';
+            return 'mac';
+        }
+
+        buttons.forEach(function (b) {
+            b.addEventListener('click', function () {
+                var target = b.getAttribute('data-platform-target');
+                apply(target, { updateHash: true });
+            });
+        });
+
+        window.addEventListener('hashchange', function () {
+            apply(platformFromHash(), { updateHash: false });
+        });
+        window.addEventListener('popstate', function () {
+            apply(platformFromHash(), { updateHash: false });
+        });
+
+        apply(platformFromHash(), { updateHash: false });
+    })();
+
     // Highlight the TOC entry for whichever section is currently in the
     // upper third of the viewport. The wide rootMargin (negative top + bottom)
     // means a section is only "active" once its top crosses ~25% down the

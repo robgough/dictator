@@ -32,6 +32,19 @@ enum DictatorIOSSettings {
     /// `registerDefaults()`.
     static let selectedModelKey = "DictatorIOS.selectedModelID"
 
+    /// True once the user has either dismissed the "enable keyboard"
+    /// onboarding card on the main view or actually used the keyboard
+    /// (the host receives a `dictator://keyboard?...` URL). Hides the
+    /// card thereafter so the main view stays uncluttered.
+    static let keyboardOnboardingDismissedKey = "DictatorIOS.keyboardOnboardingDismissed"
+
+    /// True once the user has either completed every step of the
+    /// first-launch onboarding sheet (mic → model → keyboard install →
+    /// Open Access) or chosen "Skip for now". One-and-done: the sheet
+    /// supersedes the older scattered cards (which remain available as
+    /// fallback re-prompts) and never re-presents once this flag flips.
+    static let onboardingCompletedKey = "DictatorIOS.onboardingCompleted"
+
     /// Register first-launch defaults so `UserDefaults.bool(forKey:)`
     /// reads return the intended value for un-set keys. Called once
     /// from `DictatorIOSApp.init()` (main actor). Built as a static

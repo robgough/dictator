@@ -1345,6 +1345,209 @@ enum EmojiLookup {
             ("thumbs down", "👎"),
             ("broken heart", "💔"),
             ("on fire", "🔥"),
+            // PIRATE FLAG is a ZWJ sequence (🏴 + ZWJ + ☠ + VS16), so the
+            // single-scalar Unicode-name scan in `buildMap` never enters
+            // it. Without this alias the wordCount=2 lookup for "pirate
+            // flag" misses, the wordCount=1 fallback resolves "flag" to
+            // 🏁 (CHEQUERED FLAG — first scalar whose last name-word is
+            // "flag"), and "pirate" gets stranded in the output.
+            ("pirate flag", "\u{1F3F4}\u{200D}\u{2620}\u{FE0F}"),
+
+            // ----------------------------------------------------------
+            // Flag ZWJ sequences + single-scalar flags with VS16.
+            //
+            // Same shape as the pirate-flag bug: any flag built from
+            // multiple scalars (ZWJ sequences like 🏳️‍🌈, or even bare
+            // 🏳️ which is base + VS16) is invisible to the scan. The
+            // 1-word "flag" fallback then resolves to 🏁 (CHEQUERED FLAG)
+            // and the colour/descriptor gets stranded.
+            ("rainbow flag",     "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"),
+            ("pride flag",       "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"),
+            ("gay flag",         "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"),
+            ("trans flag",       "\u{1F3F3}\u{FE0F}\u{200D}\u{26A7}\u{FE0F}"),
+            ("transgender flag", "\u{1F3F3}\u{FE0F}\u{200D}\u{26A7}\u{FE0F}"),
+            ("white flag",       "\u{1F3F3}\u{FE0F}"),
+            ("surrender flag",   "\u{1F3F3}\u{FE0F}"),
+            ("black flag",       "\u{1F3F4}"),
+            ("chequered flag",   "\u{1F3C1}"),
+            ("checkered flag",   "\u{1F3C1}"),
+            ("racing flag",      "\u{1F3C1}"),
+            ("finish flag",      "\u{1F3C1}"),
+            ("triangular flag",  "\u{1F6A9}"),
+            ("red flag",         "\u{1F6A9}"),
+            ("crossed flags",    "\u{1F38C}"),
+
+            // ----------------------------------------------------------
+            // Regional-indicator flag pairs (country flags).
+            //
+            // Each country flag is two regional-indicator scalars and so
+            // is also invisible to the single-scalar scan. Curated to
+            // the countries a UK-based dictator is most likely to
+            // mention; longer tail (~250 territories) is bloat and most
+            // users won't dictate them.
+            //
+            // Multiple spoken forms per country where users genuinely
+            // alternate ("uk flag" / "british flag" / "union jack" all
+            // mean 🇬🇧).
+            ("british flag",     "\u{1F1EC}\u{1F1E7}"),
+            ("uk flag",          "\u{1F1EC}\u{1F1E7}"),
+            ("union jack",       "\u{1F1EC}\u{1F1E7}"),
+            ("english flag",     "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"),
+            ("scottish flag",    "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}"),
+            ("welsh flag",       "\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}"),
+            ("american flag",    "\u{1F1FA}\u{1F1F8}"),
+            ("us flag",          "\u{1F1FA}\u{1F1F8}"),
+            ("usa flag",         "\u{1F1FA}\u{1F1F8}"),
+            ("canadian flag",    "\u{1F1E8}\u{1F1E6}"),
+            ("canada flag",      "\u{1F1E8}\u{1F1E6}"),
+            ("irish flag",       "\u{1F1EE}\u{1F1EA}"),
+            ("ireland flag",     "\u{1F1EE}\u{1F1EA}"),
+            ("australian flag",  "\u{1F1E6}\u{1F1FA}"),
+            ("australia flag",   "\u{1F1E6}\u{1F1FA}"),
+            ("aussie flag",      "\u{1F1E6}\u{1F1FA}"),
+            ("french flag",      "\u{1F1EB}\u{1F1F7}"),
+            ("france flag",      "\u{1F1EB}\u{1F1F7}"),
+            ("german flag",      "\u{1F1E9}\u{1F1EA}"),
+            ("germany flag",     "\u{1F1E9}\u{1F1EA}"),
+            ("italian flag",     "\u{1F1EE}\u{1F1F9}"),
+            ("italy flag",       "\u{1F1EE}\u{1F1F9}"),
+            ("spanish flag",     "\u{1F1EA}\u{1F1F8}"),
+            ("spain flag",       "\u{1F1EA}\u{1F1F8}"),
+            ("portuguese flag",  "\u{1F1F5}\u{1F1F9}"),
+            ("portugal flag",    "\u{1F1F5}\u{1F1F9}"),
+            ("dutch flag",       "\u{1F1F3}\u{1F1F1}"),
+            ("netherlands flag", "\u{1F1F3}\u{1F1F1}"),
+            ("swiss flag",       "\u{1F1E8}\u{1F1ED}"),
+            ("switzerland flag", "\u{1F1E8}\u{1F1ED}"),
+            ("swedish flag",     "\u{1F1F8}\u{1F1EA}"),
+            ("sweden flag",      "\u{1F1F8}\u{1F1EA}"),
+            ("norwegian flag",   "\u{1F1F3}\u{1F1F4}"),
+            ("norway flag",      "\u{1F1F3}\u{1F1F4}"),
+            ("danish flag",      "\u{1F1E9}\u{1F1F0}"),
+            ("denmark flag",     "\u{1F1E9}\u{1F1F0}"),
+            ("japanese flag",    "\u{1F1EF}\u{1F1F5}"),
+            ("japan flag",       "\u{1F1EF}\u{1F1F5}"),
+            ("chinese flag",     "\u{1F1E8}\u{1F1F3}"),
+            ("china flag",       "\u{1F1E8}\u{1F1F3}"),
+            ("korean flag",      "\u{1F1F0}\u{1F1F7}"),
+            ("korea flag",       "\u{1F1F0}\u{1F1F7}"),
+            ("indian flag",      "\u{1F1EE}\u{1F1F3}"),
+            ("india flag",       "\u{1F1EE}\u{1F1F3}"),
+            ("brazilian flag",   "\u{1F1E7}\u{1F1F7}"),
+            ("brazil flag",      "\u{1F1E7}\u{1F1F7}"),
+            ("mexican flag",     "\u{1F1F2}\u{1F1FD}"),
+            ("mexico flag",      "\u{1F1F2}\u{1F1FD}"),
+            ("russian flag",     "\u{1F1F7}\u{1F1FA}"),
+            ("russia flag",      "\u{1F1F7}\u{1F1FA}"),
+            ("ukrainian flag",   "\u{1F1FA}\u{1F1E6}"),
+            ("ukraine flag",     "\u{1F1FA}\u{1F1E6}"),
+            ("eu flag",          "\u{1F1EA}\u{1F1FA}"),
+            ("european flag",    "\u{1F1EA}\u{1F1FA}"),
+
+            // ----------------------------------------------------------
+            // Heart variants built from ZWJ sequences.
+            //
+            // The 2-word lookup misses ZWJ hearts, and the 1-word "heart"
+            // fallback resolves to ❤️ via the curated alias — wrong
+            // emoji, descriptor stranded.
+            ("heart on fire",  "\u{2764}\u{FE0F}\u{200D}\u{1F525}"),
+            ("burning heart",  "\u{2764}\u{FE0F}\u{200D}\u{1F525}"),
+            ("flaming heart",  "\u{2764}\u{FE0F}\u{200D}\u{1F525}"),
+            ("mending heart",  "\u{2764}\u{FE0F}\u{200D}\u{1FA79}"),
+            ("healing heart",  "\u{2764}\u{FE0F}\u{200D}\u{1FA79}"),
+
+            // ----------------------------------------------------------
+            // Profession ZWJ sequences (gendered + neutral).
+            //
+            // Not strictly bug-shaped (the 1-word fallback misses since
+            // none of "cook"/"astronaut"/"firefighter"/... are in the
+            // scan map), but without explicit aliases the user gets no
+            // emoji at all. Cover the common professions in all three
+            // gender variants. Person variants use 🧑.
+            ("man cook",          "\u{1F468}\u{200D}\u{1F373}"),
+            ("woman cook",        "\u{1F469}\u{200D}\u{1F373}"),
+            ("cook",              "\u{1F9D1}\u{200D}\u{1F373}"),
+            ("chef",              "\u{1F9D1}\u{200D}\u{1F373}"),
+            ("man astronaut",     "\u{1F468}\u{200D}\u{1F680}"),
+            ("woman astronaut",   "\u{1F469}\u{200D}\u{1F680}"),
+            ("astronaut",         "\u{1F9D1}\u{200D}\u{1F680}"),
+            ("man firefighter",   "\u{1F468}\u{200D}\u{1F692}"),
+            ("woman firefighter", "\u{1F469}\u{200D}\u{1F692}"),
+            ("firefighter",       "\u{1F9D1}\u{200D}\u{1F692}"),
+            ("man teacher",       "\u{1F468}\u{200D}\u{1F3EB}"),
+            ("woman teacher",     "\u{1F469}\u{200D}\u{1F3EB}"),
+            ("teacher",           "\u{1F9D1}\u{200D}\u{1F3EB}"),
+            ("man scientist",     "\u{1F468}\u{200D}\u{1F52C}"),
+            ("woman scientist",   "\u{1F469}\u{200D}\u{1F52C}"),
+            ("scientist",         "\u{1F9D1}\u{200D}\u{1F52C}"),
+            ("man technologist",  "\u{1F468}\u{200D}\u{1F4BB}"),
+            ("woman technologist","\u{1F469}\u{200D}\u{1F4BB}"),
+            ("technologist",      "\u{1F9D1}\u{200D}\u{1F4BB}"),
+            ("programmer",        "\u{1F9D1}\u{200D}\u{1F4BB}"),
+            ("developer",         "\u{1F9D1}\u{200D}\u{1F4BB}"),
+            ("coder",             "\u{1F9D1}\u{200D}\u{1F4BB}"),
+            ("man artist",        "\u{1F468}\u{200D}\u{1F3A8}"),
+            ("woman artist",      "\u{1F469}\u{200D}\u{1F3A8}"),
+            ("artist",            "\u{1F9D1}\u{200D}\u{1F3A8}"),
+            ("man singer",        "\u{1F468}\u{200D}\u{1F3A4}"),
+            ("woman singer",      "\u{1F469}\u{200D}\u{1F3A4}"),
+            ("singer",            "\u{1F9D1}\u{200D}\u{1F3A4}"),
+            ("man pilot",         "\u{1F468}\u{200D}\u{2708}\u{FE0F}"),
+            ("woman pilot",       "\u{1F469}\u{200D}\u{2708}\u{FE0F}"),
+            ("pilot",             "\u{1F9D1}\u{200D}\u{2708}\u{FE0F}"),
+            ("man farmer",        "\u{1F468}\u{200D}\u{1F33E}"),
+            ("woman farmer",      "\u{1F469}\u{200D}\u{1F33E}"),
+            ("farmer",            "\u{1F9D1}\u{200D}\u{1F33E}"),
+            ("man mechanic",      "\u{1F468}\u{200D}\u{1F527}"),
+            ("woman mechanic",    "\u{1F469}\u{200D}\u{1F527}"),
+            ("mechanic",          "\u{1F9D1}\u{200D}\u{1F527}"),
+            ("man doctor",        "\u{1F468}\u{200D}\u{2695}\u{FE0F}"),
+            ("woman doctor",      "\u{1F469}\u{200D}\u{2695}\u{FE0F}"),
+            ("doctor",            "\u{1F9D1}\u{200D}\u{2695}\u{FE0F}"),
+            ("nurse",             "\u{1F9D1}\u{200D}\u{2695}\u{FE0F}"),
+            ("man judge",         "\u{1F468}\u{200D}\u{2696}\u{FE0F}"),
+            ("woman judge",       "\u{1F469}\u{200D}\u{2696}\u{FE0F}"),
+            ("judge",             "\u{1F9D1}\u{200D}\u{2696}\u{FE0F}"),
+            ("man student",       "\u{1F468}\u{200D}\u{1F393}"),
+            ("woman student",     "\u{1F469}\u{200D}\u{1F393}"),
+            ("student",           "\u{1F9D1}\u{200D}\u{1F393}"),
+            ("graduate",          "\u{1F9D1}\u{200D}\u{1F393}"),
+
+            // ----------------------------------------------------------
+            // Other ZWJ / VS16 group emojis.
+            //
+            // Eye-in-speech-bubble and people-holding-hands are pure
+            // ZWJ; "speech bubble" alone is base + VS16 (and the base
+            // isn't isEmojiPresentation, so the scan misses).
+            ("eye in speech bubble", "\u{1F441}\u{FE0F}\u{200D}\u{1F5E8}\u{FE0F}"),
+            ("speech bubble",        "\u{1F5E8}\u{FE0F}"),
+            ("people holding hands", "\u{1F9D1}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}"),
+            ("holding hands",        "\u{1F9D1}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}"),
+
+            // ----------------------------------------------------------
+            // Single-base scalars whose Unicode name has
+            // isEmojiPresentation=false. The scan skips these entirely;
+            // adding the VS16 form here makes them render as proper
+            // emoji rather than monochrome text glyphs.
+            ("snowman",  "\u{2603}\u{FE0F}"),
+            ("eye",      "\u{1F441}\u{FE0F}"),
+            ("umbrella", "\u{2602}\u{FE0F}"),
+
+            // ----------------------------------------------------------
+            // Keycap sequences (digit + VS16 + COMBINING ENCLOSING
+            // KEYCAP). Three scalars each — invisible to the scan.
+            ("zero key",  "0\u{FE0F}\u{20E3}"),
+            ("one key",   "1\u{FE0F}\u{20E3}"),
+            ("two key",   "2\u{FE0F}\u{20E3}"),
+            ("three key", "3\u{FE0F}\u{20E3}"),
+            ("four key",  "4\u{FE0F}\u{20E3}"),
+            ("five key",  "5\u{FE0F}\u{20E3}"),
+            ("six key",   "6\u{FE0F}\u{20E3}"),
+            ("seven key", "7\u{FE0F}\u{20E3}"),
+            ("eight key", "8\u{FE0F}\u{20E3}"),
+            ("nine key",  "9\u{FE0F}\u{20E3}"),
+            ("hash key",  "#\u{FE0F}\u{20E3}"),
+            ("star key",  "*\u{FE0F}\u{20E3}"),
         ]
         for (alias, emoji) in aliases {
             m[alias] = emoji

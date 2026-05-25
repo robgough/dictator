@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Dictator iOS host app privacy manifest.
+
+      All inference runs on-device; nothing the user dictates ever leaves
+      this device. The only network traffic is the one-time download of
+      Parakeet model weights from Hugging Face. No analytics, no
+      third-party SDKs, no trackers.
+
+      Required-Reason API declarations cover the categories Apple
+      enumerates in "Describing data use in privacy manifests". The only
+      one this target hits is UserDefaults (heavy use — settings storage
+      and the App Group bridge that shuttles state between the host and
+      the keyboard extension). Reason CA92.1 = access info from same app,
+      per-user-installation, no tracking.
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!--
+          Microphone audio is captured for transcription. Apple's
+          questionnaire considers data "collected" only when it's
+          transmitted off-device — Dictator transcribes locally and the
+          PCM never leaves the device. We declare it anyway, for
+          transparency, marked not-linked-to-user and not-for-tracking.
+        -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeAudioData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

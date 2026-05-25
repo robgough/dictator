@@ -22,4 +22,11 @@ if [ -z "${DICTATOR_TEAM_ID:-}" ]; then
     echo "" >&2
 fi
 
+if [ -z "${DICTATOR_IOS_TEAM_ID:-}" ]; then
+    echo "⚠️  DICTATOR_IOS_TEAM_ID not set — the iOS app + keyboard extension can't" >&2
+    echo "    sign for real-device installs, TestFlight, or App Store submission." >&2
+    echo "    Simulator-only iOS builds are unaffected." >&2
+    echo "" >&2
+fi
+
 exec xcodegen generate "$@"

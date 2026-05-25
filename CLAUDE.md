@@ -37,9 +37,15 @@ The post-build phase ditto-copies the built `.app` to `~/Applications/Dictator.a
 - `cp -R` doesn't preserve code-signature metadata; `ditto` does.
 - xcodegen's `postBuildScripts` run *before* Xcode's `CodeSign` phase, so the ditto'd copy is unsigned at that moment and needs an explicit `codesign` invocation.
 
-## Release notes (CHANGELOG.md)
+## Release notes (CHANGELOG.md / CHANGELOG-iOS.md)
 
-When a commit changes user-visible behaviour, add a one-line bullet under `## Unreleased` in `CHANGELOG.md` in the same commit. User-visible means something a user could notice in the app: bug fixes, new features, performance changes they'd feel, UI changes, new/changed settings. Internal changes — refactors, build/CI tweaks, website edits under `docs/`, dependency bumps with no behaviour change — don't belong here.
+When a commit changes user-visible behaviour, add a one-line bullet under `## Unreleased` in the relevant changelog in the same commit:
+
+- **macOS app changes** → `CHANGELOG.md`
+- **iOS app + keyboard extension changes** → `CHANGELOG-iOS.md`
+- **Shared code in `Sources/DictatorCore/` that ships to both** → both files (worth a brief mention even if the wording's identical)
+
+User-visible means something a user could notice in the app: bug fixes, new features, performance changes they'd feel, UI changes, new/changed settings. Internal changes — refactors, build/CI tweaks, website edits under `docs/`, dependency bumps with no behaviour change — don't belong here.
 
 Style is user-language, not commit-language: "Settings no longer freezes when AirPods are connected" rather than "Move InputLevelMonitor engine startup off the main thread". Inline markdown (bold, code, links) isn't supported by the HTML converter — keep entries plain text.
 

@@ -145,42 +145,75 @@ private struct HistoryRow: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(entry.text)
-                .font(.body)
-                .lineLimit(4)
-                .foregroundStyle(.primary)
+        HStack(alignment: .top, spacing: 12) {
+            // Leading mode badge — mirrors the mic / assist button
+            // glyphs from the main screen so it's immediately obvious
+            // which entry point produced each entry. Sized to align
+            // with the first line of text without crowding it.
+            Image(systemName: modeIcon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(modeTint)
+                .frame(width: 22, alignment: .center)
+                .accessibilityLabel(modeAccessibilityLabel)
 
-            HStack(spacing: 8) {
-                Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if entry.hasRaw {
-                    // Subtle hint that a pre-cleanup version exists.
-                    // Discoverability is otherwise zero — users wouldn't
-                    // know to long-press without something signalling it.
-                    Label("raw", systemImage: "waveform")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.tertiary)
-                        .labelStyle(.titleAndIcon)
-                }
-                Spacer()
-                if justCopiedRaw {
-                    Label("Raw copied", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                } else if justCopied {
-                    Label("Copied", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(entry.text)
+                    .font(.body)
+                    .lineLimit(4)
+                    .foregroundStyle(.primary)
+
+                HStack(spacing: 8) {
+                    Text(Self.relative.localizedString(for: entry.timestamp, relativeTo: Date()))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if entry.hasRaw {
+                        // Subtle hint that a pre-cleanup version exists.
+                        // Discoverability is otherwise zero — users wouldn't
+                        // know to long-press without something signalling it.
+                        Label("raw", systemImage: "waveform")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .labelStyle(.titleAndIcon)
+                    }
+                    Spacer()
+                    if justCopiedRaw {
+                        Label("Raw copied", systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.green)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    } else if justCopied {
+                        Label("Copied", systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.green)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
                 }
             }
         }
         .padding(.vertical, 4)
         .animation(.easeInOut(duration: 0.18), value: justCopied)
         .animation(.easeInOut(duration: 0.18), value: justCopiedRaw)
+    }
+
+    private var modeIcon: String {
+        switch entry.resolvedMode {
+        case .dictation: "mic.fill"
+        case .assist: "wand.and.stars"
+        }
+    }
+
+    private var modeTint: Color {
+        switch entry.resolvedMode {
+        case .dictation: .red
+        case .assist: .purple
+        }
+    }
+
+    private var modeAccessibilityLabel: String {
+        switch entry.resolvedMode {
+        case .dictation: "Dictation"
+        case .assist: "Assistant"
+        }
     }
 }
 
