@@ -53,6 +53,32 @@ enum SharedFolderBookmark {
         return name.isEmpty ? url.path : name
     }
 
+    /// Full path of the configured folder, formatted as a breadcrumb
+    /// so the user can verify they picked the right place. The on-disk
+    /// path for an iCloud Drive folder on iOS looks like
+    /// `/private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs/...`
+    /// which is meaningless to a user — we replace the iCloud Drive
+    /// container prefix with the user-visible `iCloud Drive` label
+    /// before splitting on slashes. Other Files.app providers
+    /// (Dropbox, Google Drive, on-device) fall through to the raw
+    /// path; that's still readable enough as a breadcrumb.
+    static var displayPath: String? {
+        guard let url = activeScopedURL else { return nil }
+        let raw = url.path(percentEncoded: false)
+        let iCloudPrefixes = [
+            "/private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs",
+            "/var/mobile/Library/Mobile Documents/com~apple~CloudDocs"
+        ]
+        var friendly = raw
+        for prefix in iCloudPrefixes where friendly.hasPrefix(prefix) {
+            friendly = "iCloud Drive" + friendly.dropFirst(prefix.count)
+            break
+        }
+        return friendly
+            .split(separator: "/")
+            .joined(separator: " › ")
+    }
+
     /// Save the picked URL as a security-scoped bookmark and start
     /// accessing it for the rest of the session. Returns the resolved
     /// URL. Throws on bookmark creation failure (rare — usually means

@@ -13,6 +13,10 @@ struct AboutView: View {
     /// SwiftUI render pass. AboutView is push-navigated and short-lived,
     /// so a snapshot at present-time is plenty fresh.
     @State private var stats: UsageStats = .zero
+    /// Whether the user has opted into a shared folder. Drives the
+    /// "Your usage" footer copy — the local-only line is misleading
+    /// once stats are pooled across devices.
+    @State private var sharedFolderConfigured: Bool = false
 
     private var appName: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
@@ -76,7 +80,14 @@ struct AboutView: View {
             } header: {
                 Text("Your usage")
             } footer: {
-                Text("Counted locally on this device — nothing is reported.")
+                // When a shared folder is connected, totals are summed
+                // across every device writing to it (other iPhones, the
+                // Mac app) — the local-only line would be misleading.
+                if sharedFolderConfigured {
+                    Text("Counted on-device with no telemetry. Because you've connected a shared folder in Settings, totals add up across every device sharing it.")
+                } else {
+                    Text("Counted locally on this device — nothing is reported.")
+                }
             }
 
             Section {
@@ -154,6 +165,7 @@ struct AboutView: View {
         .onAppear {
             UsageStatsStore.shared.reload()
             stats = UsageStatsStore.shared.totals
+            sharedFolderConfigured = SharedFolderBookmark.isConfigured
         }
     }
 }

@@ -19,11 +19,12 @@ struct SettingsView: View {
     /// can find the walkthrough again after dismissing the card.
     @State private var showingKeyboardSetup = false
     @State private var showingFolderPicker = false
-    /// Folder name surfaced under the "Shared folder" row. Recomputed
+    /// Full path of the configured shared folder, as a `›`-separated
+    /// breadcrumb (`iCloud Drive › Documents › Dictator`). Recomputed
     /// on appear and after a successful pick / disconnect so the UI
     /// doesn't have to introspect `SharedFolderBookmark` on every
     /// SwiftUI render. `nil` means the user hasn't opted in.
-    @State private var sharedFolderName: String?
+    @State private var sharedFolderPath: String?
     /// Last shared-folder error (stale bookmark, permission denied,
     /// etc.). Shown inline so the user sees why it didn't connect.
     @State private var sharedFolderError: String?
@@ -116,15 +117,15 @@ struct SettingsView: View {
             }
 
             Section {
-                if let sharedFolderName {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
+                if let sharedFolderPath {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Image(systemName: "checkmark.icloud.fill")
                                 .foregroundStyle(.green)
-                            Text(sharedFolderName)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
+                            Text(sharedFolderPath)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Button("Stop using shared folder", role: .destructive) {
                             disconnectSharedFolder()
@@ -202,7 +203,7 @@ struct SettingsView: View {
     /// folder was deleted). `SharedFolderBookmark.activeURL` is set on
     /// app launch by `DictatorIOSApp.init`; this just surfaces it.
     private func refreshSharedFolderState() {
-        sharedFolderName = SharedFolderBookmark.displayName
+        sharedFolderPath = SharedFolderBookmark.displayPath
         sharedFolderError = nil
     }
 
