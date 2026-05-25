@@ -77,6 +77,15 @@ final class VocabularyStore {
     /// start the external-change watcher. Called from `AppState.bootstrap()`
     /// before any UI surfaces or the pipeline read the vocabulary.
     func bootstrap(customDirectory: URL?, legacyEntries: [VocabularyEntry]?) {
+        // Idempotent: a second call (e.g. iOS user enabling a shared
+        // folder mid-session) must release the previous file watcher
+        // and cancel any pending debounced save targeting the old URL
+        // before re-pointing. Without this, the old watcher leaks and
+        // a debounced save can fire after we've already migrated.
+        stopWatching()
+        saveDebounceTask?.cancel()
+        saveDebounceTask = nil
+
         let directory = customDirectory ?? Self.defaultDirectory()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

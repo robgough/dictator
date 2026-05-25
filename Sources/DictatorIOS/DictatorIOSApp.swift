@@ -31,13 +31,23 @@ struct DictatorIOSApp: App {
             UserDefaults.standard.set(true, forKey: DictatorIOSSettings.onboardingCompletedKey)
         }
 
+        // Resolve the user's shared-folder bookmark if they've opted
+        // in. Done before VocabularyStore.bootstrap so the store loads
+        // directly from the shared location (via iCloud Drive, Dropbox,
+        // etc.) instead of the sandbox. Failure is silent here — the
+        // Settings UI exposes the resolved/error state and lets the
+        // user re-pick or disconnect; throwing in App init would just
+        // crash launch with no recourse.
+        let sharedFolder = (try? SharedFolderBookmark.resolve()) ?? nil
+
         // VocabularyStore is a singleton that loads from disk on bootstrap;
         // until that runs, `entries` is empty and substitution is a silent
         // no-op. Doing this at App init keeps it ahead of the first view
         // appearing — the ContentView's @State viewModel is constructed
         // lazily on first body evaluation, by which point the store has
         // already populated.
-        VocabularyStore.shared.bootstrap(customDirectory: nil, legacyEntries: nil)
+        VocabularyStore.shared.bootstrap(customDirectory: sharedFolder, legacyEntries: nil)
+        UsageStatsStore.shared.bootstrap(customDirectory: sharedFolder)
     }
 
     var body: some Scene {

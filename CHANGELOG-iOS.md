@@ -21,3 +21,4 @@ listing — keep entries as plain bullet lines.
 - New first-launch walkthrough that takes you through microphone access, downloading the speech model, installing the Dictator keyboard, and enabling Full Access in one place.
 - About screen now credits NVIDIA's Parakeet TDT model alongside the FluidAudio library that runs it.
 - About screen now shows a Your usage section: dictations, assistant turns, words spoken, words delivered, counted on-device.
+- New Settings → Shared folder option. Pick a folder in iCloud Drive (typically iCloud Drive › Documents › Dictator on a Mac with Desktop & Documents syncing on) to share your custom vocabulary and usage stats with the Mac app or another iPhone signed into the same iCloud account. Dictation history and assistant conversations stay on this device only.

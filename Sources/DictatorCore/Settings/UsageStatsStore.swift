@@ -82,8 +82,43 @@ public final class UsageStatsStore {
     private var records: [String: UsageStatsDeviceRecord] = [:]
     private var deviceID: String = ""
     private var loaded = false
+    /// Overrides the platform-default storage directory. Set by
+    /// `bootstrap(customDirectory:)`; nil means "fall back to the
+    /// platform default" (synced folder on macOS, sandbox on iOS).
+    private var customDirectory: URL?
 
     private init() {}
+
+    /// Point the store at an explicit directory. Used on iOS when the
+    /// user enables a shared folder via the security-scoped picker —
+    /// any existing per-device records from other machines in the
+    /// shared file are preserved, and this device's record is folded
+    /// in (or kept fresh if it didn't exist there yet). Safe to call
+    /// repeatedly: each call swaps the directory and reloads.
+    public func bootstrap(customDirectory: URL?) {
+        let existingLocalRecord: UsageStatsDeviceRecord?
+        if loaded {
+            existingLocalRecord = records[deviceID]
+        } else {
+            existingLocalRecord = nil
+        }
+
+        self.customDirectory = customDirectory
+        loaded = false
+        ensureLoaded()
+
+        // If we had counters locally before the switch (most common:
+        // the user has been dictating in sandbox mode and now connects
+        // a shared folder), preserve them by writing this device's
+        // pre-switch record into the new location. Other devices'
+        // records that the new location already had stay intact.
+        if let existingLocalRecord {
+            let merged = mergeRecords(existing: records[deviceID], incoming: existingLocalRecord)
+            records[deviceID] = merged
+            recomputeTotals()
+            persist()
+        }
+    }
 
     /// Increment this device's counters by the supplied amounts. Loads
     /// on first call. Failure to persist is logged but never thrown —
@@ -138,7 +173,7 @@ public final class UsageStatsStore {
             }
         }
 
-        let url = Self.storeURL()
+        let url = storeURL()
         if let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder.iso8601.decode(Envelope.self, from: data) {
             records = decoded.devices
@@ -149,7 +184,7 @@ public final class UsageStatsStore {
     private func persist() {
         let envelope = Envelope(schemaVersion: 1, devices: records)
         guard let data = try? JSONEncoder.iso8601.encode(envelope) else { return }
-        try? data.write(to: Self.storeURL(), options: .atomic)
+        try? data.write(to: storeURL(), options: .atomic)
     }
 
     private func recomputeTotals() {
@@ -169,26 +204,50 @@ public final class UsageStatsStore {
 
     // MARK: - Platform plumbing
 
-    private static func storeURL() -> URL {
-        let directory: URL
+    private func storeURL() -> URL {
+        let directory = customDirectory ?? Self.defaultDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("stats.json")
+    }
+
+    private static func defaultDirectory() -> URL {
         #if canImport(AppKit)
-        directory = SyncedStorage.directory
+        return SyncedStorage.directory
         #else
-        // iOS: keep stats alongside the iOS history store, in the
-        // sandbox's App Support directory. The shared synced folder
-        // story doesn't exist on iOS yet (no Files.app picker, no
-        // iCloud Drive integration), so picking a path users won't
-        // ever browse to is the right call.
+        // iOS: by default keep stats in the app sandbox alongside the
+        // history store. The shared-folder opt-in (Settings → Shared
+        // folder on iOS) overrides this via `bootstrap(customDirectory:)`.
         let base = (try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )) ?? FileManager.default.temporaryDirectory
-        directory = base.appendingPathComponent("Dictator", isDirectory: true)
+        return base.appendingPathComponent("Dictator", isDirectory: true)
         #endif
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("stats.json")
+    }
+
+    /// Combines two per-device records (same deviceID) by taking the
+    /// component-wise *max* of each counter and the latest timestamps.
+    /// Max-rather-than-sum guards against the obvious double-count
+    /// failure when the same record exists on both sides of a switch:
+    /// counters are monotonically non-decreasing per device, so the
+    /// higher number is always the more recent truth.
+    private func mergeRecords(existing: UsageStatsDeviceRecord?, incoming: UsageStatsDeviceRecord) -> UsageStatsDeviceRecord {
+        guard let existing else { return incoming }
+        let stats = UsageStats(
+            dictationCount: max(existing.stats.dictationCount, incoming.stats.dictationCount),
+            assistantCount: max(existing.stats.assistantCount, incoming.stats.assistantCount),
+            wordsIn: max(existing.stats.wordsIn, incoming.stats.wordsIn),
+            wordsOut: max(existing.stats.wordsOut, incoming.stats.wordsOut)
+        )
+        return UsageStatsDeviceRecord(
+            deviceName: incoming.deviceName,
+            platform: incoming.platform,
+            stats: stats,
+            firstSeen: min(existing.firstSeen, incoming.firstSeen),
+            lastUpdated: max(existing.lastUpdated, incoming.lastUpdated)
+        )
     }
 
     private static func currentDeviceName() -> String {

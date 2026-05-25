@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Settings — currently just the vocabulary editor. The macOS app has a
 /// much richer Settings surface (modes, prompts, LLM model picker,
@@ -15,6 +16,15 @@ struct SettingsView: View {
     /// the main view uses, but reachable from Settings so the user
     /// can find the walkthrough again after dismissing the card.
     @State private var showingKeyboardSetup = false
+    @State private var showingFolderPicker = false
+    /// Folder name surfaced under the "Shared folder" row. Recomputed
+    /// on appear and after a successful pick / disconnect so the UI
+    /// doesn't have to introspect `SharedFolderBookmark` on every
+    /// SwiftUI render. `nil` means the user hasn't opted in.
+    @State private var sharedFolderName: String?
+    /// Last shared-folder error (stale bookmark, permission denied,
+    /// etc.). Shown inline so the user sees why it didn't connect.
+    @State private var sharedFolderError: String?
 
     @AppStorage(DictatorIOSSettings.cuePunctuationKey) private var punctuationEnabled = true
     @AppStorage(DictatorIOSSettings.cueNumbersKey) private var numbersEnabled = true
@@ -130,6 +140,51 @@ struct SettingsView: View {
             }
 
             Section {
+                if let sharedFolderName {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.icloud.fill")
+                                .foregroundStyle(.green)
+                            Text(sharedFolderName)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                        }
+                        Button("Stop using shared folder", role: .destructive) {
+                            disconnectSharedFolder()
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    Button {
+                        showingFolderPicker = true
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Use a shared folder")
+                                    .foregroundStyle(.primary)
+                                Text("Sync vocabulary and usage stats with your Mac")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "icloud.and.arrow.up")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+                if let sharedFolderError {
+                    Text(sharedFolderError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Shared folder")
+            } footer: {
+                Text("Pick a folder in iCloud Drive — typically iCloud Drive › Documents › Dictator on a Mac with Desktop & Documents syncing turned on — to share your custom vocabulary and your usage counters with the Mac app or another iPhone signed in to the same iCloud account. Dictation history and assistant conversations stay on this device only.")
+            }
+
+            Section {
                 NavigationLink {
                     AboutView()
                 } label: {
@@ -148,6 +203,14 @@ struct SettingsView: View {
                 }
             }
         }
+        .onAppear { refreshSharedFolderState() }
+        .fileImporter(
+            isPresented: $showingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFolderPick(result)
+        }
         .sheet(isPresented: $showingNewSheet) {
             VocabularyEntryEditor(entry: nil) { newEntry in
                 store.entries.append(newEntry)
@@ -163,6 +226,55 @@ struct SettingsView: View {
         .sheet(isPresented: $showingKeyboardSetup) {
             KeyboardSetupSheet()
         }
+    }
+
+    /// Re-reads the bookmark on view appear so the row reflects state
+    /// changes made elsewhere (e.g. iOS revoked the grant because the
+    /// folder was deleted). `SharedFolderBookmark.activeURL` is set on
+    /// app launch by `DictatorIOSApp.init`; this just surfaces it.
+    private func refreshSharedFolderState() {
+        sharedFolderName = SharedFolderBookmark.displayName
+        sharedFolderError = nil
+    }
+
+    /// Handles the `.fileImporter` callback. On success: save the
+    /// bookmark, point the two opt-in stores at the new folder, and
+    /// refresh the UI. On failure: surface the error inline so the
+    /// user knows why it didn't take.
+    private func handleFolderPick(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            sharedFolderError = "Couldn't read the chosen folder: \(error.localizedDescription)"
+        case .success(let urls):
+            guard let picked = urls.first else { return }
+            do {
+                let resolved = try SharedFolderBookmark.save(picked)
+                // Re-bootstrap both opt-in stores against the new
+                // location. Vocab union-merges this device's existing
+                // entries with whatever the shared folder already had;
+                // stats merges by per-device record so other Macs'
+                // counters are preserved alongside this device's.
+                let existingEntries = VocabularyStore.shared.entries
+                VocabularyStore.shared.bootstrap(customDirectory: resolved, legacyEntries: existingEntries)
+                UsageStatsStore.shared.bootstrap(customDirectory: resolved)
+                sharedFolderError = nil
+                refreshSharedFolderState()
+            } catch {
+                sharedFolderError = "Couldn't connect to the folder: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Drops the bookmark and re-points both stores at their sandbox
+    /// defaults. This device's vocab + stats stay populated in memory;
+    /// the next write lands in the sandbox so the local snapshot is
+    /// preserved without further user action.
+    private func disconnectSharedFolder() {
+        SharedFolderBookmark.clear()
+        let existingEntries = VocabularyStore.shared.entries
+        VocabularyStore.shared.bootstrap(customDirectory: nil, legacyEntries: existingEntries)
+        UsageStatsStore.shared.bootstrap(customDirectory: nil)
+        refreshSharedFolderState()
     }
 }
 
