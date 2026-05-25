@@ -13,6 +13,8 @@ struct AboutView: View {
     /// SwiftUI render pass. AboutView is push-navigated and short-lived,
     /// so a snapshot at present-time is plenty fresh.
     @State private var stats: UsageStats = .zero
+    @State private var thisDeviceStats: UsageStats = .zero
+    @State private var deviceCount: Int = 0
     /// Whether the user has opted into a shared folder. Drives the
     /// "Your usage" footer copy — the local-only line is misleading
     /// once stats are pooled across devices.
@@ -111,8 +113,11 @@ struct AboutView: View {
                 .listRowSeparator(.hidden)
                 if stats.llmTokensIn + stats.llmTokensOut > 0 {
                     LLMTokenCard(
-                        tokensIn: stats.llmTokensIn,
-                        tokensOut: stats.llmTokensOut
+                        allTokensIn: stats.llmTokensIn,
+                        allTokensOut: stats.llmTokensOut,
+                        thisTokensIn: thisDeviceStats.llmTokensIn,
+                        thisTokensOut: thisDeviceStats.llmTokensOut,
+                        showsPerDevice: deviceCount > 1
                     )
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     .listRowBackground(Color.clear)
@@ -206,6 +211,8 @@ struct AboutView: View {
         .onAppear {
             UsageStatsStore.shared.reload()
             stats = UsageStatsStore.shared.totals
+            thisDeviceStats = UsageStatsStore.shared.thisDeviceStats
+            deviceCount = UsageStatsStore.shared.deviceCount
             sharedFolderConfigured = SharedFolderBookmark.isConfigured
         }
     }
@@ -296,10 +303,71 @@ private struct StatLine: View {
 /// Combined LLM token total — sits below the two main flow cards.
 /// Cross-cuts both dictation cleanup and assistant turns, so it
 /// doesn't belong inside either flow card. Teal so it reads as
-/// related-but-different from the accent + purple above. Rendered
-/// only when there's been at least one LLM call (hidden when both
-/// counts are zero).
+/// related-but-different from the accent + purple above.
+///
+/// Two layouts: a single-column featured count when only this
+/// device has activity, or a side-by-side comparison of this
+/// device vs. all devices when more than one is contributing
+/// (via the shared folder).
 private struct LLMTokenCard: View {
+    let allTokensIn: Int
+    let allTokensOut: Int
+    let thisTokensIn: Int
+    let thisTokensOut: Int
+    let showsPerDevice: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Local LLM")
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                Spacer(minLength: 0)
+                Text("tokens generated on-device")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.teal)
+
+            if showsPerDevice {
+                HStack(alignment: .top, spacing: 20) {
+                    LLMTokenColumn(
+                        caption: "This device",
+                        tokensIn: thisTokensIn,
+                        tokensOut: thisTokensOut
+                    )
+                    LLMTokenColumn(
+                        caption: "All devices",
+                        tokensIn: allTokensIn,
+                        tokensOut: allTokensOut
+                    )
+                }
+            } else {
+                LLMTokenColumn(
+                    caption: nil,
+                    tokensIn: allTokensIn,
+                    tokensOut: allTokensOut
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.teal.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.teal.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct LLMTokenColumn: View {
+    let caption: String?
     let tokensIn: Int
     let tokensOut: Int
 
@@ -315,41 +383,23 @@ private struct LLMTokenCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Local LLM")
-                    .font(.system(size: 11, weight: .semibold))
+        VStack(alignment: .leading, spacing: 4) {
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 10, weight: .semibold))
                     .textCase(.uppercase)
-                    .tracking(0.6)
-            }
-            .foregroundStyle(.teal)
-
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                Text(Self.formatted(tokensIn + tokensOut))
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                Text("tokens generated on-device")
-                    .font(.callout)
+                    .tracking(0.5)
                     .foregroundStyle(.secondary)
             }
-
-            HStack(spacing: 18) {
-                StatLine(value: Self.formatted(tokensIn), label: "input")
-                StatLine(value: Self.formatted(tokensOut), label: "output")
+            Text(Self.formatted(tokensIn + tokensOut))
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            HStack(spacing: 12) {
+                StatLine(value: Self.formatted(tokensIn), label: "in")
+                StatLine(value: Self.formatted(tokensOut), label: "out")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.teal.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.teal.opacity(0.18), lineWidth: 1)
-        )
     }
 }
 

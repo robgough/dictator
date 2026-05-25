@@ -159,6 +159,8 @@ private struct CheckForUpdatesButton: View {
 /// assistant — let the eye pick a card without reading every label.
 private struct AboutStats: View {
     @State private var stats: UsageStats = .zero
+    @State private var thisDeviceStats: UsageStats = .zero
+    @State private var deviceCount: Int = 0
 
     var body: some View {
         AboutSection(title: "Your usage") {
@@ -193,8 +195,11 @@ private struct AboutStats: View {
                 }
                 if stats.llmTokensIn + stats.llmTokensOut > 0 {
                     LLMTokenCard(
-                        tokensIn: stats.llmTokensIn,
-                        tokensOut: stats.llmTokensOut
+                        allTokensIn: stats.llmTokensIn,
+                        allTokensOut: stats.llmTokensOut,
+                        thisTokensIn: thisDeviceStats.llmTokensIn,
+                        thisTokensOut: thisDeviceStats.llmTokensOut,
+                        showsPerDevice: deviceCount > 1
                     )
                 }
                 Text("Counted on-device with no telemetry. When your synced folder lives in iCloud Drive, totals add up across every Mac sharing it.")
@@ -206,6 +211,8 @@ private struct AboutStats: View {
         .onAppear {
             UsageStatsStore.shared.reload()
             stats = UsageStatsStore.shared.totals
+            thisDeviceStats = UsageStatsStore.shared.thisDeviceStats
+            deviceCount = UsageStatsStore.shared.deviceCount
         }
     }
 }
@@ -300,12 +307,22 @@ private struct StatLine: View {
 /// Combined LLM token total — sits below the two main flow cards.
 /// Cross-cuts both dictation cleanup passes and assistant turns, so
 /// it doesn't belong inside either flow card. Teal so it reads as
-/// related-but-different from the accent + purple above. Hidden when
-/// both counts are zero (no LLM engine selected, or no LLM activity
-/// yet) so an empty card doesn't take up visual space.
+/// related-but-different from the accent + purple above.
+///
+/// Two layouts:
+///   - **Single-device** (`showsPerDevice` false): one featured
+///     count with the input/output split underneath. Same shape as
+///     before the per-device fork.
+///   - **Multi-device** (`showsPerDevice` true): two columns side by
+///     side comparing this device against all devices. Surfaces only
+///     when more than one device has contributed — a one-device
+///     install has no comparison to draw and would just look noisy.
 private struct LLMTokenCard: View {
-    let tokensIn: Int
-    let tokensOut: Int
+    let allTokensIn: Int
+    let allTokensOut: Int
+    let thisTokensIn: Int
+    let thisTokensOut: Int
+    let showsPerDevice: Bool
 
     private static let formatter: NumberFormatter = {
         let f = NumberFormatter()
@@ -327,21 +344,32 @@ private struct LLMTokenCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .textCase(.uppercase)
                     .tracking(0.6)
+                Spacer(minLength: 0)
+                Text("tokens generated on-device")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .foregroundStyle(.teal)
 
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                Text(Self.formatted(tokensIn + tokensOut))
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                Text("tokens generated on-device")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 18) {
-                StatLine(value: Self.formatted(tokensIn), label: "input")
-                StatLine(value: Self.formatted(tokensOut), label: "output")
+            if showsPerDevice {
+                HStack(alignment: .top, spacing: 24) {
+                    LLMTokenColumn(
+                        caption: "This device",
+                        tokensIn: thisTokensIn,
+                        tokensOut: thisTokensOut
+                    )
+                    LLMTokenColumn(
+                        caption: "All devices",
+                        tokensIn: allTokensIn,
+                        tokensOut: allTokensOut
+                    )
+                }
+            } else {
+                LLMTokenColumn(
+                    caption: nil,
+                    tokensIn: allTokensIn,
+                    tokensOut: allTokensOut
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -354,6 +382,43 @@ private struct LLMTokenCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.teal.opacity(0.18), lineWidth: 1)
         )
+    }
+}
+
+private struct LLMTokenColumn: View {
+    let caption: String?
+    let tokensIn: Int
+    let tokensOut: Int
+
+    private static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f
+    }()
+
+    private static func formatted(_ value: Int) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 10, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .foregroundStyle(.secondary)
+            }
+            Text(Self.formatted(tokensIn + tokensOut))
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            HStack(spacing: 12) {
+                StatLine(value: Self.formatted(tokensIn), label: "in")
+                StatLine(value: Self.formatted(tokensOut), label: "out")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

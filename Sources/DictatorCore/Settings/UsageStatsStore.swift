@@ -167,6 +167,20 @@ public final class UsageStatsStore {
     /// what the UI displays.
     public private(set) var totals: UsageStats = .zero
 
+    /// Just this device's contribution to the shared file. Same shape
+    /// as `totals` so the UI can render side-by-side comparisons
+    /// (e.g. "this Mac vs. all my Macs" on the LLM token card) when
+    /// `deviceCount > 1`. Zero when this device has never recorded
+    /// anything — the row simply hides in that case.
+    public private(set) var thisDeviceStats: UsageStats = .zero
+
+    /// How many distinct devices have at least one record in the
+    /// shared file. UI uses this to decide whether the per-device
+    /// breakdown is worth surfacing — a one-device install has no
+    /// "all devices" angle to compare against, so the comparison
+    /// layout is suppressed.
+    public private(set) var deviceCount: Int = 0
+
     /// Per-device id used as the key for this machine's row. Generated
     /// once and persisted in `UserDefaults`. We don't use the IOKit
     /// hardware UUID because (a) it requires extra IORegistry plumbing
@@ -309,6 +323,8 @@ public final class UsageStatsStore {
 
     private func recomputeTotals() {
         totals = records.values.reduce(UsageStats.zero) { $0 + $1.stats }
+        thisDeviceStats = records[deviceID]?.stats ?? .zero
+        deviceCount = records.count
     }
 
     private func freshRecord() -> UsageStatsDeviceRecord {
