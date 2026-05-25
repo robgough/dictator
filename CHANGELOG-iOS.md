@@ -24,6 +24,7 @@ listing — keep entries as plain bullet lines.
 - A third Local LLM card shows approximate total tokens the on-device foundation model has generated across cleanup and assistant turns, with input/output breakdown.
 - When more than one device is contributing to a shared stats folder, the LLM card splits into a side-by-side of this device vs. all devices.
 - Stats move out of the About screen into their own Settings → Stats page.
+- Stats footer now reports the actual number of devices contributing to your totals when more than one is sharing the folder.
 - New Settings → Shared folder option. Pick a folder in iCloud Drive (typically iCloud Drive › Documents › Dictator on a Mac with Desktop & Documents syncing on) to share your custom vocabulary and usage stats with the Mac app or another iPhone signed into the same iCloud account. Dictation history and assistant conversations stay on this device only.
 - Vocabulary editor moves into its own pushed page from Settings, with an entry-count badge on the link, so the Settings screen stops scrolling past the substitution toggles.
 - Spoken-cue toggles (Punctuation, Numbers, Clock times, Currency, Emoji names) move to their own Substitutions page reached from Settings.

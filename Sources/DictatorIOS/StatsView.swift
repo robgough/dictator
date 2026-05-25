@@ -15,10 +15,6 @@ struct StatsView: View {
     @State private var stats: UsageStats = .zero
     @State private var thisDeviceStats: UsageStats = .zero
     @State private var deviceCount: Int = 0
-    /// Whether the user has opted into a shared folder. Drives the
-    /// footer copy — the local-only line is misleading once stats
-    /// are pooled across devices.
-    @State private var sharedFolderConfigured: Bool = false
 
     var body: some View {
         List {
@@ -68,10 +64,16 @@ struct StatsView: View {
                     .listRowSeparator(.hidden)
                 }
             } footer: {
-                if sharedFolderConfigured {
-                    Text("Counted on-device with no telemetry. Because you've connected a shared folder in Settings, totals add up across every device sharing it.")
+                // Same shape as the macOS Stats footer: key off the
+                // observable device count rather than guessing at
+                // sync providers or sniffing the bookmark URL. If
+                // more than one device has written records, the
+                // folder is being shared somehow — that's the
+                // truth, and we don't need to know how.
+                if deviceCount > 1 {
+                    Text("Counted on-device across \(deviceCount) devices — nothing is reported. Totals add up because your shared folder is reaching them all.")
                 } else {
-                    Text("Counted locally on this device — nothing is reported.")
+                    Text("Counted locally on this device — nothing is reported. Connect a shared folder in Settings to combine totals with your Mac or another device.")
                 }
             }
         }
@@ -82,7 +84,6 @@ struct StatsView: View {
             stats = UsageStatsStore.shared.totals
             thisDeviceStats = UsageStatsStore.shared.thisDeviceStats
             deviceCount = UsageStatsStore.shared.deviceCount
-            sharedFolderConfigured = SharedFolderBookmark.isConfigured
         }
     }
 }

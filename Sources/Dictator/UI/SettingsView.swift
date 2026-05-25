@@ -161,7 +161,6 @@ private struct AboutStats: View {
     @State private var stats: UsageStats = .zero
     @State private var thisDeviceStats: UsageStats = .zero
     @State private var deviceCount: Int = 0
-    @State private var syncedFolderInICloud: Bool = false
 
     var body: some View {
         AboutSection(title: "Your usage") {
@@ -214,20 +213,22 @@ private struct AboutStats: View {
             stats = UsageStatsStore.shared.totals
             thisDeviceStats = UsageStatsStore.shared.thisDeviceStats
             deviceCount = UsageStatsStore.shared.deviceCount
-            syncedFolderInICloud = SyncedStorage.isInICloudDrive
         }
     }
 
-    /// Footer copy is concrete instead of conditional — we know
-    /// whether the synced folder is in iCloud Drive, so we say so
-    /// rather than asking the user to figure it out. The "Move it…"
-    /// nudge is a one-line pointer to the existing General-pane
-    /// picker so the user has somewhere to act if they want to.
+    /// Footer copy keys off the only signal that's actually
+    /// observable: how many devices have written records into the
+    /// shared stats file. Anything else (iCloud Drive sniffing, sync
+    /// provider detection) is guesswork and gets edge cases wrong
+    /// (Dropbox, Google Drive, manual folder relocations, the
+    /// Desktop & Documents Folders symlink shape, …). One row = one
+    /// device that's contributed; >1 means the folder is shared
+    /// somehow and the totals are pooled.
     private var footerText: String {
-        if syncedFolderInICloud {
-            return "Counted on-device with no telemetry. Your synced folder is in iCloud Drive — totals add up across every Mac sharing it."
+        if deviceCount > 1 {
+            return "Counted on-device across \(deviceCount) devices — no telemetry. Totals add up because your synced folder is being shared."
         } else {
-            return "Counted on-device with no telemetry. Your synced folder is local to this Mac — move it into iCloud Drive in Settings → General → Synced folder to combine totals across Macs."
+            return "Counted on-device with no telemetry. To pool totals across Macs, move your synced folder into iCloud Drive (or any other shared location) via Settings → General → Synced folder."
         }
     }
 }

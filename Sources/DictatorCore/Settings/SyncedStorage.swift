@@ -63,32 +63,6 @@ enum SyncedStorage {
         return directory.appendingPathComponent(filename)
     }
 
-    /// Whether the resolved synced folder lives inside iCloud Drive.
-    /// Used by Stats to phrase the "totals add up across every Mac"
-    /// footer concretely instead of conditionally — the answer is
-    /// knowable, so the UI shouldn't ask the user to guess.
-    ///
-    /// Two checks, OR'd:
-    ///   1. `URLResourceKey.isUbiquitousItemKey` — the canonical Apple
-    ///      API. Returns true for files inside the user's iCloud
-    ///      Drive area.
-    ///   2. Path-prefix check against `~/Library/Mobile Documents/com~apple~CloudDocs/`,
-    ///      after `resolvingSymlinksInPath`. Catches the "Desktop &
-    ///      Documents Folders" iCloud setting on macOS, which moves
-    ///      the user's real `~/Documents` into that container and
-    ///      leaves a symlink behind — the URL we read off the user's
-    ///      preference is the symlink path, so the resource-value
-    ///      check would miss it without the symlink resolution.
-    @MainActor
-    static var isInICloudDrive: Bool {
-        let url = directory
-        let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey])
-        if values?.isUbiquitousItem == true {
-            return true
-        }
-        let realPath = url.resolvingSymlinksInPath().path
-        return realPath.contains("/Library/Mobile Documents/com~apple~CloudDocs/")
-    }
 #endif
 
     /// Same as `fileURL(for:)` but for use during the early bootstrap path
