@@ -75,9 +75,15 @@ struct AboutView: View {
             Section {
                 CreditRow(
                     name: "FluidAudio",
-                    detail: "Parakeet TDT speech-to-text on the ANE",
+                    detail: "FluidInference — Parakeet TDT speech-to-text on the ANE",
                     license: "Apache 2.0",
                     url: URL(string: "https://github.com/FluidInference/FluidAudio")!
+                )
+                CreditRow(
+                    name: "Parakeet TDT v3",
+                    detail: "NVIDIA — underlying speech-recognition model (weights downloaded on demand)",
+                    license: "CC-BY-4.0",
+                    url: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!
                 )
             } header: {
                 Text("Open Source")
