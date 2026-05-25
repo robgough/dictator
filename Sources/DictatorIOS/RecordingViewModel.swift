@@ -342,6 +342,11 @@ final class RecordingViewModel {
             )
             transcript = result
             DictationHistoryStore.shared.append(result, raw: originalText, mode: .assist)
+            UsageStatsStore.shared.record(
+                mode: .assistant,
+                wordsIn: UsageStatsStore.wordCount(instruction),
+                wordsOut: UsageStatsStore.wordCount(result)
+            )
 
             // Keyboard-driven assist: write the result back with
             // replacePrecedingCharacters set to the original
@@ -598,6 +603,11 @@ final class RecordingViewModel {
             // when the user wants to recover something the cleanup
             // pass smoothed over.
             DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
+            UsageStatsStore.shared.record(
+                mode: .dictation,
+                wordsIn: UsageStatsStore.wordCount(raw),
+                wordsOut: UsageStatsStore.wordCount(processed)
+            )
 
             // If this dictation was triggered from the keyboard
             // extension, hand the result back via the App Group so

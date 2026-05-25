@@ -40,6 +40,7 @@ private struct AboutPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 AboutHeader(updater: updater)
+                AboutStats()
                 AboutAuthor()
                 AboutPrivacy()
                 AboutCredits()
@@ -144,6 +145,61 @@ private struct CheckForUpdatesButton: View {
         .controlSize(.small)
         .disabled(!canCheck)
         .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
+    }
+}
+
+/// Lifetime counters surfaced from `UsageStatsStore`. Reads `.totals`
+/// which sums every device record in `stats.json` — so a user on
+/// iCloud Drive sees the combined "across all my Macs" numbers, not
+/// just this machine's contribution.
+private struct AboutStats: View {
+    @State private var stats: UsageStats = .zero
+
+    var body: some View {
+        AboutSection(title: "Your usage") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    StatTile(label: "Dictations", value: stats.dictationCount)
+                    StatTile(label: "Assistant turns", value: stats.assistantCount)
+                    StatTile(label: "Words spoken", value: stats.wordsIn)
+                    StatTile(label: "Words delivered", value: stats.wordsOut)
+                }
+                Text("Counted on-device with no telemetry. When your synced folder lives in iCloud Drive, totals add up across every Mac sharing it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear {
+            UsageStatsStore.shared.reload()
+            stats = UsageStatsStore.shared.totals
+        }
+    }
+}
+
+private struct StatTile: View {
+    let label: String
+    let value: Int
+
+    private static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(Self.formatter.string(from: NSNumber(value: value)) ?? "\(value)")
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
     }
 }
 

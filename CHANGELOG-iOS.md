@@ -20,3 +20,4 @@ listing — keep entries as plain bullet lines.
 - Model download now warns you first if you're on cellular data so a 460 MB download doesn't blindside your monthly cap.
 - New first-launch walkthrough that takes you through microphone access, downloading the speech model, installing the Dictator keyboard, and enabling Full Access in one place.
 - About screen now credits NVIDIA's Parakeet TDT model alongside the FluidAudio library that runs it.
+- About screen now shows a Your usage section: dictations, assistant turns, words spoken, words delivered, counted on-device.

@@ -9,6 +9,11 @@ import SwiftUI
 /// `CURRENT_PROJECT_VERSION` set in `project.yml` flow through without
 /// being duplicated here.
 struct AboutView: View {
+    /// Cached on appear so the section doesn't re-read disk on every
+    /// SwiftUI render pass. AboutView is push-navigated and short-lived,
+    /// so a snapshot at present-time is plenty fresh.
+    @State private var stats: UsageStats = .zero
+
     private var appName: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
             ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
@@ -61,6 +66,17 @@ struct AboutView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .listRowBackground(Color.clear)
+            }
+
+            Section {
+                StatRow(label: "Dictations", value: stats.dictationCount)
+                StatRow(label: "Assistant turns", value: stats.assistantCount)
+                StatRow(label: "Words spoken", value: stats.wordsIn)
+                StatRow(label: "Words delivered", value: stats.wordsOut)
+            } header: {
+                Text("Your usage")
+            } footer: {
+                Text("Counted locally on this device — nothing is reported.")
             }
 
             Section {
@@ -135,6 +151,34 @@ struct AboutView: View {
         }
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            UsageStatsStore.shared.reload()
+            stats = UsageStatsStore.shared.totals
+        }
+    }
+}
+
+private struct StatRow: View {
+    let label: String
+    let value: Int
+
+    private static let formatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f
+    }()
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.callout)
+            Spacer()
+            Text(Self.formatter.string(from: NSNumber(value: value)) ?? "\(value)")
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

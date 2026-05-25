@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Settings → About now shows lifetime usage: dictations, assistant turns, words spoken, words delivered. Counts live alongside your other synced settings, so a folder shared via iCloud Drive shows the combined totals across every Mac.
 
 ## v2026.5.11 — 2026-05-24
 

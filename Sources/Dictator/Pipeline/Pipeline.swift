@@ -789,6 +789,11 @@ final class Pipeline {
             note: note
         )
         DictationHistory.shared.append(record)
+        UsageStatsStore.shared.record(
+            mode: .dictation,
+            wordsIn: UsageStatsStore.wordCount(inFlight.raw),
+            wordsOut: UsageStatsStore.wordCount(text)
+        )
         inFlight = InFlight()
 
         state = .done(text: text, pasted: pasted, note: note)
@@ -1149,6 +1154,12 @@ final class Pipeline {
             ConversationHistory.shared.append(fresh)
         }
         activeConversation = updatedConversation
+
+        UsageStatsStore.shared.record(
+            mode: .assistant,
+            wordsIn: UsageStatsStore.wordCount(instruction),
+            wordsOut: UsageStatsStore.wordCount(text)
+        )
 
         await deliverAssistant(
             text: text,
