@@ -35,15 +35,18 @@ final class MeetingMicRecorder {
 
     init() {}
 
-    /// Build a capture session against the system's default audio input
-    /// and start writing. Throws on permission denied or no input device.
-    func start(at url: URL) async throws {
+    /// Build a capture session against the user's preferred input device
+    /// (falls back to system default) and start writing. Throws on
+    /// permission denied or no input device. Matches the dictation flow's
+    /// device resolution so a meeting picks up the same Yeti / AirPods /
+    /// whatever the user already chose for dictation.
+    func start(at url: URL, preferredDevice: AudioDevice?) async throws {
         guard !running else { return }
         self.fileURL = url
         try? FileManager.default.removeItem(at: url)
         didCapture = false
 
-        guard let device = AVCaptureDevice.default(for: .audio) else {
+        guard let device = Self.resolveCaptureDevice(preferred: preferredDevice) else {
             throw NSError(
                 domain: "Dictator.Meetings", code: -10,
                 userInfo: [NSLocalizedDescriptionKey: "No microphone available."]
@@ -210,6 +213,17 @@ final class MeetingMicRecorder {
         }
         let level = min(1, max(0, sqrtf(rms) * 2.5))
         return Processed(mono: mono, sampleRate: sampleRate, level: level)
+    }
+}
+
+extension MeetingMicRecorder {
+    /// Mirrors `AudioRecorder.resolveCaptureDevice(preferred:)`. The
+    /// "System default" sentinel and any fall-through resolve to whatever
+    /// macOS has set as the current default input.
+    fileprivate nonisolated static func resolveCaptureDevice(preferred: AudioDevice?) -> AVCaptureDevice? {
+        guard let preferred else { return AVCaptureDevice.default(for: .audio) }
+        if preferred.isSystemDefault { return AVCaptureDevice.default(for: .audio) }
+        return AVCaptureDevice(uniqueID: preferred.uid) ?? AVCaptureDevice.default(for: .audio)
     }
 }
 

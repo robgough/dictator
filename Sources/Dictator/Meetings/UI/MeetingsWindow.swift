@@ -16,6 +16,7 @@ struct MeetingsRootView: View {
     @State private var openSessions: [UUID: MeetingSession] = [:]
     @State private var showingPermissionBanner = false
     @State private var permissionMessage: String?
+    @State private var deviceManager = AudioDeviceManager.shared
 
     var body: some View {
         NavigationSplitView {
@@ -25,6 +26,9 @@ struct MeetingsRootView: View {
         }
         .navigationTitle("Meetings")
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                micPicker
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     Task { await startRecording() }
@@ -92,6 +96,47 @@ struct MeetingsRootView: View {
         return s
     }
 
+    /// Toolbar menu showing the currently-active mic and letting the user
+    /// promote any connected device. Selecting one rewrites
+    /// `AudioDeviceManager.knownDevices` so both dictation and the next
+    /// meeting record pick it up — there's only ever one "preferred mic"
+    /// per user, kept consistent across both flows.
+    @ViewBuilder
+    private var micPicker: some View {
+        let isRecording = liveSession?.state.isLive == true
+        Menu {
+            ForEach(deviceManager.connectedDevices) { device in
+                Button {
+                    deviceManager.promote(uid: device.uid)
+                } label: {
+                    if device.uid == deviceManager.preferredConnectedDevice()?.uid {
+                        Label(device.name, systemImage: "checkmark")
+                    } else {
+                        Text(device.name)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                deviceManager.refresh()
+            } label: {
+                Label("Refresh devices", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "mic")
+                Text(deviceManager.activeInputDeviceName())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.visible)
+        .help(isRecording
+              ? "Changing input applies to your next meeting."
+              : "Choose which microphone the next meeting records from.")
+    }
+
     private func startRecording() async {
         // Probe permission first so the user gets the deep-link banner
         // before we try to bring up SCStream.
@@ -106,8 +151,8 @@ struct MeetingsRootView: View {
         liveSession = session
         selectedID = session.id
         openSessions[session.id] = session
-        let preferredUID = AudioDeviceManager.shared.preferredConnectedDevice()?.uid
-        await session.startRecording(preferredMicUID: preferredUID)
+        let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
+        await session.startRecording(preferredMicDevice: preferred)
     }
 
     private func importFile() async {

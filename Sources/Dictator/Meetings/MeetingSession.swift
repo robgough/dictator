@@ -92,7 +92,7 @@ final class MeetingSession: Identifiable {
 
     /// Begin capture. The session takes care of probing screen-recording
     /// permission first; on denial it lands in `.failed`.
-    func startRecording(preferredMicUID: String?) async {
+    func startRecording(preferredMicDevice: AudioDevice?) async {
         guard case .idle = state else { return }
         state = .warmingUp
 
@@ -130,14 +130,17 @@ final class MeetingSession: Identifiable {
 
         do {
             let folder = MeetingStorage.folder(for: id)
-            try await recorder.start(folder: folder, preferredMicUID: preferredMicUID)
+            try await recorder.start(folder: folder, preferredMicUID: nil)
             // Mic capture runs on its own AVCaptureSession alongside SCK —
             // SCK's `.microphone` output silently dropped buffers on this
             // test machine, so the proven dictation path owns mic capture
             // here. Failure to start mic isn't fatal: system-only recording
             // is still useful (and surfaces in the UI via didCaptureMic).
             do {
-                try await micRecorder.start(at: MeetingStorage.micURL(for: id))
+                try await micRecorder.start(
+                    at: MeetingStorage.micURL(for: id),
+                    preferredDevice: preferredMicDevice
+                )
             } catch {
                 NSLog("[Dictator] Meeting mic capture failed to start: \(error)")
             }

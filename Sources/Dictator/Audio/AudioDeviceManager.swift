@@ -125,6 +125,19 @@ final class AudioDeviceManager {
         persist()
     }
 
+    /// Promote `uid` to the top of `knownDevices` so it wins
+    /// `preferredConnectedDevice()` the next time the user records. No-op if
+    /// the device isn't known. Used by quick-pick UIs (e.g. the Meetings
+    /// window's toolbar mic chooser) that want "use this device now" with
+    /// one click rather than a drag-and-drop reorder.
+    func promote(uid: String) {
+        guard let idx = knownDevices.firstIndex(where: { $0.uid == uid }) else { return }
+        guard idx > 0 else { return }
+        let device = knownDevices.remove(at: idx)
+        knownDevices.insert(device, at: 0)
+        persist()
+    }
+
     func forget(uid: String) {
         // The "System default" sentinel is structural — refuse to drop it
         // so the user can't accidentally remove their fallback option. The
