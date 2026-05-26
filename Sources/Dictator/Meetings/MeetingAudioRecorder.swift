@@ -89,9 +89,15 @@ final class MeetingAudioRecorder {
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.captureMicrophone = true
-        if let preferredMicUID, !preferredMicUID.isEmpty {
-            config.microphoneCaptureDeviceID = preferredMicUID
-        }
+        // SCStream's `microphoneCaptureDeviceID` expects an
+        // AVCaptureDevice.uniqueID, NOT the CoreAudio UID that the dictation
+        // path uses. When we pass a mismatched ID, SCK silently disables mic
+        // capture (no error, just no .microphone buffers ever delivered).
+        // For v0.1 we let SCK use the current default input — same one the
+        // user has chosen in System Settings → Sound. If we need per-meeting
+        // mic selection later we'll translate the CoreAudio UID into the
+        // matching AVCaptureDevice properly.
+        _ = preferredMicUID  // intentionally unused for now
         config.excludesCurrentProcessAudio = true
         config.sampleRate = Int(Self.sampleRate)
         config.channelCount = Self.channelCount
@@ -102,8 +108,12 @@ final class MeetingAudioRecorder {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         config.queueDepth = 5
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         let forwarder = StreamOutputForwarder(owner: self)
+        // Attach the forwarder as both output and delegate — without the
+        // delegate we miss didStopWithError, which is the only way to find
+        // out SCK stopped the stream for us (permission revoked, display
+        // disconnected, etc.).
+        let stream = SCStream(filter: filter, configuration: config, delegate: forwarder)
         try stream.addStreamOutput(forwarder, type: .audio, sampleHandlerQueue: Self.audioQueue)
         try stream.addStreamOutput(forwarder, type: .microphone, sampleHandlerQueue: Self.audioQueue)
         try stream.addStreamOutput(forwarder, type: .screen, sampleHandlerQueue: Self.videoQueue)
@@ -117,10 +127,23 @@ final class MeetingAudioRecorder {
         onReady?()
     }
 
+    struct StopResult: Sendable {
+        let durationSeconds: Double
+        /// True iff `mic.m4a` exists on disk with at least the header bytes —
+        /// i.e. the SCStream actually delivered `.microphone` buffers. False
+        /// when mic capture silently no-op'd.
+        let didCaptureMic: Bool
+        /// True iff `system.m4a` exists. False on a fully-silent meeting
+        /// where no audio played through the system output either.
+        let didCaptureSystem: Bool
+    }
+
     /// Stop capture and close both files. Safe to call multiple times.
-    /// Returns the captured duration in seconds (0 if start never happened).
-    func stop() async -> Double {
-        guard running else { return 0 }
+    /// Returns the captured duration in seconds (0 if start never happened)
+    /// plus which tracks actually got data so the session can update its
+    /// meta to reflect what's on disk.
+    func stop() async -> StopResult {
+        guard running else { return StopResult(durationSeconds: 0, didCaptureMic: false, didCaptureSystem: false) }
         running = false
         let s = stream
         stream = nil
@@ -130,10 +153,16 @@ final class MeetingAudioRecorder {
         }
         // Closing AVAudioFile flushes any buffered samples; nil-out to
         // release the file handles before the session updates meta.json.
+        let hadMic = micFile != nil
+        let hadSystem = systemFile != nil
         micFile = nil
         systemFile = nil
-        guard let startedAt else { return 0 }
-        return Date().timeIntervalSince(startedAt)
+        let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        return StopResult(
+            durationSeconds: duration,
+            didCaptureMic: hadMic,
+            didCaptureSystem: hadSystem
+        )
     }
 
     // MARK: - Sample ingest (called from non-main queues)
@@ -338,6 +367,7 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
         let msg = error.localizedDescription
+        NSLog("[Dictator] SCStream didStopWithError: \(error)")
         Task { @MainActor [weak owner] in
             owner?.onUnexpectedStop?("Screen capture stopped: \(msg)")
         }

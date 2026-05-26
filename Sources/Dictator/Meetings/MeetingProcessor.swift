@@ -36,7 +36,12 @@ final class MeetingProcessor {
         var segments: [MeetingTranscriptSegment] = []
         var durationSeconds: Double = 0
 
-        if let micURL = session.micFileURL {
+        // Belt-and-braces: only touch a track if both the meta claims it AND
+        // the file actually exists. Older meetings recorded before the
+        // "what was actually captured" fix wrote optimistic meta with both
+        // tracks claimed even when SCK delivered nothing on .microphone.
+        if let micURL = session.micFileURL,
+           FileManager.default.fileExists(atPath: micURL.path) {
             onProgress(.transcribingMic, 0)
             let (text, duration) = try await transcribe(url: micURL, modelID: parakeetModelID)
             onProgress(.transcribingMic, 1)
@@ -46,7 +51,8 @@ final class MeetingProcessor {
             }
         }
 
-        if let systemURL = session.systemFileURL {
+        if let systemURL = session.systemFileURL,
+           FileManager.default.fileExists(atPath: systemURL.path) {
             onProgress(.transcribingSystem, 0)
             let (text, duration) = try await transcribe(url: systemURL, modelID: parakeetModelID)
             onProgress(.transcribingSystem, 1)

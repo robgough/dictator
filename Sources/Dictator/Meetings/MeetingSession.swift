@@ -135,8 +135,17 @@ final class MeetingSession: Identifiable {
         state = .stopping
         timerTask?.cancel()
         timerTask = nil
-        let duration = await recorder.stop()
-        meta.durationSeconds = duration
+        let result = await recorder.stop()
+        // Only claim tracks that actually got written. SCK's `.microphone`
+        // output can silently no-op (e.g. when the user has Dictator's mic
+        // permission granted but a mid-recording grant change leaves the
+        // microphone capture stub unwired). Reflecting reality in meta lets
+        // the processor skip missing tracks instead of crashing.
+        meta.audioFiles = MeetingMeta.AudioFiles(
+            mic: result.didCaptureMic ? MeetingStorage.micFilename : nil,
+            system: result.didCaptureSystem ? MeetingStorage.systemFilename : nil
+        )
+        meta.durationSeconds = result.durationSeconds
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
         state = .captured
