@@ -33,6 +33,20 @@ struct TranscriptView: View {
                         Label("Export…", systemImage: "square.and.arrow.up")
                     }
                     .controlSize(.small)
+                    if hasAnyAudioOnDisk {
+                        Button {
+                            Task {
+                                await session.runProcessor(
+                                    parakeetModelID: state.settings.parakeetModelID
+                                )
+                            }
+                        } label: {
+                            Label("Re-process", systemImage: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .help("Re-run the transcription and diarization pipeline from the recorded audio. Useful after a fix that improved transcript quality.")
+                        .disabled(session.state.isProcessing)
+                    }
                 }
 
                 if hasAudio {
@@ -70,6 +84,17 @@ struct TranscriptView: View {
         let micURL: URL? = meta.audioFiles.mic.map { _ in MeetingStorage.micURL(for: meta.id) }
         let sysURL: URL? = meta.audioFiles.system.map { _ in MeetingStorage.systemURL(for: meta.id) }
         hasAudio = player.load(micURL: micURL, systemURL: sysURL)
+    }
+
+    /// True when at least one audio track is still present on disk. Drives
+    /// the Re-process button — pruned meetings can't be re-transcribed.
+    private var hasAnyAudioOnDisk: Bool {
+        let fm = FileManager.default
+        let micPresent = meta.audioFiles.mic != nil
+            && fm.fileExists(atPath: MeetingStorage.micURL(for: meta.id).path)
+        let sysPresent = meta.audioFiles.system != nil
+            && fm.fileExists(atPath: MeetingStorage.systemURL(for: meta.id).path)
+        return micPresent || sysPresent
     }
 
     private func copyAll(transcript: MeetingTranscript) {
