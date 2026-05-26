@@ -75,6 +75,18 @@ final class MeetingMicRecorder {
             session.addInput(input)
 
             let output = AVCaptureAudioDataOutput()
+            // Force the output to Float32 PCM — without this AVCapture picks
+            // whatever the device prefers (commonly Int16), and our
+            // `assumingMemoryBound(to: Float.self)` then reinterprets the
+            // Int16 bytes as floats and produces ~1e34-amplitude garbage
+            // that Parakeet can't transcribe.
+            output.audioSettings = [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ]
             output.setSampleBufferDelegate(forwarder, queue: queue)
             guard session.canAddOutput(output) else {
                 session.commitConfiguration()
@@ -167,6 +179,12 @@ final class MeetingMicRecorder {
         let sampleRate = asbd.mSampleRate
         let channels = Int(asbd.mChannelsPerFrame)
         guard channels > 0, sampleRate > 0 else { return nil }
+
+        // The output was configured for Float32 PCM in `start`; if a device
+        // ever overrides that, drop the buffer instead of reinterpreting
+        // the bytes as floats.
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        guard isFloat, asbd.mBitsPerChannel == 32 else { return nil }
 
         let frameCount = Int(CMSampleBufferGetNumSamples(sampleBuffer))
         guard frameCount > 0,

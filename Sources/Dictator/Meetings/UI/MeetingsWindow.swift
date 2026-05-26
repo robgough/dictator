@@ -26,18 +26,14 @@ struct MeetingsRootView: View {
         }
         .navigationTitle("Meetings")
         .toolbar {
-            ToolbarItem(placement: .navigation) {
+            ToolbarItemGroup(placement: .primaryAction) {
                 micPicker
-            }
-            ToolbarItem(placement: .primaryAction) {
                 Button {
                     Task { await startRecording() }
                 } label: {
                     Label("Record", systemImage: "record.circle")
                 }
                 .disabled(liveSession?.state.isLive == true || liveSession?.state.isProcessing == true)
-            }
-            ToolbarItem {
                 Button {
                     Task { await importFile() }
                 } label: {
