@@ -159,27 +159,31 @@ final class ParakeetService: ASREngine {
         return Self.coalesceWords(from: timings)
     }
 
-    /// SentencePiece marks word boundaries with `▁` (U+2581). Tokens that
-    /// don't start with that marker continue the previous word — including
-    /// trailing punctuation like `,` and `.`. The first token always opens
-    /// a word regardless of whether the model emitted the marker.
+    /// Coalesce Parakeet's per-token timings into word-level ones.
+    ///
+    /// Parakeet TDT tokens come out of FluidAudio with SentencePiece's
+    /// word-boundary marker (`▁`, U+2581) already rewritten to a leading
+    /// space — see `AsrManager.normalizedTimingToken` in FluidAudio. So a
+    /// token whose `text` starts with a space opens a new word, and any
+    /// token without that space extends the previous one (punctuation,
+    /// sub-word continuations).
+    ///
+    /// We previously looked for the raw `▁` marker, which never matched
+    /// the post-normalization tokens — every token got appended to the
+    /// first word, producing run-on text like "Areyouready?".
     nonisolated static func coalesceWords(from timings: [TokenTiming]) -> [TimedWord] {
         var words: [TimedWord] = []
         words.reserveCapacity(timings.count / 2)
-        let marker: Character = "\u{2581}"
         for timing in timings {
             let raw = timing.token
-            let isNewWord = raw.first == marker || words.isEmpty
-            let cleaned = raw.first == marker ? String(raw.dropFirst()) : raw
+            let isNewWord = raw.first == " " || words.isEmpty
+            let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { continue }
             if isNewWord {
-                let text = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { continue }
-                words.append(TimedWord(start: timing.startTime, end: timing.endTime, text: text))
+                words.append(TimedWord(start: timing.startTime, end: timing.endTime, text: cleaned))
             } else {
-                let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
                 let last = words.removeLast()
-                words.append(TimedWord(start: last.start, end: timing.endTime, text: last.text + trimmed))
+                words.append(TimedWord(start: last.start, end: timing.endTime, text: last.text + cleaned))
             }
         }
         return words
