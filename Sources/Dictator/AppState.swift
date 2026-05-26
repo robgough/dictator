@@ -19,6 +19,11 @@ final class AppState {
     /// menu-bar popover may not have rendered yet on a cold launch.
     var openSettingsAction: (@MainActor () -> Void)?
 
+    /// Captured `EnvironmentValues.openWindow` action so non-SwiftUI
+    /// surfaces (dictator://meetings URL handler) can open the Meetings
+    /// window. Set by MenuBarContent on first render.
+    var openMeetingsAction: (@MainActor () -> Void)?
+
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let assistantResultWindow = AssistantResultController()

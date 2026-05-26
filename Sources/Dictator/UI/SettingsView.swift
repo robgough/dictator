@@ -19,6 +19,8 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "cpu") }
             ModesPane()
                 .tabItem { Label("Modes", systemImage: "rectangle.stack") }
+            MeetingsPane()
+                .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
             AssistantPromptPane()
                 .tabItem { Label("Assistant", systemImage: "wand.and.stars") }
             DictionaryPane()

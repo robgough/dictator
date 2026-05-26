@@ -9,6 +9,7 @@ struct MenuBarContent: View {
     /// AppDelegate's dictator://settings URL handler can open Settings
     /// without tripping SwiftUI's "use SettingsLink" runtime fault.
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @State private var history = DictationHistory.shared
     @State private var conversations = ConversationHistory.shared
     @State private var modelManager = ModelManager.shared
@@ -47,6 +48,13 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
+                Button {
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "meetings")
+                } label: {
+                    Label("Meetings…", systemImage: "person.2.wave.2")
+                }
                 // The wizard exists to walk you through the things that
                 // *must* be configured for dictation to work. Once mic is
                 // granted and at least one model in the active engine is
@@ -82,6 +90,7 @@ struct MenuBarContent: View {
             // Re-captured on every popover render — cheap and ensures the
             // closure stays valid across SwiftUI environment refreshes.
             state.openSettingsAction = { openSettings() }
+            state.openMeetingsAction = { openWindow(id: "meetings") }
             NSLog("[Dictator] MenuBarContent.onAppear: captured openSettings action")
         }
     }

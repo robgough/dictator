@@ -34,24 +34,33 @@ struct DictatorApp: App {
                 .frame(width: 560, height: 520)
         }
         .handlesExternalEvents(matching: ["settings"])
+
+        WindowGroup(id: "meetings") {
+            MeetingsRootView()
+                .environment(appState)
+                .frame(minWidth: 760, minHeight: 480)
+        }
+        .defaultSize(width: 980, height: 640)
+        .handlesExternalEvents(matching: ["meetings"])
     }
 
-    /// Routes incoming `dictator://…` URLs. Two hosts handled today:
-    /// `settings` opens the Settings window via the same selector SwiftUI's
-    /// Settings scene responds to; `onboarding` re-shows the wizard. Anything
-    /// else is logged and ignored.
+    /// Routes incoming `dictator://…` URLs. Three hosts handled today:
+    /// `settings` opens the Settings window, `onboarding` re-shows the
+    /// wizard, `meetings` opens the Meetings window. Anything else is
+    /// logged and ignored.
     private func handleURL(_ url: URL) {
         guard url.scheme?.lowercased() == "dictator" else { return }
         switch url.host?.lowercased() {
         case "settings":
             NSApp.activate(ignoringOtherApps: true)
-            // macOS 14+ replaced `showPreferencesWindow:` with
-            // `showSettingsWindow:`. Sending the action with nil target lets
-            // the responder chain dispatch it to the Settings scene.
             NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "onboarding", "setup", "wizard":
             NSApp.activate(ignoringOtherApps: true)
             appState.showOnboarding()
+        case "meetings":
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            appState.openMeetingsAction?()
         default:
             NSLog("[Dictator] Ignoring unknown URL: \(url.absoluteString)")
         }
@@ -99,6 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "onboarding", "setup", "wizard":
                 NSApp.activate(ignoringOtherApps: true)
                 AppState.shared.showOnboarding()
+            case "meetings":
+                Task { @MainActor in
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                    AppState.shared.openMeetingsAction?()
+                }
             default:
                 NSLog("[Dictator] Ignoring unknown URL: \(url.absoluteString)")
             }
