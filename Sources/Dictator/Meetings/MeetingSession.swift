@@ -28,13 +28,14 @@ final class MeetingSession: Identifiable {
         case loadingDiarizer(progress: Double)
         case diarizing(progress: Double)
         case merging
+        case summarising
         case ready
         case failed(String)
 
         var isProcessing: Bool {
             switch self {
             case .loadingASR, .transcribingMic, .transcribingSystem,
-                 .loadingDiarizer, .diarizing, .merging:
+                 .loadingDiarizer, .diarizing, .merging, .summarising:
                 return true
             default: return false
             }
@@ -85,11 +86,31 @@ final class MeetingSession: Identifiable {
         self.state = .idle
     }
 
-    /// Construct from on-disk meta. Lands directly in `.ready`.
+    /// Construct from on-disk meta. Lands in `.ready` if a transcript is
+    /// already on disk; otherwise in `.captured` so the "Process now"
+    /// button surfaces — covers the crash-mid-process case where audio
+    /// + meta were written but the transcript stage never finished.
     init(from meta: MeetingMeta) {
         self.id = meta.id
         self.meta = meta
-        self.state = .ready
+        let hasTranscript = FileManager.default.fileExists(
+            atPath: MeetingStorage.transcriptURL(for: meta.id).path
+        )
+        let fm = FileManager.default
+        let micPresent = meta.audioFiles.mic != nil
+            && fm.fileExists(atPath: MeetingStorage.micURL(for: meta.id).path)
+        let sysPresent = meta.audioFiles.system != nil
+            && fm.fileExists(atPath: MeetingStorage.systemURL(for: meta.id).path)
+        let hasAnyAudio = micPresent || sysPresent
+        if hasTranscript {
+            self.state = .ready
+        } else if hasAnyAudio {
+            self.state = .captured
+        } else {
+            // No transcript and no audio — show as ready and let the
+            // detail view's empty-transcript placeholder handle it.
+            self.state = .ready
+        }
     }
 
     // MARK: - Live recording
@@ -211,8 +232,44 @@ final class MeetingSession: Identifiable {
             }
             MeetingsStore.shared.upsert(meta)
             state = .ready
+
+            // Optional auto-summary. The toggle is opt-in because summary
+            // is expensive on a long meeting and not every user wants one;
+            // when it's off the user can still hit the "Generate summary"
+            // button on the meeting detail view.
+            if AppState.shared.settings.meetingSummaryEnabled,
+               AppState.shared.settings.activeLLMEngine() != nil {
+                await runSummary(settings: AppState.shared.settings)
+            }
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Run the LLM summary pass on the current transcript and persist the
+    /// result on meta. Non-destructive: a failure surfaces in NSLog and
+    /// leaves the transcript intact (state returns to .ready). Used both
+    /// by the auto-run after processing and the manual "Generate summary"
+    /// button.
+    func runSummary(settings: DictatorSettings) async {
+        guard let transcript = MeetingStorage.readTranscript(for: id) else {
+            NSLog("[Dictator] Skipping summary: no transcript on disk for \(id)")
+            return
+        }
+        state = .summarising
+        do {
+            let result = try await MeetingSummaryService.summarise(
+                transcript: transcript,
+                meta: meta,
+                settings: settings
+            )
+            meta.summary = result
+            try? MeetingStorage.writeMeta(meta)
+            MeetingsStore.shared.upsert(meta)
+            state = .ready
+        } catch {
+            NSLog("[Dictator] Meeting summary failed for \(id): \(error)")
+            state = .ready
         }
     }
 
@@ -222,6 +279,30 @@ final class MeetingSession: Identifiable {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         meta.title = trimmed
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+    }
+
+    /// Rename a speaker. The id stays stable (transcript segments reference
+    /// it) — only the user-visible displayName changes. Silent no-op for
+    /// unknown ids or empty names.
+    func renameSpeaker(id: String, to newDisplayName: String) {
+        let trimmed = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let idx = meta.speakers.firstIndex(where: { $0.id == id }) else { return }
+        guard meta.speakers[idx].displayName != trimmed else { return }
+        meta.speakers[idx].displayName = trimmed
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+    }
+
+    /// Update a speaker's colour (hex string). Same persistence shape as
+    /// rename — meta.json round-trips immediately so the new colour
+    /// survives a relaunch.
+    func recolorSpeaker(id: String, hex: String) {
+        guard let idx = meta.speakers.firstIndex(where: { $0.id == id }) else { return }
+        guard meta.speakers[idx].colorHex != hex else { return }
+        meta.speakers[idx].colorHex = hex
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
     }

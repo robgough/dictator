@@ -3595,7 +3595,7 @@ private struct AssistantPromptPane: View {
 ///   prominent warning explains the risks; a toggle at the bottom flips between
 ///   modes. The built-in itself lives behind a "View built-in prompt" button
 ///   that opens a sheet (it's reference material, not edit surface).
-private struct PromptCustomiser: View {
+struct PromptCustomiser: View {
     let description: String
     let builtin: String
     @Binding var addendum: String
@@ -3721,7 +3721,7 @@ private struct PromptCustomiser: View {
     }
 }
 
-private struct BuiltinPromptSheet: View {
+struct BuiltinPromptSheet: View {
     let prompt: String
     @Binding var isPresented: Bool
 

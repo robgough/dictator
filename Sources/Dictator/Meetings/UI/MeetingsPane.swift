@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// Settings → Meetings tab. v0.1 ships with a single setting: the
-/// auto-delete window. The pane is sized as a placeholder for the
-/// summary toggle + diarization model controls that land in v0.2/0.3.
+/// Settings → Meetings tab. Carries the per-Mac storage retention
+/// settings, the cross-Mac summary preferences, and a short note about
+/// speaker identification.
 struct MeetingsPane: View {
     @Environment(AppState.self) private var state
+    @State private var showSummaryPromptSheet = false
 
     var body: some View {
         @Bindable var s = state
@@ -40,7 +41,25 @@ struct MeetingsPane: View {
             }
 
             Section {
-                Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Automatic decision/action-item summarisation is still on the way.")
+                Toggle("Summarise meetings automatically", isOn: Binding(
+                    get: { s.settings.meetingSummaryEnabled },
+                    set: { s.settings.meetingSummaryEnabled = $0; state.save() }
+                ))
+                Button {
+                    showSummaryPromptSheet = true
+                } label: {
+                    Label("Customise summary prompt…", systemImage: "wand.and.stars")
+                }
+            } header: {
+                Text("Summary")
+            } footer: {
+                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting, extracting decisions, action items, and a short narrative. You can always trigger it manually from the meeting page — the toggle here just decides whether it runs automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
@@ -49,5 +68,40 @@ struct MeetingsPane: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .sheet(isPresented: $showSummaryPromptSheet) {
+            SummaryPromptSheet(isPresented: $showSummaryPromptSheet)
+        }
+    }
+}
+
+/// Sheet wrapper around `PromptCustomiser` for the meeting summary prompt.
+/// Same shape as the Assistant prompt tab uses, just inside a modal sheet
+/// because the Meetings tab is already a Form and we don't want to swap
+/// the entire layout for one prompt field.
+private struct SummaryPromptSheet: View {
+    @Environment(AppState.self) private var state
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        @Bindable var s = state
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Meeting summary prompt")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            Divider()
+            PromptCustomiser(
+                description: "Used when Dictator summarises a meeting. The model is asked for strict JSON with decisions, action items, and a 3–6 sentence narrative.",
+                builtin: DictatorSettings.builtinMeetingSummaryPrompt,
+                addendum: $s.settings.meetingSummaryPromptAddendum,
+                override: $s.settings.meetingSummaryPromptOverride
+            ) { state.save() }
+            .padding()
+        }
+        .frame(width: 720, height: 560)
     }
 }

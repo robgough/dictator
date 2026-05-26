@@ -1,12 +1,15 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Renders the chronological speaker turns for a ready meeting. Per-speaker
 /// colour bar on the leading edge. Plain `Text(.textSelection(.enabled))`
 /// so copy works.
 struct TranscriptView: View {
+    @Environment(AppState.self) private var state
     let meta: MeetingMeta
     let transcript: MeetingTranscript?
+    @Bindable var session: MeetingSession
     @State private var player = MeetingPlayer()
     @State private var hasAudio: Bool = false
 
@@ -15,13 +18,19 @@ struct TranscriptView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     ForEach(meta.speakers, id: \.id) { speaker in
-                        SpeakerChip(speaker: speaker)
+                        EditableSpeakerChip(speaker: speaker, session: session)
                     }
                     Spacer()
                     Button {
                         copyAll(transcript: transcript)
                     } label: {
                         Label("Copy all", systemImage: "doc.on.doc")
+                    }
+                    .controlSize(.small)
+                    Button {
+                        exportTranscript(transcript: transcript)
+                    } label: {
+                        Label("Export…", systemImage: "square.and.arrow.up")
                     }
                     .controlSize(.small)
                 }
@@ -31,6 +40,8 @@ struct TranscriptView: View {
                 } else {
                     AudioMissingNote()
                 }
+
+                SummaryPanel(session: session, transcript: transcript, meta: meta)
 
                 ForEach(Array(transcript.segments.enumerated()), id: \.offset) { _, segment in
                     SegmentRow(segment: segment, meta: meta)
@@ -62,12 +73,32 @@ struct TranscriptView: View {
     }
 
     private func copyAll(transcript: MeetingTranscript) {
-        let rendered = transcript.segments.map { seg -> String in
-            let name = meta.speakers.first(where: { $0.id == seg.speakerId })?.displayName ?? seg.speakerId
-            return "\(name): \(seg.text)"
-        }.joined(separator: "\n\n")
+        let rendered = MeetingExporter.plainText(transcript: transcript, meta: meta)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rendered, forType: .string)
+    }
+
+    /// NSSavePanel-driven export. The picker's allowed types determine
+    /// the on-disk format — plain text or markdown.
+    private func exportTranscript(transcript: MeetingTranscript) {
+        let panel = NSSavePanel()
+        panel.title = "Export meeting"
+        panel.message = "Choose where to save the transcript."
+        panel.allowedContentTypes = [UTType.plainText, UTType(filenameExtension: "md") ?? UTType.plainText]
+        panel.canCreateDirectories = true
+        let safeTitle = meta.title.replacingOccurrences(of: "/", with: "-")
+        panel.nameFieldStringValue = "\(safeTitle).md"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let isMarkdown = url.pathExtension.lowercased() == "md" || url.pathExtension.lowercased() == "markdown"
+        let body = isMarkdown
+            ? MeetingExporter.markdown(transcript: transcript, meta: meta)
+            : MeetingExporter.plainText(transcript: transcript, meta: meta)
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[Dictator] Meeting export failed: \(error)")
+        }
     }
 }
 
@@ -180,20 +211,239 @@ private struct AudioMissingNote: View {
     }
 }
 
-private struct SpeakerChip: View {
+/// Click-to-edit speaker chip. The chip itself renders identically to
+/// the read-only v0.2 design; tapping it opens a popover for renaming
+/// and recolouring. Changes flow through `session.renameSpeaker` /
+/// `session.recolorSpeaker` so they persist to meta.json immediately.
+private struct EditableSpeakerChip: View {
     let speaker: MeetingMeta.Speaker
+    @Bindable var session: MeetingSession
+    @State private var isEditing = false
+    @State private var draftName: String = ""
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color(hex: speaker.colorHex) ?? .accentColor)
-                .frame(width: 8, height: 8)
-            Text(speaker.displayName)
-                .font(.caption.weight(.semibold))
+        Button {
+            draftName = speaker.displayName
+            isEditing = true
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: speaker.colorHex) ?? .accentColor)
+                    .frame(width: 8, height: 8)
+                Text(speaker.displayName)
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .foregroundStyle(.primary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+        .buttonStyle(.plain)
+        .popover(isPresented: $isEditing, arrowEdge: .top) {
+            SpeakerEditor(
+                speaker: speaker,
+                draftName: $draftName,
+                onCommit: {
+                    let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty, trimmed != speaker.displayName {
+                        session.renameSpeaker(id: speaker.id, to: trimmed)
+                    }
+                    isEditing = false
+                },
+                onPickColor: { hex in
+                    session.recolorSpeaker(id: speaker.id, hex: hex)
+                }
+            )
+        }
+    }
+}
+
+private struct SpeakerEditor: View {
+    let speaker: MeetingMeta.Speaker
+    @Binding var draftName: String
+    let onCommit: () -> Void
+    let onPickColor: (String) -> Void
+
+    /// Same palette MeetingProcessor uses for new meetings, plus the
+    /// "me" blue so the user can re-apply it after a wrong selection.
+    private static let colorChoices: [String] = [
+        "#5B9BD5",  // blue (me)
+        "#ED7D31",  // orange
+        "#70AD47",  // green
+        "#A5A5A5",  // grey
+        "#9966CC",  // purple
+        "#E15554",  // red
+        "#4B89DC",  // sky blue
+        "#F4B400",  // amber
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Speaker")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            TextField("Name", text: $draftName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { onCommit() }
+                .frame(minWidth: 200)
+
+            Text("Colour")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            HStack(spacing: 8) {
+                ForEach(Self.colorChoices, id: \.self) { hex in
+                    Button {
+                        onPickColor(hex)
+                    } label: {
+                        Circle()
+                            .fill(Color(hex: hex) ?? .gray)
+                            .frame(width: 20, height: 20)
+                            .overlay(
+                                Circle()
+                                    .stroke(hex == speaker.colorHex ? Color.primary : Color.clear, lineWidth: 2)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Done") { onCommit() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+    }
+}
+
+/// LLM summary block rendered above the transcript. Three states:
+///   1. No summary yet, no LLM configured → muted hint pointing at Settings.
+///   2. No summary yet, LLM configured → "Generate summary" button.
+///   3. Summary present → decisions / action items / narrative, re-run button.
+private struct SummaryPanel: View {
+    @Environment(AppState.self) private var state
+    @Bindable var session: MeetingSession
+    let transcript: MeetingTranscript
+    let meta: MeetingMeta
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.purple)
+                Text("Summary")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                actionButton
+            }
+
+            if case .summarising = session.state {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(meta.summary == nil ? "Generating summary…" : "Regenerating summary…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else if let summary = meta.summary {
+                SummaryBody(summary: summary)
+            } else if state.settings.activeLLMEngine() == nil {
+                Text("Turn on an LLM in Settings → Models to summarise meetings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Generate a structured summary of decisions, action items, and the narrative arc of this meeting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.purple.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.purple.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        let isSummarising: Bool = {
+            if case .summarising = session.state { return true }
+            return false
+        }()
+        let isEnabled = state.settings.activeLLMEngine() != nil && !isSummarising
+        Button {
+            Task { await session.runSummary(settings: state.settings) }
+        } label: {
+            Label(meta.summary == nil ? "Generate" : "Re-run", systemImage: "wand.and.stars")
+        }
+        .controlSize(.small)
+        .disabled(!isEnabled)
+    }
+}
+
+private struct SummaryBody: View {
+    let summary: MeetingSummaryResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !summary.narrative.isEmpty {
+                Text(summary.narrative)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !summary.decisions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Decisions")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(summary.decisions.enumerated()), id: \.offset) { _, d in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(.secondary)
+                            Text(d).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.callout)
+                    }
+                }
+            }
+
+            if !summary.actionItems.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Action items")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(summary.actionItems.enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(.secondary)
+                            if let owner = item.owner, !owner.isEmpty {
+                                Text(.init("**\(owner)**: \(item.text)"))
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text(item.text)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .font(.callout)
+                    }
+                }
+            }
+        }
     }
 }
 

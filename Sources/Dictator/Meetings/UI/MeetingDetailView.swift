@@ -91,6 +91,8 @@ struct MeetingDetailView: View {
                 ProcessingPill(text: "Identifying speakers…", color: .blue)
             case .merging:
                 ProcessingPill(text: "Writing transcript…", color: .blue)
+            case .summarising:
+                ProcessingPill(text: "Summarising…", color: .purple)
             case .failed:
                 ProcessingPill(text: "Failed", color: .red)
             }
@@ -107,6 +109,12 @@ struct MeetingDetailView: View {
         case .loadingASR, .transcribingMic, .transcribingSystem,
              .loadingDiarizer, .diarizing, .merging:
             ProcessingPane(session: session)
+        case .summarising:
+            // The transcript is already on disk by the time we're
+            // summarising — keep it visible so the user can read while
+            // the LLM works. The SummaryPanel inside TranscriptView
+            // renders its own "Summarising…" placeholder.
+            TranscriptView(meta: session.meta, transcript: transcriptCache, session: session)
         case .captured:
             VStack(spacing: 12) {
                 Text("Recording saved. The transcript hasn't been generated yet.")
@@ -134,7 +142,7 @@ struct MeetingDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
         case .idle, .ready:
-            TranscriptView(meta: session.meta, transcript: transcriptCache)
+            TranscriptView(meta: session.meta, transcript: transcriptCache, session: session)
         }
     }
 

@@ -43,6 +43,10 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     var sourceFilename: String?
     var audioFiles: AudioFiles
     var speakers: [Speaker]
+    /// Optional — present only after the user (or the auto-run path) has run
+    /// the LLM summary pass. Old meetings decode this as nil and render
+    /// without a summary section.
+    var summary: MeetingSummaryResult?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -56,6 +60,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         sourceFilename: String? = nil,
         audioFiles: AudioFiles,
         speakers: [Speaker],
+        summary: MeetingSummaryResult? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -66,6 +71,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.sourceFilename = sourceFilename
         self.audioFiles = audioFiles
         self.speakers = speakers
+        self.summary = summary
         self.schemaVersion = schemaVersion
     }
 

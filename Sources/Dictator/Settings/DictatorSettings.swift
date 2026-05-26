@@ -165,6 +165,20 @@ struct DictatorSettings: Codable, Equatable {
     /// audio, then the whole record when the older window kicks in.
     var meetingAudioRetentionDays: Int = 0
 
+    /// Opt-in: when true, MeetingProcessor runs the structured LLM summary
+    /// pass automatically after transcription. False by default — summary
+    /// is expensive on a long meeting and not everyone wants it. The
+    /// "Generate summary" button in the meeting detail view still works
+    /// when this is off; the toggle only governs the auto-run.
+    var meetingSummaryEnabled: Bool = false
+    /// Appended under the built-in meeting summary prompt. Empty = no
+    /// addendum. Synced across Macs because it's a personal preference,
+    /// not hardware-dependent.
+    var meetingSummaryPromptAddendum: String = ""
+    /// When set, replaces the built-in summary prompt wholesale. nil =
+    /// use built-in + addendum.
+    var meetingSummaryPromptOverride: String?
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -321,6 +335,9 @@ struct DictatorSettings: Codable, Equatable {
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
+        self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
+        self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
+        self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -432,6 +449,15 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     // MARK: - Effective prompts
+
+    /// Resolved meeting summary prompt: override wins if set, otherwise
+    /// built-in + addendum. Same shape as `effectiveAssistantPrompt` —
+    /// the LLM never sees the raw addendum/override; only this.
+    var effectiveMeetingSummaryPrompt: String {
+        Self.combine(builtin: Self.builtinMeetingSummaryPrompt,
+                     override: meetingSummaryPromptOverride,
+                     addendum: meetingSummaryPromptAddendum)
+    }
 
     var effectiveAssistantPrompt: String {
         // Assistant Mode drafts emails, replies, messages — it's the one pass
@@ -705,6 +731,28 @@ struct DictatorSettings: Codable, Equatable {
     "we need three — sorry, four people on the call" → We need four people on the call.
     """
 
+    static let builtinMeetingSummaryPrompt = """
+    You produce a structured summary of a recorded meeting transcript. The transcript is segmented by speaker — speakers are anonymous (Speaker 1, Speaker 2, …) unless renamed by the user. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
+
+    Output STRICT JSON matching this exact shape, with no commentary, no preamble, no markdown fences:
+
+    {
+      "decisions": ["..."],
+      "actionItems": [{"owner": "Alice", "text": "..."}, {"owner": null, "text": "..."}],
+      "narrative": "..."
+    }
+
+    Rules:
+    - "decisions" lists CONCRETE AGREED OUTCOMES — things the participants chose to do or not do. NOT topics discussed. If nothing was decided, return [].
+    - "actionItems" lists tasks with an owner if the transcript names one, otherwise owner is null. Do NOT invent owners. Do NOT assign tasks to "Me" unless the transcript clearly attributes the commitment to the speaker labelled "Me". If there are no action items, return [].
+    - "narrative" is 3–6 sentences. Factual. No editorialising. No bullet points inside the narrative — it's prose.
+    - Use plain text inside the JSON strings. No markdown.
+    - If the meeting is short or trivial, still emit valid JSON with sensible empty arrays — do NOT refuse.
+    - Speaker names in actionItems are taken from the speaker labels in the transcript ("Me", "Speaker 1", or a rename like "Alice"). Never invent unrelated names.
+
+    Output ONLY the JSON object. Nothing before it. Nothing after it. No "Here is the summary:" preamble. No ```json fences.
+    """
+
     static let builtinAssistantPrompt = """
     You are the on-device writing assistant inside Dictator, a macOS dictation app. Your job is to help the user produce text — drafting, rewriting, restructuring, listing, or briefly answering factual questions. You run locally on the user's Mac.
 
@@ -942,6 +990,9 @@ struct DictatorSettings: Codable, Equatable {
         case hasCompletedOnboarding
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
+        case meetingSummaryEnabled
+        case meetingSummaryPromptAddendum
+        case meetingSummaryPromptOverride
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -966,6 +1017,9 @@ struct DictatorSettings: Codable, Equatable {
         "defaultModeID",
         "assistantPromptAddendum",
         "assistantPromptOverride",
+        "meetingSummaryEnabled",
+        "meetingSummaryPromptAddendum",
+        "meetingSummaryPromptOverride",
     ]
 
     /// Keys that belong in the per-Mac file
