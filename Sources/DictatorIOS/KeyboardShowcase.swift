@@ -41,33 +41,24 @@ struct KeyboardShowcase: View {
 
     private var keyboardMockup: some View {
         VStack(spacing: 12) {
-            // Model readiness chip.
-            HStack(spacing: 6) {
-                Circle().fill(.green).frame(width: 7, height: 7)
-                Text("Model loaded")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color(.tertiarySystemBackground)))
+            // Always-on Paste pill — Paste button on the left, preview
+            // of what's on the clipboard on the right (Dictator puts a
+            // snapshot in the App Group whenever it auto-copies, so
+            // the keyboard can preview without ever reading the
+            // pasteboard string itself).
+            pasteRow
 
-            // Primary buttons.
-            HStack(spacing: 24) {
-                primary(tint: .red, icon: "mic.fill", label: "Dictate", enabled: true)
-                primary(tint: .purple, icon: "wand.and.stars", label: "Assist", enabled: true)
+            // Primary action tiles — compact horizontal pills, not
+            // the big circular buttons the keyboard used to have.
+            HStack(spacing: 12) {
+                primary(tint: .red, icon: "mic.fill", label: "Dictate")
+                primary(tint: .purple, icon: "wand.and.stars", label: "Assist")
             }
 
-            Text("Tap a button — Dictator opens, you talk, the result lands here when you come back.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-                .padding(.top, 2)
-
-            // Secondary row.
+            // Secondary row — no extra horizontal padding here so it
+            // aligns with the buttons above.
             HStack(spacing: 10) {
-                secondary(icon: "arrow.uturn.backward", label: "Undo", enabled: true)
+                secondary(icon: "arrow.uturn.backward", label: "Undo")
                 Text("space")
                     .font(.footnote.weight(.medium))
                     .frame(maxWidth: .infinity)
@@ -76,7 +67,7 @@ struct KeyboardShowcase: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color(.tertiarySystemBackground))
                     )
-                secondary(icon: "return", label: "Return", enabled: true)
+                secondary(icon: "return", label: "Return")
                 Image(systemName: "delete.left")
                     .font(.system(size: 20, weight: .medium))
                     .frame(width: 60, height: 44)
@@ -85,8 +76,6 @@ struct KeyboardShowcase: View {
                             .fill(Color(.tertiarySystemBackground))
                     )
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
 
             // "Globe" hint mimicking the system keyboard-switcher row.
             HStack {
@@ -95,8 +84,7 @@ struct KeyboardShowcase: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
+            .padding(.top, 2)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -104,25 +92,64 @@ struct KeyboardShowcase: View {
         .background(Color(.secondarySystemBackground))
     }
 
-    private func primary(tint: Color, icon: String, label: String, enabled: Bool) -> some View {
-        VStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .fill(tint)
-                    .frame(width: 84, height: 84)
-                Image(systemName: icon)
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundStyle(.white)
+    /// Paste button + preview pill, matching `KeyboardRootView.pasteChip`.
+    /// Both render at cornerRadius 14 to share a shape family with the
+    /// primary tiles.
+    private var pasteRow: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.clipboard.fill")
+                    .font(.caption.weight(.semibold))
+                Text("Paste")
+                    .font(.footnote.weight(.semibold))
             }
-            Text(label)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.primary)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.accentColor)
+            )
+
+            HStack(spacing: 6) {
+                Text("Pick up flowers on the way home, will swing by the place on Elm.")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("· 14 words")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.tertiarySystemBackground))
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
-        .opacity(enabled ? 1 : 0.4)
     }
 
-    private func secondary(icon: String, label: String, enabled: Bool) -> some View {
+    /// Compact tile matching `KeyboardRootView.primaryButton`. Icon +
+    /// label on a 56pt-tall coloured rounded rectangle.
+    private func primary(tint: Color, icon: String, label: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(tint)
+        )
+    }
+
+    private func secondary(icon: String, label: String) -> some View {
         Image(systemName: icon)
             .font(.system(size: 18, weight: .medium))
             .foregroundStyle(.primary)
