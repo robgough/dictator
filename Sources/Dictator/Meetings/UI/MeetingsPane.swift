@@ -40,11 +40,11 @@ struct MeetingsPane: View {
             }
 
             Section {
-                Text("Diarization and summarisation are coming in the next releases. For v0.1, microphone audio is labelled \"Me\" and the system audio is labelled \"Other\" wholesale.")
+                Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Automatic decision/action-item summarisation is still on the way.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Coming soon")
+                Text("Speakers")
             }
         }
         .formStyle(.grouped)

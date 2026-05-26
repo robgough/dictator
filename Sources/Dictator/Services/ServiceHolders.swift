@@ -28,3 +28,11 @@ enum AppleFoundationLLMServiceHolder {
 enum ParakeetServiceHolder {
     static let shared = ParakeetService()
 }
+
+/// FluidAudio offline speaker-diarization pipeline. Loaded on demand by the
+/// Meetings post-capture flow; the Models pane Verify button also reaches in
+/// here so settings + pipeline share one warm model.
+@MainActor
+enum DiarizerServiceHolder {
+    static let shared = DiarizerService()
+}

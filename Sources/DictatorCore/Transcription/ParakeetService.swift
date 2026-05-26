@@ -1,6 +1,21 @@
 import Foundation
 @preconcurrency import FluidAudio
 
+/// One word from a word-aligned ASR pass with its time range in seconds from
+/// the start of the supplied sample buffer. Used by the meetings pipeline
+/// for diarizer alignment — not surfaced in the dictation path.
+public struct TimedWord: Sendable, Equatable {
+    public let start: TimeInterval
+    public let end: TimeInterval
+    public let text: String
+
+    public init(start: TimeInterval, end: TimeInterval, text: String) {
+        self.start = start
+        self.end = end
+        self.text = text
+    }
+}
+
 /// Parakeet TDT speech-to-text. Mirrors the surface of `TranscriptionService`
 /// so both engines slot into Pipeline through the same protocol.
 ///
@@ -122,6 +137,52 @@ final class ParakeetService: ASREngine {
         var state = try TdtDecoderState()
         let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
         return result.text
+    }
+
+    /// Word-aligned transcription. Same audio shape as `transcribe(...)` but
+    /// surfaces SentencePiece tokens coalesced back into whitespace-separated
+    /// words with `(start, end)` timestamps. Used by the meetings pipeline so
+    /// the diarizer can attribute each word to a speaker.
+    ///
+    /// Returns an empty array (not an error) when the model produced no
+    /// timing information — callers should fall back to the plain text path
+    /// in that case.
+    func transcribeWithTimestamps(samples: [Float], modelID: String) async throws -> [TimedWord] {
+        try await ensureLoaded(modelID: modelID)
+        guard let manager else {
+            throw NSError(domain: "Dictator", code: 11,
+                          userInfo: [NSLocalizedDescriptionKey: "Parakeet not loaded"])
+        }
+        var state = try TdtDecoderState()
+        let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
+        guard let timings = result.tokenTimings, !timings.isEmpty else { return [] }
+        return Self.coalesceWords(from: timings)
+    }
+
+    /// SentencePiece marks word boundaries with `▁` (U+2581). Tokens that
+    /// don't start with that marker continue the previous word — including
+    /// trailing punctuation like `,` and `.`. The first token always opens
+    /// a word regardless of whether the model emitted the marker.
+    nonisolated static func coalesceWords(from timings: [TokenTiming]) -> [TimedWord] {
+        var words: [TimedWord] = []
+        words.reserveCapacity(timings.count / 2)
+        let marker: Character = "\u{2581}"
+        for timing in timings {
+            let raw = timing.token
+            let isNewWord = raw.first == marker || words.isEmpty
+            let cleaned = raw.first == marker ? String(raw.dropFirst()) : raw
+            if isNewWord {
+                let text = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                words.append(TimedWord(start: timing.startTime, end: timing.endTime, text: text))
+            } else {
+                let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                let last = words.removeLast()
+                words.append(TimedWord(start: last.start, end: timing.endTime, text: last.text + trimmed))
+            }
+        }
+        return words
     }
 
     // MARK: - Nonisolated bridge

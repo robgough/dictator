@@ -2127,6 +2127,7 @@ private struct MicrophoneStatusRow: View {
 private enum ModelsSubPane: String, CaseIterable, Identifiable {
     case transcription = "Transcription"
     case formatting = "Formatting"
+    case diarization = "Diarization"
     case stats = "Stats"
     var id: String { rawValue }
 }
@@ -2196,6 +2197,7 @@ private struct ModelsPane: View {
             switch subPane {
             case .transcription: TranscriptionModelsPane()
             case .formatting: FormattingModelsPane()
+            case .diarization: DiarizationModelsPane()
             case .stats: StatsModelsPane()
             }
 
@@ -2520,6 +2522,56 @@ private struct AppleFoundationStatusRow: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+}
+
+/// Diarization sub-pane: download / verify / remove for the offline
+/// speaker-diarization bundle. There's only one option in v0.2, so the row
+/// is always "active" — picking between models isn't a thing yet, but the
+/// shape mirrors the other panes so we can grow it without rewriting.
+private struct DiarizationModelsPane: View {
+    @State private var manager = ModelManager.shared
+    @State private var diarizer = DiarizerServiceHolder.shared
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ModelCatalog.diarizationModels) { model in
+                    ModelRow(
+                        name: model.displayName,
+                        note: model.note,
+                        sizeMB: model.approxSizeMB,
+                        ramMB: model.approxRAMMB,
+                        state: manager.diarizationStates[model.id] ?? .unknown,
+                        isActive: true,
+                        isLoaded: diarizer.currentModelID == model.id,
+                        isVerifying: manager.verifyingDiarization.contains(model.id),
+                        select: {},
+                        download: {
+                            manager.downloadDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelDiarizationDownload(model.id)
+                        },
+                        verify: {
+                            Task { await manager.verifyDiarization(model.id, using: DiarizerServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        },
+                        remove: {
+                            manager.removeDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        }
+                    )
+                }
+            } header: {
+                Text("Speaker diarization")
+            } footer: {
+                SectionFootnote("Used by the Meetings feature to split the remote audio into per-speaker turns (\"Speaker 1 said…, Speaker 2 replied…\"). Downloads on first use, or pre-fetch from here. Your own microphone is always tagged as you — diarization only runs on the system-audio track.")
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 

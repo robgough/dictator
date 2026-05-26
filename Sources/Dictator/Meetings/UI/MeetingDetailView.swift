@@ -85,6 +85,10 @@ struct MeetingDetailView: View {
                 ProcessingPill(text: "Transcribing mic · \(Int(p * 100))%", color: .blue)
             case .transcribingSystem(let p):
                 ProcessingPill(text: "Transcribing remote · \(Int(p * 100))%", color: .blue)
+            case .loadingDiarizer(let p):
+                ProcessingPill(text: "Loading speakers · \(Int(p * 100))%", color: .blue)
+            case .diarizing:
+                ProcessingPill(text: "Identifying speakers…", color: .blue)
             case .merging:
                 ProcessingPill(text: "Writing transcript…", color: .blue)
             case .failed:
@@ -100,7 +104,8 @@ struct MeetingDetailView: View {
             LiveRecordingView(session: session, isWarming: true)
         case .recording:
             LiveRecordingView(session: session, isWarming: false)
-        case .loadingASR, .transcribingMic, .transcribingSystem, .merging:
+        case .loadingASR, .transcribingMic, .transcribingSystem,
+             .loadingDiarizer, .diarizing, .merging:
             ProcessingPane(session: session)
         case .captured:
             VStack(spacing: 12) {
@@ -278,7 +283,8 @@ private struct ProcessingPane: View {
 
     private var progressValue: Double {
         switch session.state {
-        case .loadingASR(let p), .transcribingMic(let p), .transcribingSystem(let p):
+        case .loadingASR(let p), .transcribingMic(let p), .transcribingSystem(let p),
+             .loadingDiarizer(let p), .diarizing(let p):
             return p
         case .merging: return 0.95
         default: return 0
@@ -290,6 +296,8 @@ private struct ProcessingPane: View {
         case .loadingASR: return "Loading transcription model…"
         case .transcribingMic: return "Transcribing your microphone track…"
         case .transcribingSystem: return "Transcribing the system audio track…"
+        case .loadingDiarizer: return "Loading speaker-identification model…"
+        case .diarizing: return "Identifying who spoke when…"
         case .merging: return "Writing the transcript…"
         default: return ""
         }

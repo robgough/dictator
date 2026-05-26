@@ -25,13 +25,17 @@ final class MeetingSession: Identifiable {
         case loadingASR(progress: Double)
         case transcribingMic(progress: Double)
         case transcribingSystem(progress: Double)
+        case loadingDiarizer(progress: Double)
+        case diarizing(progress: Double)
         case merging
         case ready
         case failed(String)
 
         var isProcessing: Bool {
             switch self {
-            case .loadingASR, .transcribingMic, .transcribingSystem, .merging: return true
+            case .loadingASR, .transcribingMic, .transcribingSystem,
+                 .loadingDiarizer, .diarizing, .merging:
+                return true
             default: return false
             }
         }
@@ -200,6 +204,8 @@ final class MeetingSession: Identifiable {
                 case .loadingASR: self.state = .loadingASR(progress: fraction)
                 case .transcribingMic: self.state = .transcribingMic(progress: fraction)
                 case .transcribingSystem: self.state = .transcribingSystem(progress: fraction)
+                case .loadingDiarizer: self.state = .loadingDiarizer(progress: fraction)
+                case .diarizing: self.state = .diarizing(progress: fraction)
                 case .writingTranscript: self.state = .merging
                 }
             }

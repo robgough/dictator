@@ -26,4 +26,14 @@ enum ModelStorage {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    /// FluidAudio's `OfflineDiarizerModels.load(from:)` treats this URL as the
+    /// parent dir and appends `Repo.diarizer.folderName` ("speaker-diarization")
+    /// itself, so the actual weights land at
+    /// `~/Library/Application Support/Dictator/Models/diarization/speaker-diarization/…`.
+    static func diarizationRoot() -> URL {
+        let dir = root().appendingPathComponent("diarization", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 }
