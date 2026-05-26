@@ -233,16 +233,46 @@ final class MeetingSession: Identifiable {
             MeetingsStore.shared.upsert(meta)
             state = .ready
 
-            // Optional auto-summary. The toggle is opt-in because summary
-            // is expensive on a long meeting and not every user wants one;
-            // when it's off the user can still hit the "Generate summary"
-            // button on the meeting detail view.
+            // Auto title suggestion. Always runs when an LLM is
+            // available — the call is short and cheap, and a meeting
+            // titled "Q3 launch planning" is dramatically more useful
+            // than "Meeting on 2026-05-27 14:32" when you're scanning
+            // the sidebar a week later. Quality-gated and only applied
+            // when the current title still looks like the default —
+            // we never overwrite a manual rename.
+            if AppState.shared.settings.activeLLMEngine() != nil {
+                await maybeAutoRename(settings: AppState.shared.settings)
+            }
+
+            // Optional auto-summary. The toggle is opt-in because the
+            // structured summary is expensive on a long meeting and not
+            // every user wants one; when it's off the user can still
+            // hit the "Generate summary" button on the meeting detail
+            // view.
             if AppState.shared.settings.meetingSummaryEnabled,
                AppState.shared.settings.activeLLMEngine() != nil {
                 await runSummary(settings: AppState.shared.settings)
             }
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Run the title-suggestion LLM call and, if the suggestion passes
+    /// the quality gate AND the current title is still the default
+    /// date-format title, apply it. Failures are silent — the meeting
+    /// just keeps its default title.
+    private func maybeAutoRename(settings: DictatorSettings) async {
+        guard MeetingSummaryService.isDefaultMeetingTitle(meta.title) else { return }
+        guard let transcript = MeetingStorage.readTranscript(for: id) else { return }
+        do {
+            if let suggestion = try await MeetingSummaryService.suggestTitle(
+                transcript: transcript, meta: meta, settings: settings
+            ) {
+                rename(to: suggestion)
+            }
+        } catch {
+            NSLog("[Dictator] Title suggestion failed for \(id): \(error)")
         }
     }
 

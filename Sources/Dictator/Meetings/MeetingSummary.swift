@@ -251,6 +251,143 @@ enum MeetingSummaryService {
         }
     }
 
+    // MARK: - Title suggestion
+
+    /// Short, cheap LLM call that proposes a 2–8 word title for the
+    /// meeting. Returns nil when the model declined, returned garbage,
+    /// or produced something that fails the quality gate — callers fall
+    /// back to the existing date-format title in that case.
+    ///
+    /// Uses only the first ~chunkLeadChars of the transcript: most
+    /// meetings open with enough context to title from (greetings,
+    /// agenda mention, "today we want to talk about…"), and feeding the
+    /// whole transcript wastes input tokens and risks the model
+    /// regurgitating later content as a literal title.
+    static func suggestTitle(
+        transcript: MeetingTranscript,
+        meta: MeetingMeta,
+        settings: DictatorSettings
+    ) async throws -> String? {
+        guard let engine = settings.activeLLMEngine() else { return nil }
+        try await engine.ensureReady()
+
+        let segments = transcript.segments
+        guard !segments.isEmpty else { return nil }
+
+        let leadChars = 4_000
+        let rendered = renderSegments(segments, speakers: meta.speakers)
+        let lead = String(rendered.prefix(leadChars))
+
+        let result: AssistantResult
+        do {
+            result = try await engine.assist(
+                selection: lead,
+                instruction: "Suggest a concise title for this meeting based on what's said. Output ONLY the title — nothing else.",
+                systemPrompt: titleSuggestionPrompt,
+                priorTurns: [],
+                summary: nil,
+                cancellation: { Task.isCancelled }
+            )
+        } catch {
+            return nil
+        }
+
+        return cleanCandidateTitle(result.text)
+    }
+
+    /// Standalone system prompt for the title-suggestion call. Kept
+    /// internal (not a customisable user setting) — the surface is
+    /// already crowded and the title prompt is narrow enough that the
+    /// tuning headroom isn't worth a dedicated knob.
+    private static let titleSuggestionPrompt = """
+    You produce concise, descriptive titles for recorded meeting transcripts. You see only the opening of the transcript — enough to tell what the meeting is about.
+
+    Output ONLY the title as a single line. 2–8 words. Title-case. No surrounding quotes. No trailing punctuation. No preamble like "Title:" or "Here is".
+
+    If the opening is too short, too generic, or too unclear to title meaningfully (small-talk only, garbled speech, no discernible topic), output exactly the literal token: NOTITLE
+
+    Examples:
+    - A planning chat about a Q3 product launch → "Q3 Product Launch Planning"
+    - Two engineers debugging a deployment → "Deployment Debugging Session"
+    - "Hey, how are you, good, yeah, fine" → NOTITLE
+    """
+
+    /// Quality gate. Returns nil when the candidate fails — caller keeps
+    /// the existing default title.
+    nonisolated static func cleanCandidateTitle(_ raw: String) -> String? {
+        let cleaned = LLMTextUtilities.clean(raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Pull the first non-empty line — the model occasionally
+            // appends "Here's why: …" commentary on a second line.
+            .components(separatedBy: .newlines)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !cleaned.isEmpty else { return nil }
+
+        // Strip wrapping punctuation the prompt forbids but small models
+        // sometimes still emit. Includes ASCII + smart quotes.
+        let stripChars = CharacterSet(charactersIn: "\"'\u{201C}\u{201D}\u{2018}\u{2019}`*_.,;:")
+        var candidate = cleaned.trimmingCharacters(in: stripChars)
+            .trimmingCharacters(in: .whitespaces)
+
+        // Drop a leading "Title:" / "Meeting title:" preamble.
+        for prefix in ["Title:", "TITLE:", "title:", "Meeting title:", "Meeting Title:"] {
+            if candidate.hasPrefix(prefix) {
+                candidate = String(candidate.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+
+        // Explicit "the model couldn't title this" signal.
+        if candidate.uppercased() == "NOTITLE" { return nil }
+
+        // Length + word-count gate. 3–80 chars, 1–12 words. Very long
+        // outputs are almost always the model summarising rather than
+        // titling.
+        let chars = candidate.count
+        guard chars >= 3, chars <= 80 else { return nil }
+        let words = candidate.split(whereSeparator: { $0.isWhitespace })
+        guard words.count >= 1, words.count <= 12 else { return nil }
+
+        // Refusal / preamble patterns. If the model declined ("I cannot
+        // create a title for this content") we'd otherwise paste that
+        // straight into the title bar.
+        let lower = candidate.lowercased()
+        let refusalPatterns = [
+            "i cannot", "i can't", "i'm sorry", "i am sorry",
+            "as an ai", "as a language model",
+            "unable to", "i won't", "i will not",
+        ]
+        if refusalPatterns.contains(where: { lower.hasPrefix($0) }) { return nil }
+
+        // The model occasionally just emits "Meeting Title" as the literal
+        // string — useless. Same for variations on the default we'd
+        // already be using.
+        let lowercaseIdentity = lower.replacingOccurrences(of: " ", with: "")
+        if lowercaseIdentity == "meeting" || lowercaseIdentity == "meetingtitle" {
+            return nil
+        }
+
+        return candidate
+    }
+
+    /// True when `title` matches the default "Meeting on YYYY-MM-DD HH:MM"
+    /// format produced by `MeetingSession.defaultTitle`. Used to decide
+    /// whether the auto-suggested title is safe to apply — if the user
+    /// has already renamed (manually or via a previous auto-rename), we
+    /// don't clobber that.
+    nonisolated static func isDefaultMeetingTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "Meeting on " + 16 chars of date/time = 27 chars exactly.
+        guard trimmed.hasPrefix("Meeting on "), trimmed.count == 27 else { return false }
+        let datePart = String(trimmed.dropFirst("Meeting on ".count))
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.date(from: datePart) != nil
+    }
+
     // MARK: - Engine id
 
     private static func engineModelID(settings: DictatorSettings) -> String {
