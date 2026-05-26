@@ -10,11 +10,29 @@ import Foundation
 /// per-recording allocations are only the streaming manager and its internal
 /// `AsrManager` decoder copy.
 ///
-/// When streaming is active, `finish()` is the canonical source of the final
-/// transcript — do NOT also call the offline `ParakeetService.transcribe`,
-/// that would re-decode the same audio.
+/// We deliberately use a much smaller chunk than `SlidingWindowAsrConfig.streaming`
+/// (which is tuned for meetings — 11s chunk + 2s right context means no
+/// interim text would appear until ~13s into a recording, longer than most
+/// dictations). The trade-off is that short chunks degrade transcript quality,
+/// so the canonical final transcript still goes through the offline
+/// `ParakeetService.transcribe` on the full audio buffer. This service exists
+/// purely for visible HUD feedback during the hold.
 @MainActor
 final class ParakeetStreamingService {
+    /// Streaming config tuned for short, hotkey-driven dictations. First
+    /// update lands at `chunkSeconds + rightContextSeconds` after the user
+    /// starts speaking; subsequent updates land every `chunkSeconds`.
+    /// We pay a CoreML encoder pass per chunk, so don't push these any
+    /// smaller without measuring on the slowest target Mac.
+    static let dictationConfig = SlidingWindowAsrConfig(
+        chunkSeconds: 1.5,
+        hypothesisChunkSeconds: 1.0, // declared but unused inside FluidAudio
+        leftContextSeconds: 1.0,
+        rightContextSeconds: 0.5,
+        minContextForConfirmation: 0.5,
+        confirmationThreshold: 0.5
+    )
+
     private var streamer: SlidingWindowAsrManager?
     private var nativeSampleRate: Double = 0
     private var inputFormat: AVAudioFormat?
@@ -42,7 +60,7 @@ final class ParakeetStreamingService {
     /// the streamer's `transcriptionUpdates` continuation finishes (after
     /// `finish()` or `cancel()`).
     func start(models: AsrModels) async throws {
-        let mgr = SlidingWindowAsrManager(config: .streaming)
+        let mgr = SlidingWindowAsrManager(config: Self.dictationConfig)
         try await mgr.loadModels(models)
         try await mgr.startStreaming(source: .microphone)
         self.streamer = mgr

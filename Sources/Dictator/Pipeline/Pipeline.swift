@@ -429,21 +429,14 @@ final class Pipeline {
                 budget: Self.transcribeBudgetSeconds(audioSamples: samples.count)
             )
             defer { watchdog.cancel() }
-            if let streamer, streamer.isReady {
-                // Streaming-active means streaming-final. The streamer has
-                // already chewed through every interim chunk; finish()
-                // drains the remaining audio and reconstructs the full
-                // transcript from accumulated tokens.
-                raw = try await streamer.finish()
-            } else {
-                // Either streaming wasn't enabled, or the streamer's
-                // async model-load hadn't completed yet when the user
-                // released the hotkey. Fall back to the offline pass —
-                // the recorder kept the full audio buffer either way.
-                streamer?.cancel()
-                let asr = activeASR
-                raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
-            }
+            // The streaming service exists only for HUD interim feedback —
+            // it runs with a short chunk size that's responsive but produces
+            // lower-quality transcripts than the offline encoder. The final
+            // transcript always goes through the offline pass on the full
+            // captured buffer regardless of whether streaming was active.
+            streamer?.cancel()
+            let asr = activeASR
+            raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             streamer?.cancel()
             if Task.isCancelled { return }
