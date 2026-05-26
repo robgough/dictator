@@ -210,20 +210,24 @@ final class MeetingAudioRecorder {
 
     // MARK: - File helpers
 
-    /// Open an AAC-encoded `.m4a` file at `url` whose decoded format
-    /// matches `source`. We pass AAC settings in `AVAudioFile(forWriting:)`
-    /// — the file then transparently encodes incoming Float32 buffers via
-    /// CoreAudio's AAC encoder. 96 kbps mono is plenty for ASR and lands
-    /// a 2-hour meeting under ~170 MB.
+    /// Open a CAF (Core Audio Format) file at `url` for streaming writes.
+    /// CAF is crash-safe by design: its `data` chunk is written with a
+    /// sentinel `-1` length meaning "read to end of file", so a truncated
+    /// CAF from a crashed recorder is still fully decodable. MP4/M4A is
+    /// the opposite — the `moov` atom that holds the sample table is
+    /// written only at file close, so a crash mid-recording leaves the
+    /// container unreadable even though the AAC bytes themselves are on
+    /// disk. The trade-off is larger files (LinearPCM Float32 mono at the
+    /// source rate is ~700 MB/hour) versus 100% recoverability.
     private static func openFile(at url: URL, source: AVAudioFormat) throws -> AVAudioFile {
-        // Force mono output — both Parakeet and the level meter want mono,
-        // and downmixing on write keeps the disk file half the size.
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: source.sampleRate,
             AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 96_000,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
         ]
         return try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
     }

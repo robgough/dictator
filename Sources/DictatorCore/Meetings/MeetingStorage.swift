@@ -2,14 +2,21 @@ import Foundation
 
 /// Path helpers + read/write shims for per-meeting folders. One folder per
 /// meeting under `~/Library/Application Support/Dictator/Meetings/<uuid>/`
-/// containing `mic.m4a`, `system.m4a`, `transcript.json`, `meta.json`.
+/// containing `mic.caf`, `system.caf`, `transcript.json`, `meta.json`.
+///
+/// We use CAF (LinearPCM) rather than compressed M4A for the audio tracks
+/// because CAF is crash-safe by design: its data chunk uses a "-1 = read
+/// to end" length sentinel, so a truncated CAF (from a Dictator crash or
+/// power loss mid-recording) is fully decodable. M4A would lose the moov
+/// atom on crash and the whole file becomes unreadable. The cost is disk:
+/// ~700 MB/hour/track at Float32 mono 48 kHz.
 ///
 /// Local to each Mac — meetings are big audio files, syncing them into a
 /// shared folder would chew bandwidth and storage. Held alongside model
 /// weights for that reason.
 enum MeetingStorage {
-    static let micFilename = "mic.m4a"
-    static let systemFilename = "system.m4a"
+    static let micFilename = "mic.caf"
+    static let systemFilename = "system.caf"
     static let transcriptFilename = "transcript.json"
     static let metaFilename = "meta.json"
 
