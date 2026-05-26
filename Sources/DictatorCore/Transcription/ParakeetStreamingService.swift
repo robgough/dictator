@@ -21,15 +21,18 @@ import Foundation
 final class ParakeetStreamingService {
     /// Streaming config tuned for short, hotkey-driven dictations. First
     /// update lands at `chunkSeconds + rightContextSeconds` after the user
-    /// starts speaking; subsequent updates land every `chunkSeconds`.
+    /// starts speaking; subsequent updates land every `chunkSeconds`. The
+    /// encoder receives a window of `left + chunk + right` audio on each
+    /// step, so total context per pass is ~1.5 s — enough for Parakeet to
+    /// produce sensible tokens, but short enough to update sub-second.
     /// We pay a CoreML encoder pass per chunk, so don't push these any
     /// smaller without measuring on the slowest target Mac.
     static let dictationConfig = SlidingWindowAsrConfig(
-        chunkSeconds: 1.5,
-        hypothesisChunkSeconds: 1.0, // declared but unused inside FluidAudio
-        leftContextSeconds: 1.0,
-        rightContextSeconds: 0.5,
-        minContextForConfirmation: 0.5,
+        chunkSeconds: 0.5,
+        hypothesisChunkSeconds: 0.5, // declared but unused inside FluidAudio
+        leftContextSeconds: 0.75,
+        rightContextSeconds: 0.25,
+        minContextForConfirmation: 0.3,
         confirmationThreshold: 0.5
     )
 

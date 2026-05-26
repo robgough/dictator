@@ -137,13 +137,8 @@ struct HUDView: View {
                     .frame(maxWidth: 200, alignment: .trailing)
                 }
                 if !interim.isEmpty {
-                    Text(interim)
-                        .font(.system(size: 11, weight: .regular, design: .rounded).italic())
-                        .foregroundStyle(.secondary)
-                        .opacity(0.75)
-                        .lineLimit(2)
-                        .truncationMode(.head)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    InterimPreview(text: interim)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
         case .transcribing:
@@ -279,6 +274,40 @@ private struct ModeChip: View {
                 .strokeBorder(Color.brandBlue.opacity(0.25), lineWidth: 0.5)
         )
         .padding(.top, 1)
+    }
+}
+
+/// Single-line scrolling preview of the in-flight streaming transcript.
+/// Latest words land on the right; older ones scroll off the left (via
+/// `.truncationMode(.head)` on a single-line, trailing-aligned Text).
+/// Labelled "PREVIEW" so users don't mistake it for the final output.
+private struct InterimPreview: View {
+    let text: String
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text("PREVIEW")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.12))
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 0.5)
+                )
+            Text(text)
+                .font(.system(size: 11, weight: .regular, design: .rounded).italic())
+                .foregroundStyle(.secondary)
+                .opacity(0.75)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .contentTransition(.opacity)
+                .animation(.snappy(duration: 0.18), value: text)
+        }
     }
 }
 
