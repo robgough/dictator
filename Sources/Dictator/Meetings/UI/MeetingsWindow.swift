@@ -46,25 +46,44 @@ struct MeetingsRootView: View {
         }
     }
 
+    /// Collect dropped URLs and feed them through the same import path
+    /// the toolbar's Import… button uses.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, MeetingImporter.urlLooksLikeAudio(url) else { return }
+                Task { @MainActor in
+                    await importFiles([url])
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var sidebar: some View {
-        if store.metas.isEmpty {
-            // SwiftUI renders the empty state in the detail pane; the
-            // sidebar collapses to a hint.
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Meetings")
-                    .font(.headline)
-                Text("No meetings yet.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            if store.metas.isEmpty {
+                // SwiftUI renders the empty state in the detail pane; the
+                // sidebar collapses to a hint.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Meetings")
+                        .font(.headline)
+                    Text("No meetings yet.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                MeetingSidebarList(selection: $selectedID, metas: store.metas) { id in
+                    store.delete(id: id)
+                    if selectedID == id { selectedID = nil }
+                    openSessions.removeValue(forKey: id)
+                }
+                .frame(maxHeight: .infinity)
             }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else {
-            MeetingSidebarList(selection: $selectedID, metas: store.metas) { id in
-                store.delete(id: id)
-                if selectedID == id { selectedID = nil }
-                openSessions.removeValue(forKey: id)
+            SidebarDropZone { providers in
+                handleDroppedProviders(providers)
             }
         }
     }
@@ -156,26 +175,28 @@ struct MeetingsRootView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [
-            UTType.audio,
-            UTType(filenameExtension: "m4a") ?? .audio,
-            UTType(filenameExtension: "wav") ?? .audio,
-            UTType(filenameExtension: "mp3") ?? .audio,
-            UTType(filenameExtension: "aac") ?? .audio,
-            UTType(filenameExtension: "flac") ?? .audio,
-            UTType(filenameExtension: "caf") ?? .audio,
-        ]
+        panel.allowedContentTypes = MeetingImporter.acceptedContentTypes
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
-        do {
-            let session = try MeetingImporter.makeSession(from: url)
-            openSessions[session.id] = session
-            selectedID = session.id
-            liveSession = session
-            let modelID = state.settings.parakeetModelID
-            await session.runProcessor(parakeetModelID: modelID)
-        } catch {
-            permissionMessage = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
+        await importFiles([url])
+    }
+
+    /// Shared entry point for both the Import… NSOpenPanel and the
+    /// drag-and-drop zones. Imports each URL serially so we don't try to
+    /// load + run the ASR model in parallel across multiple files, and
+    /// leaves the last-imported session selected when the batch is done.
+    private func importFiles(_ urls: [URL]) async {
+        for url in urls {
+            do {
+                let session = try MeetingImporter.makeSession(from: url)
+                openSessions[session.id] = session
+                selectedID = session.id
+                liveSession = session
+                let modelID = state.settings.parakeetModelID
+                await session.runProcessor(parakeetModelID: modelID)
+            } catch {
+                permissionMessage = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
+            }
         }
     }
 }
@@ -195,7 +216,7 @@ struct MeetingsEmptyState: View {
                     .foregroundStyle(.tint)
                 Text("No meeting open")
                     .font(.title2.weight(.semibold))
-                Text("Start a new recording or import an audio file to get a transcript.")
+                Text("Start a new recording, import an audio file, or drag one onto the drop zone at the bottom of the sidebar to get a transcript.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -235,5 +256,48 @@ struct MeetingsEmptyState: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Drop target pinned to the bottom of the Meetings sidebar. Dashed
+/// border, downward arrow, "Drop audio to transcribe" label. Hover
+/// state tints the chrome so a dragging cursor gets visual feedback
+/// before the drop lands.
+private struct SidebarDropZone: View {
+    let onDrop: ([NSItemProvider]) -> Void
+    @State private var isTargeted = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "arrow.down.doc")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+            Text("Drop audio to transcribe")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    isTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isTargeted ? Color.accentColor.opacity(0.08) : Color.clear)
+                )
+        )
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+        .onDrop(of: MeetingImporter.acceptedContentTypes, isTargeted: $isTargeted) { providers in
+            onDrop(providers)
+            return true
+        }
+        .help("Drop an audio file here to import it as a new meeting.")
     }
 }

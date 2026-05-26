@@ -1,11 +1,49 @@
 import Foundation
 @preconcurrency import AVFoundation
+import UniformTypeIdentifiers
 
 /// Copies an imported audio file into a fresh meeting folder, re-encodes
 /// it as `system.m4a`, and produces a session pinned to it. The processor
 /// path is identical to a live recording with the mic track missing.
 @MainActor
 enum MeetingImporter {
+    /// Audio file types accepted by both the Import… NSOpenPanel and the
+    /// drag-and-drop zones (menu bar + Meetings window). Kept central so
+    /// the two entry points stay in sync. `nonisolated` so the menu bar's
+    /// non-actor-isolated drop callbacks (which fire on arbitrary queues)
+    /// can read it without an actor hop.
+    nonisolated static let acceptedContentTypes: [UTType] = [
+        UTType.audio,
+        UTType(filenameExtension: "m4a") ?? .audio,
+        UTType(filenameExtension: "wav") ?? .audio,
+        UTType(filenameExtension: "mp3") ?? .audio,
+        UTType(filenameExtension: "aac") ?? .audio,
+        UTType(filenameExtension: "flac") ?? .audio,
+        UTType(filenameExtension: "caf") ?? .audio,
+    ]
+
+    /// Lowercased file extensions matching `acceptedContentTypes`. Used by
+    /// the drop-zone path to filter URLs the OS hands us — `UTType.audio`
+    /// covers most cases via UTI conformance, but a few file types (e.g.
+    /// raw `.flac` on older systems) lack the right conformance tree, and
+    /// `NSItemProvider` doesn't always vend a usable conformance for
+    /// file-promise drops. Falling back to extension matching keeps the
+    /// drop affordance permissive.
+    nonisolated static let acceptedExtensions: Set<String> = [
+        "m4a", "wav", "mp3", "aac", "flac", "caf", "mp4", "mov", "aiff", "aif",
+    ]
+
+    /// True when the URL's extension or UTI conformance suggests an audio
+    /// file. Used by the drop-zone path — we accept on either signal so a
+    /// well-known extension lands even when the UTI db doesn't know about
+    /// the type, and a custom-extension audio file still works as long as
+    /// its UTI conforms to `public.audio`.
+    nonisolated static func urlLooksLikeAudio(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if acceptedExtensions.contains(ext) { return true }
+        if let type = UTType(filenameExtension: ext), type.conforms(to: .audio) { return true }
+        return false
+    }
     /// Build a session from a source audio file the user picked. The
     /// session lands in `.captured` so the caller can immediately run the
     /// processor. The source file is copied (not moved) so the user's
