@@ -252,7 +252,7 @@ struct MenuBarContent: View {
         case .idle: "Idle"
         case .capturingSelection: "Reading selection…"
         case .warmingUp: "Connecting microphone…"
-        case .recording(_, let isAssistant): isAssistant ? "Listening for instruction…" : "Listening…"
+        case .recording(_, let isAssistant, _): isAssistant ? "Listening for instruction…" : "Listening…"
         case .transcribing: "Transcribing…"
         case .formatting: "Formatting…"
         case .fixingGrammar: "Tidying grammar…"

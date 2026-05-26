@@ -11,7 +11,7 @@ enum PipelineState: Equatable {
     /// HFP. Surfaced in the HUD so the user understands they're not yet
     /// being recorded.
     case warmingUp(isAssistant: Bool)
-    case recording(level: Float, isAssistant: Bool)
+    case recording(level: Float, isAssistant: Bool, interim: String)
     case transcribing
     case formatting
     case fixingGrammar
@@ -105,6 +105,13 @@ final class Pipeline {
     private let parakeet = ParakeetServiceHolder.shared
     private let injector = TextInjector()
     private let audioInterrupter = AudioInterrupter()
+
+    /// Live streamer for the current Parakeet recording. Non-nil only while
+    /// the user is holding the hotkey *and* `realtimeInterimEnabled` is on.
+    /// When set, `finishRecording()` drains this for the final transcript
+    /// instead of running the offline `activeASR.transcribe`.
+    @ObservationIgnored private var streamingService: ParakeetStreamingService?
+    @ObservationIgnored private var interimDrainTask: Task<Void, Never>?
 
     /// Resolves the currently-selected engine to the concrete service plus
     /// the model ID it should run with. Both call sites in the pipeline
@@ -204,9 +211,12 @@ final class Pipeline {
         self.settings = settings
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
-            if case .recording(_, let isAssistant) = state {
-                state = .recording(level: level, isAssistant: isAssistant)
+            if case .recording(_, let isAssistant, let interim) = state {
+                state = .recording(level: level, isAssistant: isAssistant, interim: interim)
             }
+        }
+        recorder.onInterimSamples = { [weak self] samples, rate in
+            self?.streamingService?.feed(samples: samples, sampleRate: rate)
         }
         recorder.onReady = { [weak self] in
             self?.handleRecorderReady()
@@ -226,12 +236,61 @@ final class Pipeline {
     /// has already been told to stop; nothing to do here.
     private func handleRecorderReady() {
         guard case .warmingUp(let isAssistant) = state else { return }
-        state = .recording(level: 0, isAssistant: isAssistant)
+        state = .recording(level: 0, isAssistant: isAssistant, interim: "")
         if settings.playSounds { SoundEffects.shared.playStart() }
         // Engaged after the start sound so the chime itself isn't dipped
         // by the very ducking it announces. Mode is snapshotted inside
         // start(); the matching stop() restores whatever was applied.
         audioInterrupter.start(mode: settings.audioInterruption)
+
+        // Parakeet streaming for live HUD interim. Dictation-only — assistant
+        // flow doesn't need a visible draft and we don't want two manager
+        // instances competing for the same weights. Whisper isn't wired up
+        // in this round; the flag is forced off when the active engine is
+        // Whisper. Failure here is non-fatal — we just don't show interim.
+        if !isAssistant,
+           settings.realtimeInterimEnabled,
+           settings.transcriptionEngine == .parakeet {
+            startStreamingService()
+        }
+    }
+
+    private func startStreamingService() {
+        let modelID = settings.parakeetModelID
+        let streamer = ParakeetStreamingService()
+        streamingService = streamer
+        let updates = streamer.interimStream!
+        interimDrainTask = Task { @MainActor [weak self] in
+            for await text in updates {
+                guard let self else { return }
+                guard case .recording(let level, let isAssistant, _) = self.state else { continue }
+                self.state = .recording(level: level, isAssistant: isAssistant, interim: text)
+            }
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let models = try await ParakeetServiceHolder.shared.loadedModels(forID: modelID)
+                // The user may already have released the hotkey while the
+                // streamer was loading. Bail without starting if so.
+                guard let self, self.streamingService === streamer else { return }
+                try await streamer.start(models: models)
+            } catch {
+                // Streamer failed to start — just drop interim. The offline
+                // path is unaffected because we only switch to streaming-final
+                // once streamingService is still set at finish time AND start
+                // succeeded; if start threw, we tear down here and the
+                // pipeline falls back to the offline transcribe.
+                NSLog("[Dictator] Streaming service failed to start: \(error.localizedDescription)")
+                self?.tearDownStreaming()
+            }
+        }
+    }
+
+    private func tearDownStreaming() {
+        interimDrainTask?.cancel()
+        interimDrainTask = nil
+        streamingService?.cancel()
+        streamingService = nil
     }
 
     private func handleRecorderStartFailed(error: Error) {
@@ -246,12 +305,17 @@ final class Pipeline {
         guard case .recording = state else { return }
         let samples = recorder.stop()
         audioInterrupter.stop()
+        let streamer = streamingService
+        interimDrainTask?.cancel()
+        interimDrainTask = nil
+        streamingService = nil
         guard samples.count > 8_000 else {
+            streamer?.cancel()
             fail(note)
             return
         }
         pendingNote = note
-        Task { await runPostCapture(samples: samples) }
+        Task { await runPostCapture(samples: samples, streamer: streamer) }
     }
 
     func settingsChanged(_ new: DictatorSettings) {
@@ -331,17 +395,25 @@ final class Pipeline {
         let samples = recorder.stop()
         audioInterrupter.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
+        // Detach the streamer from the live recording. It still owns the
+        // background recognition task; runPostCapture will call finish()
+        // on it instead of running the offline transcribe.
+        let streamer = streamingService
+        interimDrainTask?.cancel()
+        interimDrainTask = nil
+        streamingService = nil
         guard samples.count > 8_000 else { // <0.5s of audio @ 16kHz
+            streamer?.cancel()
             state = .idle
             return
         }
         inFlightTask = Task { @MainActor [weak self] in
-            await self?.runPostCapture(samples: samples)
+            await self?.runPostCapture(samples: samples, streamer: streamer)
             self?.inFlightTask = nil
         }
     }
 
-    private func runPostCapture(samples: [Float]) async {
+    private func runPostCapture(samples: [Float], streamer: ParakeetStreamingService? = nil) async {
         state = .transcribing
         let raw: String
         do {
@@ -353,13 +425,27 @@ final class Pipeline {
             // ASREngine protocol) so we can revisit with a different strategy
             // — likely a runtime-detected previous segment, or a much shorter
             // hint — without re-plumbing.
-            let asr = activeASR
             let watchdog = startTranscribeWatchdog(
                 budget: Self.transcribeBudgetSeconds(audioSamples: samples.count)
             )
             defer { watchdog.cancel() }
-            raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
+            if let streamer, streamer.isReady {
+                // Streaming-active means streaming-final. The streamer has
+                // already chewed through every interim chunk; finish()
+                // drains the remaining audio and reconstructs the full
+                // transcript from accumulated tokens.
+                raw = try await streamer.finish()
+            } else {
+                // Either streaming wasn't enabled, or the streamer's
+                // async model-load hadn't completed yet when the user
+                // released the hotkey. Fall back to the offline pass —
+                // the recorder kept the full audio buffer either way.
+                streamer?.cancel()
+                let asr = activeASR
+                raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
+            }
         } catch {
+            streamer?.cancel()
             if Task.isCancelled { return }
             fail("Transcribe: \(error.localizedDescription)")
             return
@@ -948,6 +1034,7 @@ final class Pipeline {
         // Idempotent — start() only engages from .recording, so this is a
         // no-op on the .warmingUp branch but a real restore on .recording.
         audioInterrupter.stop()
+        tearDownStreaming()
         inFlightTask?.cancel()
         inFlightTask = nil
         inFlightAssistant = nil

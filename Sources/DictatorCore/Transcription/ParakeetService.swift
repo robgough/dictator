@@ -18,8 +18,19 @@ final class ParakeetService: ASREngine {
     /// True while `ensureLoaded` is running. Drives the Verify-button spinner.
     private(set) var isLoading: Bool = false
 
-    @ObservationIgnored private var models: AsrModels?
+    @ObservationIgnored private(set) var models: AsrModels?
     @ObservationIgnored private var manager: AsrManager?
+
+    /// Ensure the models are downloaded and loaded; return them so a sibling
+    /// component (e.g. the streaming service) can share the weight load.
+    func loadedModels(forID modelID: String) async throws -> AsrModels {
+        try await ensureLoaded(modelID: modelID)
+        guard let models else {
+            throw NSError(domain: "Dictator", code: 12,
+                          userInfo: [NSLocalizedDescriptionKey: "Parakeet models not loaded"])
+        }
+        return models
+    }
 
     /// Resolve a catalogue ID to the FluidAudio version enum. Catalogue IDs
     /// happen to be the same string as `AsrModelVersion.repo.folderName`,

@@ -87,53 +87,64 @@ struct HUDView: View {
                 ProgressView()
                     .controlSize(.small)
             }
-        case .recording(let level, let isAssistant):
+        case .recording(let level, let isAssistant, let interim):
             let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
-            HStack(spacing: 16) {
-                if isAssistant {
-                    Image(systemName: isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars")
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(Color.hudIndigo)
-                        .font(.system(size: 18, weight: .semibold))
-                } else {
-                    RecordingDot()
-                }
-                Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue)
-                    .frame(maxWidth: .infinity)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(isAssistant ? Color.hudIndigo : .primary)
-                    Text(isContinuation
-                         ? "Continuing the conversation"
-                         : (isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName()))
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    // Mode chip — dictation only. Modes don't apply to
-                    // Assistant Mode (separate flow, separate prompt). The
-                    // "Tab → next" suffix only renders when Tab cycling will
-                    // actually work — i.e. when Accessibility is granted so
-                    // the CGEventTap can swallow Tab before it inserts a tab
-                    // character into the focused app. Without AX we'd be
-                    // promising a feature we can't deliver.
-                    if !isAssistant {
-                        let canCycle = TextInjector.hasAccessibilityPermission()
-                        ModeChip(
-                            name: state.pipeline.currentMode.name,
-                            nextName: canCycle ? state.pipeline.nextCycleMode?.name : nil
-                        )
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 16) {
+                    if isAssistant {
+                        Image(systemName: isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Color.hudIndigo)
+                            .font(.system(size: 18, weight: .semibold))
+                    } else {
+                        RecordingDot()
                     }
-                    // Same Esc-cancel discoverability hint as the
-                    // StatusRow states. Sits below the mode chip so it
-                    // doesn't separate the chip from its subtitle.
-                    Text("Press Esc to cancel")
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 1)
+                    Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue)
+                        .frame(maxWidth: .infinity)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(isAssistant ? Color.hudIndigo : .primary)
+                        Text(isContinuation
+                             ? "Continuing the conversation"
+                             : (isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName()))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        // Mode chip — dictation only. Modes don't apply to
+                        // Assistant Mode (separate flow, separate prompt). The
+                        // "Tab → next" suffix only renders when Tab cycling will
+                        // actually work — i.e. when Accessibility is granted so
+                        // the CGEventTap can swallow Tab before it inserts a tab
+                        // character into the focused app. Without AX we'd be
+                        // promising a feature we can't deliver.
+                        if !isAssistant {
+                            let canCycle = TextInjector.hasAccessibilityPermission()
+                            ModeChip(
+                                name: state.pipeline.currentMode.name,
+                                nextName: canCycle ? state.pipeline.nextCycleMode?.name : nil
+                            )
+                        }
+                        // Same Esc-cancel discoverability hint as the
+                        // StatusRow states. Sits below the mode chip so it
+                        // doesn't separate the chip from its subtitle.
+                        Text("Press Esc to cancel")
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 1)
+                    }
+                    .frame(maxWidth: 200, alignment: .trailing)
                 }
-                .frame(maxWidth: 200, alignment: .trailing)
+                if !interim.isEmpty {
+                    Text(interim)
+                        .font(.system(size: 11, weight: .regular, design: .rounded).italic())
+                        .foregroundStyle(.secondary)
+                        .opacity(0.75)
+                        .lineLimit(2)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         case .transcribing:
             StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)

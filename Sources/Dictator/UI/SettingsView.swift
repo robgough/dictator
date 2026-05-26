@@ -2289,6 +2289,23 @@ private struct TranscriptionModelsPane: View {
             }
 
             Section {
+                Toggle("Show real-time transcription in HUD", isOn: Binding(
+                    get: { s.settings.realtimeInterimEnabled },
+                    set: { newValue in
+                        s.settings.realtimeInterimEnabled = newValue
+                        state.save()
+                    }
+                ))
+                .disabled(s.settings.transcriptionEngine != .parakeet)
+            } footer: {
+                if s.settings.transcriptionEngine == .parakeet {
+                    SectionFootnote("Streams a draft transcript into the HUD while you're holding the hotkey, so you can see whether your speech is being captured correctly. Doesn't change the final output — the cleanup passes still run on the full recording.")
+                } else {
+                    SectionFootnote("Real-time HUD transcription is only available on Parakeet. Switch the engine above to enable it.")
+                }
+            }
+
+            Section {
                 ForEach(ModelCatalog.parakeetModels) { model in
                     ModelRow(
                         name: model.displayName,

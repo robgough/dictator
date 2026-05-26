@@ -84,6 +84,14 @@ final class AudioRecorder {
     /// 0...1 RMS reported on the main actor.
     var onLevel: (@MainActor (Float) -> Void)?
 
+    /// Per-buffer mono samples at the device's native sample rate, alongside
+    /// that rate so the consumer can wrap them in an AVAudioPCMBuffer of the
+    /// correct format. Used by the Parakeet streaming path to feed FluidAudio
+    /// live during recording. Fires on the same main-actor hop as `onLevel`,
+    /// after the buffer has been appended to `rawBuffer`, so the final samples
+    /// at `stop()` always include every interim chunk too.
+    var onInterimSamples: (@MainActor ([Float], Double) -> Void)?
+
     /// Fired once the capture session is genuinely producing audio. On
     /// Bluetooth mics this can be 2–5 s after `start()` returns —
     /// callers should reflect "warming up" in their UI until then.
@@ -539,6 +547,7 @@ final class AudioRecorder {
         nativeSampleRate = sampleRate
         lastBufferTime = Date()
         onLevel?(level)
+        onInterimSamples?(mono, sampleRate)
     }
 
     // MARK: - Static helpers (off-main, no actor isolation)

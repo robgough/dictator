@@ -85,6 +85,12 @@ struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
     var parakeetModelID: String
+    /// Show a draft, two-tier transcript in the HUD while the user holds the
+    /// hotkey. Parakeet-only — runs FluidAudio's sliding-window streamer
+    /// alongside the recorder so the user sees roughly what's being captured.
+    /// Whisper doesn't have an equivalent streaming API in this version, so the
+    /// flag is ignored when Whisper is the active engine.
+    var realtimeInterimEnabled: Bool
     var llmEngine: LLMEngineKind
     /// Only meaningful when `llmEngine == .mlx`. Ignored for `.none` and `.apple`,
     /// but kept around so the user can flip back to MLX without losing their last
@@ -156,6 +162,7 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: .parakeet,
         whisperModelID: ModelCatalog.defaultWhisper.id,
         parakeetModelID: ModelCatalog.defaultParakeet.id,
+        realtimeInterimEnabled: true,
         llmEngine: .apple,
         llmModelID: ModelCatalog.defaultLLM.id,
         pasteAutomatically: true,
@@ -178,6 +185,7 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: TranscriptionEngine,
         whisperModelID: String,
         parakeetModelID: String,
+        realtimeInterimEnabled: Bool,
         llmEngine: LLMEngineKind,
         llmModelID: String,
         pasteAutomatically: Bool,
@@ -198,6 +206,7 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = transcriptionEngine
         self.whisperModelID = whisperModelID
         self.parakeetModelID = parakeetModelID
+        self.realtimeInterimEnabled = realtimeInterimEnabled
         self.llmEngine = llmEngine
         self.llmModelID = llmModelID
         self.pasteAutomatically = pasteAutomatically
@@ -226,6 +235,7 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = try c.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? d.transcriptionEngine
         self.whisperModelID     = try c.decodeIfPresent(String.self,      forKey: .whisperModelID)     ?? d.whisperModelID
         self.parakeetModelID    = try c.decodeIfPresent(String.self,      forKey: .parakeetModelID)    ?? d.parakeetModelID
+        self.realtimeInterimEnabled = try c.decodeIfPresent(Bool.self,    forKey: .realtimeInterimEnabled) ?? d.realtimeInterimEnabled
         let decodedLLMID        = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
         self.llmModelID         = decodedLLMID == "none" ? d.llmModelID : decodedLLMID
         // Migration: pre-v3 installs only had `llmModelID`, with a "none" sentinel
@@ -904,6 +914,7 @@ struct DictatorSettings: Codable, Equatable {
     /// below partition this set for the two-file layout.
     private enum CodingKeys: String, CodingKey {
         case transcriptionEngine, whisperModelID, parakeetModelID
+        case realtimeInterimEnabled
         case llmEngine, llmModelID
         case pasteAutomatically, playSounds
         case audioInterruption
@@ -950,6 +961,7 @@ struct DictatorSettings: Codable, Equatable {
         "transcriptionEngine",
         "whisperModelID",
         "parakeetModelID",
+        "realtimeInterimEnabled",
         "llmEngine",
         "llmModelID",
         "preloadModelsOnLaunch",
