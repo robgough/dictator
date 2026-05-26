@@ -29,34 +29,103 @@ struct KeyboardRootView: View {
     /// Non-nil while a keyboard-driven recording / transcription is
     /// in flight. Drives the in-flight UI.
     let hostState: KeyboardBridge.HostState?
-    /// Optional model-readiness hint published by the host. Drives a
-    /// small chip above the primary buttons so the user can gauge
-    /// how long the next dictation will take before tapping.
-    let modelReadiness: KeyboardBridge.ModelReadiness?
+    /// True when the system clipboard has a string to paste. Drives
+    /// the always-on Paste pill's enabled state.
+    let canPaste: Bool
+    /// Text the keyboard renders in the preview pill alongside
+    /// Paste. Sourced from the host's last-dictation snapshot via
+    /// the App Group; `nil` when the system clipboard has been
+    /// overwritten by another app since the host wrote (or the host
+    /// hasn't transcribed yet on this device). We never read
+    /// `UIPasteboard.general.string` for this — that would trip
+    /// iOS's "Pasted from X" toast / permission prompt.
+    let pastePreview: String?
+    /// Tap action for the always-on Paste pill. Reads from
+    /// `UIPasteboard.general` and inserts via the text document
+    /// proxy — see `KeyboardViewController.pasteFromClipboard`.
+    let onPaste: () -> Void
+
+    /// True while the "copy text first" hint is on screen. Set when
+    /// the user taps a greyed-out Assist button; auto-clears after a
+    /// few seconds via `hintHideTask`, and also clears the moment
+    /// `canAssist` flips true (a fresh copy made the prompt moot).
+    @State private var showAssistHint = false
+    @State private var hintHideTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 12) {
+            // Always-on Paste pill above whatever primary content is
+            // showing. Enabled only when the system clipboard has a
+            // string; tap reads it and inserts via the text document
+            // proxy.
+            pasteChip
+
             if let state = hostState {
                 inFlightContent(state)
+            } else if showAssistHint && !canAssist {
+                // Hint takes over the same slot as Dictate / Assist —
+                // a clean swap at matched height rather than pushing
+                // the secondary row off the bottom of the keyboard.
+                // Auto-reverts after the hide task fires.
+                assistHintBanner
             } else {
                 idleContent
             }
+
             secondaryRow
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
         .background(Color(.secondarySystemBackground))
+        .animation(.easeInOut(duration: 0.2), value: showAssistHint)
+        // Once the user copies something the gate opens and the
+        // hint becomes redundant — clear it (and cancel any pending
+        // auto-hide) so it doesn't linger while Assist is live.
+        .onChange(of: canAssist) { _, newValue in
+            if newValue {
+                hintHideTask?.cancel()
+                hintHideTask = nil
+                showAssistHint = false
+            }
+        }
+    }
+
+    /// Replacement for the Dictate / Assist row while the user has
+    /// tapped the disabled "Copy first" button. Same height (56pt)
+    /// as the buttons it replaces so the rest of the keyboard layout
+    /// doesn't reflow.
+    private var assistHintBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.on.clipboard")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Copy text first")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Highlight and copy in your app, then tap Assist.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.tertiarySystemBackground))
+        )
+        .transition(.opacity)
     }
 
     // MARK: - Idle (no in-flight session)
 
     @ViewBuilder
     private var idleContent: some View {
-        if let readiness = modelReadiness {
-            modelReadinessChip(readiness)
-        }
-
         HStack(spacing: 24) {
             primaryButton(
                 tint: .red,
@@ -65,68 +134,45 @@ struct KeyboardRootView: View {
                 action: onMicPress,
                 enabled: true
             )
-            primaryButton(
-                tint: .purple,
-                icon: "wand.and.stars",
-                label: "Assist",
-                action: onAssistPress,
-                enabled: canAssist
-            )
-        }
-
-        Text("Tap a button — Dictator opens, you talk, the result lands here when you come back.")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 24)
-    }
-
-    /// Small chip above the primary buttons mirroring the in-app
-    /// model status pill — same terminology ("Model loaded" vs
-    /// "Model ready") and same dot colours (green / secondary) so
-    /// the two surfaces read as one. The keyboard adds a red "not
-    /// downloaded" state since the user might tap into a field
-    /// before they've ever opened the host to download the model;
-    /// the in-app pill doesn't need this because the host swaps the
-    /// whole UI to a download CTA in that case.
-    ///
-    /// We trust the bridge's `loaded` flag. The host writes
-    /// `loaded: false` on every cold launch and `loaded: true` once
-    /// prewarm or first transcribe completes. The keyboard re-reads
-    /// the bridge on every lifecycle event, so any stale claim
-    /// self-corrects on the next host write.
-    @ViewBuilder
-    private func modelReadinessChip(_ readiness: KeyboardBridge.ModelReadiness) -> some View {
-        let (color, text): (Color, String) = {
-            switch readiness.diskStatus {
-            case .notDownloaded:
-                return (.red, "Model not downloaded")
-            case .downloaded:
-                // Three visually-distinct states: green for in-memory,
-                // orange for on-disk-but-needs-loading, red for not
-                // present. "Unloaded" reads more clearly than the
-                // earlier "ready" — readiness implied the model could
-                // dictate immediately, which it can't without warmup.
-                if readiness.loaded {
-                    return (.green, "Model loaded")
+            // Assist reads the system clipboard for the text to
+            // transform (selectedText is unreliable across iOS
+            // apps — see KeyboardViewController). When there's
+            // nothing fresh to act on, the button looks disabled
+            // (greyed, "Copy first" label) but stays tappable so we
+            // can pop a hint explaining what to do — a true
+            // SwiftUI .disabled() button can't fire any action,
+            // which leaves the user prodding a dead control.
+            Button {
+                if canAssist {
+                    onAssistPress()
                 } else {
-                    return (.orange, "Model unloaded")
+                    showAssistHint = true
+                    hintHideTask?.cancel()
+                    hintHideTask = Task {
+                        try? await Task.sleep(for: .seconds(3))
+                        guard !Task.isCancelled else { return }
+                        showAssistHint = false
+                    }
                 }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: canAssist ? "wand.and.stars" : "doc.on.clipboard")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(canAssist ? "Assist" : "Copy first")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.purple)
+                )
+                .opacity(canAssist ? 1 : 0.4)
             }
-        }()
-        HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
-            Text(text)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(
-            Capsule().fill(Color(.tertiarySystemBackground))
-        )
     }
 
     // MARK: - In flight (host is recording / transcribing)
@@ -180,10 +226,86 @@ struct KeyboardRootView: View {
             .foregroundStyle(.secondary)
     }
 
+    // MARK: - Paste row (always-on shortcut for the system clipboard)
+
+    /// Paste button on the left + preview pill on the right.
+    /// Reads `UIPasteboard.general.string` and inserts via the text
+    /// document proxy on tap; greys out when the clipboard is empty.
+    /// The preview only shows when we can verify the clipboard still
+    /// holds the host's last-dictation snapshot (we compare
+    /// changeCount through the App Group) — that way "Hello world"
+    /// doesn't keep advertising itself after the user has copied
+    /// something unrelated from another app.
+    @ViewBuilder
+    private var pasteChip: some View {
+        // Match the Dictate/Assist tiles' rounded-rectangle shape
+        // (cornerRadius 14) rather than a fully-rounded capsule so
+        // the whole keyboard reads as one family. Same goes for the
+        // preview pill on the right.
+        HStack(spacing: 8) {
+            Button(action: onPaste) {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard.fill")
+                        .font(.caption.weight(.semibold))
+                    Text(canPaste ? "Paste" : "Nothing to paste")
+                        .font(.footnote.weight(.semibold))
+                }
+                .foregroundStyle(canPaste ? .white : .secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(canPaste ? Color.accentColor : Color(.tertiarySystemBackground))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPaste)
+            .opacity(canPaste ? 1 : 0.6)
+
+            if let preview = pastePreview {
+                HStack(spacing: 6) {
+                    Text(previewSnippet(preview))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text("· \(wordCount(preview)) words")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(.tertiarySystemBackground))
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Single-line snippet for the preview pill — collapses
+    /// whitespace and trims so a multi-paragraph transcript still
+    /// reads cleanly at one line width.
+    private func previewSnippet(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    }
+
     // MARK: - Secondary row
 
     @ViewBuilder
     private var secondaryRow: some View {
+        // No internal horizontal padding — the parent VStack already
+        // applies 16pt, and stacking a second pass made this row sit
+        // visibly more inset than the paste / idle / in-flight rows
+        // above it.
         HStack(spacing: 10) {
             secondaryButton(
                 icon: "arrow.uturn.backward",
@@ -200,7 +322,6 @@ struct KeyboardRootView: View {
             )
             backspaceButton
         }
-        .padding(.horizontal, 12)
     }
 
     /// Wide space-bar tile that fills the gap between Undo and
@@ -269,18 +390,18 @@ struct KeyboardRootView: View {
         enabled: Bool
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.white)
                 Text(label)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 110)
+            .frame(height: 56)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(tint)
             )
         }

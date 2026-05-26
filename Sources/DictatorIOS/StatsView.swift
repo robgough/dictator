@@ -103,15 +103,13 @@ private struct StatsCard: View {
     let wordsOut: Int
     let wordsOutLabel: String
 
-    private static let formatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.groupingSeparator = ","
-        return f
-    }()
-
+    /// Compact-name formatting (`1.2K`, `12K`, `1.2M`) to match the
+    /// LLM card — heavy users push word totals into the millions and
+    /// comma-separated digits were straining the card width. The
+    /// granularity loss is acceptable; the stats screen is a glanceable
+    /// "how much have I used this" summary, not a precise audit.
     private static func formatted(_ value: Int) -> String {
-        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+        value.formatted(.number.notation(.compactName))
     }
 
     var body: some View {
@@ -130,6 +128,8 @@ private struct StatsCard: View {
                 Text(Self.formatted(primaryValue))
                     .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text(primaryLabel)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -237,15 +237,13 @@ private struct LLMTokenColumn: View {
     let tokensIn: Int
     let tokensOut: Int
 
-    private static let formatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.groupingSeparator = ","
-        return f
-    }()
-
+    /// Compact-name formatter: `999`, `1.2K`, `12K`, `1.2M`, `12M`,
+    /// `1.2B`. LLM token totals run into the millions for daily users
+    /// and the comma-separated layout was wrapping / overflowing the
+    /// two-column card — the user only needs a rough "how heavy am I
+    /// leaning on this" number, not seven digits of precision.
     private static func formatted(_ value: Int) -> String {
-        formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+        value.formatted(.number.notation(.compactName))
     }
 
     var body: some View {
@@ -260,6 +258,8 @@ private struct LLMTokenColumn: View {
             Text(Self.formatted(tokensIn + tokensOut))
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             HStack(spacing: 12) {
                 StatLine(value: Self.formatted(tokensIn), label: "in")
                 StatLine(value: Self.formatted(tokensOut), label: "out")

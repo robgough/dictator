@@ -71,26 +71,58 @@ final class RecordingViewModel {
     /// around the active button only.
     private(set) var recordingMode: RecordingMode = .dictation
 
-    /// Set when the host has been launched by the keyboard extension
-    /// for a single-shot dictation. The next successful transcript
-    /// is written to `KeyboardBridge` so the keyboard can insert it
-    /// when the user returns to the original app, then cleared.
-    /// `nil` for normal in-app use.
-    var activeKeyboardSession: UUID?
+    /// Set when the host has been launched by the keyboard extension.
+    /// True only while a recording that we started *for* the user
+    /// (not from a button press) is in flight. Currently set when
+    /// arriving via the keyboard URL launch — the user already
+    /// pressed in the keyboard, so a hold-to-talk affordance on
+    /// arrival would be wrong; tap-to-stop fits. Cleared as soon as
+    /// that recording ends; any subsequent presses inside the app
+    /// use the regular hold gesture.
+    private(set) var autoStartedRecordingActive: Bool = false
 
-    /// True when we're driving a keyboard-extension flow. Switches
-    /// the UI to a tap-to-stop button and a "switch back to your app"
-    /// affordance instead of the press-and-hold + Copy pairing.
-    var isKeyboardMode: Bool { activeKeyboardSession != nil }
+    /// Wall-clock seconds between `.transcribing` and `.ready` for the
+    /// most recent successful run. Surfaced in the status pill's idle
+    /// state ("Idle · 1.2s") so the user can see how fast the round-
+    /// trip was. Cleared on `clear()` and on the start of a fresh
+    /// recording so a stale duration doesn't linger past relevance;
+    /// also cleared on a failed run (no successful transcription, no
+    /// duration to advertise).
+    private(set) var lastTranscriptionDuration: TimeInterval?
+
+    /// Monotonic counter incremented on each press. The UI uses it as
+    /// an `.id(...)` value on the waveform view so a new recording
+    /// gets a fresh component instance — without this the waveform's
+    /// internal `bars` @State would carry over from the previous
+    /// recording, and the leftover bars would flash visible the
+    /// instant the new recording started.
+    private(set) var recordingStartCount: Int = 0
+
+    /// Timestamp captured at `.transcribing` entry — paired with the
+    /// `.ready` transition to compute `lastTranscriptionDuration`.
+    private var transcribingStartedAt: Date?
+
     /// User-editable. Bound from `TextEditor` so the user can tweak the
-    /// transcribed result before copying. The view model only writes it on
-    /// transcribe-complete and on press-to-start (clearing the previous
-    /// result); everything else is the user typing.
+    /// transcribed result before copying. The view model writes it on
+    /// transcribe-complete (cursor-aware merge — see `mergeTranscribed`)
+    /// and on `clear()`; everything else is the user typing.
     var transcript: String = ""
+    /// Live caret / selection in the transcript editor. Bound back
+    /// from the UIKit-backed `EditableTranscript` view so a transcribed
+    /// chunk can land at the user's cursor (or replace their
+    /// highlighted range) rather than always appending at the end.
+    /// `nil` while the field has never been focused; the merge helper
+    /// falls back to append.
+    ///
+    /// `NSRange` (not `Range<String.Index>`) because UITextView speaks
+    /// UTF-16 offsets natively — round-tripping through String.Index on
+    /// every selection change would be both slower and more bug-prone
+    /// at grapheme boundaries.
+    var transcriptSelection: NSRange?
     /// One-step undo target. Snapshotted at the start of each
-    /// dictation or assist press — i.e. just before a programmatic
-    /// overwrite of `transcript`. The undo button toggles current /
-    /// previous, so a second tap acts as redo.
+    /// dictation / assist press AND on `clear()` — i.e. just before any
+    /// programmatic mutation of `transcript`. The undo button toggles
+    /// current / previous, so a second tap acts as redo.
     private(set) var previousTranscript: String?
     private(set) var permission: Permission
 
@@ -139,6 +171,16 @@ final class RecordingViewModel {
     /// longer than the keyboard's staleness window would falsely
     /// register as "host crashed".
     private var heartbeatTask: Task<Void, Never>?
+
+    /// Periodic re-write of the host-active flag in `KeyboardBridge`
+    /// while the app is foregrounded. The keyboard extension's
+    /// "don't render inside Dictator" check looks at the flag's
+    /// freshness (60s window), so without this heartbeat the flag
+    /// would age out for a user sitting in Dictator without
+    /// backgrounding — and Dictator's keyboard would start showing
+    /// up inside Dictator again. 30s interval keeps it well within
+    /// the freshness budget. Cancelled when the app backgrounds.
+    private var hostActiveHeartbeatTask: Task<Void, Never>?
 
     /// Throttled timestamp of the last host-state write — keeps the
     /// `onLevel` callback from hammering UserDefaults at the audio
@@ -236,17 +278,32 @@ final class RecordingViewModel {
     /// the load latency overlaps with the user actually speaking, so by
     /// the time they release the model is usually ready and `transcribe`
     /// is instant.
-    func startRecording() {
+    func startRecording(snapshotForUndo: Bool = true) {
         guard permission == .granted else { return }
         guard case .downloaded = modelDiskStatus else { return }
         switch status {
         case .idle, .ready, .error:
             recordingMode = .dictation
-            // Snapshot the current transcript BEFORE clearing, so the
-            // undo button can restore what the user had before they
-            // started this dictation cycle.
-            previousTranscript = transcript
-            transcript = ""
+            // Fresh waveform on every press; bump the counter the UI
+            // keys its `.id(...)` off so SwiftUI rebuilds a clean
+            // component instead of carrying the previous run's bars.
+            recordingStartCount &+= 1
+            // Clear the prior duration so the pill goes from
+            // "Idle · 1.2s" to plain "Idle" (then bars) as soon as
+            // the new run begins.
+            lastTranscriptionDuration = nil
+            // Snapshot the current transcript BEFORE the merge so undo
+            // can restore what the user had before they started this
+            // dictation cycle. We *don't* clear — multi-shot dictation
+            // appends (or replaces a selection) via `mergeTranscribed`.
+            // Callers that have already staged a snapshot themselves
+            // (e.g. the keyboard-record arrival path, which pre-clears
+            // the transcript and wants undo to recover the pre-clear
+            // text) pass `snapshotForUndo: false` so we don't clobber
+            // their setup.
+            if snapshotForUndo {
+                previousTranscript = transcript
+            }
             status = .warmingUp
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
@@ -276,6 +333,8 @@ final class RecordingViewModel {
         switch status {
         case .idle, .ready, .error:
             recordingMode = .assist
+            recordingStartCount &+= 1
+            lastTranscriptionDuration = nil
             // Snapshot the transcript so undo can restore it after
             // the transformation lands. We don't clear here — assist
             // transforms the existing content rather than replacing
@@ -309,11 +368,19 @@ final class RecordingViewModel {
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
+            // Empty-samples early-return used to skip the keyboard
+            // teardown, which left the keyboard side stuck on its
+            // "recording" UI until the 30s freshness window expired.
+            // Always clean up the host-state heartbeat and auto-record
+            // flag on the way out.
             status = .idle
             recordingMode = .dictation
+            autoStartedRecordingActive = false
+            tearDownKeyboardHostState()
             return
         }
         status = .transcribing
+        transcribingStartedAt = Date()
         let originalText = transcript
         do {
             let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
@@ -332,8 +399,14 @@ final class RecordingViewModel {
             let instruction = SpokenCues.apply(to: rawInstruction, options: DictatorIOSSettings.cueOptions)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !instruction.isEmpty else {
+                // Same teardown as the success path — the host wrote
+                // "transcribing" to the bridge above, the keyboard
+                // needs to see that we're no longer in flight.
+                transcribingStartedAt = nil
                 status = .ready
                 recordingMode = .dictation
+                autoStartedRecordingActive = false
+                tearDownKeyboardHostState()
                 return
             }
             let result = try await AppleFoundationAssist.transform(
@@ -341,6 +414,13 @@ final class RecordingViewModel {
                 instruction: instruction
             )
             transcript = result
+            // Invalidate the stale TextSelection — its indices were
+            // sampled against `originalText`, and the wholesale swap
+            // makes them meaningless.
+            transcriptSelection = nil
+            // See stopRecording — auto-copy keeps the keyboard's
+            // Paste pill primed without needing an explicit Send.
+            publishTranscriptToClipboard()
             DictationHistoryStore.shared.append(result, raw: originalText, mode: .assist)
             UsageStatsStore.shared.record(
                 mode: .assistant,
@@ -348,22 +428,16 @@ final class RecordingViewModel {
                 wordsOut: UsageStatsStore.wordCount(result)
             )
 
-            // Keyboard-driven assist: write the result back with
-            // replacePrecedingCharacters set to the original
-            // surrounding text length so the keyboard deletes the
-            // old text and inserts the transformed version in
-            // place. Skipped when this wasn't a keyboard flow.
-            if let session = activeKeyboardSession {
-                KeyboardBridge.writeResult(.init(
-                    session: session,
-                    text: result,
-                    replacePrecedingCharacters: originalText.count,
-                    createdAt: Date()
-                ))
-                activeKeyboardSession = nil
-            }
+            // Per-recording teardown only — the keyboard session
+            // stays alive across multi-shot edits until the user
+            // explicitly hits Send.
+            autoStartedRecordingActive = false
             tearDownKeyboardHostState()
 
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
@@ -371,8 +445,12 @@ final class RecordingViewModel {
             // an instruction expecting a transformation; reverting to
             // raw would lose their intent and confuse the rollback.
             transcript = originalText
+            transcriptSelection = nil
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
+            autoStartedRecordingActive = false
             tearDownKeyboardHostState()
         }
         recordingMode = .dictation
@@ -552,11 +630,13 @@ final class RecordingViewModel {
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
+            autoStartedRecordingActive = false
             tearDownKeyboardHostState()
             return
         }
 
         status = .transcribing
+        transcribingStartedAt = Date()
         publishHostState(phase: .transcribing, level: 0, force: true)
 
         do {
@@ -597,11 +677,19 @@ final class RecordingViewModel {
                 }
             }
 
-            transcript = processed
+            mergeTranscribed(processed)
+            // Auto-copy the (possibly-built-up) transcript and stash
+            // a preview snapshot so the keyboard's Paste pill is
+            // primed without needing an explicit Send. See
+            // `publishTranscriptToClipboard`.
+            publishTranscriptToClipboard()
             // Keep the raw Parakeet text alongside the polished delivery
             // so the history detail can show "what I actually heard"
             // when the user wants to recover something the cleanup
-            // pass smoothed over.
+            // pass smoothed over. History records the chunk itself —
+            // not the full transcript — so each dictation press lands
+            // as its own entry even when the transcript field is
+            // building up across multiple presses.
             DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
             UsageStatsStore.shared.record(
                 mode: .dictation,
@@ -609,47 +697,43 @@ final class RecordingViewModel {
                 wordsOut: UsageStatsStore.wordCount(processed)
             )
 
-            // If this dictation was triggered from the keyboard
-            // extension, hand the result back via the App Group so
-            // the keyboard can insert it when the user returns to
-            // the original app. Cleared after writing so a manual
-            // re-record can't accidentally re-fire the same session.
-            if let session = activeKeyboardSession {
-                KeyboardBridge.writeResult(.init(
-                    session: session,
-                    text: processed,
-                    replacePrecedingCharacters: 0,
-                    createdAt: Date()
-                ))
-                activeKeyboardSession = nil
-            }
-            // Clear the in-flight heartbeat + stop watcher whether or
-            // not this run was keyboard-driven — cheap no-op for the
-            // non-keyboard path.
+            // Tear down per-recording heartbeat / stop-watcher. The
+            // keyboard session itself stays alive so the user can
+            // append more dictations or edit before hitting Send.
+            // Cheap no-op for the non-keyboard path.
+            autoStartedRecordingActive = false
             tearDownKeyboardHostState()
 
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
+            autoStartedRecordingActive = false
             tearDownKeyboardHostState()
         }
     }
 
     /// Publish a host-state heartbeat to the App Group container so
     /// the Dictator keyboard can render a recording / transcribing
-    /// UI while it's visible. No-op when there's no keyboard session
-    /// driving the recording. Level writes are throttled to ~10 Hz;
-    /// phase changes always go through immediately so transitions
-    /// like .recording -> .transcribing land without lag.
+    /// UI while it's visible. Fires for any recording (not just
+    /// keyboard-initiated ones) — in-app dictations also publish, but
+    /// the keyboard auto-dismisses inside Dictator so no one's
+    /// watching. Level writes are throttled to ~10 Hz; phase changes
+    /// always go through immediately so transitions like
+    /// .recording -> .transcribing land without lag.
     private func publishHostState(phase: KeyboardBridge.HostState.Phase, level: Float, force: Bool = false) {
-        guard let session = activeKeyboardSession else { return }
         let now = Date()
         if !force, now.timeIntervalSince(lastHostStateWrite) < 0.1 { return }
         lastHostStateWrite = now
         KeyboardBridge.writeHostState(.init(
-            session: session,
+            session: UUID(),
             phase: phase,
             level: level,
             updatedAt: now
@@ -657,18 +741,18 @@ final class RecordingViewModel {
     }
 
     /// Kick off the background poll that watches for a Stop request
-    /// from the keyboard during a keyboard-driven recording. Cheap —
-    /// just a UserDefaults read every 250 ms. Cancels itself when
-    /// `activeKeyboardSession` clears.
+    /// from the keyboard. Cheap — a UserDefaults read every 250 ms.
+    /// Runs for the duration of any recording; the keyboard only
+    /// sends stop requests when its in-flight UI is visible, so the
+    /// poll is a no-op for in-app recordings.
     private func startStopWatcher() {
         stopWatcherTask?.cancel()
-        guard let session = activeKeyboardSession else { return }
         stopWatcherTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let self else { return }
-                guard self.activeKeyboardSession == session else { return }
-                if KeyboardBridge.consumeStopRequest(matching: session) {
+                guard self.status.isCapturing else { return }
+                if KeyboardBridge.consumeAnyStopRequest() {
                     // Dispatch to the correct stop method based on
                     // the current recording mode — assist needs to
                     // run the transform, dictation just transcribes.
@@ -687,19 +771,17 @@ final class RecordingViewModel {
     /// so the keyboard's "is this still alive?" check sees a fresh
     /// timestamp during long transcriptions. Without this the
     /// keyboard would falsely treat any transcription past its
-    /// staleness threshold as a dead host. Lightweight — one
-    /// UserDefaults read + one write per tick.
+    /// staleness threshold as a dead host.
     private func startHeartbeat() {
         heartbeatTask?.cancel()
-        guard let session = activeKeyboardSession else { return }
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 guard let self else { return }
-                guard self.activeKeyboardSession == session else { return }
-                // Just bump updatedAt. Phase + level stay as last
-                // written — onLevel re-writes those during recording.
-                if let current = KeyboardBridge.readHostState(), current.session == session {
+                guard self.status.isCapturing || {
+                    if case .transcribing = self.status { return true } else { return false }
+                }() else { return }
+                if let current = KeyboardBridge.readHostState() {
                     var fresh = current
                     fresh.updatedAt = Date()
                     KeyboardBridge.writeHostState(fresh)
@@ -708,8 +790,9 @@ final class RecordingViewModel {
         }
     }
 
-    /// Cancel the poll + heartbeat tasks and clear the state
-    /// heartbeat the keyboard might be reading.
+    /// Cancel the poll + heartbeat tasks and clear the state slot
+    /// the keyboard reads. Called from recording-end paths so the
+    /// keyboard's in-flight UI retracts promptly.
     private func tearDownKeyboardHostState() {
         stopWatcherTask?.cancel()
         stopWatcherTask = nil
@@ -718,10 +801,8 @@ final class RecordingViewModel {
         KeyboardBridge.clearHostState()
     }
 
-    /// Abort a recording mid-flight without transcribing or sending
-    /// anything back. Used by the keyboard-mode banner's X button —
-    /// the user wants out, not a stale transcript landing later.
-    /// Safe to call when nothing's recording (no-op).
+    /// Abort a recording mid-flight without transcribing. Safe to
+    /// call when nothing's recording (no-op on status).
     func cancelRecording() {
         if status.isCapturing {
             _ = recorder.stop()
@@ -729,8 +810,69 @@ final class RecordingViewModel {
             recordingMode = .dictation
             resultFeedback.notificationOccurred(.warning)
         }
-        activeKeyboardSession = nil
+        autoStartedRecordingActive = false
         tearDownKeyboardHostState()
+    }
+
+    /// Entry point called when the host is launched by the keyboard
+    /// extension URL handler. Pre-populates the transcript (clears it
+    /// for `.record`, takes the captured surrounding text for
+    /// `.assist`) and auto-starts the recording — the user already
+    /// pressed in the keyboard, so making them tap again here would
+    /// feel broken. `autoStartedRecordingActive` is set so the UI
+    /// picks the tap-to-stop button instead of hold-to-talk; cleared
+    /// at the end of this recording, so any subsequent presses use
+    /// the regular hold gesture.
+    func beginKeyboardRecording(mode: KeyboardBridge.Mode, surroundingText: String?) {
+        autoStartedRecordingActive = true
+        switch mode {
+        case .record:
+            // Arriving from the keyboard's Dictate tile means a
+            // fresh thought to insert in another app — the user
+            // wouldn't expect their last in-app transcript to still
+            // be sitting there to append to. Snapshot first so undo
+            // recovers the pre-clear text, then pass
+            // `snapshotForUndo: false` so startRecording doesn't
+            // replace the snapshot with the now-empty value.
+            if !transcript.isEmpty {
+                previousTranscript = transcript
+                transcript = ""
+                transcriptSelection = nil
+            }
+            startRecording(snapshotForUndo: false)
+        case .assist:
+            // The keyboard's `textDocumentProxy.selectedText` is
+            // unreliable across iOS apps (Radar FB7789012 — silently
+            // truncates the selection to first+last sentence in
+            // WebView-backed fields), so the keyboard now hands us
+            // nothing and we source the text from the system
+            // clipboard instead. The user copies their target text
+            // before tapping Assist on the keyboard; we read it
+            // here. iOS will fire the "Pasted from X" toast on the
+            // read, which is the expected price of any
+            // pasteboard-string access since iOS 16.
+            transcript = UIPasteboard.general.string ?? ""
+            // Pre-select the captured text so the user can
+            // immediately re-dictate to replace it (the cursor-aware
+            // merge picks the selection up as "replace this range").
+            // Assist always transforms the full transcript regardless
+            // of selection, so this is purely a UX cue — the mic
+            // flips to its replace-mode icon, priming the
+            // "actually, scrap this, dictate fresh" path.
+            let length = (transcript as NSString).length
+            transcriptSelection = length > 0
+                ? NSRange(location: 0, length: length)
+                : nil
+            // If the clipboard was empty we have nothing to assist
+            // on — skip the auto-start (startAssistRecording would
+            // also no-op on empty transcript, but bailing here keeps
+            // the autoStartedRecordingActive flag from latching).
+            if transcript.isEmpty {
+                autoStartedRecordingActive = false
+            } else {
+                startAssistRecording()
+            }
+        }
     }
 
     /// Drive the bridge's foreground tracking from a scenePhase
@@ -738,13 +880,36 @@ final class RecordingViewModel {
     /// auto-dismiss inside the host's own app, and re-publishes the
     /// readiness snapshot on a transition to active so the keyboard's
     /// chip reflects the latest in-process state (which the keyboard
-    /// reads on appear). No timer — the bridge is updated at the
-    /// natural lifecycle points where the readiness can have changed.
+    /// reads on appear).
     func applyForegroundState(_ active: Bool) {
         KeyboardBridge.writeHostActive(active)
         if active {
+            // Keep the host-active flag fresh while the user is
+            // sitting in Dictator — without the heartbeat the flag's
+            // 60s freshness window expires and our keyboard starts
+            // popping up over Dictator's own UI again.
+            startHostActiveHeartbeat()
             publishModelReadiness()
+        } else {
+            stopHostActiveHeartbeat()
         }
+    }
+
+    private func startHostActiveHeartbeat() {
+        hostActiveHeartbeatTask?.cancel()
+        hostActiveHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                guard self != nil else { return }
+                KeyboardBridge.writeHostActive(true)
+            }
+        }
+    }
+
+    private func stopHostActiveHeartbeat() {
+        hostActiveHeartbeatTask?.cancel()
+        hostActiveHeartbeatTask = nil
     }
 
     /// Publish the model's disk + memory status to the App Group so
@@ -774,6 +939,10 @@ final class RecordingViewModel {
         return prev != transcript
     }
 
+    /// True when there's text to wipe. Drives the floating clear
+    /// button's visibility on the transcript card.
+    var canClear: Bool { !transcript.isEmpty }
+
     /// Toggle current ↔ previous transcript. First tap behaves as
     /// undo (restore the snapshot taken at the start of the last
     /// recording); a second tap returns the post-recording text,
@@ -784,15 +953,169 @@ final class RecordingViewModel {
         let current = transcript
         transcript = prev
         previousTranscript = current
+        // Selection indices from the prior string are invalid against
+        // the swapped-in text; let TextEditor settle to a fresh caret
+        // at the end rather than carry a stale range that could trap.
+        transcriptSelection = nil
         pressFeedback.impactOccurred()
     }
 
-    /// One-tap clipboard copy. The mainstream "navigate to your destination
-    /// then long-press → paste" flow is the prototype's substitute for the
-    /// (not-yet-built) keyboard extension.
+    /// Wipe the transcript. Snapshots the current text into
+    /// `previousTranscript` first so a misfired clear is one tap of
+    /// undo away from recovery. Selection is invalidated. No-op when
+    /// already empty.
+    func clear() {
+        guard !transcript.isEmpty else { return }
+        previousTranscript = transcript
+        transcript = ""
+        transcriptSelection = nil
+        // The duration is a stat about the now-wiped transcript;
+        // hanging onto it would mean "Idle · 1.2s" reading as if there
+        // was still something to show for it.
+        lastTranscriptionDuration = nil
+        pressFeedback.impactOccurred()
+    }
+
+    /// Merge a freshly transcribed chunk into the transcript using the
+    /// current selection as the insertion site:
+    ///   - Non-empty selection → replace the selected range
+    ///   - Empty selection (caret) → insert at the caret with smart
+    ///     space padding (skipped when the neighbouring char is
+    ///     already whitespace / a closing punctuation mark)
+    ///   - No selection at all (field never focused) → append at the
+    ///     end, with a single-space separator (or newline after a
+    ///     sentence terminator)
+    /// Empty / whitespace-only chunks are dropped — there's nothing
+    /// meaningful to add and we don't want a stray space appearing.
+    private func mergeTranscribed(_ chunk: String) {
+        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let ns = transcript as NSString
+        let total = ns.length
+
+        // Empty transcript → take the chunk verbatim, place the caret
+        // at the end so a subsequent edit lands naturally.
+        guard total > 0 else {
+            transcript = trimmed
+            transcriptSelection = NSRange(location: (trimmed as NSString).length, length: 0)
+            return
+        }
+
+        // Cursor / selection path — guard against a stale range that
+        // doesn't fit the current text (e.g. after a manual edit the
+        // view model didn't observe yet).
+        if let sel = transcriptSelection,
+           sel.location >= 0,
+           sel.location + sel.length <= total {
+            let lead: String
+            let trail: String
+            if sel.length == 0 {
+                // Inserting at a caret — pad to avoid concatenation
+                // when the neighbouring character isn't already a
+                // space or a closing punctuation glyph.
+                lead = needsLeadingSpace(in: ns, before: sel.location) ? " " : ""
+                trail = needsTrailingSpace(in: ns, after: sel.location + sel.length) ? " " : ""
+            } else {
+                // Replacing the user's explicit selection — their
+                // boundaries are intentional, padding would corrupt
+                // them. "Helloworld" with "world" selected and
+                // dictation "people" should yield "Hellopeople", not
+                // "Hello people".
+                lead = ""
+                trail = ""
+            }
+            let insertion = lead + trimmed + trail
+            transcript = ns.replacingCharacters(in: sel, with: insertion)
+            let leadLength = (lead as NSString).length
+            let trimmedLength = (trimmed as NSString).length
+            let insertedLength = (insertion as NSString).length
+
+            if sel.length > 0 {
+                // Replaced a selection — keep the new content
+                // selected (sans any padding, which is empty in this
+                // branch) so the user can immediately re-dictate to
+                // try a different replacement.
+                transcriptSelection = NSRange(
+                    location: sel.location + leadLength,
+                    length: trimmedLength
+                )
+            } else {
+                // Pure caret insertion — drop the caret at the end
+                // of the inserted text so the user can continue
+                // dictating to extend it.
+                transcriptSelection = NSRange(
+                    location: sel.location + insertedLength,
+                    length: 0
+                )
+            }
+            return
+        }
+
+        // Fallback: append at end with a sentence-aware separator.
+        let separator = endOfTranscriptSeparator()
+        transcript += separator + trimmed
+        let newLength = (transcript as NSString).length
+        transcriptSelection = NSRange(location: newLength, length: 0)
+    }
+
+    /// True when inserting before `loc` would butt up against a
+    /// non-space character. The closing-punctuation set is *not*
+    /// included here — they live on the trailing side.
+    private func needsLeadingSpace(in ns: NSString, before loc: Int) -> Bool {
+        guard loc > 0, loc <= ns.length else { return false }
+        let ch = ns.substring(with: NSRange(location: loc - 1, length: 1))
+        guard let c = ch.first else { return false }
+        return !c.isWhitespace && !c.isNewline
+    }
+
+    /// True when inserting after `loc` would butt up against a
+    /// non-space character and that character isn't a closing
+    /// punctuation glyph (we don't want " ." or " ,").
+    private func needsTrailingSpace(in ns: NSString, after loc: Int) -> Bool {
+        guard loc >= 0, loc < ns.length else { return false }
+        let ch = ns.substring(with: NSRange(location: loc, length: 1))
+        guard let c = ch.first else { return false }
+        if c.isWhitespace || c.isNewline { return false }
+        return !".,!?;:)]}".contains(c)
+    }
+
+    /// Separator used between the existing transcript and the new
+    /// chunk when no selection / caret is present. Sentence terminators
+    /// get a newline (treating each end-of-sentence dictation as a
+    /// fresh thought worth visually separating); everything else gets
+    /// a plain space.
+    private func endOfTranscriptSeparator() -> String {
+        guard let last = transcript.last else { return "" }
+        if last.isWhitespace || last.isNewline { return "" }
+        if ".!?".contains(last) { return "\n" }
+        return " "
+    }
+
+    /// User-tapped Copy. Pushes the current transcript through the
+    /// same clipboard + bridge-snapshot pipeline auto-copy uses, so
+    /// the Dictator keyboard's preview pill stays in sync with what
+    /// will actually paste (a manual Copy after editing has to bump
+    /// the snapshot's `changeCount` too, otherwise the keyboard
+    /// would hide its preview because the stored count no longer
+    /// matches the pasteboard's).
     func copyTranscriptToClipboard() {
         guard !transcript.isEmpty else { return }
-        UIPasteboard.general.string = transcript
+        publishTranscriptToClipboard()
         resultFeedback.notificationOccurred(.success)
+    }
+
+    /// Single source of truth for "put the current transcript on the
+    /// system clipboard and tell the keyboard about it". Called from
+    /// the success paths of stopRecording / stopAssistRecording as
+    /// well as the manual Copy button — keeps the auto and manual
+    /// paths from drifting out of sync.
+    private func publishTranscriptToClipboard() {
+        UIPasteboard.general.string = transcript
+        KeyboardBridge.writeLastDictation(.init(
+            text: transcript,
+            pasteboardChangeCount: UIPasteboard.general.changeCount,
+            writtenAt: Date()
+        ))
     }
 }

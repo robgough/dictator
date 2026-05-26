@@ -78,6 +78,16 @@ enum AppleFoundationAssist {
         result = result.trimmingCharacters(in: .whitespacesAndNewlines)
 
         NSLog("[DictatorIOS] Assist text=\(text.count)c inst=\(instruction.count)c out=\(result.count)c")
+        // Surface the actual instruction the FM ran with — if the
+        // result is mangled (e.g. an assist that should have been a
+        // no-op aggressively cleaned the text) the instruction is
+        // usually the culprit, and that's hard to diagnose without
+        // seeing exactly what we passed in. Capped at 200 chars so a
+        // huge instruction doesn't flood the log.
+        let instructionSnippet = instruction.count > 200
+            ? "\(instruction.prefix(200))…"
+            : instruction
+        NSLog("[DictatorIOS] Assist instruction=\"\(instructionSnippet)\"")
 
         guard !result.isEmpty else {
             throw AssistError.empty

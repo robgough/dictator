@@ -23,9 +23,6 @@ enum KeyboardBridge {
     /// Key the keyboard writes when it kicks off a session. Cleared
     /// by the host once consumed.
     private static let requestKey = "DictatorKeyboard.request"
-    /// Key the host writes when it has a result for the keyboard.
-    /// Cleared by the keyboard once inserted.
-    private static let resultKey = "DictatorKeyboard.result"
     /// Host-side state heartbeat — keyboard reads this while polling
     /// to drive its in-flight UI.
     private static let hostStateKey = "DictatorKeyboard.hostState"
@@ -46,6 +43,26 @@ enum KeyboardBridge {
     /// `DictatorIOSApp`; the timestamp lets the keyboard ignore
     /// stale values from a killed host.
     private static let hostActiveKey = "DictatorKeyboard.hostActive"
+    /// Most recent text the host put on the system clipboard, paired
+    /// with the pasteboard `changeCount` captured at write time.
+    /// Lets the keyboard show a preview of "what tapping Paste will
+    /// insert" without ever reading `UIPasteboard.general.string`
+    /// itself (which triggers iOS's "Pasted from X" toast and a
+    /// permission prompt on iOS 16+). If something else overwrites
+    /// the clipboard the keyboard's local changeCount won't match
+    /// the stored one and the preview hides itself.
+    private static let lastDictationKey = "DictatorKeyboard.lastDictation"
+
+    /// Snapshot of "what we just wrote to the system clipboard". The
+    /// keyboard's preview pill renders `text` when the system
+    /// pasteboard's current `changeCount` still equals
+    /// `pasteboardChangeCount` — i.e. nothing else has overwritten
+    /// the clipboard since the host wrote.
+    struct LastDictation: Codable, Sendable, Equatable {
+        var text: String
+        var pasteboardChangeCount: Int
+        var writtenAt: Date
+    }
 
     private struct HostActiveState: Codable, Sendable {
         var active: Bool
@@ -67,18 +84,6 @@ enum KeyboardBridge {
         var session: UUID
         var mode: Mode
         var surroundingText: String?
-        var createdAt: Date
-    }
-
-    /// What the host writes back. `replacePrecedingCharacters` is the
-    /// number of characters the keyboard should delete-backward
-    /// before inserting `text` — non-zero for assist (we're replacing
-    /// the input the host transformed) and zero for record (just
-    /// insert).
-    struct Result: Codable, Sendable {
-        var session: UUID
-        var text: String
-        var replacePrecedingCharacters: Int
         var createdAt: Date
     }
 
@@ -146,24 +151,7 @@ enum KeyboardBridge {
         )
         guard let data = try? JSONEncoder().encode(request) else { return nil }
         defaults.set(data, forKey: requestKey)
-        // Belt-and-braces: ensure any stale result from a prior
-        // session can't be picked up as ours.
-        defaults.removeObject(forKey: resultKey)
         return request.session
-    }
-
-    /// Called from the keyboard on appear. Returns and clears any
-    /// pending result. The session id check makes sure we only
-    /// consume our own — a stale result from a different keyboard
-    /// session would otherwise leak into the wrong text field.
-    static func consumeResult(matching session: UUID?) -> Result? {
-        guard let defaults else { return nil }
-        guard let data = defaults.data(forKey: resultKey),
-              let result = try? JSONDecoder().decode(Result.self, from: data)
-        else { return nil }
-        if let session, result.session != session { return nil }
-        defaults.removeObject(forKey: resultKey)
-        return result
     }
 
     // MARK: - Host side
@@ -178,15 +166,6 @@ enum KeyboardBridge {
               let request = try? JSONDecoder().decode(Request.self, from: data)
         else { return nil }
         return request
-    }
-
-    /// Host writes the work result. Keyboard picks it up on next
-    /// appear.
-    static func writeResult(_ result: Result) {
-        guard let defaults else { return }
-        guard let data = try? JSONEncoder().encode(result) else { return }
-        defaults.set(data, forKey: resultKey)
-        defaults.removeObject(forKey: requestKey)
     }
 
     /// Host clears a request without writing a result — used when
@@ -224,20 +203,21 @@ enum KeyboardBridge {
     // MARK: - Stop request
 
     /// Keyboard writes this when the user taps Stop. The host polls
-    /// while recording and aborts when it sees its own session id.
+    /// while recording and aborts when it sees a stop request.
     static func requestStop(session: UUID) {
         guard let defaults else { return }
         defaults.set(session.uuidString, forKey: stopRequestKey)
     }
 
     /// Host calls this once per poll tick. Returns true and clears
-    /// the slot if a stop has been requested for the given session.
-    static func consumeStopRequest(matching session: UUID) -> Bool {
+    /// the slot if any stop request is pending. No longer
+    /// session-matched — with the host's keyboard-mode state gone,
+    /// there's only one host process and at most one recording in
+    /// flight, so the session ID is unnecessary disambiguation.
+    static func consumeAnyStopRequest() -> Bool {
         guard let defaults,
-              let raw = defaults.string(forKey: stopRequestKey),
-              let requested = UUID(uuidString: raw)
+              defaults.string(forKey: stopRequestKey) != nil
         else { return false }
-        guard requested == session else { return false }
         defaults.removeObject(forKey: stopRequestKey)
         return true
     }
@@ -256,6 +236,22 @@ enum KeyboardBridge {
               let readiness = try? JSONDecoder().decode(ModelReadiness.self, from: data)
         else { return nil }
         return readiness
+    }
+
+    // MARK: - Last dictation (clipboard preview hint)
+
+    static func writeLastDictation(_ snapshot: LastDictation) {
+        guard let defaults else { return }
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        defaults.set(data, forKey: lastDictationKey)
+    }
+
+    static func readLastDictation() -> LastDictation? {
+        guard let defaults,
+              let data = defaults.data(forKey: lastDictationKey),
+              let snapshot = try? JSONDecoder().decode(LastDictation.self, from: data)
+        else { return nil }
+        return snapshot
     }
 
     // MARK: - Host-active flag

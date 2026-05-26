@@ -303,8 +303,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS
-        MARKETING_VERSION: "2026.5.1"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "2026.5.2"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -402,8 +402,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.Keyboard
-        MARKETING_VERSION: "2026.5.1"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "2026.5.2"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
