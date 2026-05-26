@@ -28,6 +28,17 @@ struct MeetingDetailView: View {
         }
         .onChange(of: session.meta.title) { _, new in titleDraft = new }
         .onChange(of: session.state) { _, _ in reloadTranscriptIfNeeded() }
+        // When the user picks a different meeting in the sidebar SwiftUI
+        // reuses this view instance and just swaps the bound session.
+        // `@State` (titleDraft / transcriptCache) survives the swap, so
+        // without this onChange both stay stuck on the previous meeting's
+        // values — the title happens to update via its own onChange, but
+        // the transcript would silently keep showing the old one.
+        .onChange(of: session.id) { _, _ in
+            titleDraft = session.meta.title
+            transcriptCache = nil
+            reloadTranscriptIfNeeded()
+        }
     }
 
     private var header: some View {
