@@ -157,6 +157,14 @@ struct DictatorSettings: Codable, Equatable {
     /// its own pile of meeting audio.
     var meetingAutoDeleteAfterDays: Int = 0
 
+    /// Days after which a meeting's audio files (mic.caf, system.caf) are
+    /// pruned even though its transcript is kept. Lets users hold on to
+    /// the searchable transcript history forever while letting the bulky
+    /// audio age out. 0 = keep audio forever. Independent of
+    /// `meetingAutoDeleteAfterDays`: a meeting hit by both first loses
+    /// audio, then the whole record when the older window kicks in.
+    var meetingAudioRetentionDays: Int = 0
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -312,6 +320,7 @@ struct DictatorSettings: Codable, Equatable {
         // ambush them with a setup window on next launch.
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
+        self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -932,6 +941,7 @@ struct DictatorSettings: Codable, Equatable {
         case assistantPromptAddendum, assistantPromptOverride
         case hasCompletedOnboarding
         case meetingAutoDeleteAfterDays
+        case meetingAudioRetentionDays
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -978,6 +988,7 @@ struct DictatorSettings: Codable, Equatable {
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
         "meetingAutoDeleteAfterDays",
+        "meetingAudioRetentionDays",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

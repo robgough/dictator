@@ -10,11 +10,22 @@ struct MeetingsPane: View {
         @Bindable var s = state
         Form {
             Section {
-                Picker("Auto-delete after", selection: Binding(
+                Picker("Delete audio after", selection: Binding(
+                    get: { s.settings.meetingAudioRetentionDays },
+                    set: { s.settings.meetingAudioRetentionDays = $0; state.save() }
+                )) {
+                    Text("Keep forever").tag(0)
+                    Text("7 days").tag(7)
+                    Text("30 days").tag(30)
+                    Text("90 days").tag(90)
+                }
+                .pickerStyle(.menu)
+
+                Picker("Delete entire meeting after", selection: Binding(
                     get: { s.settings.meetingAutoDeleteAfterDays },
                     set: { s.settings.meetingAutoDeleteAfterDays = $0; state.save() }
                 )) {
-                    Text("Never").tag(0)
+                    Text("Keep forever").tag(0)
                     Text("7 days").tag(7)
                     Text("30 days").tag(30)
                     Text("90 days").tag(90)
@@ -23,7 +34,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Storage")
             } footer: {
-                Text("Meeting audio and transcripts live under ~/Library/Application Support/Dictator/Meetings. Each meeting's two audio files weigh roughly 80 MB per hour combined. Set a window and Dictator prunes older meetings the next time the Meetings window opens.")
+                Text("Meeting audio is large — roughly 800 MB per hour combined across both tracks — but transcripts are tiny. \"Delete audio\" prunes the .caf files but keeps the transcript so you can still search and re-read older meetings without paying for the audio. \"Delete entire meeting\" drops everything including the transcript. Both sweeps run when the Meetings window opens.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

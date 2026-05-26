@@ -94,6 +94,22 @@ enum MeetingStorage {
         try? FileManager.default.removeItem(at: folder(for: id))
     }
 
+    /// Remove just the audio (mic.caf, system.caf) for `id`, leaving
+    /// meta.json + transcript.json in place. Used by the audio-retention
+    /// sweep that ages out the bulky recordings while keeping the
+    /// transcripts searchable forever.
+    /// Returns the updated meta with `audioFiles` cleared, ready for the
+    /// caller to persist. Returns nil if the meeting's meta couldn't be read.
+    static func pruneAudio(for id: UUID) -> MeetingMeta? {
+        let folder = folder(for: id)
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(micFilename))
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(systemFilename))
+        guard var meta = readMeta(at: folder.appendingPathComponent(metaFilename)) else { return nil }
+        meta.audioFiles = MeetingMeta.AudioFiles(mic: nil, system: nil)
+        try? writeMeta(meta)
+        return meta
+    }
+
     private static let jsonEncoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601

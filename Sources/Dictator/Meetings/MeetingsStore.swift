@@ -27,6 +27,7 @@ final class MeetingsStore {
         let loaded = MeetingStorage.loadAllMetas()
         metas = loaded.sorted { $0.createdAt > $1.createdAt }
         applyAutoDeleteIfConfigured()
+        applyAudioRetentionIfConfigured()
     }
 
     /// Look up by UUID for the detail pane.
@@ -60,5 +61,23 @@ final class MeetingsStore {
             MeetingStorage.deleteMeeting(id: m.id)
         }
         metas.removeAll { $0.createdAt < cutoff }
+    }
+
+    /// Apply the user's audio-only retention policy. 0 = never. Older
+    /// meetings keep their transcript but lose their `.caf` files. Cheap
+    /// to run on every refresh: we only touch meetings whose meta still
+    /// claims at least one audio file, and only if they've aged past the
+    /// cutoff.
+    private func applyAudioRetentionIfConfigured() {
+        let days = AppState.shared.settings.meetingAudioRetentionDays
+        guard days > 0 else { return }
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) else { return }
+        for (idx, m) in metas.enumerated() {
+            guard m.createdAt < cutoff else { continue }
+            guard m.audioFiles.mic != nil || m.audioFiles.system != nil else { continue }
+            if let updated = MeetingStorage.pruneAudio(for: m.id) {
+                metas[idx] = updated
+            }
+        }
     }
 }
