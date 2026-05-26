@@ -84,14 +84,6 @@ final class AudioRecorder {
     /// 0...1 RMS reported on the main actor.
     var onLevel: (@MainActor (Float) -> Void)?
 
-    /// Per-buffer mono samples at the device's native sample rate, alongside
-    /// that rate so the consumer can wrap them in an AVAudioPCMBuffer of the
-    /// correct format. Used by the Parakeet streaming path to feed FluidAudio
-    /// live during recording. Fires on the same main-actor hop as `onLevel`,
-    /// after the buffer has been appended to `rawBuffer`, so the final samples
-    /// at `stop()` always include every interim chunk too.
-    var onInterimSamples: (@MainActor ([Float], Double) -> Void)?
-
     /// Fired once the capture session is genuinely producing audio. On
     /// Bluetooth mics this can be 2–5 s after `start()` returns —
     /// callers should reflect "warming up" in their UI until then.
@@ -193,6 +185,19 @@ final class AudioRecorder {
     func cancelStart() {
         startGeneration &+= 1
         startInFlight = false
+    }
+
+    /// Mid-recording snapshot of the captured audio, resampled to 16 kHz
+    /// mono so it can be fed straight into the same ASR path as the final
+    /// transcript. Used by the HUD's interim preview — we re-transcribe the
+    /// growing buffer every ~second so the user sees a running draft.
+    /// The internal buffer isn't drained; this is purely a read.
+    func snapshotResampled16k() -> [Float] {
+        let snap = rawBuffer
+        let rate = nativeSampleRate
+        guard rate > 0, !snap.isEmpty else { return [] }
+        if abs(rate - targetSampleRate) < 1 { return snap }
+        return Self.resampleToTarget(monoSamples: snap, fromSampleRate: rate, toSampleRate: targetSampleRate) ?? []
     }
 
     /// Stop capture and return 16 kHz mono Float32 samples ready for
@@ -547,7 +552,6 @@ final class AudioRecorder {
         nativeSampleRate = sampleRate
         lastBufferTime = Date()
         onLevel?(level)
-        onInterimSamples?(mono, sampleRate)
     }
 
     // MARK: - Static helpers (off-main, no actor isolation)
