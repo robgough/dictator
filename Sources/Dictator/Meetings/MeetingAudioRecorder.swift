@@ -118,7 +118,11 @@ final class MeetingAudioRecorder {
         try stream.addStreamOutput(forwarder, type: .microphone, sampleHandlerQueue: Self.audioQueue)
         try stream.addStreamOutput(forwarder, type: .screen, sampleHandlerQueue: Self.videoQueue)
 
+        NSLog("[Dictator] SCStream starting: captureMicrophone=\(config.captureMicrophone) capturesAudio=\(config.capturesAudio)")
+        StreamOutputForwarder.loggedAudio = false
+        StreamOutputForwarder.loggedMic = false
         try await stream.startCapture()
+        NSLog("[Dictator] SCStream started")
 
         self.stream = stream
         self.output = forwarder
@@ -359,7 +363,17 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
-        case .audio, .microphone:
+        case .audio:
+            if !Self.loggedAudio {
+                Self.loggedAudio = true
+                NSLog("[Dictator] SCStream first .audio buffer arrived")
+            }
+            owner?.ingest(audio: sampleBuffer, type: type)
+        case .microphone:
+            if !Self.loggedMic {
+                Self.loggedMic = true
+                NSLog("[Dictator] SCStream first .microphone buffer arrived")
+            }
             owner?.ingest(audio: sampleBuffer, type: type)
         case .screen:
             // Discard. SCK requires a video stream but we don't need it.
@@ -368,6 +382,9 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
             return
         }
     }
+
+    nonisolated(unsafe) static var loggedAudio = false
+    nonisolated(unsafe) static var loggedMic = false
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
         let msg = error.localizedDescription
