@@ -172,7 +172,7 @@ final class MeetingAudioRecorder {
     // MARK: - Sample ingest (called from non-main queues)
 
     fileprivate nonisolated func ingest(audio sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) {
-        guard let (samples, format) = Self.extractPCM(from: sampleBuffer) else { return }
+        guard let (samples, format) = Self.extractPCM(from: sampleBuffer, type: type) else { return }
         let level = Self.rms(samples: samples)
         Task { @MainActor [weak self] in
             self?.write(samples: samples, format: format, type: type, level: level)
@@ -207,7 +207,8 @@ final class MeetingAudioRecorder {
             // Best-effort: a single failed write shouldn't tear the whole
             // recording down — surface via onUnexpectedStop only if the
             // file handle itself is gone.
-            NSLog("[Dictator] MeetingAudioRecorder write failed: \(error)")
+            let kind = type == .microphone ? "mic" : "system"
+            NSLog("[Dictator] write(\(kind)) failed: \(error)")
         }
         onLevel?(lastMicLevel, lastSystemLevel)
     }
@@ -262,23 +263,37 @@ final class MeetingAudioRecorder {
     /// produced by SCStream. SCK delivers planar / interleaved Float32 or
     /// Int16 depending on configuration; we asked for Float32 above but
     /// guard against either shape for safety.
-    private nonisolated static func extractPCM(from sampleBuffer: CMSampleBuffer) -> ([Float], AVAudioFormat)? {
+    private nonisolated static func extractPCM(from sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) -> ([Float], AVAudioFormat)? {
         guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return nil }
+              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
+            logFormat(type: type, reason: "no format description")
+            return nil
+        }
         let asbd = asbdPtr.pointee
         let sampleRate = asbd.mSampleRate
         let channels = Int(asbd.mChannelsPerFrame)
-        guard channels > 0, sampleRate > 0 else { return nil }
+        guard channels > 0, sampleRate > 0 else {
+            logFormat(type: type, reason: "zero channels or sample rate (\(channels)ch, \(sampleRate)Hz)")
+            return nil
+        }
 
         let frameCount = Int(CMSampleBufferGetNumSamples(sampleBuffer))
         guard frameCount > 0,
-              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+            logFormat(type: type, reason: "zero frames or no block buffer")
+            return nil
+        }
 
         // SCK delivers audio either as interleaved or non-interleaved
         // depending on the source. mFormatFlags bit 0x20 = non-interleaved.
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        guard isFloat else { return nil }
+        let bitsPerChannel = asbd.mBitsPerChannel
+        guard isFloat else {
+            logFormat(type: type, reason: "non-float format (isFloat=\(isFloat), bitsPerChannel=\(bitsPerChannel), flags=\(asbd.mFormatFlags), formatID=\(asbd.mFormatID))")
+            return nil
+        }
+        logFirstAcceptedFormat(type: type, channels: channels, sampleRate: sampleRate, nonInterleaved: isNonInterleaved, bitsPerChannel: bitsPerChannel)
 
         var totalLength = 0
         var dataPointer: UnsafeMutablePointer<CChar>?
@@ -393,4 +408,31 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
             owner?.onUnexpectedStop?("Screen capture stopped: \(msg)")
         }
     }
+}
+
+// MARK: - Diagnostic logging
+
+private nonisolated(unsafe) var loggedDropReasons: Set<String> = []
+private nonisolated(unsafe) var loggedAcceptedFormats: Set<String> = []
+private let formatLogLock = NSLock()
+
+private func logFormat(type: SCStreamOutputType, reason: String) {
+    let kind = type == .microphone ? "mic" : "audio"
+    let key = "\(kind):\(reason)"
+    formatLogLock.lock()
+    let already = loggedDropReasons.contains(key)
+    if !already { loggedDropReasons.insert(key) }
+    formatLogLock.unlock()
+    guard !already else { return }
+    NSLog("[Dictator] dropped \(kind) buffer: \(reason)")
+}
+
+private func logFirstAcceptedFormat(type: SCStreamOutputType, channels: Int, sampleRate: Double, nonInterleaved: Bool, bitsPerChannel: UInt32) {
+    let kind = type == .microphone ? "mic" : "audio"
+    formatLogLock.lock()
+    let already = loggedAcceptedFormats.contains(kind)
+    if !already { loggedAcceptedFormats.insert(kind) }
+    formatLogLock.unlock()
+    guard !already else { return }
+    NSLog("[Dictator] accepted \(kind) buffer: \(channels)ch \(sampleRate)Hz \(bitsPerChannel)bit \(nonInterleaved ? "non-interleaved" : "interleaved")")
 }
