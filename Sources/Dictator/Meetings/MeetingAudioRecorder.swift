@@ -5,16 +5,15 @@ import CoreMedia
 import ScreenCaptureKit
 import AppKit
 
-/// Captures mic + system audio for one meeting via ScreenCaptureKit. Writes
-/// two AAC-encoded `.m4a` files (mic.m4a, system.m4a) into the meeting's
-/// folder.
+/// Captures **system audio** for one meeting via ScreenCaptureKit. Writes
+/// a single CAF file (system.caf) into the meeting's folder.
 ///
-/// Sibling to `Audio/AudioRecorder.swift` — they share concepts (sample
-/// extraction, level metering) but the underlying capture surface is
-/// completely different. AudioRecorder uses AVCaptureSession for the mic
-/// only; this class uses SCStream so it can grab system audio at the same
-/// time. macOS 15+ added `captureMicrophone` to SCStream which lets one
-/// session deliver both tracks via separate `SCStreamOutputType` channels.
+/// SCK's own `.microphone` output dropped buffers silently on at least one
+/// test Mac (delegate fired but the writes never landed on disk), so the
+/// mic track is captured by a sibling `MeetingMicRecorder` running its own
+/// AVCaptureSession — same proven path the dictation flow uses every day.
+/// Two recorders run in parallel for the duration of the meeting; the
+/// session orchestrates their lifecycle.
 ///
 /// We pick the smallest possible content filter (2×2 pixels, 1 fps) and
 /// drop video buffers as they arrive — SCK refuses to start without a
@@ -28,23 +27,22 @@ final class MeetingAudioRecorder {
 
     private var stream: SCStream?
     private var output: StreamOutputForwarder?
-    private var micFile: AVAudioFile?
     private var systemFile: AVAudioFile?
     private var running = false
 
-    /// Where the recorder writes. Populated by `start(folder:)` and held so
-    /// the file URLs survive across SCStream's async lifecycle.
-    private(set) var micURL: URL?
+    /// Where the system audio is being written. Populated by `start`.
     private(set) var systemURL: URL?
     private(set) var startedAt: Date?
 
-    /// Fired once both files exist and the stream is producing buffers.
-    /// The session's "warmingUp" → "recording" pivot hangs off this.
+    /// Fired once SCStream is producing buffers. The session's
+    /// `warmingUp` → `recording` pivot hangs off this.
     var onReady: (@MainActor () -> Void)?
 
-    /// Fired on each successful sample-buffer ingest with the current mic
-    /// + system RMS levels. Each on a 0…1 scale; either may be 0 if that
-    /// track hasn't produced a buffer yet.
+    /// Fired on each successful system-audio buffer with the current
+    /// system RMS level (0…1). The mic level is owned by
+    /// `MeetingMicRecorder` and arrives on a separate callback. The mic
+    /// argument here is retained as 0 to keep the API ergonomic for
+    /// callers that snapshot both into the same state.
     var onLevel: (@MainActor (_ mic: Float, _ system: Float) -> Void)?
 
     /// Fired if SCStream stops itself outside our control (user revoked
@@ -52,7 +50,6 @@ final class MeetingAudioRecorder {
     /// without us holding an idle assertion). Recorder is left torn down.
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
-    private var lastMicLevel: Float = 0
     private var lastSystemLevel: Float = 0
 
     init() {}
@@ -63,12 +60,10 @@ final class MeetingAudioRecorder {
     /// responsibility, not ours.
     func start(folder: URL, preferredMicUID: String?) async throws {
         guard !running else { return }
+        _ = preferredMicUID // mic capture lives in MeetingMicRecorder now
 
-        let micPath = folder.appendingPathComponent(MeetingStorage.micFilename)
         let systemPath = folder.appendingPathComponent(MeetingStorage.systemFilename)
-        self.micURL = micPath
         self.systemURL = systemPath
-        try? FileManager.default.removeItem(at: micPath)
         try? FileManager.default.removeItem(at: systemPath)
 
         let content = try await SCShareableContent.current
@@ -88,16 +83,11 @@ final class MeetingAudioRecorder {
 
         let config = SCStreamConfiguration()
         config.capturesAudio = true
-        config.captureMicrophone = true
-        // SCStream's `microphoneCaptureDeviceID` expects an
-        // AVCaptureDevice.uniqueID, NOT the CoreAudio UID that the dictation
-        // path uses. When we pass a mismatched ID, SCK silently disables mic
-        // capture (no error, just no .microphone buffers ever delivered).
-        // For v0.1 we let SCK use the current default input — same one the
-        // user has chosen in System Settings → Sound. If we need per-meeting
-        // mic selection later we'll translate the CoreAudio UID into the
-        // matching AVCaptureDevice properly.
-        _ = preferredMicUID  // intentionally unused for now
+        // SCK's `.microphone` output was unreliable on this codebase's test
+        // hardware — buffers arrived but never landed on disk and no error
+        // was raised. Mic capture moved out to a parallel AVCaptureSession
+        // (see `MeetingMicRecorder`); SCStream is now system-only.
+        config.captureMicrophone = false
         config.excludesCurrentProcessAudio = true
         config.sampleRate = Int(Self.sampleRate)
         config.channelCount = Self.channelCount
@@ -115,14 +105,9 @@ final class MeetingAudioRecorder {
         // disconnected, etc.).
         let stream = SCStream(filter: filter, configuration: config, delegate: forwarder)
         try stream.addStreamOutput(forwarder, type: .audio, sampleHandlerQueue: Self.audioQueue)
-        try stream.addStreamOutput(forwarder, type: .microphone, sampleHandlerQueue: Self.audioQueue)
         try stream.addStreamOutput(forwarder, type: .screen, sampleHandlerQueue: Self.videoQueue)
 
-        NSLog("[Dictator] SCStream starting: captureMicrophone=\(config.captureMicrophone) capturesAudio=\(config.capturesAudio)")
-        StreamOutputForwarder.loggedAudio = false
-        StreamOutputForwarder.loggedMic = false
         try await stream.startCapture()
-        NSLog("[Dictator] SCStream started")
 
         self.stream = stream
         self.output = forwarder
@@ -133,21 +118,14 @@ final class MeetingAudioRecorder {
 
     struct StopResult: Sendable {
         let durationSeconds: Double
-        /// True iff `mic.m4a` exists on disk with at least the header bytes —
-        /// i.e. the SCStream actually delivered `.microphone` buffers. False
-        /// when mic capture silently no-op'd.
-        let didCaptureMic: Bool
-        /// True iff `system.m4a` exists. False on a fully-silent meeting
-        /// where no audio played through the system output either.
+        /// True iff `system.caf` got at least one buffer written. False on
+        /// a fully-silent meeting where nothing played through speakers.
         let didCaptureSystem: Bool
     }
 
-    /// Stop capture and close both files. Safe to call multiple times.
-    /// Returns the captured duration in seconds (0 if start never happened)
-    /// plus which tracks actually got data so the session can update its
-    /// meta to reflect what's on disk.
+    /// Stop SCStream and close the system file. Safe to call multiple times.
     func stop() async -> StopResult {
-        guard running else { return StopResult(durationSeconds: 0, didCaptureMic: false, didCaptureSystem: false) }
+        guard running else { return StopResult(durationSeconds: 0, didCaptureSystem: false) }
         running = false
         let s = stream
         stream = nil
@@ -155,18 +133,10 @@ final class MeetingAudioRecorder {
         if let s {
             try? await s.stopCapture()
         }
-        // Closing AVAudioFile flushes any buffered samples; nil-out to
-        // release the file handles before the session updates meta.json.
-        let hadMic = micFile != nil
         let hadSystem = systemFile != nil
-        micFile = nil
         systemFile = nil
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
-        return StopResult(
-            durationSeconds: duration,
-            didCaptureMic: hadMic,
-            didCaptureSystem: hadSystem
-        )
+        return StopResult(durationSeconds: duration, didCaptureSystem: hadSystem)
     }
 
     // MARK: - Sample ingest (called from non-main queues)
@@ -182,35 +152,19 @@ final class MeetingAudioRecorder {
     @MainActor
     private func write(samples: [Float], format: AVAudioFormat, type: SCStreamOutputType, level: Float) {
         guard running else { return }
+        guard type == .audio else { return }
         do {
-            switch type {
-            case .audio:
-                if systemFile == nil, let url = systemURL {
-                    systemFile = try Self.openFile(at: url, source: format)
-                }
-                if let file = systemFile {
-                    try Self.append(samples: samples, format: format, to: file)
-                }
-                lastSystemLevel = level
-            case .microphone:
-                if micFile == nil, let url = micURL {
-                    micFile = try Self.openFile(at: url, source: format)
-                }
-                if let file = micFile {
-                    try Self.append(samples: samples, format: format, to: file)
-                }
-                lastMicLevel = level
-            default:
-                return
+            if systemFile == nil, let url = systemURL {
+                systemFile = try Self.openFile(at: url, source: format)
             }
+            if let file = systemFile {
+                try Self.append(samples: samples, format: format, to: file)
+            }
+            lastSystemLevel = level
         } catch {
-            // Best-effort: a single failed write shouldn't tear the whole
-            // recording down — surface via onUnexpectedStop only if the
-            // file handle itself is gone.
-            let kind = type == .microphone ? "mic" : "system"
-            NSLog("[Dictator] write(\(kind)) failed: \(error)")
+            NSLog("[Dictator] write(system) failed: \(error)")
         }
-        onLevel?(lastMicLevel, lastSystemLevel)
+        onLevel?(0, lastSystemLevel)
     }
 
     // MARK: - File helpers
@@ -265,35 +219,21 @@ final class MeetingAudioRecorder {
     /// guard against either shape for safety.
     private nonisolated static func extractPCM(from sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) -> ([Float], AVAudioFormat)? {
         guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
-            logFormat(type: type, reason: "no format description")
-            return nil
-        }
+              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return nil }
         let asbd = asbdPtr.pointee
         let sampleRate = asbd.mSampleRate
         let channels = Int(asbd.mChannelsPerFrame)
-        guard channels > 0, sampleRate > 0 else {
-            logFormat(type: type, reason: "zero channels or sample rate (\(channels)ch, \(sampleRate)Hz)")
-            return nil
-        }
+        guard channels > 0, sampleRate > 0 else { return nil }
 
         let frameCount = Int(CMSampleBufferGetNumSamples(sampleBuffer))
         guard frameCount > 0,
-              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-            logFormat(type: type, reason: "zero frames or no block buffer")
-            return nil
-        }
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
 
         // SCK delivers audio either as interleaved or non-interleaved
         // depending on the source. mFormatFlags bit 0x20 = non-interleaved.
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        let bitsPerChannel = asbd.mBitsPerChannel
-        guard isFloat else {
-            logFormat(type: type, reason: "non-float format (isFloat=\(isFloat), bitsPerChannel=\(bitsPerChannel), flags=\(asbd.mFormatFlags), formatID=\(asbd.mFormatID))")
-            return nil
-        }
-        logFirstAcceptedFormat(type: type, channels: channels, sampleRate: sampleRate, nonInterleaved: isNonInterleaved, bitsPerChannel: bitsPerChannel)
+        guard isFloat else { return nil }
 
         var totalLength = 0
         var dataPointer: UnsafeMutablePointer<CChar>?
@@ -379,27 +319,13 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
         case .audio:
-            if !Self.loggedAudio {
-                Self.loggedAudio = true
-                NSLog("[Dictator] SCStream first .audio buffer arrived")
-            }
             owner?.ingest(audio: sampleBuffer, type: type)
-        case .microphone:
-            if !Self.loggedMic {
-                Self.loggedMic = true
-                NSLog("[Dictator] SCStream first .microphone buffer arrived")
-            }
-            owner?.ingest(audio: sampleBuffer, type: type)
-        case .screen:
-            // Discard. SCK requires a video stream but we don't need it.
-            return
-        @unknown default:
+        default:
+            // .screen (required by SCK but discarded) and .microphone
+            // (we don't request it — mic capture lives in MeetingMicRecorder).
             return
         }
     }
-
-    nonisolated(unsafe) static var loggedAudio = false
-    nonisolated(unsafe) static var loggedMic = false
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
         let msg = error.localizedDescription
@@ -408,31 +334,4 @@ private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDel
             owner?.onUnexpectedStop?("Screen capture stopped: \(msg)")
         }
     }
-}
-
-// MARK: - Diagnostic logging
-
-private nonisolated(unsafe) var loggedDropReasons: Set<String> = []
-private nonisolated(unsafe) var loggedAcceptedFormats: Set<String> = []
-private let formatLogLock = NSLock()
-
-private func logFormat(type: SCStreamOutputType, reason: String) {
-    let kind = type == .microphone ? "mic" : "audio"
-    let key = "\(kind):\(reason)"
-    formatLogLock.lock()
-    let already = loggedDropReasons.contains(key)
-    if !already { loggedDropReasons.insert(key) }
-    formatLogLock.unlock()
-    guard !already else { return }
-    NSLog("[Dictator] dropped \(kind) buffer: \(reason)")
-}
-
-private func logFirstAcceptedFormat(type: SCStreamOutputType, channels: Int, sampleRate: Double, nonInterleaved: Bool, bitsPerChannel: UInt32) {
-    let kind = type == .microphone ? "mic" : "audio"
-    formatLogLock.lock()
-    let already = loggedAcceptedFormats.contains(kind)
-    if !already { loggedAcceptedFormats.insert(kind) }
-    formatLogLock.unlock()
-    guard !already else { return }
-    NSLog("[Dictator] accepted \(kind) buffer: \(channels)ch \(sampleRate)Hz \(bitsPerChannel)bit \(nonInterleaved ? "non-interleaved" : "interleaved")")
 }

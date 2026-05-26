@@ -49,6 +49,7 @@ final class MeetingSession: Identifiable {
     private(set) var state: State
 
     private let recorder = MeetingAudioRecorder()
+    private let micRecorder = MeetingMicRecorder()
     private let processor = MeetingProcessor()
     private var timerTask: Task<Void, Never>?
     private var lastMicLevel: Float = 0
@@ -108,9 +109,12 @@ final class MeetingSession: Identifiable {
             self.state = .recording(elapsed: 0, micLevel: 0, sysLevel: 0)
             self.startTimerLoop()
         }
-        recorder.onLevel = { [weak self] mic, sys in
-            self?.lastMicLevel = mic
-            self?.lastSystemLevel = sys
+        // System level updates land immediately so the HUD's right meter
+        // tracks live audio output without waiting for the 250ms tick.
+        recorder.onLevel = { [weak self] _, sys in
+            guard let self else { return }
+            self.lastSystemLevel = sys
+            self.pushLevels()
         }
         recorder.onUnexpectedStop = { [weak self] reason in
             guard let self else { return }
@@ -118,13 +122,39 @@ final class MeetingSession: Identifiable {
             self.timerTask = nil
             self.state = .failed(reason)
         }
+        micRecorder.onLevel = { [weak self] mic in
+            guard let self else { return }
+            self.lastMicLevel = mic
+            self.pushLevels()
+        }
 
         do {
             let folder = MeetingStorage.folder(for: id)
             try await recorder.start(folder: folder, preferredMicUID: preferredMicUID)
+            // Mic capture runs on its own AVCaptureSession alongside SCK —
+            // SCK's `.microphone` output silently dropped buffers on this
+            // test machine, so the proven dictation path owns mic capture
+            // here. Failure to start mic isn't fatal: system-only recording
+            // is still useful (and surfaces in the UI via didCaptureMic).
+            do {
+                try await micRecorder.start(at: MeetingStorage.micURL(for: id))
+            } catch {
+                NSLog("[Dictator] Meeting mic capture failed to start: \(error)")
+            }
         } catch {
             state = .failed("Couldn't start recording: \(error.localizedDescription)")
         }
+    }
+
+    /// Push the current levels into `.recording` without waiting for the
+    /// next timer tick. Cheap — just rebuilds the enum payload.
+    private func pushLevels() {
+        guard case .recording(let elapsed, _, _) = state else { return }
+        state = .recording(
+            elapsed: elapsed,
+            micLevel: lastMicLevel,
+            sysLevel: lastSystemLevel
+        )
     }
 
     /// Stop recording. Writes the meta.json with the final duration,
@@ -135,17 +165,18 @@ final class MeetingSession: Identifiable {
         state = .stopping
         timerTask?.cancel()
         timerTask = nil
-        let result = await recorder.stop()
-        // Only claim tracks that actually got written. SCK's `.microphone`
-        // output can silently no-op (e.g. when the user has Dictator's mic
-        // permission granted but a mid-recording grant change leaves the
-        // microphone capture stub unwired). Reflecting reality in meta lets
-        // the processor skip missing tracks instead of crashing.
+        // Tear down both recorders in parallel so we don't double the wait.
+        async let systemStop: MeetingAudioRecorder.StopResult = recorder.stop()
+        async let micStop: Void = micRecorder.stop()
+        let systemResult = await systemStop
+        await micStop
+        // Reflect what actually landed on disk. SCStream owns the system
+        // track; the parallel AVCaptureSession owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(
-            mic: result.didCaptureMic ? MeetingStorage.micFilename : nil,
-            system: result.didCaptureSystem ? MeetingStorage.systemFilename : nil
+            mic: micRecorder.didCapture ? MeetingStorage.micFilename : nil,
+            system: systemResult.didCaptureSystem ? MeetingStorage.systemFilename : nil
         )
-        meta.durationSeconds = result.durationSeconds
+        meta.durationSeconds = systemResult.durationSeconds
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
         state = .captured
