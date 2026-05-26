@@ -151,6 +151,12 @@ struct DictatorSettings: Codable, Equatable {
     /// model so the first hotkey press just works.
     var hasCompletedOnboarding: Bool
 
+    /// How long to keep recorded / imported meetings before pruning them
+    /// off disk. 0 = never delete. Per-Mac (local-settings.json) because
+    /// meetings live in App Support, not the synced folder — each Mac has
+    /// its own pile of meeting audio.
+    var meetingAutoDeleteAfterDays: Int = 0
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -305,6 +311,7 @@ struct DictatorSettings: Codable, Equatable {
         // already have models + permissions configured, and we don't want to
         // ambush them with a setup window on next launch.
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
+        self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -924,6 +931,7 @@ struct DictatorSettings: Codable, Equatable {
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
         case hasCompletedOnboarding
+        case meetingAutoDeleteAfterDays
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -969,6 +977,7 @@ struct DictatorSettings: Codable, Equatable {
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
+        "meetingAutoDeleteAfterDays",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the
