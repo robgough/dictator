@@ -221,6 +221,14 @@ struct LiveRecordingView: View {
                     .fill(Color.secondary.opacity(0.08))
             )
 
+            // Draft transcript pane. Only present while a live transcriber
+            // exists on the session — the post-capture / processing / ready
+            // states render the canonical transcript via TranscriptView and
+            // never see this pane.
+            if let transcriber = session.liveTranscriber {
+                LiveTranscriptPane(transcriber: transcriber)
+            }
+
             Button(role: .destructive) {
                 Task {
                     await session.stopRecording(parakeetModelID: state.settings.parakeetModelID)
@@ -324,4 +332,53 @@ private struct ProcessingPane: View {
         default: return ""
         }
     }
+}
+
+/// Live-recording draft transcript. Fills in chunk by chunk while the meeting
+/// records; the canonical, diarized transcript replaces it as soon as the
+/// post-capture processor finishes. No speaker attribution in this view —
+/// that's the post-pass's job. Empty state shows a "Listening…" placeholder
+/// so the user can see the pane wired up even before the first chunk lands.
+private struct LiveTranscriptPane: View {
+    @Bindable var transcriber: MeetingLiveTranscriber
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Group {
+                    if transcriber.interimText.isEmpty {
+                        Text("Listening…")
+                            .italic()
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        // The trailing bottomAnchor view is what the
+                        // ScrollViewReader pins to as new chunks land —
+                        // gives us the auto-scroll-to-bottom behaviour
+                        // without any manual scroll-offset math.
+                        Text(transcriber.interimText)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomAnchor)
+                }
+                .padding(14)
+            }
+            .frame(maxHeight: 240)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .onChange(of: transcriber.interimText) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    private static let bottomAnchor = "live-transcript-bottom"
 }

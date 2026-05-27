@@ -56,6 +56,17 @@ final class MeetingMicRecorder {
     /// 0…1 RMS reported on the main actor for every captured buffer.
     var onLevel: (@MainActor (Float) -> Void)?
 
+    /// Optional sink for raw mic `AVAudioPCMBuffer`s, fired alongside the
+    /// on-disk write. The live-transcript service hangs off this so it can
+    /// resample + chunk for Parakeet without us having to install a second
+    /// tap on the input node (which AVAudioEngine doesn't support cleanly
+    /// at the same bus anyway). **Fires on the realtime audio queue inside
+    /// the `installTap` closure, not the main actor** — the callee is
+    /// responsible for any actor hop. Snapshotted into the tap closure at
+    /// engine start; reassigning after `start` won't affect an in-flight
+    /// engine.
+    var onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
+
     init() {}
 
     /// Build an AVAudioEngine against the user's preferred input device
@@ -168,7 +179,14 @@ final class MeetingMicRecorder {
         // on the realtime audio queue, which without the annotation
         // would inherit @MainActor isolation from this method and trap
         // the moment the audio thread fires it.
+        //
+        // `bufferSink` is the live-transcript drop-off. Snapshot it into
+        // the closure so the realtime queue can fire it without crossing
+        // back to the main actor to read `self.onBuffer`. Set-once-at-
+        // start semantics are documented on the property.
+        let bufferSink = onBuffer
         newEngine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable [weak self] buffer, _ in
+            bufferSink?(buffer)
             guard let processed = Self.processBuffer(buffer) else { return }
             Task { @MainActor [weak self, processed] in
                 guard let self, self.running else { return }
