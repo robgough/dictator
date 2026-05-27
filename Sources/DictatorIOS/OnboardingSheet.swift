@@ -2,19 +2,24 @@ import SwiftUI
 import UIKit
 @preconcurrency import AVFoundation
 
-/// First-launch walkthrough that sequences the four bits of system
+/// First-launch walkthrough that sequences the five bits of system
 /// setup Dictator needs before it can actually work end-to-end:
 ///   1. Microphone permission
-///   2. Parakeet model download (~500 MB)
-///   3. Keyboard extension installed via system Settings
-///   4. Open Access granted to the keyboard
+///   2. Pick the Parakeet variant (multilingual v3 default, or English-only v2)
+///   3. Parakeet model download (~460 MB)
+///   4. Keyboard extension installed via system Settings
+///   5. Open Access granted to the keyboard
 ///
 /// Steps render as a vertical checklist with `pending` / `inProgress`
 /// / `done` states. The single bottom CTA is always wired to the
 /// active (first non-done) step, so the user has one button to focus
 /// on at a time. A "Skip for now" affordance in the top-left lets
 /// them dismiss and configure later from the existing scattered
-/// cards.
+/// cards. If the user skips before step 2, the persisted
+/// `selectedModelID` stays at whatever `UserDefaults` returns — the
+/// app seeds v3 in `registerDefaults`, so the skip path is safe and
+/// the user can change it later from the model picker on the
+/// download screen / settings.
 ///
 /// State detection is best-effort and asymmetric:
 ///   - Mic permission and model presence have direct APIs.
@@ -56,10 +61,20 @@ struct OnboardingSheet: View {
     /// if the user re-launches without onboarding having completed,
     /// which is fine — they're walked through the same steps again.
     @State private var keyboardInstallConfirmed = false
-    /// Same idea for step 4 — latches the "I've enabled Open Access"
+    /// Same idea for step 5 — latches the "I've enabled Open Access"
     /// confirmation so the user can advance past a step we can't
     /// detect with certainty.
     @State private var openAccessConfirmed = false
+
+    /// Latches the model-picker step (step 2) once the user explicitly
+    /// confirms their choice in this onboarding session. Returning
+    /// users with the model already on disk bypass this latch — the
+    /// `chooseModel` state check treats "files exist for the
+    /// persisted selection" as proof the language choice was already
+    /// made on a prior launch, so we don't ambush them with a
+    /// confirmation step for a decision they've effectively already
+    /// made.
+    @State private var modelChoiceConfirmed = false
 
     /// Re-evaluated whenever the scene foregrounds — the user
     /// flipping a system Settings switch is invisible to us until we
@@ -161,7 +176,7 @@ struct OnboardingSheet: View {
                 .padding(.bottom, 4)
             Text("A few quick steps")
                 .font(.title2.weight(.semibold))
-            Text("Dictator runs entirely on this device. Walk through these four steps to get set up — most of it is one-time.")
+            Text("Dictator runs entirely on this device. Walk through these steps to get set up — most of it is one-time.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -185,7 +200,7 @@ struct OnboardingSheet: View {
         let body: String
         let ctaWhenActive: String
 
-        enum Kind { case microphone, model, keyboard, openAccess }
+        enum Kind { case microphone, chooseModel, model, keyboard, openAccess }
     }
 
     private let steps: [Step] = [
@@ -196,9 +211,23 @@ struct OnboardingSheet: View {
             ctaWhenActive: "Grant microphone access"
         ),
         Step(
+            kind: .chooseModel,
+            title: "Choose your language model",
+            // Body intentionally short — the per-variant detail copy
+            // lives inside the inline picker rows below, where the user
+            // is actually making the decision.
+            body: "Multilingual covers most users; English-only is a touch leaner if you'll never dictate in another language.",
+            ctaWhenActive: "Continue"
+        ),
+        Step(
             kind: .model,
             title: "Download the speech model",
-            body: "Parakeet, around 460 MB. Runs on-device — no audio leaves your device. You can leave the app while it downloads; it'll pick up where it left off if your connection drops.",
+            // Size is approximate and the same for both variants — the
+            // raw download is similar, the difference is what's *inside*
+            // the weights. Keeping the copy variant-agnostic avoids the
+            // body text contradicting whichever picker option was chosen
+            // on the previous step.
+            body: "Around 460 MB. Runs on-device — no audio leaves your device. You can leave the app while it downloads; it'll pick up where it left off if your connection drops.",
             ctaWhenActive: "Download model"
         ),
         Step(
@@ -225,6 +254,8 @@ struct OnboardingSheet: View {
         switch kind {
         case .microphone:
             return micGranted ? .done : (firstPendingKind == .microphone ? .inProgress : .pending)
+        case .chooseModel:
+            return modelChoiceMade ? .done : (firstPendingKind == .chooseModel ? .inProgress : .pending)
         case .model:
             return modelDownloaded ? .done : (firstPendingKind == .model ? .inProgress : .pending)
         case .keyboard:
@@ -239,6 +270,7 @@ struct OnboardingSheet: View {
     /// Nil when every step is complete.
     private var firstPendingKind: Step.Kind? {
         if !micGranted { return .microphone }
+        if !modelChoiceMade { return .chooseModel }
         if !modelDownloaded { return .model }
         if !keyboardInstalled { return .keyboard }
         if !openAccessGranted { return .openAccess }
@@ -257,6 +289,22 @@ struct OnboardingSheet: View {
         // Matches the same disk check the view model uses on init —
         // pure filesystem probe, no model touched.
         ParakeetService.modelsExist(id: viewModel.selectedModelID)
+    }
+
+    /// Treat the language-model choice as already made when either:
+    ///   - the user explicitly tapped Continue in this session
+    ///     (`modelChoiceConfirmed`), OR
+    ///   - the currently-selected variant is already on disk —
+    ///     proof that a previous session committed to that choice and
+    ///     downloaded against it. Re-prompting a returning user for a
+    ///     decision they've effectively already locked in would be
+    ///     noise.
+    /// The persisted default is v3 (seeded by `registerDefaults`), so
+    /// a brand-new user lands on this step with v3 pre-selected; they
+    /// still have to confirm to advance the checklist.
+    private var modelChoiceMade: Bool {
+        if modelChoiceConfirmed { return true }
+        return ParakeetService.modelsExist(id: viewModel.selectedModelID)
     }
 
     /// Probe iOS's installed input modes for the Dictator keyboard's
@@ -338,6 +386,14 @@ struct OnboardingSheet: View {
                 if isActive, step.kind == .model {
                     modelInlineStatus
                 }
+                // The language-model choice is made via two tappable
+                // option cards rather than a segmented picker — the
+                // copy-per-option doesn't fit comfortably under a
+                // narrow segment and the user benefits from seeing
+                // both tradeoffs side by side before committing.
+                if isActive, step.kind == .chooseModel {
+                    modelChoiceInline
+                }
             }
             Spacer(minLength: 0)
         }
@@ -357,6 +413,12 @@ struct OnboardingSheet: View {
             // rows would pre-empt the linear flow, and taps on done
             // rows have nothing useful to do.
             guard isActive else { return }
+            // The model-choice row is special-cased: the row body hosts
+            // tappable picker cards, and the only way to commit the
+            // choice is the bottom CTA. A stray tap on the row chrome
+            // would otherwise latch `modelChoiceConfirmed` and skip the
+            // user's chance to actually pick.
+            if step.kind == .chooseModel { return }
             performAction(for: step.kind)
         }
     }
@@ -495,6 +557,70 @@ struct OnboardingSheet: View {
         }
     }
 
+    /// Two-option picker rendered inside the active `chooseModel` row.
+    /// Each option is a tappable card that flips `viewModel.selectedModelID`
+    /// via the existing `selectModel(_:)` API — the user is free to
+    /// switch back and forth before tapping the bottom CTA to lock it
+    /// in. Selecting a variant the user already has on disk is fine —
+    /// `selectModel` re-evaluates `modelDiskStatus`, so committing on
+    /// that path lands the user directly on the keyboard-install step
+    /// (the download step's check goes green immediately).
+    @ViewBuilder
+    private var modelChoiceInline: some View {
+        VStack(spacing: 8) {
+            modelOptionCard(
+                id: "parakeet-tdt-0.6b-v3",
+                title: "Parakeet (multilingual)",
+                detail: "Recommended. Around 460 MB. Supports English plus French, German, Spanish, Italian, Dutch, and other European languages."
+            )
+            modelOptionCard(
+                id: "parakeet-tdt-0.6b-v2",
+                title: "Parakeet (English-only)",
+                detail: "Around 460 MB. Same speed, slightly tighter on English accuracy because the model isn't splitting capacity across other languages."
+            )
+        }
+        .padding(.top, 6)
+    }
+
+    /// One row in the picker. Tappable surface mutates `selectedModelID`
+    /// via the view model; the checkmark + accent border tracks the
+    /// current selection without latching anything until the user hits
+    /// the bottom CTA.
+    @ViewBuilder
+    private func modelOptionCard(id: String, title: String, detail: String) -> some View {
+        let selected = viewModel.selectedModelID == id
+        Button {
+            viewModel.selectModel(id)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.body)
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(.systemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.18), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     /// Inline progress / failure block rendered inside the active model
     /// step row. Visually mirrors ContentView's full-screen `downloadingView`
     /// but at a smaller scale — the row is a callout card inside a list,
@@ -625,6 +751,13 @@ struct OnboardingSheet: View {
         switch kind {
         case .microphone:
             Task { await viewModel.requestPermissionIfNeeded() }
+        case .chooseModel:
+            // The picker rows have already mutated `viewModel.selectedModelID`
+            // via `selectModel` at the moment of tap; the bottom CTA is
+            // a pure "lock it in" affordance. Latching `modelChoiceConfirmed`
+            // flips `modelChoiceMade` to true, which advances
+            // `firstPendingKind` to `.model` on the next render.
+            modelChoiceConfirmed = true
         case .model:
             // Routes through the cellular-aware entry point so a user on
             // metered data gets the confirmation alert before the 460 MB
