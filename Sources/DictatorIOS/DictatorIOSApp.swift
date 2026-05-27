@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct DictatorIOSApp: App {
@@ -7,6 +8,14 @@ struct DictatorIOSApp: App {
     /// after the recording completes and the result has been written
     /// back to the shared App Group.
     @State private var keyboardRequest: KeyboardBridge.Request?
+
+    /// Wire a UIKit application delegate alongside the SwiftUI App so
+    /// background URLSession events (model downloads continuing while
+    /// Dictator is suspended) get routed to the downloader's stored
+    /// completion handler. SwiftUI's `App` doesn't expose
+    /// `application(_:handleEventsForBackgroundURLSession:completionHandler:)`,
+    /// so the only clean way to hook it is an `UIApplicationDelegateAdaptor`.
+    @UIApplicationDelegateAdaptor(DictatorAppDelegate.self) private var appDelegate
 
     init() {
         // Defaults registered here so first-launch reads return the
@@ -76,5 +85,58 @@ struct DictatorIOSApp: App {
         // the keyboard opened the URL. This avoids URL length
         // limits for the assist path's potentially large input.
         return KeyboardBridge.peekRequest()
+    }
+}
+
+/// UIKit-side delegate. Two responsibilities:
+///   1. Touch `BackgroundModelDownloader.shared` at launch so the
+///      background URLSession gets recreated and iOS replays any pending
+///      delegate events from downloads that ran while we were suspended.
+///   2. Route the system's
+///      `application(_:handleEventsForBackgroundURLSession:completionHandler:)`
+///      callback into the downloader so it can fire the system handler
+///      once it's finished consuming the replayed events. Without this,
+///      iOS would kill the app's background snapshot before the OS-side
+///      delivery completes.
+final class DictatorAppDelegate: NSObject, UIApplicationDelegate {
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Reattach to any in-flight downloads from a previous launch.
+        // Cheap if there are none (an idempotent disk probe), and
+        // critical when there are — the background URLSession needs to
+        // exist with the right identifier before iOS replays the
+        // delegate events for transfers that finished while we were
+        // suspended.
+        Task { @MainActor in
+            BackgroundModelDownloader.shared.bootstrapOnLaunch()
+        }
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        // Only one background session in this app — match by identifier
+        // anyway so we don't accidentally swallow events for a future
+        // session.
+        guard identifier == BackgroundModelDownloader.sessionIdentifier else {
+            completionHandler()
+            return
+        }
+        // The system handler must be invoked on the main thread per
+        // Apple's docs. The downloader's `handleEventsDelivered` already
+        // hops to `@MainActor` before calling whatever it has stored, so
+        // we wrap the OS-provided closure with a main-actor shim that
+        // calls back on the main thread.
+        Task { @MainActor in
+            BackgroundModelDownloader.shared.setSystemBackgroundCompletionHandler {
+                completionHandler()
+            }
+        }
     }
 }

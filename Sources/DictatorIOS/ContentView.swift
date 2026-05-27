@@ -331,49 +331,138 @@ struct ContentView: View {
         }
     }
 
-    /// Active-download UI. Linear progress bar + percentage + MB
-    /// readout so the user knows the app isn't stuck. ~460 MB is the
-    /// nominal size for parakeet-tdt-0.6b-v3; close enough for the
-    /// "X MB of 460 MB" display even though real bytes vary slightly.
-    private func downloadingView(progress: Double) -> some View {
-        VStack(spacing: 18) {
+    /// Active- (or paused-) download UI. Linear progress bar with
+    /// bytes-downloaded / total, a smoothed transfer rate, and an
+    /// explicit "you can leave the app" message — the underlying
+    /// downloader runs over a background URLSession that keeps making
+    /// progress while Dictator is suspended, so the user doesn't need
+    /// to babysit the screen. Pause / Resume / Cancel let them control
+    /// the transfer; resume data is persisted on disk so a paused
+    /// download (or one interrupted by a network drop) picks up where
+    /// it left off rather than restarting the whole 460 MB.
+    private func downloadingView(snapshot: BackgroundModelDownloader.Progress, paused: Bool, pausedReason: String?) -> some View {
+        let formatter: ByteCountFormatter = {
+            let f = ByteCountFormatter()
+            f.countStyle = .file
+            f.allowedUnits = [.useMB, .useGB]
+            return f
+        }()
+        let downloaded = formatter.string(fromByteCount: max(0, snapshot.bytesDownloaded))
+        let total = snapshot.bytesTotal > 0
+            ? formatter.string(fromByteCount: snapshot.bytesTotal)
+            : "—"
+        let percent = Int(snapshot.fraction * 100)
+        let rate: String? = (snapshot.bytesPerSecond > 1024 && !paused)
+            ? "\(formatter.string(fromByteCount: Int64(snapshot.bytesPerSecond)))/s"
+            : nil
+
+        return VStack(spacing: 18) {
             Spacer()
-            Image(systemName: "arrow.down.circle")
+            Image(systemName: paused ? "pause.circle" : "arrow.down.circle")
                 .font(.system(size: 64, weight: .light))
                 .foregroundStyle(.tint)
-            Text("Downloading model…")
+            Text(paused ? "Download paused" : "Downloading model…")
                 .font(.title3.weight(.semibold))
-            ProgressView(value: max(0, min(1, progress)))
+            ProgressView(value: max(0, min(1, snapshot.fraction)))
                 .progressViewStyle(.linear)
                 .padding(.horizontal)
-            Text("\(Int(progress * 100))%  ·  \(Int(progress * 460)) MB of 460 MB")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Text("Keep Dictator open until this finishes.")
+            VStack(spacing: 4) {
+                Text("\(percent)%  ·  \(downloaded) of \(total)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let rate {
+                    Text(rate)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                if snapshot.totalFiles > 0 {
+                    Text("File \(min(snapshot.currentFileIndex + 1, snapshot.totalFiles)) of \(snapshot.totalFiles)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            // "Leave the app" reassurance — this is the headline UX
+            // change. The previous version told users to keep Dictator
+            // open; the background URLSession path removes that
+            // requirement entirely.
+            Text(paused
+                 ? "Tap Resume to continue where you left off."
+                 : "You can leave the app — the download will keep going in the background. Come back any time to check progress.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            if let pausedReason {
+                Text(pausedReason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            HStack(spacing: 12) {
+                if paused {
+                    Button {
+                        Task { await viewModel.downloadModel() }
+                    } label: {
+                        Text("Resume")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .font(.body.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button {
+                        Task { await viewModel.pauseDownload() }
+                    } label: {
+                        Text("Pause")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .font(.body.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Button(role: .destructive) {
+                    Task { await viewModel.cancelDownload() }
+                } label: {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .font(.body.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
             Spacer()
         }
     }
 
-    /// Failure UI. Retry button rewinds to `.notDownloaded` so the CTA
-    /// reappears and the user can try again.
+    /// Failure UI. "Try again" rewinds to `.notDownloaded` so the CTA
+    /// reappears and the user can try again — the background downloader
+    /// will resume from the last completed file (and the in-flight
+    /// file's resume data if available), not restart from zero.
+    /// "Try later" exits the download flow so the user isn't trapped
+    /// inside a permanently-failed onboarding screen on a flaky
+    /// connection.
     private func downloadFailedView(reason: String) -> some View {
         VStack(spacing: 16) {
             Spacer()
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48, weight: .light))
                 .foregroundStyle(.orange)
-            Text("Download failed")
+            Text("Download interrupted")
                 .font(.title3.weight(.semibold))
             Text(reason)
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
+            Text("Your progress so far is saved. Tap Try again to resume from where you left off — Dictator won't restart the whole download.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
             Button {
-                viewModel.resetDownload()
+                Task { await viewModel.downloadModel() }
             } label: {
                 Text("Try again")
                     .frame(maxWidth: .infinity)
@@ -381,6 +470,16 @@ struct ContentView: View {
                     .font(.body.weight(.semibold))
             }
             .buttonStyle(.borderedProminent)
+            .padding(.horizontal)
+            Button {
+                viewModel.resetDownload()
+            } label: {
+                Text("Come back later")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .font(.body)
+            }
+            .buttonStyle(.bordered)
             .padding(.horizontal)
             Spacer()
         }
@@ -432,8 +531,10 @@ struct ContentView: View {
             // ever wrong about disk presence.
             downloadPrompt
                 .sheet(isPresented: $showingModelSheet) { ModelStatusSheet(viewModel: viewModel) }
-        case .downloading(let progress):
-            downloadingView(progress: progress)
+        case .downloading(_, let snapshot):
+            downloadingView(snapshot: snapshot, paused: false, pausedReason: nil)
+        case .paused(let snapshot, let reason):
+            downloadingView(snapshot: snapshot, paused: true, pausedReason: reason)
         case .failed(let reason):
             downloadFailedView(reason: reason)
         case .downloaded:

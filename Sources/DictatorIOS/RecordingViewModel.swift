@@ -55,10 +55,16 @@ final class RecordingViewModel {
     /// Disk presence of the Parakeet model files. Independent of the
     /// in-memory `isModelLoaded` flag — a model can be on disk but not
     /// yet loaded into memory.
+    ///
+    /// The `.downloading` case carries a full progress snapshot so the
+    /// UI can render bytes / total / rate without having to reach into
+    /// the downloader directly. The legacy `progress: Double` field is
+    /// preserved for any consumer that just wants a fractional value.
     enum ModelDiskStatus: Equatable {
         case checking
         case notDownloaded
-        case downloading(progress: Double)
+        case downloading(progress: Double, snapshot: BackgroundModelDownloader.Progress)
+        case paused(snapshot: BackgroundModelDownloader.Progress, reason: String?)
         case downloaded
         case failed(String)
     }
@@ -193,6 +199,15 @@ final class RecordingViewModel {
     private let pressFeedback = UIImpactFeedbackGenerator(style: .light)
     private let resultFeedback = UINotificationFeedbackGenerator()
 
+    /// Long-lived observer that mirrors `BackgroundModelDownloader.shared`
+    /// state into our `modelDiskStatus` so the existing UI bindings
+    /// don't need to know about the downloader directly. Started the
+    /// first time we kick off a download (lazy — first launches without
+    /// a model don't pay for it) and stays alive for the rest of the
+    /// process lifetime; the downloader is a singleton, so observing it
+    /// continuously is cheap.
+    private var downloaderObserverTask: Task<Void, Never>?
+
     init() {
         permission = Self.currentPermission()
         // Read the persisted model choice. `registerDefaults()` seeds v3
@@ -234,6 +249,19 @@ final class RecordingViewModel {
         // the real disk state immediately, even before any user
         // action.
         publishModelReadiness()
+
+        // Reflect the background downloader's state into ours from
+        // launch. The AppDelegate also calls `bootstrapOnLaunch`, which
+        // resurrects any in-flight session and replays delegate events;
+        // observing here means the UI shows a resumed-mid-flight bar
+        // immediately on cold launch if the previous session was
+        // interrupted.
+        startDownloaderObserverIfNeeded()
+        if case .notDownloaded = modelDiskStatus {
+            // applyDownloaderState seeds from current state on first
+            // tick, so this just forces an immediate read.
+            applyDownloaderState(BackgroundModelDownloader.shared.state)
+        }
 
         // Screenshot-capture hook. When the env var or launch arg below
         // is set we synthesise a "mid-recording" state for the App Store
@@ -531,22 +559,100 @@ final class RecordingViewModel {
     }
 
     /// Stage the Parakeet model onto disk — explicit, with progress.
-    /// Triggered by the first-launch CTA. Calls `parakeet.download`
-    /// which writes the CoreML bundles into `ModelStorage.parakeetRoot()`
-    /// but doesn't load them into memory; the model loads lazily on
-    /// the first recording press, same as for users who already had
-    /// the files locally.
+    /// Triggered by the first-launch CTA.
+    ///
+    /// Routes through `BackgroundModelDownloader` rather than calling
+    /// FluidAudio's foreground downloader directly. The background path
+    /// survives app suspension (lock screen, app switch) and persists
+    /// per-file resume data so a flaky connection — or a relaunch —
+    /// picks up where it left off instead of starting the whole 460 MB
+    /// over. Once the downloader reports completion the on-disk layout
+    /// matches what FluidAudio's loader expects, so the model loads
+    /// lazily on the first recording press without a second network
+    /// round trip.
     func downloadModel() async {
-        guard case .notDownloaded = modelDiskStatus else { return }
-        modelDiskStatus = .downloading(progress: 0)
-        do {
-            try await parakeet.download(modelID: selectedModelID) { [weak self] fraction in
-                self?.modelDiskStatus = .downloading(progress: fraction)
+        switch modelDiskStatus {
+        case .downloaded, .checking: return
+        default: break
+        }
+        startDownloaderObserverIfNeeded()
+        await BackgroundModelDownloader.shared.startDownload(modelID: selectedModelID)
+    }
+
+    /// Pause the active download. Resume data is persisted so a
+    /// subsequent `downloadModel()` continues mid-file rather than
+    /// restarting whichever chunk was in flight.
+    func pauseDownload() async {
+        await BackgroundModelDownloader.shared.pause()
+    }
+
+    /// Drop the in-flight download entirely. Clears the manifest and
+    /// any persisted resume data. The next download starts from
+    /// scratch.
+    func cancelDownload() async {
+        await BackgroundModelDownloader.shared.cancel()
+    }
+
+    /// Idempotent: start an observation loop over the downloader's
+    /// `state` property and mirror it into `modelDiskStatus`. Uses
+    /// `withObservationTracking` in a loop so SwiftUI-style observation
+    /// surfaces the changes without us reaching for any KVO / Combine
+    /// machinery. The loop exits naturally when the task is cancelled.
+    private func startDownloaderObserverIfNeeded() {
+        guard downloaderObserverTask == nil else { return }
+        downloaderObserverTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                // withObservationTracking only fires once — re-arm by
+                // looping. Using a continuation here lets us wait on the
+                // next change without busy-spinning.
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    withObservationTracking {
+                        self.applyDownloaderState(BackgroundModelDownloader.shared.state)
+                    } onChange: {
+                        // onChange fires off the observation queue; hop
+                        // back to main for the next iteration's
+                        // applyDownloaderState read.
+                        Task { @MainActor in continuation.resume() }
+                    }
+                }
             }
+        }
+    }
+
+    /// Translate the downloader's state into our `ModelDiskStatus`
+    /// shape. `.completed` triggers a one-time bridge re-publish so the
+    /// keyboard's readiness chip updates immediately.
+    private func applyDownloaderState(_ state: BackgroundModelDownloader.State) {
+        switch state {
+        case .idle:
+            // Re-check disk status — the downloader may have been
+            // cancelled and the manifest cleared.
+            if ParakeetService.modelsExist(id: selectedModelID) {
+                modelDiskStatus = .downloaded
+            } else if case .downloaded = modelDiskStatus {
+                modelDiskStatus = .notDownloaded
+            } else if case .failed = modelDiskStatus {
+                // Keep failure visible until the user explicitly retries.
+            } else {
+                modelDiskStatus = .notDownloaded
+            }
+        case .listing:
+            // Show a 0% bar with placeholder counts so the UI moves the
+            // moment the user taps Download. The first real
+            // `didWriteData` will overwrite this.
+            modelDiskStatus = .downloading(
+                progress: 0,
+                snapshot: .zero
+            )
+        case .downloading(let snapshot):
+            modelDiskStatus = .downloading(progress: snapshot.fraction, snapshot: snapshot)
+        case .paused(let snapshot, let reason):
+            modelDiskStatus = .paused(snapshot: snapshot, reason: reason)
+        case .completed:
             modelDiskStatus = .downloaded
             publishModelReadiness()
-        } catch {
-            modelDiskStatus = .failed(error.localizedDescription)
+        case .failed(let message):
+            modelDiskStatus = .failed(message)
         }
     }
 
@@ -570,6 +676,13 @@ final class RecordingViewModel {
         // previous model wasn't actually resident.
         parakeet.unload(modelID: previousID)
         isModelLoaded = false
+        // If a download for the previous variant was in flight (or
+        // paused / failed), drop it. The observer would otherwise
+        // overwrite our `.notDownloaded` with the previous model's
+        // download state on its next tick — and the manifest on disk
+        // is for the old model, so resuming a v3 download under a v2
+        // selection would land bytes in the wrong place.
+        Task { await BackgroundModelDownloader.shared.cancel() }
         // Re-evaluate disk presence for the newly-selected variant so
         // the UI transitions to the download CTA when needed (and out
         // of it when the user picks a variant they already have).
@@ -577,13 +690,16 @@ final class RecordingViewModel {
         publishModelReadiness()
     }
 
-    /// Retry path after a failed download — flips the state back to
-    /// `.notDownloaded` so the CTA re-appears and the user can kick
-    /// off another attempt.
+    /// Exit path from the failed-download screen. Clears the
+    /// downloader's failure state AND any persisted manifest / resume
+    /// data so the user can choose to come back later without the
+    /// observer immediately overwriting the local "notDownloaded" back
+    /// to "failed". Used by the "Come back later" button on the
+    /// failure UI; the "Try again" button calls `downloadModel()`
+    /// directly which preserves resume data.
     func resetDownload() {
-        if case .failed = modelDiskStatus {
-            modelDiskStatus = .notDownloaded
-        }
+        Task { await BackgroundModelDownloader.shared.cancel() }
+        modelDiskStatus = .notDownloaded
     }
 
     /// Manually release the model from memory. Files stay on disk; the
