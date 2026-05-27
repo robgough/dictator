@@ -17,6 +17,7 @@ struct TranscriptView: View {
         if let transcript, !transcript.segments.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
+                    SpeakerCountChip(count: meta.speakers.count)
                     ForEach(meta.speakers, id: \.id) { speaker in
                         EditableSpeakerChip(speaker: speaker, session: session)
                     }
@@ -274,6 +275,37 @@ private struct AudioMissingNote: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.secondary.opacity(0.06))
         )
+    }
+}
+
+/// Muted diarization-diagnostics chip sitting at the start of the speaker
+/// chips row. Reports how many distinct speakers the diarizer (now run on
+/// both mic and system tracks, merged via centroid similarity) settled on.
+/// Lets the user catch obvious over- or under-clustering at a glance —
+/// "expected 3 people on this call, the chip says 1" is a useful prompt
+/// to re-process or report a bug. We deliberately don't surface the
+/// overlap fraction because doing so cleanly would require persisting it
+/// on the transcript schema, which is out of scope for the speaker-merge
+/// task that introduced this chip.
+private struct SpeakerCountChip: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "person.2.wave.2")
+                .font(.caption2)
+            Text(label)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color.secondary.opacity(0.08)))
+        .foregroundStyle(.secondary)
+        .help("Number of distinct speakers detected. Click any speaker chip to rename or recolour.")
+    }
+
+    private var label: String {
+        count == 1 ? "1 speaker" : "\(count) speakers"
     }
 }
 
