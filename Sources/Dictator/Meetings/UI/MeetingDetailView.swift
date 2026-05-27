@@ -211,6 +211,23 @@ struct LiveRecordingView: View {
     var body: some View {
         VStack(spacing: 20) {
             timerView
+
+            // Capture warnings (mic and / or system) — surfaced when a
+            // recorder fails to deliver buffers within its bring-up
+            // watchdog window. Sits above the meters so the user
+            // notices it instead of staring at a flat bar. Dismissible
+            // per source; the dismissal is UI-only and resets next
+            // recording.
+            if !session.captureWarnings.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(session.captureWarnings) { warning in
+                        CaptureWarningBanner(message: warning.message) {
+                            session.dismissCaptureWarning(source: warning.source)
+                        }
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: 16) {
                 LabeledWaveform(label: "Mic (Me)", level: levels.mic, tint: .accentColor)
                 LabeledWaveform(label: "System (Other)", level: levels.system, tint: .indigo)
@@ -331,6 +348,44 @@ private struct ProcessingPane: View {
         case .merging: return "Writing the transcript…"
         default: return ""
         }
+    }
+}
+
+/// Muted yellow-orange warning pill, used by `LiveRecordingView` to
+/// surface capture-side issues (mic recorder isn't getting buffers,
+/// SCStream isn't producing system audio because of a protected app).
+/// Matches the shape of the permission banner on `MeetingsEmptyState`
+/// — same rounded-rect background, same `.orange.opacity(0.12)` fill —
+/// with an `xmark` dismiss so the user can hide a warning they already
+/// know about (e.g. "yes, I'm on FaceTime, I expected this").
+private struct CaptureWarningBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .imageScale(.medium)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
     }
 }
 

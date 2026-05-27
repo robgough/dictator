@@ -4,6 +4,7 @@ import Accelerate
 import AudioToolbox
 import CoreAudio
 import CoreMedia
+import os
 
 /// Captures mic audio for a meeting via AVAudioEngine and writes it
 /// directly to a CAF file as the buffers arrive. Runs alongside the
@@ -53,8 +54,25 @@ final class MeetingMicRecorder {
     /// True once at least one buffer made it to disk.
     private(set) var didCapture: Bool = false
 
+    /// Tap-side first-buffer signal — flipped on the realtime audio queue
+    /// inside the `installTap` closure the moment the first buffer lands.
+    /// Used by the bring-up watchdog (main actor) to decide whether to
+    /// trigger the VP-off retry. `OSAllocatedUnfairLock<Bool>` is the
+    /// async-safe primitive here: `NSLock.lock()` traps when called from
+    /// an async context under Swift 6 strict concurrency.
+    private let firstBufferFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+    private var bringUpStartedAt: Date?
+    private var bringUpWatchdog: Task<Void, Never>?
+
     /// 0…1 RMS reported on the main actor for every captured buffer.
     var onLevel: (@MainActor (Float) -> Void)?
+
+    /// Fires once per recording with a human-readable reason the mic
+    /// capture looks unhealthy (e.g. the voice-processing AU is producing
+    /// no buffers and the auto-retry without VP also failed). The session
+    /// pipes this into its `captureWarnings` collection which surfaces in
+    /// the LiveRecordingView banner.
+    var onCaptureWarning: (@MainActor (String) -> Void)?
 
     /// Optional sink for raw mic `AVAudioPCMBuffer`s, fired alongside the
     /// on-disk write. The live-transcript service hangs off this so it can
@@ -92,9 +110,11 @@ final class MeetingMicRecorder {
 
         try configureAndStartEngine(
             preferredDevice: preferredDevice,
-            echoCancellation: echoCancellation
+            echoCancellation: echoCancellation,
+            forceVoiceProcessingOff: false
         )
         installConfigurationChangeObserver()
+        startBringUpWatchdog(forRetry: false)
         running = true
     }
 
@@ -102,6 +122,8 @@ final class MeetingMicRecorder {
     func stop() async {
         guard running else { return }
         running = false
+        bringUpWatchdog?.cancel()
+        bringUpWatchdog = nil
         teardownEngine()
         // Drop the file reference last so any in-flight `write` on a
         // concurrently-scheduled main-actor hop finds `running == false`
@@ -116,12 +138,24 @@ final class MeetingMicRecorder {
     /// start. Mirrors the dictation recorder's "fresh engine every start"
     /// rule: reusing an engine after a device override leaves the AUHAL
     /// in a stale state where the next tap silently delivers no buffers.
+    ///
+    /// `forceVoiceProcessingOff` short-circuits the AEC decision and
+    /// brings the engine up without voice processing regardless of the
+    /// `.auto` / `.alwaysOn` setting. Used by the watchdog when an initial
+    /// VP-on bring-up produced no buffers — `setVoiceProcessingEnabled`
+    /// is known to silently capture zero buffers on some Mac + output
+    /// device combos because the AU expects a full-duplex graph with a
+    /// playback reference signal and our recorder is input-only.
     private func configureAndStartEngine(
         preferredDevice: AudioDevice?,
-        echoCancellation: MeetingMicEchoCancellation
+        echoCancellation: MeetingMicEchoCancellation,
+        forceVoiceProcessingOff: Bool
     ) throws {
         let newEngine = AVAudioEngine()
         engine = newEngine
+
+        let deviceLabel = preferredDevice.map { $0.isSystemDefault ? "<system default>" : "\($0.uid)" } ?? "<nil / system default>"
+        NSLog("[Dictator] MeetingMic: starting — preferredDevice=\(deviceLabel), echoMode=\(echoCancellation.rawValue), forceVPOff=\(forceVoiceProcessingOff)")
 
         // Resolve the user's input choice to a CoreAudio device ID and
         // pin the input AU to it. AVAudioEngine has no high-level API
@@ -143,14 +177,20 @@ final class MeetingMicRecorder {
                 UInt32(MemoryLayout<AudioDeviceID>.size)
             )
             if status != noErr {
-                NSLog("[Dictator] MeetingMicRecorder couldn't pin input device (status=\(status)); falling back to system default.")
+                NSLog("[Dictator] MeetingMic: couldn't pin input device (status=\(status)); falling back to system default")
+            } else {
+                NSLog("[Dictator] MeetingMic: input device pinned (CoreAudio id=\(coreAudioID))")
             }
+        } else {
+            NSLog("[Dictator] MeetingMic: using system default input (no device override)")
         }
 
         // Decide AEC. Resolving .auto needs the active output device —
         // do it AFTER the device override above so the heuristic sees the
         // user's actual routing.
-        let wantsVoiceProcessing = Self.shouldEnableVoiceProcessing(for: echoCancellation)
+        let wantsVoiceProcessing = forceVoiceProcessingOff
+            ? false
+            : Self.shouldEnableVoiceProcessing(for: echoCancellation)
 
         // Voice processing must be toggled BEFORE the engine starts. On
         // macOS the call wires up the playback-reference tap inside
@@ -158,15 +198,21 @@ final class MeetingMicRecorder {
         do {
             try newEngine.inputNode.setVoiceProcessingEnabled(wantsVoiceProcessing)
             voiceProcessingActive = wantsVoiceProcessing
+            NSLog("[Dictator] MeetingMic: voice processing toggle — requested=\(wantsVoiceProcessing), active=\(voiceProcessingActive)")
         } catch {
             // Voice processing failed to attach (very rare — bad output
             // device, missing entitlement on sandboxed targets). Log and
             // continue without it: a meeting recorded WITHOUT AEC is
             // worse than no meeting at all, and the post-pass dedup will
             // still catch the bleed.
-            NSLog("[Dictator] MeetingMicRecorder voice-processing toggle failed (\(error)); recording without AEC.")
+            NSLog("[Dictator] MeetingMic: voice-processing toggle failed (\(error)); recording without AEC")
             voiceProcessingActive = false
         }
+
+        // Reset the first-buffer flag for this bring-up. Done before
+        // installTap so a buffer that lands on the audio queue between
+        // `installTap` returning and `start()` returning still flips it.
+        firstBufferFlag.withLock { $0 = false }
 
         // `format: nil` is load-bearing. `outputFormat(forBus:)` returns
         // a stale format right after the device override above because
@@ -185,7 +231,22 @@ final class MeetingMicRecorder {
         // back to the main actor to read `self.onBuffer`. Set-once-at-
         // start semantics are documented on the property.
         let bufferSink = onBuffer
+        let firstBufferFlag = self.firstBufferFlag
         newEngine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable [weak self] buffer, _ in
+            // Cheap first-buffer probe — log once per bring-up, then stay
+            // silent. The lock-guarded flag is also read by the watchdog
+            // task on the main actor, which is why we can't just stash a
+            // local boolean in the closure.
+            let wasFirst = firstBufferFlag.withLock { seen -> Bool in
+                guard !seen else { return false }
+                seen = true
+                return true
+            }
+            if wasFirst {
+                let format = buffer.format
+                NSLog("[Dictator] MeetingMic: first buffer — format=\(format.sampleRate)/\(format.channelCount), frames=\(buffer.frameLength)")
+            }
+
             bufferSink?(buffer)
             guard let processed = Self.processBuffer(buffer) else { return }
             Task { @MainActor [weak self, processed] in
@@ -197,19 +258,77 @@ final class MeetingMicRecorder {
                 )
             }
         }
+        NSLog("[Dictator] MeetingMic: tap installed on input bus 0")
 
         newEngine.prepare()
         do {
             try newEngine.start()
+            NSLog("[Dictator] MeetingMic: engine started")
         } catch {
             // Surface as a thrown error so the caller's catch in
             // MeetingSession.startRecording can log + fall through (mic
             // failure is non-fatal for the meeting: the system track
             // alone is still useful).
+            NSLog("[Dictator] MeetingMic: engine.start() threw \(error)")
             newEngine.inputNode.removeTap(onBus: 0)
             engine = nil
             voiceProcessingActive = false
             throw error
+        }
+
+        bringUpStartedAt = Date()
+    }
+
+    // MARK: - Bring-up watchdog
+
+    /// Arm a 2-second timer that checks whether any buffers have actually
+    /// landed since the engine was started. If not — and voice processing
+    /// was enabled — tear down and try again with VP forced off, on the
+    /// theory that the voice-processing AU is silently dropping every
+    /// buffer (a known failure mode on macOS for input-only graphs).
+    /// On the second failure surface a warning to the session so the user
+    /// can see "Dictator isn't getting any mic audio" in the live HUD
+    /// instead of staring at a flat meter for the whole meeting.
+    private func startBringUpWatchdog(forRetry isRetry: Bool) {
+        bringUpWatchdog?.cancel()
+        let armedAt = Date()
+        bringUpWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled, self.running || isRetry else { return }
+            let sawBuffer = self.firstBufferFlag.withLock { $0 }
+            if sawBuffer {
+                if isRetry {
+                    let elapsedMs = Int(Date().timeIntervalSince(armedAt) * 1000)
+                    NSLog("[Dictator] MeetingMic: retried without voice processing — first buffer arrived in \(elapsedMs)ms")
+                }
+                return
+            }
+
+            if !isRetry && self.voiceProcessingActive {
+                NSLog("[Dictator] MeetingMic: no buffer in 2s — voice processing may be blocking capture")
+                // Tear down and rebuild without VP. We hold `running`
+                // true the whole time so concurrent writes don't bail,
+                // and re-arm the config-change observer afterwards.
+                self.teardownEngine()
+                do {
+                    try self.configureAndStartEngine(
+                        preferredDevice: self.lastPreferredDevice,
+                        echoCancellation: self.lastEchoCancellation,
+                        forceVoiceProcessingOff: true
+                    )
+                    self.installConfigurationChangeObserver()
+                    self.startBringUpWatchdog(forRetry: true)
+                } catch {
+                    NSLog("[Dictator] MeetingMic: VP-off retry threw \(error)")
+                    self.onCaptureWarning?("Dictator couldn't start the microphone capture. Try ending the recording and starting again, or pick a different input device in Settings.")
+                }
+            } else {
+                let reason = isRetry
+                    ? "Dictator isn't receiving any microphone audio. Check that the right input device is selected and that nothing else is holding the mic exclusively."
+                    : "Dictator isn't receiving any microphone audio. The recording will continue but the mic track may be empty."
+                NSLog("[Dictator] MeetingMic: still no buffers after \(isRetry ? "VP-off retry" : "initial bring-up") — surfacing warning to UI")
+                self.onCaptureWarning?(reason)
+            }
         }
     }
 
@@ -271,13 +390,15 @@ final class MeetingMicRecorder {
         do {
             try configureAndStartEngine(
                 preferredDevice: lastPreferredDevice,
-                echoCancellation: lastEchoCancellation
+                echoCancellation: lastEchoCancellation,
+                forceVoiceProcessingOff: false
             )
             // Reopen on first new-buffer write — `write` already does
             // that when `file == nil`, so just clear the pointer.
             file = previousFile
             _ = previousURL
             installConfigurationChangeObserver()
+            startBringUpWatchdog(forRetry: false)
         } catch {
             NSLog("[Dictator] MeetingMicRecorder lost capture during device switch: \(error)")
             running = false
