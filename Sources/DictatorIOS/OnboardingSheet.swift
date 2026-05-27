@@ -430,12 +430,15 @@ struct OnboardingSheet: View {
             // pending rows would pre-empt the linear flow, and taps on
             // done rows have nothing useful to do.
             guard isActive else { return }
-            // The active model-choice row is special-cased: the body
-            // hosts tappable picker cards, and the only way to commit
-            // the choice is the bottom CTA. A stray tap on the row
-            // chrome would otherwise latch `modelChoiceConfirmed` and
-            // skip the user's chance to actually pick.
-            if step.kind == .chooseModel { return }
+            // Several steps host their own inline button instead of
+            // relying on the row chrome being the tap target:
+            //   - `.chooseModel` has the picker cards + bottom CTA
+            //   - `.model` has an explicit "Start download" / pause /
+            //     try-again button inline, so a casual row tap mustn't
+            //     silently kick off a 460 MB download.
+            // For both, the row tap is intentionally a no-op so the
+            // user has to use the explicit affordance.
+            if step.kind == .chooseModel || step.kind == .model { return }
             performAction(for: step.kind)
         }
     }
@@ -609,13 +612,20 @@ struct OnboardingSheet: View {
         }
     }
 
-    /// True when the model row's inline state — downloading, paused,
-    /// or just failed — already presents an actionable affordance, so
-    /// the bottom CTA should retract rather than duplicate it.
+    /// True when the model row's inline state already presents an
+    /// actionable affordance, so the bottom CTA should retract rather
+    /// than duplicate it. Now covers every state the user can hit on
+    /// step 3 — including `.notDownloaded` / `.checking`, where the
+    /// row hosts an explicit "Start download" button instead of the
+    /// old "tap anywhere on the card" implicit kick-off.
     private var hidesBottomCTAForModel: Bool {
+        // All downloadable states have an inline button somewhere on
+        // the row, so the bottom CTA would just be a duplicate.
         switch viewModel.modelDiskStatus {
-        case .downloading, .paused, .failed: return true
-        default: return false
+        case .notDownloaded, .checking, .downloading, .paused, .failed:
+            return true
+        case .downloaded:
+            return false
         }
     }
 
@@ -713,6 +723,32 @@ struct OnboardingSheet: View {
     @ViewBuilder
     private var modelInlineStatus: some View {
         switch viewModel.modelDiskStatus {
+        case .notDownloaded, .checking:
+            // Explicit "Start download" button so it's obvious what's
+            // about to happen. Previously the card itself was the tap
+            // target — kicking off a 460 MB download from a casual
+            // row tap read as opaque ("did I just trigger something?").
+            // The bottom CTA also hides for this state so there's a
+            // single, prominent affordance right on the row.
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    Task { await viewModel.confirmAndDownloadModel() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text("Start download")
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                Text("Around 460 MB. You can leave the app once the download starts — it'll keep going in the background.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 6)
         case .downloading(_, let snapshot):
             downloadingInlineBlock(snapshot: snapshot, paused: false, pausedReason: nil)
         case .paused(let snapshot, let reason):
