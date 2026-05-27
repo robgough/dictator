@@ -203,11 +203,19 @@ final class MeetingAudioRecorder {
         let firstFlag = firstAudioBufferFlag
 
         var procID: AudioDeviceIOProcID?
+        // `@Sendable` is load-bearing for the same reason MeetingMicRecorder's
+        // `installTap` closure carries it: AudioDeviceCreateIOProcIDWithBlock
+        // dispatches this block on `Self.audioQueue`, which is not the main
+        // actor. Without the annotation, Swift 6 inherits @MainActor isolation
+        // from the enclosing `start()` method, and the runtime traps with
+        // `_dispatch_assert_queue_fail` the first time a real audio buffer
+        // arrives (so without anything playing through the system you never
+        // see the bug — silence means zero IOProc invocations).
         let createErr = AudioDeviceCreateIOProcIDWithBlock(
             &procID,
             aggID,
             Self.audioQueue
-        ) { [weak self] _, inInputData, _, _, _ in
+        ) { @Sendable [weak self] _, inInputData, _, _, _ in
             // `inInputData` is the AudioBufferList carrying the tap's PCM
             // samples for this IO cycle. Each cycle is short (the HAL
             // schedules at the device's preferred buffer size — typically
