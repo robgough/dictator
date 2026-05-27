@@ -65,6 +65,19 @@ struct MeetingsPane: View {
             } header: {
                 Text("Speakers")
             }
+
+            Section {
+                Toggle("Drop echoes captured by my microphone", isOn: Binding(
+                    get: { s.settings.meetingDedupeMicEchoes },
+                    set: { s.settings.meetingDedupeMicEchoes = $0; state.save() }
+                ))
+            } header: {
+                Text("Echo cleanup")
+            } footer: {
+                Text("When you're not wearing headphones, your mic picks up the remote speakers and the same words appear twice in the transcript. This drops the mic-track copies. Turn off if you suspect it's eating legitimate overlapping speech.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
