@@ -35,6 +35,10 @@ struct DictatorApp: App {
         }
         .handlesExternalEvents(matching: ["settings"])
 
+        // Meetings is in-progress and only available in Debug / custom
+        // `MEETINGS_ENABLED` builds. See `MeetingsFeature.swift` for
+        // the rationale + how to flip it on for a one-off Release.
+        #if DEBUG || MEETINGS_ENABLED
         WindowGroup(id: "meetings") {
             MeetingsRootView()
                 .environment(appState)
@@ -42,6 +46,7 @@ struct DictatorApp: App {
         }
         .defaultSize(width: 980, height: 640)
         .handlesExternalEvents(matching: ["meetings"])
+        #endif
     }
 
     /// Routes incoming `dictator://…` URLs. Three hosts handled today:
@@ -58,6 +63,10 @@ struct DictatorApp: App {
             NSApp.activate(ignoringOtherApps: true)
             appState.showOnboarding()
         case "meetings":
+            guard MeetingsFeature.isEnabled else {
+                NSLog("[Dictator] dictator://meetings ignored — Meetings feature is disabled in this build")
+                return
+            }
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             appState.openMeetingsAction?()
@@ -109,6 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 AppState.shared.showOnboarding()
             case "meetings":
+                guard MeetingsFeature.isEnabled else {
+                    NSLog("[Dictator] dictator://meetings ignored — Meetings feature is disabled in this build")
+                    continue
+                }
                 Task { @MainActor in
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
