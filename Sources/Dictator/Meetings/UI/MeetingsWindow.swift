@@ -47,15 +47,22 @@ struct MeetingsRootView: View {
     }
 
     /// Collect dropped URLs and feed them through the same import path
-    /// the toolbar's Import… button uses.
-    private func handleDroppedProviders(_ providers: [NSItemProvider]) {
-        for provider in providers {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url, MeetingImporter.urlLooksLikeAudio(url) else { return }
-                Task { @MainActor in
-                    await importFiles([url])
-                }
-            }
+    /// the toolbar's Import… button uses. The drop zone uses SwiftUI's
+    /// modern `.dropDestination(for: URL.self)`, which hands us real
+    /// file URLs directly — far more reliable than the legacy
+    /// `NSItemProvider.loadObject(ofClass: URL.self)` path, which on
+    /// macOS 26 silently drops items for many providers (Voice Memos
+    /// `.m4a` exports were the obvious casualty: their provider vends
+    /// the file via `com.apple.m4a-audio` but not as a plain `URL`
+    /// object, so `loadObject` returned nil and the import never fired).
+    private func handleDroppedURLs(_ urls: [URL]) {
+        // Logged so the user can verify drops are actually reaching the
+        // app via Console.app — useful for any next-pass debugging.
+        NSLog("[Dictator] Drop received: \(urls.count) urls — \(urls.map { $0.lastPathComponent })")
+        let audioURLs = urls.filter { MeetingImporter.urlLooksLikeAudio($0) }
+        guard !audioURLs.isEmpty else { return }
+        Task { @MainActor in
+            await importFiles(audioURLs)
         }
     }
 
@@ -82,8 +89,8 @@ struct MeetingsRootView: View {
                 }
                 .frame(maxHeight: .infinity)
             }
-            SidebarDropZone { providers in
-                handleDroppedProviders(providers)
+            SidebarDropZone { urls in
+                handleDroppedURLs(urls)
             }
         }
     }
@@ -263,8 +270,20 @@ struct MeetingsEmptyState: View {
 /// border, downward arrow, "Drop audio to transcribe" label. Hover
 /// state tints the chrome so a dragging cursor gets visual feedback
 /// before the drop lands.
+///
+/// Uses SwiftUI's `.dropDestination(for: URL.self)` (introduced in
+/// macOS 13). The older `.onDrop(of:isTargeted:)` + `NSItemProvider`
+/// shape didn't fire reliably on macOS 26 — Voice Memos `.m4a` files
+/// dropped from Finder never produced a URL through
+/// `loadObject(ofClass: URL.self)`, so the import silently no-op'd.
+/// `dropDestination(for: URL.self)` handles file-promise,
+/// security-scoped, and async-loaded providers internally and yields
+/// `[URL]` directly. The URL-shaped Transferable conformance accepts
+/// any provider that can vend a file URL, regardless of which audio
+/// UTI it advertises — `MeetingImporter.urlLooksLikeAudio(_:)` does
+/// the final filter so we don't try to transcribe text files.
 private struct SidebarDropZone: View {
-    let onDrop: ([NSItemProvider]) -> Void
+    let onDrop: ([URL]) -> Void
     @State private var isTargeted = false
 
     var body: some View {
@@ -281,6 +300,7 @@ private struct SidebarDropZone: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
         .padding(.horizontal, 10)
+        .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
@@ -294,9 +314,11 @@ private struct SidebarDropZone: View {
         )
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
-        .onDrop(of: MeetingImporter.acceptedContentTypes, isTargeted: $isTargeted) { providers in
-            onDrop(providers)
-            return true
+        .dropDestination(for: URL.self) { urls, _ in
+            onDrop(urls)
+            return !urls.isEmpty
+        } isTargeted: { hovering in
+            isTargeted = hovering
         }
         .help("Drop an audio file here to import it as a new meeting.")
     }
