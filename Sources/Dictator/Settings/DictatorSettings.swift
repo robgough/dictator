@@ -81,6 +81,44 @@ enum AudioInterruption: String, Codable, Sendable, Hashable, CaseIterable {
     }
 }
 
+/// Whether the meeting microphone recorder should run macOS's built-in
+/// voice-processing chain (acoustic echo cancellation + noise suppression
+/// + automatic gain control) on the captured audio. The point is mostly
+/// the AEC: when the user isn't wearing headphones during a video call,
+/// the Mac's speakers play the remote audio and the mic picks it back up.
+/// Without AEC, every remote utterance appears twice in the merged
+/// transcript — once correctly on the system track, once incorrectly
+/// attributed to "Me" on the mic track. With AEC on, macOS subtracts the
+/// playback reference signal from the mic capture before it ever reaches
+/// the recorder, so the bleed simply isn't in the file.
+///
+/// - `auto` (default): AEC on when the active output looks like speakers
+///   (built-in laptop speakers, external monitor, anything that radiates
+///   into the room), off when it looks like headphones (AirPods / BT
+///   headset / a device whose name says "headphones"). Ambiguous outputs
+///   (external USB audio interface, HDMI, AirPlay) leave AEC OFF — the
+///   thinner-timbre failure mode of unnecessary AEC is more user-visible
+///   than the duplication failure mode of missing AEC, which the
+///   post-transcription dedup catches as backup.
+/// - `alwaysOn`: force AEC regardless of output. Useful if the auto
+///   heuristic guesses wrong and the user is consistently getting bleed.
+/// - `alwaysOff`: skip AEC. Useful on a setup where the user is always on
+///   headphones and the slight voice-timbre change AEC introduces is
+///   audible enough to bother them.
+enum MeetingMicEchoCancellation: String, Codable, Sendable, Hashable, CaseIterable {
+    case auto
+    case alwaysOn
+    case alwaysOff
+
+    var label: String {
+        switch self {
+        case .auto: return "Automatic"
+        case .alwaysOn: return "Always on"
+        case .alwaysOff: return "Always off"
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
@@ -164,6 +202,15 @@ struct DictatorSettings: Codable, Equatable {
     /// `meetingAutoDeleteAfterDays`: a meeting hit by both first loses
     /// audio, then the whole record when the older window kicks in.
     var meetingAudioRetentionDays: Int = 0
+
+    /// How the meeting mic recorder handles speaker-bleed (remote audio
+    /// played through the Mac speakers, picked up by the mic). See the
+    /// `MeetingMicEchoCancellation` enum doc-comment for the trade-offs
+    /// behind each value. Per-Mac because the right answer depends on
+    /// this machine's typical output device — a desktop with always-on
+    /// speakers wants `.alwaysOn`, a laptop the user always wears AirPods
+    /// with wants `.alwaysOff`.
+    var meetingMicEchoCancellation: MeetingMicEchoCancellation = .auto
 
     /// Opt-in: when true, MeetingProcessor runs the structured LLM summary
     /// pass automatically after transcription. False by default — summary
@@ -335,6 +382,7 @@ struct DictatorSettings: Codable, Equatable {
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
+        self.meetingMicEchoCancellation = try c.decodeIfPresent(MeetingMicEchoCancellation.self, forKey: .meetingMicEchoCancellation) ?? d.meetingMicEchoCancellation
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
@@ -990,6 +1038,7 @@ struct DictatorSettings: Codable, Equatable {
         case hasCompletedOnboarding
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
+        case meetingMicEchoCancellation
         case meetingSummaryEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
@@ -1043,6 +1092,7 @@ struct DictatorSettings: Codable, Equatable {
         "hasCompletedOnboarding",
         "meetingAutoDeleteAfterDays",
         "meetingAudioRetentionDays",
+        "meetingMicEchoCancellation",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

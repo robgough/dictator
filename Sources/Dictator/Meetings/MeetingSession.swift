@@ -164,7 +164,8 @@ final class MeetingSession: Identifiable {
             do {
                 try await micRecorder.start(
                     at: MeetingStorage.micURL(for: id),
-                    preferredDevice: preferredMicDevice
+                    preferredDevice: preferredMicDevice,
+                    echoCancellation: AppState.shared.settings.meetingMicEchoCancellation
                 )
             } catch {
                 NSLog("[Dictator] Meeting mic capture failed to start: \(error)")
