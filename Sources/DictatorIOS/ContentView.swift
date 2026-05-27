@@ -375,11 +375,6 @@ struct ContentView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
-                if snapshot.totalFiles > 0 {
-                    Text("File \(min(snapshot.currentFileIndex + 1, snapshot.totalFiles)) of \(snapshot.totalFiles)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
             }
             // "Leave the app" reassurance — this is the headline UX
             // change. The previous version told users to keep Dictator

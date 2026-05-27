@@ -816,11 +816,6 @@ struct OnboardingSheet: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
-                if snapshot.totalFiles > 0 {
-                    Text("File \(min(snapshot.currentFileIndex + 1, snapshot.totalFiles)) of \(snapshot.totalFiles)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
             }
             Text(paused
                  ? "Tap Resume to continue where you left off."
