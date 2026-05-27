@@ -45,6 +45,30 @@ enum DictatorIOSSettings {
     /// fallback re-prompts) and never re-presents once this flag flips.
     static let onboardingCompletedKey = "DictatorIOS.onboardingCompleted"
 
+    /// True once the user has explicitly confirmed their model choice
+    /// in the first-launch walkthrough's picker step. Persisted via
+    /// `@AppStorage` rather than `@State` so a kill-and-relaunch
+    /// mid-onboarding doesn't ask the user to re-pick a variant they
+    /// already chose (and possibly already started downloading).
+    static let modelChoiceConfirmedKey = "DictatorIOS.modelChoiceConfirmed"
+
+    /// Best-guess default Parakeet variant based on the device's
+    /// preferred language. English-locale users get v2 (English-only)
+    /// — it's slightly tighter on English accuracy because the model
+    /// isn't splitting capacity across other European languages.
+    /// Everyone else gets v3 (multilingual). The user can still flip
+    /// either way from the onboarding picker or settings — this only
+    /// decides what we recommend / pre-select.
+    @MainActor
+    static func recommendedModelID() -> String {
+        // `Locale.preferredLanguages` returns BCP-47 tags like "en-GB"
+        // / "en-US" / "fr-FR" / "de-DE". Prefix-match on the 2-letter
+        // language code; the region doesn't matter for our split.
+        let preferred = Locale.preferredLanguages.first ?? "en"
+        let langCode = String(preferred.split(separator: "-").first ?? "en").lowercased()
+        return langCode == "en" ? "parakeet-tdt-0.6b-v2" : "parakeet-tdt-0.6b-v3"
+    }
+
     /// Register first-launch defaults so `UserDefaults.bool(forKey:)`
     /// reads return the intended value for un-set keys. Called once
     /// from `DictatorIOSApp.init()` (main actor). Built as a static
@@ -64,7 +88,10 @@ enum DictatorIOSSettings {
             // the feature on, others see the toggle hidden so the
             // stored value is moot.
             foundationCleanupKey: AppleFoundationCleanup.isAvailable,
-            selectedModelKey: "parakeet-tdt-0.6b-v3",
+            // Locale-aware first-launch default: English locales get
+            // v2, everyone else gets v3. The picker in the onboarding
+            // sheet still lets the user flip either way.
+            selectedModelKey: recommendedModelID(),
         ])
     }
 

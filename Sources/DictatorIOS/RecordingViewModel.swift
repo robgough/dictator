@@ -215,7 +215,7 @@ final class RecordingViewModel {
         // the `?? v3` fallback covers a hypothetical un-registered
         // launch path defensively.
         let storedID = UserDefaults.standard.string(forKey: DictatorIOSSettings.selectedModelKey)
-            ?? "parakeet-tdt-0.6b-v3"
+            ?? DictatorIOSSettings.recommendedModelID()
         selectedModelID = storedID
         // Cheap synchronous filesystem check — no network, no model
         // touched. Drives the first-launch UI: if the model isn't on

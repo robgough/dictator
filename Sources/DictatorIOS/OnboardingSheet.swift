@@ -67,14 +67,14 @@ struct OnboardingSheet: View {
     @State private var openAccessConfirmed = false
 
     /// Latches the model-picker step (step 2) once the user explicitly
-    /// confirms their choice in this onboarding session. Returning
-    /// users with the model already on disk bypass this latch — the
-    /// `chooseModel` state check treats "files exist for the
-    /// persisted selection" as proof the language choice was already
-    /// made on a prior launch, so we don't ambush them with a
-    /// confirmation step for a decision they've effectively already
-    /// made.
-    @State private var modelChoiceConfirmed = false
+    /// confirms their choice. Persisted via `@AppStorage` so a
+    /// kill-and-relaunch mid-onboarding doesn't bounce the user back
+    /// to the picker — if they've already chosen a model and started
+    /// the (background, resumable) download, the relaunched onboarding
+    /// sheet lands them directly on the download step with the
+    /// resumed progress visible. Returning users with the model
+    /// already on disk also bypass via the `chooseModel` state check.
+    @AppStorage(DictatorIOSSettings.modelChoiceConfirmedKey) private var modelChoiceConfirmed = false
 
     /// Re-evaluated whenever the scene foregrounds — the user
     /// flipping a system Settings switch is invisible to us until we
@@ -567,19 +567,40 @@ struct OnboardingSheet: View {
     /// (the download step's check goes green immediately).
     @ViewBuilder
     private var modelChoiceInline: some View {
+        // Order the cards so the locale-recommended variant sits first
+        // (and carries the "Recommended" badge in its detail copy).
+        // English-locale phones get v2 on top; everyone else gets v3.
+        let recommendedID = DictatorIOSSettings.recommendedModelID()
+        let v3Card = ModelOption(
+            id: "parakeet-tdt-0.6b-v3",
+            title: "Parakeet (multilingual)",
+            base: "Around 460 MB. Supports English plus French, German, Spanish, Italian, Dutch, and other European languages."
+        )
+        let v2Card = ModelOption(
+            id: "parakeet-tdt-0.6b-v2",
+            title: "Parakeet (English-only)",
+            base: "Around 460 MB. Same speed, slightly tighter on English accuracy because the model isn't splitting capacity across other languages."
+        )
+        let ordered: [ModelOption] = (recommendedID == v2Card.id) ? [v2Card, v3Card] : [v3Card, v2Card]
         VStack(spacing: 8) {
-            modelOptionCard(
-                id: "parakeet-tdt-0.6b-v3",
-                title: "Parakeet (multilingual)",
-                detail: "Recommended. Around 460 MB. Supports English plus French, German, Spanish, Italian, Dutch, and other European languages."
-            )
-            modelOptionCard(
-                id: "parakeet-tdt-0.6b-v2",
-                title: "Parakeet (English-only)",
-                detail: "Around 460 MB. Same speed, slightly tighter on English accuracy because the model isn't splitting capacity across other languages."
-            )
+            ForEach(ordered, id: \.id) { card in
+                modelOptionCard(
+                    id: card.id,
+                    title: card.title,
+                    detail: (card.id == recommendedID ? "Recommended. " : "") + card.base
+                )
+            }
         }
         .padding(.top, 6)
+    }
+
+    /// Lightweight tuple used only inside `modelChoiceInline` to
+    /// describe a picker card before its "Recommended. " prefix is
+    /// stamped on at render time.
+    private struct ModelOption {
+        let id: String
+        let title: String
+        let base: String
     }
 
     /// One row in the picker. Tappable surface mutates `selectedModelID`
