@@ -183,12 +183,12 @@ struct MeetingsRootView: View {
 
     private func startRecording() async {
         // Probe permission first so the user gets the deep-link banner
-        // before we try to bring up SCStream.
-        switch await ScreenRecordingPermission.probe() {
+        // before we try to bring up the CATap recorder.
+        switch await AudioRecordingPermission.probe() {
         case .granted:
             permissionMessage = nil
         case .notGranted:
-            permissionMessage = "Dictator needs Screen Recording permission. Open System Settings, then come back."
+            permissionMessage = "Dictator needs System Audio Recording permission. Open System Settings, then come back."
             return
         }
         let session = MeetingSession(forLiveRecording: UUID())
@@ -279,7 +279,7 @@ struct MeetingsEmptyState: View {
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
                     Button("Open System Settings") {
-                        ScreenRecordingPermission.openSystemSettings()
+                        AudioRecordingPermission.openSystemSettings()
                     }
                 }
                 .padding(16)
