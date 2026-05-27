@@ -670,7 +670,24 @@ final class RecordingViewModel {
         case .paused(let snapshot, let reason):
             modelDiskStatus = .paused(snapshot: snapshot, reason: reason)
         case .completed:
-            modelDiskStatus = .downloaded
+            // Gate on a fresh disk probe. The downloader's `.completed`
+            // state can outlive the actual files — a stale `.completed`
+            // from a previous run, a different model variant, or the
+            // simulator's storage being wiped between launches all
+            // produced the bug where `modelDiskStatus = .downloaded`
+            // but `ParakeetService.modelsExist` returned false. The
+            // onboarding sheet's `firstPendingKind` reads `modelsExist`
+            // directly (live), so it kept showing step 2 active while
+            // the view model said `.downloaded`, and tapping the CTA
+            // routed into `confirmAndDownloadModel`'s "already in
+            // downloaded — ignoring tap" guard. Trust the disk, not the
+            // downloader's last-known state.
+            if ParakeetService.modelsExist(id: selectedModelID) {
+                modelDiskStatus = .downloaded
+            } else {
+                NSLog("[Dictator iOS] downloader reports .completed but files for \(selectedModelID) are missing — resetting state")
+                modelDiskStatus = .notDownloaded
+            }
             publishModelReadiness()
         case .failed(let message):
             modelDiskStatus = .failed(message)
