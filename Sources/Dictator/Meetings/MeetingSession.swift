@@ -61,6 +61,13 @@ final class MeetingSession: Identifiable {
     private var lastMicLevel: Float = 0
     private var lastSystemLevel: Float = 0
 
+    /// Draft transcript service, live for the duration of a recording. Nil
+    /// outside of an active recording (and for sessions opened from disk
+    /// or via import — those go straight to the post-capture processor).
+    /// Exposed so `LiveRecordingView` can subscribe to its `interimText`
+    /// and re-render the draft as new chunks land.
+    private(set) var liveTranscriber: MeetingLiveTranscriber?
+
     var micFileURL: URL? {
         guard meta.audioFiles.mic != nil else { return nil }
         return MeetingStorage.micURL(for: id)
@@ -156,12 +163,30 @@ final class MeetingSession: Identifiable {
             guard let self else { return }
             self.timerTask?.cancel()
             self.timerTask = nil
+            self.liveTranscriber?.stop()
+            self.liveTranscriber = nil
             self.state = .failed(reason)
         }
         micRecorder.onLevel = { [weak self] mic in
             guard let self else { return }
             self.lastMicLevel = mic
             self.pushLevels()
+        }
+
+        // Live transcript scaffolding. Constructed once we know recording
+        // is going to be attempted (post permission probe), wired to both
+        // recorders so future "live both tracks" work doesn't need another
+        // hook, and torn down on stop / unexpected stop. The transcriber
+        // is given the parakeet model id once at construction; settings
+        // changes mid-meeting don't apply until the next recording.
+        let liveModelID = AppState.shared.settings.parakeetModelID
+        let live = MeetingLiveTranscriber(parakeetModelID: liveModelID)
+        liveTranscriber = live
+        recorder.onBuffer = { [weak live] sampleBuffer in
+            live?.feedSystemBuffer(sampleBuffer)
+        }
+        micRecorder.onBuffer = { [weak live] buffer in
+            live?.feedMicBuffer(buffer)
         }
 
         do {
@@ -210,6 +235,13 @@ final class MeetingSession: Identifiable {
         async let micStop: Void = micRecorder.stop()
         let systemResult = await systemStop
         await micStop
+        // Tear down the live transcriber after the recorders so any final
+        // buffers they enqueued get a chance to land before we cancel the
+        // in-flight chunk task. The Parakeet weights themselves live in
+        // `ParakeetServiceHolder.shared` and stay warm — the processor
+        // about to run will reuse them immediately.
+        liveTranscriber?.stop()
+        liveTranscriber = nil
         // Reflect what actually landed on disk. SCStream owns the system
         // track; the parallel AVCaptureSession owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(

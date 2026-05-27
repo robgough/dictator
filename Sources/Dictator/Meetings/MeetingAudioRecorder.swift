@@ -50,6 +50,15 @@ final class MeetingAudioRecorder {
     /// without us holding an idle assertion). Recorder is left torn down.
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
+    /// Optional sink for raw system-audio sample buffers, fired alongside
+    /// the on-disk write. The live-transcript service hangs off this so it
+    /// can re-encode each buffer for Parakeet without us having to plumb a
+    /// second SCStream output. **Fires on the SCStream audio dispatch
+    /// queue (`Self.audioQueue`), not the main actor** — the callee is
+    /// responsible for any actor hop. Read on the audio queue; rebound in
+    /// `start` and never reassigned mid-stream.
+    var onBuffer: (@Sendable (CMSampleBuffer) -> Void)?
+
     private var lastSystemLevel: Float = 0
 
     init() {}
@@ -98,7 +107,7 @@ final class MeetingAudioRecorder {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         config.queueDepth = 5
 
-        let forwarder = StreamOutputForwarder(owner: self)
+        let forwarder = StreamOutputForwarder(owner: self, bufferSink: onBuffer)
         // Attach the forwarder as both output and delegate — without the
         // delegate we miss didStopWithError, which is the only way to find
         // out SCK stopped the stream for us (permission revoked, display
@@ -141,7 +150,21 @@ final class MeetingAudioRecorder {
 
     // MARK: - Sample ingest (called from non-main queues)
 
-    fileprivate nonisolated func ingest(audio sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) {
+    fileprivate nonisolated func ingest(
+        audio sampleBuffer: CMSampleBuffer,
+        type: SCStreamOutputType,
+        sink: (@Sendable (CMSampleBuffer) -> Void)?
+    ) {
+        // Fire the optional raw-buffer sink first, off-main, so the live
+        // transcriber can start its conversion on the audio queue while
+        // we're still building the resampled mono Float32 for disk. The
+        // sink contract documents that it runs on this queue and is
+        // responsible for any actor hop of its own. The sink is snapshotted
+        // by the forwarder at start time so we never have to cross the
+        // MainActor isolation barrier to read it.
+        if type == .audio, let sink {
+            sink(sampleBuffer)
+        }
         guard let (samples, format) = Self.extractPCM(from: sampleBuffer, type: type) else { return }
         let level = Self.rms(samples: samples)
         Task { @MainActor [weak self] in
@@ -311,15 +334,24 @@ final class MeetingAudioRecorder {
 /// straight back to the main actor before touching any owner state.
 private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     weak var owner: MeetingAudioRecorder?
+    /// Snapshot of `MeetingAudioRecorder.onBuffer` taken at start. Holding
+    /// it on the (`@unchecked Sendable`) forwarder lets the audio queue
+    /// invoke it without ever crossing the main-actor isolation barrier
+    /// to read it back off the recorder. Set once, never reassigned.
+    let bufferSink: (@Sendable (CMSampleBuffer) -> Void)?
 
-    init(owner: MeetingAudioRecorder) {
+    init(
+        owner: MeetingAudioRecorder,
+        bufferSink: (@Sendable (CMSampleBuffer) -> Void)?
+    ) {
         self.owner = owner
+        self.bufferSink = bufferSink
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
         case .audio:
-            owner?.ingest(audio: sampleBuffer, type: type)
+            owner?.ingest(audio: sampleBuffer, type: type, sink: bufferSink)
         default:
             // .screen (required by SCK but discarded) and .microphone
             // (we don't request it — mic capture lives in MeetingMicRecorder).
