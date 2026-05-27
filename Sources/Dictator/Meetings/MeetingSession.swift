@@ -148,18 +148,20 @@ final class MeetingSession: Identifiable {
 
     // MARK: - Live recording
 
-    /// Begin capture. The session takes care of probing screen-recording
-    /// permission first; on denial it lands in `.failed`.
+    /// Begin capture. The session takes care of probing system-audio-
+    /// recording permission first; on denial it lands in `.failed`. The
+    /// probe attempts a tap creation and treats the macOS prompt outcome
+    /// as the source of truth — there's no preflight API for this bucket.
     func startRecording(preferredMicDevice: AudioDevice?) async {
         guard case .idle = state else { return }
         state = .warmingUp
         captureWarnings = []
 
-        switch await ScreenRecordingPermission.probe() {
+        switch await AudioRecordingPermission.probe() {
         case .granted:
             break
         case .notGranted:
-            state = .failed("Dictator needs Screen Recording permission to capture meeting audio. Open System Settings to grant it, then try again.")
+            state = .failed("Dictator needs System Audio Recording permission to capture meeting audio. Open System Settings to grant it, then try again.")
             return
         }
 
@@ -214,11 +216,11 @@ final class MeetingSession: Identifiable {
         do {
             let folder = MeetingStorage.folder(for: id)
             try await recorder.start(folder: folder, preferredMicUID: nil)
-            // Mic capture runs on its own AVCaptureSession alongside SCK —
-            // SCK's `.microphone` output silently dropped buffers on this
-            // test machine, so the proven dictation path owns mic capture
-            // here. Failure to start mic isn't fatal: system-only recording
-            // is still useful (and surfaces in the UI via didCaptureMic).
+            // Mic capture runs on its own AVAudioEngine alongside the
+            // CATap system recorder — voice-processing AEC against the
+            // speakers is only exposed via AVAudioEngine. Failure to start
+            // mic isn't fatal: system-only recording is still useful (and
+            // surfaces in the UI via didCaptureMic).
             do {
                 try await micRecorder.start(
                     at: MeetingStorage.micURL(for: id),
@@ -281,8 +283,8 @@ final class MeetingSession: Identifiable {
         // about to run will reuse them immediately.
         liveTranscriber?.stop()
         liveTranscriber = nil
-        // Reflect what actually landed on disk. SCStream owns the system
-        // track; the parallel AVCaptureSession owns the mic.
+        // Reflect what actually landed on disk. The CATap process tap owns
+        // the system track; the parallel AVAudioEngine owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(
             mic: micRecorder.didCapture ? MeetingStorage.micFilename : nil,
             system: systemResult.didCaptureSystem ? MeetingStorage.systemFilename : nil

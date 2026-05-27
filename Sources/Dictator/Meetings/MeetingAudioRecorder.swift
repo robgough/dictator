@@ -1,42 +1,54 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
+import AudioToolbox
+import CoreAudio
 import CoreMedia
-import ScreenCaptureKit
 import AppKit
 import os
 
-/// Captures **system audio** for one meeting via ScreenCaptureKit. Writes
-/// a single CAF file (system.caf) into the meeting's folder.
+/// Captures **system audio** for one meeting via the CoreAudio Process Tap
+/// API (`AudioHardwareCreateProcessTap`, introduced in macOS 14.4). Writes a
+/// single `system.caf` file (Float32 mono) into the meeting's folder.
 ///
-/// SCK's own `.microphone` output dropped buffers silently on at least one
-/// test Mac (delegate fired but the writes never landed on disk), so the
-/// mic track is captured by a sibling `MeetingMicRecorder` running its own
-/// AVCaptureSession — same proven path the dictation flow uses every day.
-/// Two recorders run in parallel for the duration of the meeting; the
-/// session orchestrates their lifecycle.
+/// Why CATap instead of ScreenCaptureKit? SCK enforces Apple's
+/// "screen-recording-shaped" allow list: FaceTime, Apple Music, and a
+/// handful of DRM-conscious apps silently produce zero audio buffers under
+/// SCK, regardless of permissions. CATap sits below that allow list and
+/// captures whatever is going through the system mixer — so a Dictator
+/// meeting recording finally covers FaceTime + Music + streaming services.
 ///
-/// We pick the smallest possible content filter (2×2 pixels, 1 fps) and
-/// drop video buffers as they arrive — SCK refuses to start without a
-/// video stream, but the per-frame cost is negligible at that size.
+/// The mic track is still owned by `MeetingMicRecorder` (AVAudioEngine on
+/// the mic input — needed for voice-processing AEC against the speakers).
+/// The two recorders run in parallel; the session orchestrates lifecycle.
+///
+/// Shape modelled on insidegui/AudioCap (`ProcessTap.swift`), adapted to
+/// keep the recorder's existing public surface (`onReady`, `onLevel`,
+/// `onUnexpectedStop`, `onBuffer`, `start`/`stop`) so the session and live
+/// transcriber don't shift around this rewrite.
 @MainActor
 final class MeetingAudioRecorder {
-    /// SCStream sample rate. 48 kHz is SCK's preferred output; we downsample
-    /// at ASR time, so picking the higher rate avoids upsample artifacts.
-    private static let sampleRate: Double = 48_000
-    private static let channelCount: Int = 2
+    /// Stable UID prefix for our private aggregate devices. The full UID is
+    /// `\(aggregateUIDPrefix)\(uuid)`; the prefix is what `sweepStaleAggregates()`
+    /// uses to recognise our own leaked devices and reap them on launch.
+    /// Bundle ID is in there so a future re-namespacing of the app doesn't
+    /// accidentally inherit some other product's leaked UIDs.
+    private static let aggregateUIDPrefix = "net.robgough.Dictator.meetingTap-"
 
-    private var stream: SCStream?
-    private var output: StreamOutputForwarder?
-    private var systemFile: AVAudioFile?
-    private var running = false
+    @ObservationIgnored private var processTapID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var aggregateDeviceID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var deviceProcID: AudioDeviceIOProcID?
+    @ObservationIgnored private var tapStreamDescription: AudioStreamBasicDescription?
+    @ObservationIgnored private var tapFormat: AVAudioFormat?
+    @ObservationIgnored private var systemFile: AVAudioFile?
+    @ObservationIgnored private var running = false
 
     /// Where the system audio is being written. Populated by `start`.
     private(set) var systemURL: URL?
     private(set) var startedAt: Date?
 
-    /// Fired once SCStream is producing buffers. The session's
-    /// `warmingUp` → `recording` pivot hangs off this.
+    /// Fired once the CATap IOProc has been started successfully. The
+    /// session's `warmingUp` → `recording` pivot hangs off this.
     var onReady: (@MainActor () -> Void)?
 
     /// Fired on each successful system-audio buffer with the current
@@ -46,48 +58,54 @@ final class MeetingAudioRecorder {
     /// callers that snapshot both into the same state.
     var onLevel: (@MainActor (_ mic: Float, _ system: Float) -> Void)?
 
-    /// Fired if SCStream stops itself outside our control (user revoked
-    /// the grant mid-recording, display went to sleep on system sleep
-    /// without us holding an idle assertion). Recorder is left torn down.
+    /// Fired if the IOProc stops itself outside our control. Rare on CATap
+    /// — mostly happens if the default output device disappears (HDMI
+    /// unplug, USB DAC powered off) and the aggregate's main sub-device
+    /// goes away with it.
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
     /// Fired once per recording with a human-readable reason the system
-    /// capture looks unhealthy. The classic case is FaceTime, Apple
-    /// Music, and a handful of other Apple apps that ScreenCaptureKit
-    /// refuses to surface audio for — buffers arrive for the rest of the
-    /// desktop but never carry the meeting itself. The session pipes
-    /// this into its `captureWarnings` collection which surfaces in the
-    /// LiveRecordingView banner.
+    /// capture looks unhealthy. With CATap the historical "FaceTime / Apple
+    /// Music is blocking us" failure mode is gone — this now mainly fires
+    /// if the IOProc starts but never delivers a buffer (e.g. nothing on
+    /// the system is producing audio for the full watchdog window). The
+    /// session pipes this into `captureWarnings` for the LiveRecordingView
+    /// banner.
     var onCaptureWarning: (@MainActor (String) -> Void)?
-
-    /// Flipped on the SCStream audio queue the first time a real audio
-    /// buffer arrives. Read on the main actor by the bring-up watchdog
-    /// 5s after start. `OSAllocatedUnfairLock<Bool>` is the async-safe
-    /// primitive: `NSLock` traps when called from an async context
-    /// under Swift 6 strict concurrency.
-    private let firstAudioBufferFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
-    private var bringUpWatchdog: Task<Void, Never>?
 
     /// Optional sink for raw system-audio sample buffers, fired alongside
     /// the on-disk write. The live-transcript service hangs off this so it
-    /// can re-encode each buffer for Parakeet without us having to plumb a
-    /// second SCStream output. **Fires on the SCStream audio dispatch
-    /// queue (`Self.audioQueue`), not the main actor** — the callee is
-    /// responsible for any actor hop. Read on the audio queue; rebound in
-    /// `start` and never reassigned mid-stream.
+    /// could re-encode each buffer for Parakeet. In v1 the live transcriber
+    /// drops system buffers (mic-only strategy), but we still synthesise a
+    /// CMSampleBuffer here to preserve the contract — a future "live both
+    /// tracks" upgrade picks it up for free. **Fires on the CATap audio
+    /// queue (`Self.audioQueue`), not the main actor** — the callee owns
+    /// any actor hop. Set once at `start` time and never reassigned.
     var onBuffer: (@Sendable (CMSampleBuffer) -> Void)?
+
+    /// Flipped on the CATap audio queue the first time a real audio buffer
+    /// arrives. Read on the main actor by the bring-up watchdog 5 s after
+    /// start. `OSAllocatedUnfairLock<Bool>` is the async-safe primitive:
+    /// `NSLock` traps when called from an async context under Swift 6
+    /// strict concurrency.
+    private let firstAudioBufferFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+    private var bringUpWatchdog: Task<Void, Never>?
 
     private var lastSystemLevel: Float = 0
 
     init() {}
 
-    /// Build the SCStream, open both AVAudioFiles lazily on first sample,
-    /// and begin capture. Throws on permission denied, content-filter
-    /// failure, or AVAudioFile setup. The meta.json is the session's
-    /// responsibility, not ours.
+    /// Build the tap + aggregate device + IOProc, open the AVAudioFile
+    /// lazily on first sample, and begin capture. Throws on permission
+    /// denied (tap creation fails with an OSStatus the user sees in the
+    /// error string) or aggregate / IOProc setup failure.
     func start(folder: URL, preferredMicUID: String?) async throws {
         guard !running else { return }
-        _ = preferredMicUID // mic capture lives in MeetingMicRecorder now
+        _ = preferredMicUID // mic capture lives in MeetingMicRecorder
+
+        // Reap any leaked aggregate devices from a previous crashed session
+        // before we add a new one. Cheap (single HAL property read).
+        Self.sweepStaleAggregates()
 
         let systemPath = folder.appendingPathComponent(MeetingStorage.systemFilename)
         self.systemURL = systemPath
@@ -95,74 +113,181 @@ final class MeetingAudioRecorder {
 
         NSLog("[Dictator] MeetingSystem: starting — destination=\(systemPath.lastPathComponent)")
 
-        let content = try await SCShareableContent.current
-        guard let display = content.displays.first else {
-            NSLog("[Dictator] MeetingSystem: no display in SCShareableContent — aborting")
+        // 1. Build the process tap. Stereo, global, with our own AudioObject
+        // ID in the exclude list — same intent as SCK's
+        // `excludesCurrentProcessAudio`, implemented at the HAL layer so we
+        // never sniff our own UI sounds back through the mix. If the PID
+        // can't be translated (our process hasn't appeared in the audio
+        // process list yet because we haven't played any audio in this
+        // session) we proceed with an empty exclude list — Dictator
+        // produces no meaningful audio, so the worst case is harmless.
+        let excludeIDs: [AudioObjectID]
+        if let ownObject = Self.translatePIDToAudioProcessObject(pid: ProcessInfo.processInfo.processIdentifier) {
+            excludeIDs = [ownObject]
+        } else {
+            excludeIDs = []
+        }
+        let tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: excludeIDs)
+        tapDesc.name = "Dictator meeting capture"
+        tapDesc.uuid = UUID()
+        tapDesc.muteBehavior = .unmuted // never mute the user's playback while capturing
+
+        var tapID: AUAudioObjectID = AudioObjectID(kAudioObjectUnknown)
+        let tapErr = AudioHardwareCreateProcessTap(tapDesc, &tapID)
+        guard tapErr == noErr, tapID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[Dictator] MeetingSystem: AudioHardwareCreateProcessTap failed: \(tapErr)")
             throw NSError(
-                domain: "Dictator.Meetings", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "No display available for the content filter."]
+                domain: "Dictator.Meetings", code: Int(tapErr),
+                userInfo: [NSLocalizedDescriptionKey: "Couldn't create the system audio tap (OSStatus \(tapErr)). Dictator needs System Audio Recording permission — open System Settings to grant it."]
+            )
+        }
+        self.processTapID = tapID
+
+        // 2. Read the tap's stream format so we can describe the aggregate
+        // device and the in-IOProc PCM extraction without guessing.
+        let streamDesc = try Self.readTapStreamDescription(tapID: tapID)
+        self.tapStreamDescription = streamDesc
+        var mutableStreamDesc = streamDesc
+        let tapFormat = AVAudioFormat(streamDescription: &mutableStreamDesc)
+        self.tapFormat = tapFormat
+        NSLog("[Dictator] MeetingSystem: tap format — rate=\(streamDesc.mSampleRate) ch=\(streamDesc.mChannelsPerFrame) flags=0x\(String(streamDesc.mFormatFlags, radix: 16))")
+
+        // 3. Build the aggregate device. We need a main sub-device for the
+        // clock — the default system output is the conventional choice and
+        // matches what AudioCap does. The tap is added as a sub-tap with
+        // drift compensation enabled so any clock skew between the tap and
+        // the output device is corrected by the HAL.
+        let defaultOutputID = try Self.readDefaultSystemOutputDevice()
+        let outputUID = try Self.readDeviceUID(deviceID: defaultOutputID)
+        let aggregateUID = "\(Self.aggregateUIDPrefix)\(UUID().uuidString)"
+
+        let description: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "Dictator Meeting Tap",
+            kAudioAggregateDeviceUIDKey: aggregateUID,
+            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceIsStackedKey: false,
+            kAudioAggregateDeviceTapAutoStartKey: true,
+            kAudioAggregateDeviceSubDeviceListKey: [
+                [kAudioSubDeviceUIDKey: outputUID]
+            ],
+            kAudioAggregateDeviceTapListKey: [
+                [
+                    kAudioSubTapDriftCompensationKey: true,
+                    kAudioSubTapUIDKey: tapDesc.uuid.uuidString,
+                ]
+            ],
+        ]
+
+        var aggID = AudioObjectID(kAudioObjectUnknown)
+        let aggErr = AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggID)
+        guard aggErr == noErr, aggID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[Dictator] MeetingSystem: AudioHardwareCreateAggregateDevice failed: \(aggErr)")
+            // Tear down the tap we just created — no aggregate means
+            // nothing to drive it, so leaving it around just leaks.
+            _ = AudioHardwareDestroyProcessTap(tapID)
+            self.processTapID = AudioObjectID(kAudioObjectUnknown)
+            throw NSError(
+                domain: "Dictator.Meetings", code: Int(aggErr),
+                userInfo: [NSLocalizedDescriptionKey: "Couldn't create the aggregate device for system capture (OSStatus \(aggErr))."]
+            )
+        }
+        self.aggregateDeviceID = aggID
+
+        // 4. Snapshot the buffer sink + tap format into Sendable locals so
+        // the IOProc block — running on the audio queue — never has to
+        // hop the main actor to read them back off `self`. `self` is
+        // captured weakly so the deinit path can collapse safely.
+        let bufferSink = onBuffer
+        let queueFormat = tapFormat
+        let firstFlag = firstAudioBufferFlag
+
+        var procID: AudioDeviceIOProcID?
+        let createErr = AudioDeviceCreateIOProcIDWithBlock(
+            &procID,
+            aggID,
+            Self.audioQueue
+        ) { [weak self] _, inInputData, _, _, _ in
+            // `inInputData` is the AudioBufferList carrying the tap's PCM
+            // samples for this IO cycle. Each cycle is short (the HAL
+            // schedules at the device's preferred buffer size — typically
+            // ~10 ms at 48 kHz), so per-call work has to stay cheap.
+            //
+            // Order matters: fire the raw buffer sink first (so the live
+            // transcriber can start its conversion while we're still
+            // downmixing for disk), then extract / write / RMS / level.
+            if let bufferSink, let format = queueFormat,
+               let sample = Self.wrapAudioBufferListAsSampleBuffer(
+                   bufferList: inInputData,
+                   format: format
+               ) {
+                bufferSink(sample)
+            }
+            guard let (samples, format) = Self.extractMonoFloat32(
+                bufferList: inInputData,
+                streamDescription: queueFormat?.streamDescription.pointee
+            ) else { return }
+            let level = Self.rms(samples: samples)
+
+            let wasFirst = firstFlag.withLock { seen -> Bool in
+                guard !seen else { return false }
+                seen = true
+                return true
+            }
+            if wasFirst {
+                NSLog("[Dictator] MeetingSystem: first audio buffer — format=\(format.sampleRate)/\(format.channelCount), frames=\(samples.count), rmsLevel=\(level)")
+            }
+
+            Task { @MainActor [weak self] in
+                self?.write(samples: samples, format: format, level: level)
+            }
+        }
+        guard createErr == noErr, let procID else {
+            NSLog("[Dictator] MeetingSystem: AudioDeviceCreateIOProcIDWithBlock failed: \(createErr)")
+            _ = AudioHardwareDestroyAggregateDevice(aggID)
+            self.aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
+            _ = AudioHardwareDestroyProcessTap(tapID)
+            self.processTapID = AudioObjectID(kAudioObjectUnknown)
+            throw NSError(
+                domain: "Dictator.Meetings", code: Int(createErr),
+                userInfo: [NSLocalizedDescriptionKey: "Couldn't attach the IO proc to the aggregate device (OSStatus \(createErr))."]
+            )
+        }
+        self.deviceProcID = procID
+
+        // Reset the first-buffer flag before declaring the recorder running
+        // so the watchdog has a clean signal. The audio queue may already
+        // be racing to deliver — the lock serialises them safely.
+        firstAudioBufferFlag.withLock { $0 = false }
+
+        let startErr = AudioDeviceStart(aggID, procID)
+        guard startErr == noErr else {
+            NSLog("[Dictator] MeetingSystem: AudioDeviceStart failed: \(startErr)")
+            _ = AudioDeviceDestroyIOProcID(aggID, procID)
+            self.deviceProcID = nil
+            _ = AudioHardwareDestroyAggregateDevice(aggID)
+            self.aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
+            _ = AudioHardwareDestroyProcessTap(tapID)
+            self.processTapID = AudioObjectID(kAudioObjectUnknown)
+            throw NSError(
+                domain: "Dictator.Meetings", code: Int(startErr),
+                userInfo: [NSLocalizedDescriptionKey: "Couldn't start the audio device (OSStatus \(startErr))."]
             )
         }
 
-        // Exclude our own bundle so the recorder doesn't capture
-        // Dictator's own UI sounds (or future chimes) into system.m4a.
-        let ownBundleID = Bundle.main.bundleIdentifier ?? "net.robgough.Dictator"
-        let runningApp = content.applications.first { $0.bundleIdentifier == ownBundleID }
-        let exclude: [SCRunningApplication] = runningApp.map { [$0] } ?? []
-        let filter = SCContentFilter(display: display, excludingApplications: exclude, exceptingWindows: [])
-        NSLog("[Dictator] MeetingSystem: filter built — display=\(display.displayID), excludeOwnApp=\(runningApp != nil)")
+        NSLog("[Dictator] MeetingSystem: CATap IOProc started — tap=#\(tapID) aggregate=#\(aggID)")
 
-        let config = SCStreamConfiguration()
-        config.capturesAudio = true
-        // SCK's `.microphone` output was unreliable on this codebase's test
-        // hardware — buffers arrived but never landed on disk and no error
-        // was raised. Mic capture moved out to a parallel AVCaptureSession
-        // (see `MeetingMicRecorder`); SCStream is now system-only.
-        config.captureMicrophone = false
-        config.excludesCurrentProcessAudio = true
-        config.sampleRate = Int(Self.sampleRate)
-        config.channelCount = Self.channelCount
-        // Minimum-cost video stream — SCK requires it, but we drop every
-        // .screen sample on arrival.
-        config.width = 2
-        config.height = 2
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        config.queueDepth = 5
-
-        let forwarder = StreamOutputForwarder(owner: self, bufferSink: onBuffer)
-        // Attach the forwarder as both output and delegate — without the
-        // delegate we miss didStopWithError, which is the only way to find
-        // out SCK stopped the stream for us (permission revoked, display
-        // disconnected, etc.).
-        let stream = SCStream(filter: filter, configuration: config, delegate: forwarder)
-        try stream.addStreamOutput(forwarder, type: .audio, sampleHandlerQueue: Self.audioQueue)
-        try stream.addStreamOutput(forwarder, type: .screen, sampleHandlerQueue: Self.videoQueue)
-
-        try await stream.startCapture()
-        NSLog("[Dictator] MeetingSystem: SCStream startCapture returned, awaiting first audio buffer")
-
-        // Reset the first-buffer flag before declaring the recorder
-        // running so the watchdog has a clean signal. The audio queue
-        // may already be racing to deliver buffers — the lock serialises
-        // them safely.
-        firstAudioBufferFlag.withLock { $0 = false }
-
-        self.stream = stream
-        self.output = forwarder
         self.running = true
         self.startedAt = Date()
         startBringUpWatchdog()
         onReady?()
     }
 
-    /// Arm a 5-second timer that checks whether SCStream is actually
-    /// delivering audio buffers. ScreenCaptureKit happily reports a
-    /// running stream for some Apple apps (FaceTime, Apple Music, the
-    /// short list of "protected" apps that block screen-recording-shaped
-    /// capture) while silently never emitting audio for the app of
-    /// interest. We can't force capture if Apple has decided not to
-    /// surface it; we just need to tell the user instead of leaving
-    /// them on a flat system meter for the whole call.
+    /// Arm a 5-second timer that checks whether the IOProc is actually
+    /// delivering audio buffers. With CATap the historical "FaceTime is
+    /// blocking us" failure mode is gone — silence here usually means
+    /// nothing on the system was producing audio for the whole window,
+    /// which on a meeting is unusual enough to surface.
     private func startBringUpWatchdog() {
         bringUpWatchdog?.cancel()
         bringUpWatchdog = Task { @MainActor [weak self] in
@@ -170,8 +295,8 @@ final class MeetingAudioRecorder {
             guard let self, !Task.isCancelled, self.running else { return }
             let saw = self.firstAudioBufferFlag.withLock { $0 }
             guard !saw else { return }
-            NSLog("[Dictator] MeetingSystem: no audio buffers in 5s — likely a protected app (FaceTime / Apple Music) blocking capture")
-            self.onCaptureWarning?("Dictator couldn't capture system audio. FaceTime, Apple Music, and a handful of other Apple apps block ScreenCaptureKit from recording their audio. The mic track will still be saved.")
+            NSLog("[Dictator] MeetingSystem: no audio buffers in 5s — nothing on the system appears to be producing audio")
+            self.onCaptureWarning?("Dictator hasn't seen any system audio yet. If the call is silent or you're listening on a separate device (e.g. external headphones not routed through the default output), the system track may stay empty.")
         }
     }
 
@@ -182,66 +307,54 @@ final class MeetingAudioRecorder {
         let didCaptureSystem: Bool
     }
 
-    /// Stop SCStream and close the system file. Safe to call multiple times.
+    /// Stop the IOProc, destroy it, destroy the aggregate device, destroy
+    /// the tap. Order matters — Apple's documented teardown sequence.
+    /// Safe to call multiple times; second call is a no-op.
     func stop() async -> StopResult {
         guard running else { return StopResult(durationSeconds: 0, didCaptureSystem: false) }
         running = false
         bringUpWatchdog?.cancel()
         bringUpWatchdog = nil
-        let s = stream
-        stream = nil
-        output = nil
-        if let s {
-            try? await s.stopCapture()
+
+        if aggregateDeviceID != AudioObjectID(kAudioObjectUnknown) {
+            if let procID = deviceProcID {
+                let stopErr = AudioDeviceStop(aggregateDeviceID, procID)
+                if stopErr != noErr {
+                    NSLog("[Dictator] MeetingSystem: AudioDeviceStop failed: \(stopErr)")
+                }
+                let destroyErr = AudioDeviceDestroyIOProcID(aggregateDeviceID, procID)
+                if destroyErr != noErr {
+                    NSLog("[Dictator] MeetingSystem: AudioDeviceDestroyIOProcID failed: \(destroyErr)")
+                }
+                deviceProcID = nil
+            }
+            let aggErr = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            if aggErr != noErr {
+                NSLog("[Dictator] MeetingSystem: AudioHardwareDestroyAggregateDevice failed: \(aggErr)")
+            }
+            aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
         }
+        if processTapID != AudioObjectID(kAudioObjectUnknown) {
+            let tapErr = AudioHardwareDestroyProcessTap(processTapID)
+            if tapErr != noErr {
+                NSLog("[Dictator] MeetingSystem: AudioHardwareDestroyProcessTap failed: \(tapErr)")
+            }
+            processTapID = AudioObjectID(kAudioObjectUnknown)
+        }
+
         let hadSystem = systemFile != nil
         systemFile = nil
+        tapFormat = nil
+        tapStreamDescription = nil
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
         return StopResult(durationSeconds: duration, didCaptureSystem: hadSystem)
     }
 
-    // MARK: - Sample ingest (called from non-main queues)
-
-    fileprivate nonisolated func ingest(
-        audio sampleBuffer: CMSampleBuffer,
-        type: SCStreamOutputType,
-        sink: (@Sendable (CMSampleBuffer) -> Void)?
-    ) {
-        // Fire the optional raw-buffer sink first, off-main, so the live
-        // transcriber can start its conversion on the audio queue while
-        // we're still building the resampled mono Float32 for disk. The
-        // sink contract documents that it runs on this queue and is
-        // responsible for any actor hop of its own. The sink is snapshotted
-        // by the forwarder at start time so we never have to cross the
-        // MainActor isolation barrier to read it.
-        if type == .audio, let sink {
-            sink(sampleBuffer)
-        }
-        guard let (samples, format) = Self.extractPCM(from: sampleBuffer, type: type) else { return }
-        let level = Self.rms(samples: samples)
-
-        // First-audio-buffer probe: log once per recording. Guarded by
-        // the same lock the watchdog reads under, on the audio queue.
-        if type == .audio {
-            let wasFirst = firstAudioBufferFlag.withLock { seen -> Bool in
-                guard !seen else { return false }
-                seen = true
-                return true
-            }
-            if wasFirst {
-                NSLog("[Dictator] MeetingSystem: first audio buffer — format=\(format.sampleRate)/\(format.channelCount), frames=\(samples.count), rmsLevel=\(level)")
-            }
-        }
-
-        Task { @MainActor [weak self] in
-            self?.write(samples: samples, format: format, type: type, level: level)
-        }
-    }
+    // MARK: - Disk write (main actor)
 
     @MainActor
-    private func write(samples: [Float], format: AVAudioFormat, type: SCStreamOutputType, level: Float) {
+    private func write(samples: [Float], format: AVAudioFormat, level: Float) {
         guard running else { return }
-        guard type == .audio else { return }
         do {
             if systemFile == nil, let url = systemURL {
                 systemFile = try Self.openFile(at: url, source: format)
@@ -258,15 +371,12 @@ final class MeetingAudioRecorder {
 
     // MARK: - File helpers
 
-    /// Open a CAF (Core Audio Format) file at `url` for streaming writes.
-    /// CAF is crash-safe by design: its `data` chunk is written with a
-    /// sentinel `-1` length meaning "read to end of file", so a truncated
-    /// CAF from a crashed recorder is still fully decodable. MP4/M4A is
-    /// the opposite — the `moov` atom that holds the sample table is
-    /// written only at file close, so a crash mid-recording leaves the
-    /// container unreadable even though the AAC bytes themselves are on
-    /// disk. The trade-off is larger files (LinearPCM Float32 mono at the
-    /// source rate is ~700 MB/hour) versus 100% recoverability.
+    /// Open a CAF (Core Audio Format) file for streaming writes. CAF is
+    /// crash-safe: the `data` chunk uses a sentinel `-1` length so a
+    /// truncated file is still fully decodable. AAC in MP4/M4A is the
+    /// opposite — the `moov` atom only lands on close, so a mid-recording
+    /// crash leaves an unreadable container. Trade-off is size (Float32
+    /// mono ~700 MB/hour) for 100% recoverability.
     private static func openFile(at url: URL, source: AVAudioFormat) throws -> AVAudioFile {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -281,9 +391,9 @@ final class MeetingAudioRecorder {
     }
 
     private static func append(samples: [Float], format: AVAudioFormat, to file: AVAudioFile) throws {
-        // Build a non-interleaved Float32 mono buffer (downmix happens in
-        // `extractPCM`) at the source rate. AVAudioFile.write transparently
-        // resamples to the target rate if needed.
+        // Build a non-interleaved Float32 mono buffer at the source rate.
+        // AVAudioFile.write transparently resamples to the file's target
+        // rate if needed.
         guard let sourceMono = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: format.sampleRate,
@@ -300,74 +410,73 @@ final class MeetingAudioRecorder {
         try file.write(from: buffer)
     }
 
-    // MARK: - Sample extraction (off-main)
+    // MARK: - PCM extraction (off-main)
 
-    /// Pull mono Float32 samples + the source format out of a CMSampleBuffer
-    /// produced by SCStream. SCK delivers planar / interleaved Float32 or
-    /// Int16 depending on configuration; we asked for Float32 above but
-    /// guard against either shape for safety.
-    private nonisolated static func extractPCM(from sampleBuffer: CMSampleBuffer, type: SCStreamOutputType) -> ([Float], AVAudioFormat)? {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return nil }
-        let asbd = asbdPtr.pointee
+    /// Pull mono Float32 samples + the source format out of an
+    /// `AudioBufferList` delivered by CATap. The tap is configured stereo
+    /// global Float32, but we tolerate either interleaved or non-interleaved
+    /// layouts (the ASBD's `kAudioFormatFlagIsNonInterleaved` says which).
+    /// Returns `nil` on any shape we can't handle — the cycle is dropped.
+    private nonisolated static func extractMonoFloat32(
+        bufferList: UnsafePointer<AudioBufferList>,
+        streamDescription: AudioStreamBasicDescription?
+    ) -> ([Float], AVAudioFormat)? {
+        guard let asbd = streamDescription else { return nil }
         let sampleRate = asbd.mSampleRate
         let channels = Int(asbd.mChannelsPerFrame)
         guard channels > 0, sampleRate > 0 else { return nil }
 
-        let frameCount = Int(CMSampleBufferGetNumSamples(sampleBuffer))
-        guard frameCount > 0,
-              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
-
-        // SCK delivers audio either as interleaved or non-interleaved
-        // depending on the source. mFormatFlags bit 0x20 = non-interleaved.
-        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
         guard isFloat else { return nil }
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
-        var totalLength = 0
-        var dataPointer: UnsafeMutablePointer<CChar>?
-        let status = CMBlockBufferGetDataPointer(
-            blockBuffer,
-            atOffset: 0,
-            lengthAtOffsetOut: nil,
-            totalLengthOut: &totalLength,
-            dataPointerOut: &dataPointer
-        )
-        guard status == noErr, let dataPointer else { return nil }
-        let totalFloats = totalLength / MemoryLayout<Float>.size
+        let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
+        guard !abl.isEmpty else { return nil }
+
+        let frameCount: Int
+        if isNonInterleaved {
+            // One buffer per channel; each buffer holds `frameCount` Float32s.
+            frameCount = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size
+        } else {
+            // Single interleaved buffer of `frameCount * channels` Float32s.
+            frameCount = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size / channels
+        }
+        guard frameCount > 0 else { return nil }
 
         var mono = [Float](repeating: 0, count: frameCount)
-        let floats = UnsafeRawPointer(dataPointer).assumingMemoryBound(to: Float.self)
+        let invChannels = 1 / Float(channels)
 
-        if channels == 1 {
-            let buf = UnsafeBufferPointer(start: floats, count: min(totalFloats, frameCount))
-            mono.withUnsafeMutableBufferPointer { dst -> Void in
-                memcpy(dst.baseAddress!, buf.baseAddress!, buf.count * MemoryLayout<Float>.size)
-            }
-        } else if isNonInterleaved {
-            // Each channel occupies a contiguous run of `frameCount` floats.
-            let invChannels = 1 / Float(channels)
+        if isNonInterleaved {
+            // Each AudioBuffer is one channel.
             mono.withUnsafeMutableBufferPointer { dst in
                 let base = dst.baseAddress!
-                for f in 0..<frameCount {
-                    var sum: Float = 0
-                    for c in 0..<channels {
-                        sum += floats[c * frameCount + f]
+                if channels == 1, let raw = abl[0].mData {
+                    let src = raw.assumingMemoryBound(to: Float.self)
+                    memcpy(base, src, frameCount * MemoryLayout<Float>.size)
+                    return
+                }
+                for c in 0..<channels {
+                    guard c < abl.count, let raw = abl[c].mData else { continue }
+                    let src = raw.assumingMemoryBound(to: Float.self)
+                    for f in 0..<frameCount {
+                        let s = src[f] * invChannels
+                        if c == 0 { base[f] = s } else { base[f] += s }
                     }
-                    base[f] = sum * invChannels
                 }
             }
         } else {
-            // Interleaved: frame 0 channel 0, frame 0 channel 1, frame 1 ch 0, …
-            guard totalFloats >= frameCount * channels else { return nil }
-            let buf = UnsafeBufferPointer(start: floats, count: frameCount * channels)
-            let invChannels = 1 / Float(channels)
+            guard let raw = abl[0].mData else { return nil }
+            let src = raw.assumingMemoryBound(to: Float.self)
             mono.withUnsafeMutableBufferPointer { dst in
                 let base = dst.baseAddress!
+                if channels == 1 {
+                    memcpy(base, src, frameCount * MemoryLayout<Float>.size)
+                    return
+                }
                 for f in 0..<frameCount {
                     var sum: Float = 0
                     let frameStart = f * channels
-                    for c in 0..<channels { sum += buf[frameStart + c] }
+                    for c in 0..<channels { sum += src[frameStart + c] }
                     base[f] = sum * invChannels
                 }
             }
@@ -391,45 +500,267 @@ final class MeetingAudioRecorder {
         return min(1, max(0, sqrtf(v) * 2.5))
     }
 
-    private static let audioQueue = DispatchQueue(label: "Dictator.MeetingAudio.audio", qos: .userInitiated)
-    private static let videoQueue = DispatchQueue(label: "Dictator.MeetingAudio.video", qos: .background)
-}
+    // MARK: - CMSampleBuffer wrapping
 
-/// Adopts SCK's two delegate protocols. `@unchecked Sendable` because SCK
-/// invokes the methods on its sample-handler queues — the closure body hops
-/// straight back to the main actor before touching any owner state.
-private final class StreamOutputForwarder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    weak var owner: MeetingAudioRecorder?
-    /// Snapshot of `MeetingAudioRecorder.onBuffer` taken at start. Holding
-    /// it on the (`@unchecked Sendable`) forwarder lets the audio queue
-    /// invoke it without ever crossing the main-actor isolation barrier
-    /// to read it back off the recorder. Set once, never reassigned.
-    let bufferSink: (@Sendable (CMSampleBuffer) -> Void)?
+    /// Wrap an `AudioBufferList` into a `CMSampleBuffer` so the existing
+    /// `@Sendable (CMSampleBuffer) -> Void` sink contract is preserved.
+    /// The live transcriber drops system buffers in v1, but the wrap keeps
+    /// the future "live both tracks" upgrade trivial — and means no other
+    /// caller needs to change shape.
+    ///
+    /// Copies the PCM bytes into a fresh `CMBlockBuffer` (the lifetime of
+    /// `inInputData` only spans the IOProc cycle, so we can't ship the
+    /// pointer through to a downstream consumer). For long meetings the
+    /// copy cost is negligible — a single 10 ms cycle at 48 kHz stereo
+    /// Float32 is 3840 bytes. Returns `nil` on any failure; the sink is
+    /// then skipped for this cycle.
+    private nonisolated static func wrapAudioBufferListAsSampleBuffer(
+        bufferList: UnsafePointer<AudioBufferList>,
+        format: AVAudioFormat
+    ) -> CMSampleBuffer? {
+        var asbd = format.streamDescription.pointee
+        var formatDesc: CMAudioFormatDescription?
+        let formatErr = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDesc
+        )
+        guard formatErr == noErr, let formatDesc else { return nil }
 
-    init(
-        owner: MeetingAudioRecorder,
-        bufferSink: (@Sendable (CMSampleBuffer) -> Void)?
-    ) {
-        self.owner = owner
-        self.bufferSink = bufferSink
+        let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
+        guard !abl.isEmpty else { return nil }
+
+        // Total bytes + frame count. Interleaved == single buffer of all
+        // channels; non-interleaved == sum of every channel's buffer.
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let channels = Int(asbd.mChannelsPerFrame)
+        guard channels > 0 else { return nil }
+
+        let bytesPerFrame = Int(asbd.mBytesPerFrame) > 0
+            ? Int(asbd.mBytesPerFrame)
+            : MemoryLayout<Float>.size * (isNonInterleaved ? 1 : channels)
+
+        var totalBytes = 0
+        for b in abl { totalBytes += Int(b.mDataByteSize) }
+        guard totalBytes > 0 else { return nil }
+
+        let frameCount: Int
+        if isNonInterleaved {
+            // bytesPerFrame describes one channel here, so per-channel-bytes
+            // / bytesPerFrame gives frames.
+            frameCount = Int(abl[0].mDataByteSize) / bytesPerFrame
+        } else {
+            frameCount = totalBytes / bytesPerFrame
+        }
+        guard frameCount > 0 else { return nil }
+
+        // Allocate and populate a CMBlockBuffer with the PCM bytes. For
+        // interleaved that's a straight copy; for non-interleaved we
+        // concatenate channel buffers end-to-end — CMSampleBuffer happily
+        // describes either layout via the ASBD's flags.
+        var blockBuffer: CMBlockBuffer?
+        let blockErr = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: totalBytes,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: totalBytes,
+            flags: kCMBlockBufferAssureMemoryNowFlag,
+            blockBufferOut: &blockBuffer
+        )
+        guard blockErr == kCMBlockBufferNoErr, let blockBuffer else { return nil }
+
+        var offset = 0
+        for b in abl {
+            guard let src = b.mData, b.mDataByteSize > 0 else { continue }
+            let n = Int(b.mDataByteSize)
+            let replaceErr = CMBlockBufferReplaceDataBytes(
+                with: src,
+                blockBuffer: blockBuffer,
+                offsetIntoDestination: offset,
+                dataLength: n
+            )
+            guard replaceErr == kCMBlockBufferNoErr else { return nil }
+            offset += n
+        }
+
+        // No meaningful timing info from the HAL cycle. The live transcriber
+        // doesn't read timestamps off the buffer — it just looks at the PCM
+        // — so an invalid PTS is fine. If a future consumer needs real
+        // timestamps we can derive them from `inNow`'s mHostTime.
+        var sampleBuffer: CMSampleBuffer?
+        let timing = CMSampleTimingInfo(
+            duration: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(asbd.mSampleRate)),
+            presentationTimeStamp: .invalid,
+            decodeTimeStamp: .invalid
+        )
+        var timingArray = [timing]
+        // Non-interleaved buffers have implicit "1 frame per sample" sizing
+        // (the size table is the same for every sample so CMSampleBuffer
+        // accepts entryCount=0). Interleaved buffers need an explicit
+        // bytes-per-frame entry.
+        var sampleSizeArray: [Int] = [bytesPerFrame]
+        let createErr: OSStatus
+        if isNonInterleaved {
+            createErr = CMSampleBufferCreate(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: blockBuffer,
+                dataReady: true,
+                makeDataReadyCallback: nil,
+                refcon: nil,
+                formatDescription: formatDesc,
+                sampleCount: CMItemCount(frameCount),
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timingArray,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sampleBuffer
+            )
+        } else {
+            createErr = CMSampleBufferCreate(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: blockBuffer,
+                dataReady: true,
+                makeDataReadyCallback: nil,
+                refcon: nil,
+                formatDescription: formatDesc,
+                sampleCount: CMItemCount(frameCount),
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timingArray,
+                sampleSizeEntryCount: 1,
+                sampleSizeArray: &sampleSizeArray,
+                sampleBufferOut: &sampleBuffer
+            )
+        }
+        guard createErr == noErr else { return nil }
+        return sampleBuffer
     }
 
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        switch type {
-        case .audio:
-            owner?.ingest(audio: sampleBuffer, type: type, sink: bufferSink)
-        default:
-            // .screen (required by SCK but discarded) and .microphone
-            // (we don't request it — mic capture lives in MeetingMicRecorder).
-            return
+    // MARK: - CoreAudio property reads
+
+    /// Translate a UNIX PID to its CoreAudio process object ID via
+    /// `kAudioHardwarePropertyTranslatePIDToProcessObject`. Returns `nil` if
+    /// the process hasn't appeared in the HAL's process list (which happens
+    /// before a process has ever produced audio — Dictator only does in
+    /// rare error chimes, so the lookup can legitimately miss).
+    private static func translatePIDToAudioProcessObject(pid: pid_t) -> AudioObjectID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var inPID = pid
+        var objectID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let err = withUnsafeMutablePointer(to: &inPID) { pidPtr -> OSStatus in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<pid_t>.size),
+                pidPtr,
+                &size,
+                &objectID
+            )
+        }
+        guard err == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else { return nil }
+        return objectID
+    }
+
+    private static func readTapStreamDescription(tapID: AudioObjectID) throws -> AudioStreamBasicDescription {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        var sizeErr = AudioObjectGetPropertyDataSize(tapID, &address, 0, nil, &dataSize)
+        guard sizeErr == noErr, dataSize >= UInt32(MemoryLayout<AudioStreamBasicDescription>.size) else {
+            throw NSError(domain: "Dictator.Meetings", code: Int(sizeErr),
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't size tap format (OSStatus \(sizeErr))"])
+        }
+        var value = AudioStreamBasicDescription()
+        sizeErr = AudioObjectGetPropertyData(tapID, &address, 0, nil, &dataSize, &value)
+        guard sizeErr == noErr else {
+            throw NSError(domain: "Dictator.Meetings", code: Int(sizeErr),
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't read tap format (OSStatus \(sizeErr))"])
+        }
+        return value
+    }
+
+    private static func readDefaultSystemOutputDevice() throws -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: AudioDeviceID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &value)
+        guard err == noErr, value != AudioObjectID(kAudioObjectUnknown) else {
+            throw NSError(domain: "Dictator.Meetings", code: Int(err),
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't read default system output device (OSStatus \(err))"])
+        }
+        return value
+    }
+
+    private static func readDeviceUID(deviceID: AudioDeviceID) throws -> String {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uid: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let err = withUnsafeMutablePointer(to: &uid) { ptr in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, ptr)
+        }
+        guard err == noErr else {
+            throw NSError(domain: "Dictator.Meetings", code: Int(err),
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't read device UID (OSStatus \(err))"])
+        }
+        return uid as String
+    }
+
+    // MARK: - Aggregate device cleanup
+
+    /// Enumerate every audio device on the system, find any whose UID starts
+    /// with our aggregate prefix, and destroy them. Defensive cleanup —
+    /// macOS does eventually reap orphaned aggregates on logout, but if a
+    /// crashed Dictator session leaks one we want it gone the next time the
+    /// recorder spins up, not accumulating across launches.
+    static func sweepStaleAggregates() {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var err = AudioObjectGetPropertyDataSize(system, &address, 0, nil, &dataSize)
+        guard err == noErr, dataSize > 0 else { return }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = [AudioDeviceID](repeating: AudioObjectID(kAudioObjectUnknown), count: count)
+        err = devices.withUnsafeMutableBufferPointer { ptr -> OSStatus in
+            AudioObjectGetPropertyData(system, &address, 0, nil, &dataSize, ptr.baseAddress!)
+        }
+        guard err == noErr else { return }
+        for dev in devices {
+            guard let uid = try? readDeviceUID(deviceID: dev) else { continue }
+            guard uid.hasPrefix(aggregateUIDPrefix) else { continue }
+            NSLog("[Dictator] MeetingSystem: reaping stale aggregate device \(uid)")
+            let destroyErr = AudioHardwareDestroyAggregateDevice(dev)
+            if destroyErr != noErr {
+                NSLog("[Dictator] MeetingSystem: failed to destroy stale aggregate \(uid): \(destroyErr)")
+            }
         }
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        let msg = error.localizedDescription
-        NSLog("[Dictator] SCStream didStopWithError: \(error)")
-        Task { @MainActor [weak owner] in
-            owner?.onUnexpectedStop?("Screen capture stopped: \(msg)")
-        }
-    }
+    private static let audioQueue = DispatchQueue(label: "Dictator.MeetingAudio.catap", qos: .userInitiated)
 }

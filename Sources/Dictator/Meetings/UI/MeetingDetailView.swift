@@ -136,9 +136,9 @@ struct MeetingDetailView: View {
                 Text(message)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-                if message.contains("Screen Recording") {
+                if message.contains("System Audio Recording") {
                     Button("Open System Settings") {
-                        ScreenRecordingPermission.openSystemSettings()
+                        AudioRecordingPermission.openSystemSettings()
                     }
                 }
             }
@@ -352,12 +352,13 @@ private struct ProcessingPane: View {
 }
 
 /// Muted yellow-orange warning pill, used by `LiveRecordingView` to
-/// surface capture-side issues (mic recorder isn't getting buffers,
-/// SCStream isn't producing system audio because of a protected app).
-/// Matches the shape of the permission banner on `MeetingsEmptyState`
-/// — same rounded-rect background, same `.orange.opacity(0.12)` fill —
-/// with an `xmark` dismiss so the user can hide a warning they already
-/// know about (e.g. "yes, I'm on FaceTime, I expected this").
+/// surface capture-side issues (mic recorder isn't getting buffers, or
+/// the CATap recorder hasn't seen any system audio yet — usually a
+/// silent call or output routed off the default device). Matches the
+/// shape of the permission banner on `MeetingsEmptyState` — same
+/// rounded-rect background, same `.orange.opacity(0.12)` fill — with
+/// an `xmark` dismiss so the user can hide a warning they already know
+/// about.
 private struct CaptureWarningBanner: View {
     let message: String
     let onDismiss: () -> Void
