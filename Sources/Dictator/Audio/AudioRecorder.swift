@@ -3,10 +3,6 @@ import Foundation
 import Accelerate
 import CoreMedia
 
-private final class MutableFlag: @unchecked Sendable {
-    var value: Bool = false
-}
-
 /// Thin NSObject shim that bridges AVCaptureAudioDataOutput's
 /// Objective-C delegate protocol to a Swift closure. Lets `AudioRecorder`
 /// stay a plain `final class` rather than inheriting NSObject just to
@@ -187,6 +183,19 @@ final class AudioRecorder {
         startInFlight = false
     }
 
+    /// Mid-recording snapshot of the captured audio, resampled to 16 kHz
+    /// mono so it can be fed straight into the same ASR path as the final
+    /// transcript. Used by the HUD's interim preview — we re-transcribe the
+    /// growing buffer every ~second so the user sees a running draft.
+    /// The internal buffer isn't drained; this is purely a read.
+    func snapshotResampled16k() -> [Float] {
+        let snap = rawBuffer
+        let rate = nativeSampleRate
+        guard rate > 0, !snap.isEmpty else { return [] }
+        if abs(rate - targetSampleRate) < 1 { return snap }
+        return AudioResampler.mono(samples: snap, from: rate, to: targetSampleRate) ?? []
+    }
+
     /// Stop capture and return 16 kHz mono Float32 samples ready for
     /// WhisperKit. All sample-rate conversion happens here on the main
     /// actor, off the capture queue. Safe to call multiple times; later
@@ -206,7 +215,7 @@ final class AudioRecorder {
         rawBuffer.removeAll(keepingCapacity: false)
 
         guard rate > 0 else { return nativeSamples }
-        return Self.resampleToTarget(monoSamples: nativeSamples, fromSampleRate: rate, toSampleRate: targetSampleRate)
+        return AudioResampler.mono(samples: nativeSamples, from: rate, to: targetSampleRate)
             ?? nativeSamples
     }
 
@@ -632,48 +641,4 @@ final class AudioRecorder {
             ?? AVCaptureDevice.default(for: .audio)
     }
 
-    /// Converts a mono Float32 stream at one sample rate to another via
-    /// AVAudioConverter. Used at `stop()` time to land WhisperKit's
-    /// expected 16 kHz input.
-    private nonisolated static func resampleToTarget(
-        monoSamples: [Float],
-        fromSampleRate: Double,
-        toSampleRate: Double
-    ) -> [Float]? {
-        guard !monoSamples.isEmpty else { return [] }
-        if abs(fromSampleRate - toSampleRate) < 1 { return monoSamples }
-
-        guard let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: fromSampleRate, channels: 1, interleaved: false),
-              let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: toSampleRate, channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: sourceFormat, to: targetFormat),
-              let inputBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(monoSamples.count))
-        else { return nil }
-
-        inputBuffer.frameLength = AVAudioFrameCount(monoSamples.count)
-        if let dst = inputBuffer.floatChannelData?[0] {
-            monoSamples.withUnsafeBufferPointer { src in
-                memcpy(dst, src.baseAddress!, monoSamples.count * MemoryLayout<Float>.size)
-            }
-        }
-
-        let ratio = toSampleRate / fromSampleRate
-        let outCap = AVAudioFrameCount(Double(monoSamples.count) * ratio + 1024)
-        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCap) else { return nil }
-
-        var error: NSError?
-        let supplied = MutableFlag()
-        converter.convert(to: outBuffer, error: &error) { _, status in
-            if supplied.value {
-                status.pointee = .endOfStream
-                return nil
-            }
-            supplied.value = true
-            status.pointee = .haveData
-            return inputBuffer
-        }
-        if error != nil { return nil }
-        guard let outData = outBuffer.floatChannelData?[0] else { return nil }
-        let outCount = Int(outBuffer.frameLength)
-        return Array(UnsafeBufferPointer(start: outData, count: outCount))
-    }
 }

@@ -39,6 +39,8 @@
 	<string>Dictator pastes transcribed text into the focused app, and (if you turn on "Pause other audio" in Settings) tells Spotify or Music to pause while you're dictating.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dictator needs microphone access to listen and transcribe your speech.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Dictator only uses screen recording to capture the audio of a meeting — both your microphone and the audio coming out of your speakers — so it can transcribe a call into a single timeline with multiple speakers. Nothing on your screen is captured or stored.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>

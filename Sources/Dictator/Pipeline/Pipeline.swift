@@ -11,7 +11,7 @@ enum PipelineState: Equatable {
     /// HFP. Surfaced in the HUD so the user understands they're not yet
     /// being recorded.
     case warmingUp(isAssistant: Bool)
-    case recording(level: Float, isAssistant: Bool)
+    case recording(level: Float, isAssistant: Bool, interim: String)
     case transcribing
     case formatting
     case fixingGrammar
@@ -105,6 +105,13 @@ final class Pipeline {
     private let parakeet = ParakeetServiceHolder.shared
     private let injector = TextInjector()
     private let audioInterrupter = AudioInterrupter()
+
+    /// Periodic re-transcription of the in-flight audio buffer to drive the
+    /// HUD's "preview" line. Spun up at recording start, torn down when
+    /// recording ends. We re-run the same offline ASR path used for the
+    /// final transcript, so quality matches and there's no streaming-config
+    /// edge case to tune. Parakeet-only.
+    @ObservationIgnored private var interimSnapshotTask: Task<Void, Never>?
 
     /// Resolves the currently-selected engine to the concrete service plus
     /// the model ID it should run with. Both call sites in the pipeline
@@ -204,8 +211,8 @@ final class Pipeline {
         self.settings = settings
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
-            if case .recording(_, let isAssistant) = state {
-                state = .recording(level: level, isAssistant: isAssistant)
+            if case .recording(_, let isAssistant, let interim) = state {
+                state = .recording(level: level, isAssistant: isAssistant, interim: interim)
             }
         }
         recorder.onReady = { [weak self] in
@@ -226,12 +233,72 @@ final class Pipeline {
     /// has already been told to stop; nothing to do here.
     private func handleRecorderReady() {
         guard case .warmingUp(let isAssistant) = state else { return }
-        state = .recording(level: 0, isAssistant: isAssistant)
+        state = .recording(level: 0, isAssistant: isAssistant, interim: "")
         if settings.playSounds { SoundEffects.shared.playStart() }
         // Engaged after the start sound so the chime itself isn't dipped
         // by the very ducking it announces. Mode is snapshotted inside
         // start(); the matching stop() restores whatever was applied.
         audioInterrupter.start(mode: settings.audioInterruption)
+
+        // HUD preview. Dictation-only (the Assistant flow doesn't show a
+        // draft) and Parakeet-only (Whisper is too slow to re-transcribe a
+        // growing buffer every second). When enabled we periodically
+        // snapshot the recorder's buffer and run the same offline transcribe
+        // path the final result uses — no streaming-config edge cases, and
+        // the preview quality matches what the user will eventually see.
+        if !isAssistant,
+           settings.realtimeInterimEnabled,
+           settings.transcriptionEngine == .parakeet {
+            startInterimSnapshots()
+        }
+    }
+
+    /// Period between snapshot transcribes. The first snapshot fires after
+    /// roughly this delay, then we wait this long *after* each transcribe
+    /// completes — so longer audio paces itself naturally rather than
+    /// stacking parallel inferences. A second feels responsive without
+    /// melting the ANE.
+    private static let interimSnapshotInterval: Duration = .milliseconds(700)
+
+    /// Minimum audio samples (at 16 kHz) before running a snapshot. Below
+    /// this AsrManager's guard rejects the input with `.invalidAudioData`.
+    /// 0.4 s gives a small margin above the framework's 0.3 s floor.
+    private static let interimMinSamples: Int = Int(16_000 * 0.4)
+
+    private func startInterimSnapshots() {
+        let modelID = settings.parakeetModelID
+        interimSnapshotTask = Task { @MainActor [weak self] in
+            // First grace period before we even try — gives the user time to
+            // get a syllable or two out before we look at the buffer.
+            try? await Task.sleep(for: Self.interimSnapshotInterval)
+            while !Task.isCancelled, let self {
+                guard case .recording = self.state else { return }
+                let snapshot = self.recorder.snapshotResampled16k()
+                if snapshot.count >= Self.interimMinSamples {
+                    do {
+                        let text = try await self.parakeet.transcribe(
+                            samples: snapshot,
+                            modelID: modelID
+                        )
+                        guard !Task.isCancelled,
+                              case .recording(let level, let isAssistant, _) = self.state else { return }
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            self.state = .recording(level: level, isAssistant: isAssistant, interim: trimmed)
+                        }
+                    } catch {
+                        // Interim is best-effort; a failed snapshot just
+                        // means we'll try again in interval ms.
+                    }
+                }
+                try? await Task.sleep(for: Self.interimSnapshotInterval)
+            }
+        }
+    }
+
+    private func tearDownInterim() {
+        interimSnapshotTask?.cancel()
+        interimSnapshotTask = nil
     }
 
     private func handleRecorderStartFailed(error: Error) {
@@ -246,6 +313,7 @@ final class Pipeline {
         guard case .recording = state else { return }
         let samples = recorder.stop()
         audioInterrupter.stop()
+        tearDownInterim()
         guard samples.count > 8_000 else {
             fail(note)
             return
@@ -331,6 +399,7 @@ final class Pipeline {
         let samples = recorder.stop()
         audioInterrupter.stop()
         if settings.playSounds { SoundEffects.shared.playStop() }
+        tearDownInterim()
         guard samples.count > 8_000 else { // <0.5s of audio @ 16kHz
             state = .idle
             return
@@ -353,11 +422,11 @@ final class Pipeline {
             // ASREngine protocol) so we can revisit with a different strategy
             // — likely a runtime-detected previous segment, or a much shorter
             // hint — without re-plumbing.
-            let asr = activeASR
             let watchdog = startTranscribeWatchdog(
                 budget: Self.transcribeBudgetSeconds(audioSamples: samples.count)
             )
             defer { watchdog.cancel() }
+            let asr = activeASR
             raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
         } catch {
             if Task.isCancelled { return }
@@ -948,6 +1017,7 @@ final class Pipeline {
         // Idempotent — start() only engages from .recording, so this is a
         // no-op on the .warmingUp branch but a real restore on .recording.
         audioInterrupter.stop()
+        tearDownInterim()
         inFlightTask?.cancel()
         inFlightTask = nil
         inFlightAssistant = nil

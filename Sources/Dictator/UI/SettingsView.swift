@@ -19,6 +19,8 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "cpu") }
             ModesPane()
                 .tabItem { Label("Modes", systemImage: "rectangle.stack") }
+            MeetingsPane()
+                .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
             AssistantPromptPane()
                 .tabItem { Label("Assistant", systemImage: "wand.and.stars") }
             DictionaryPane()
@@ -2125,6 +2127,7 @@ private struct MicrophoneStatusRow: View {
 private enum ModelsSubPane: String, CaseIterable, Identifiable {
     case transcription = "Transcription"
     case formatting = "Formatting"
+    case diarization = "Diarization"
     case stats = "Stats"
     var id: String { rawValue }
 }
@@ -2194,6 +2197,7 @@ private struct ModelsPane: View {
             switch subPane {
             case .transcription: TranscriptionModelsPane()
             case .formatting: FormattingModelsPane()
+            case .diarization: DiarizationModelsPane()
             case .stats: StatsModelsPane()
             }
 
@@ -2286,6 +2290,23 @@ private struct TranscriptionModelsPane: View {
                 Button("OK", role: .cancel) { engineSwitchBlocked = nil }
             } message: { engine in
                 Text("Download a \(engine == .parakeet ? "Parakeet" : "Whisper") model from the section below before switching engines.")
+            }
+
+            Section {
+                Toggle("Show real-time transcription in HUD", isOn: Binding(
+                    get: { s.settings.realtimeInterimEnabled },
+                    set: { newValue in
+                        s.settings.realtimeInterimEnabled = newValue
+                        state.save()
+                    }
+                ))
+                .disabled(s.settings.transcriptionEngine != .parakeet)
+            } footer: {
+                if s.settings.transcriptionEngine == .parakeet {
+                    SectionFootnote("Streams a draft transcript into the HUD while you're holding the hotkey, so you can see whether your speech is being captured correctly. Doesn't change the final output — the cleanup passes still run on the full recording.")
+                } else {
+                    SectionFootnote("Real-time HUD transcription is only available on Parakeet. Switch the engine above to enable it.")
+                }
             }
 
             Section {
@@ -2501,6 +2522,56 @@ private struct AppleFoundationStatusRow: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+}
+
+/// Diarization sub-pane: download / verify / remove for the offline
+/// speaker-diarization bundle. There's only one option in v0.2, so the row
+/// is always "active" — picking between models isn't a thing yet, but the
+/// shape mirrors the other panes so we can grow it without rewriting.
+private struct DiarizationModelsPane: View {
+    @State private var manager = ModelManager.shared
+    @State private var diarizer = DiarizerServiceHolder.shared
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ModelCatalog.diarizationModels) { model in
+                    ModelRow(
+                        name: model.displayName,
+                        note: model.note,
+                        sizeMB: model.approxSizeMB,
+                        ramMB: model.approxRAMMB,
+                        state: manager.diarizationStates[model.id] ?? .unknown,
+                        isActive: true,
+                        isLoaded: diarizer.currentModelID == model.id,
+                        isVerifying: manager.verifyingDiarization.contains(model.id),
+                        select: {},
+                        download: {
+                            manager.downloadDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        },
+                        cancel: {
+                            manager.cancelDiarizationDownload(model.id)
+                        },
+                        verify: {
+                            Task { await manager.verifyDiarization(model.id, using: DiarizerServiceHolder.shared) }
+                        },
+                        unload: {
+                            manager.unloadDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        },
+                        remove: {
+                            manager.removeDiarization(model.id, using: DiarizerServiceHolder.shared)
+                        }
+                    )
+                }
+            } header: {
+                Text("Speaker diarization")
+            } footer: {
+                SectionFootnote("Used by the Meetings feature to split the remote audio into per-speaker turns (\"Speaker 1 said…, Speaker 2 replied…\"). Downloads on first use, or pre-fetch from here. Your own microphone is always tagged as you — diarization only runs on the system-audio track.")
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -3524,7 +3595,7 @@ private struct AssistantPromptPane: View {
 ///   prominent warning explains the risks; a toggle at the bottom flips between
 ///   modes. The built-in itself lives behind a "View built-in prompt" button
 ///   that opens a sheet (it's reference material, not edit surface).
-private struct PromptCustomiser: View {
+struct PromptCustomiser: View {
     let description: String
     let builtin: String
     @Binding var addendum: String
@@ -3650,7 +3721,7 @@ private struct PromptCustomiser: View {
     }
 }
 
-private struct BuiltinPromptSheet: View {
+struct BuiltinPromptSheet: View {
     let prompt: String
     @Binding var isPresented: Bool
 

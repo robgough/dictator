@@ -41,6 +41,18 @@ struct ParakeetModel: Identifiable, Hashable, Sendable {
     let note: String
 }
 
+/// Catalogue entry for a speaker-diarization bundle. v0.2 ships a single
+/// option (FluidAudio's offline pipeline built on pyannote community-1 +
+/// WeSpeaker), but the catalog/manager shape mirrors Parakeet so we can grow
+/// it later without rewriting the Settings UI.
+struct DiarizationModel: Identifiable, Hashable, Sendable {
+    let id: String          // catalogue id (also used as on-disk subdir under diarizationRoot())
+    let displayName: String
+    let approxSizeMB: Int
+    let approxRAMMB: Int
+    let note: String
+}
+
 enum ModelCatalog {
     /// Sentinel `llmModelID` that disables all LLM passes — the raw Whisper
     /// transcript is shipped straight through the dictionary substitution and
@@ -60,6 +72,20 @@ enum ModelCatalog {
         .init(id: "parakeet-tdt-0.6b-v2", displayName: "Parakeet TDT v2", approxSizeMB: 475, approxRAMMB: 700, note: "English-only, slightly better English WER than v3."),
     ]
 
+    /// Speaker diarization. The id is a Dictator-side label only — FluidAudio
+    /// doesn't take a variant string, the offline pipeline is the one bundle
+    /// it ships. We keep the indirection so future swaps (e.g. an LS-EEND
+    /// streaming variant) don't break stored settings.
+    static let diarizationModels: [DiarizationModel] = [
+        .init(
+            id: "pyannote-community-1",
+            displayName: "Speaker Diarization (pyannote community-1)",
+            approxSizeMB: 110,
+            approxRAMMB: 600,
+            note: "Identifies who spoke when. Runs after transcription on the system-audio track only — your microphone is always tagged as you."
+        ),
+    ]
+
     static let llmModels: [LLMModel] = [
         .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", displayName: "Llama 3.2 1B (4-bit)", approxSizeMB: 760, approxRAMMB: 1500, note: "Snappy, decent formatting", contextWindowTokens: 131_072),
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, approxRAMMB: 2500, note: "Recommended", contextWindowTokens: 131_072),
@@ -73,13 +99,15 @@ enum ModelCatalog {
     /// currently shipping in the catalog.
     static let fallbackContextWindowTokens = 32_768
 
-    static let defaultWhisper  = whisperModels[2]   // small.en
-    static let defaultParakeet = parakeetModels[0]  // v3 (multilingual)
-    static let defaultLLM      = llmModels[1]       // Llama 3.2 3B
+    static let defaultWhisper      = whisperModels[2]       // small.en
+    static let defaultParakeet     = parakeetModels[0]      // v3 (multilingual)
+    static let defaultLLM          = llmModels[1]           // Llama 3.2 3B
+    static let defaultDiarization  = diarizationModels[0]   // only option in v0.2
 
     static func whisper(id: String) -> WhisperModel? { whisperModels.first { $0.id == id } }
     static func parakeet(id: String) -> ParakeetModel? { parakeetModels.first { $0.id == id } }
     static func llm(id: String) -> LLMModel? { llmModels.first { $0.id == id } }
+    static func diarization(id: String) -> DiarizationModel? { diarizationModels.first { $0.id == id } }
 
     /// What the first-run wizard recommends as the *MLX* "Recommended" LLM preset
     /// for a given machine. Lean machines get the 1B model, since pairing

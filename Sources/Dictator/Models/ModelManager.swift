@@ -30,12 +30,14 @@ final class ModelManager {
     private(set) var whisperStates: [String: ModelDownloadState] = [:]
     private(set) var parakeetStates: [String: ModelDownloadState] = [:]
     private(set) var llmStates: [String: ModelDownloadState] = [:]
+    private(set) var diarizationStates: [String: ModelDownloadState] = [:]
 
     /// IDs currently mid-verify. Drives a small inline spinner next to the
     /// Verify button — purely for UX, not used for any logic.
     private(set) var verifyingWhisper: Set<String> = []
     private(set) var verifyingParakeet: Set<String> = []
     private(set) var verifyingLLM: Set<String> = []
+    private(set) var verifyingDiarization: Set<String> = []
 
     // Per-model in-flight download Tasks. Tracked so the user can cancel a
     // download from the Settings UI; also dedupes accidental double-taps on
@@ -43,6 +45,7 @@ final class ModelManager {
     private var whisperTasks: [String: Task<Void, Never>] = [:]
     private var parakeetTasks: [String: Task<Void, Never>] = [:]
     private var llmTasks: [String: Task<Void, Never>] = [:]
+    private var diarizationTasks: [String: Task<Void, Never>] = [:]
 
     private init() {
         refreshCachedStates()
@@ -57,6 +60,9 @@ final class ModelManager {
         }
         for m in ModelCatalog.llmModels {
             llmStates[m.id] = diskState(forLLM: m.id, expectedMB: m.approxSizeMB)
+        }
+        for m in ModelCatalog.diarizationModels {
+            diarizationStates[m.id] = diskState(forDiarization: m.id)
         }
     }
 
@@ -89,6 +95,13 @@ final class ModelManager {
     /// `.notDownloaded`, never a stale "Resume — 42%" hint that misleads.
     private func diskState(forParakeet id: String) -> ModelDownloadState {
         ParakeetService.modelsExist(id: id) ? .ready : .notDownloaded
+    }
+
+    /// Diarization bundle is atomic the same way FluidAudio's Parakeet
+    /// snapshot is — no per-file `.incomplete` markers — so we only ever
+    /// flip between `.ready` and `.notDownloaded`.
+    private func diskState(forDiarization id: String) -> ModelDownloadState {
+        DiarizerService.modelsExist(id: id) ? .ready : .notDownloaded
     }
 
     private func diskState(forLLM id: String, expectedMB: Int) -> ModelDownloadState {
@@ -219,6 +232,40 @@ final class ModelManager {
         }
     }
 
+    /// Fire-and-forget diarization download. Mirrors the Parakeet variant.
+    func downloadDiarization(_ id: String, using service: DiarizerService) {
+        guard diarizationTasks[id] == nil else { return }
+        diarizationStates[id] = .preparingDownload
+        diarizationTasks[id] = Task { [weak self] in
+            do {
+                try await service.download(modelID: id) { [weak self] progress in
+                    guard let self else { return }
+                    switch self.diarizationStates[id] {
+                    case .preparingDownload, .downloading:
+                        self.diarizationStates[id] = .downloading(progress)
+                    default:
+                        break
+                    }
+                }
+                guard let self else { return }
+                if Task.isCancelled {
+                    self.diarizationStates[id] = self.diskState(forDiarization: id)
+                } else {
+                    self.diarizationStates[id] = .ready
+                }
+            } catch is CancellationError {
+                self?.diarizationStates[id] = self?.diskState(forDiarization: id) ?? .notDownloaded
+            } catch {
+                if Task.isCancelled {
+                    self?.diarizationStates[id] = self?.diskState(forDiarization: id) ?? .notDownloaded
+                } else {
+                    self?.diarizationStates[id] = .failed(error.localizedDescription)
+                }
+            }
+            self?.diarizationTasks[id] = nil
+        }
+    }
+
     /// Fire-and-forget download. Stores the Task so the user can cancel from
     /// Settings. No-ops if a download for this model is already in flight.
     /// Downloads files only — the heavy compile + RAM-resident load happens
@@ -291,6 +338,12 @@ final class ModelManager {
         parakeetStates[id] = diskState(forParakeet: id)
     }
 
+    func cancelDiarizationDownload(_ id: String) {
+        diarizationTasks[id]?.cancel()
+        diarizationTasks[id] = nil
+        diarizationStates[id] = diskState(forDiarization: id)
+    }
+
     // MARK: - Verify (load into memory + report failure to disk state)
 
     /// Attempt to load the model into memory to confirm the on-disk files are
@@ -331,6 +384,16 @@ final class ModelManager {
         }
     }
 
+    func verifyDiarization(_ id: String, using service: DiarizerService) async {
+        verifyingDiarization.insert(id)
+        defer { verifyingDiarization.remove(id) }
+        do {
+            try await service.ensureLoaded(modelID: id)
+        } catch {
+            diarizationStates[id] = .failed("Verification failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Unload (drop from memory, leave files on disk)
 
     /// Free a Whisper model from memory without touching the on-disk files.
@@ -345,6 +408,10 @@ final class ModelManager {
     }
 
     func unloadParakeet(_ id: String, using service: ParakeetService) {
+        service.unload(modelID: id)
+    }
+
+    func unloadDiarization(_ id: String, using service: DiarizerService) {
         service.unload(modelID: id)
     }
 
@@ -389,6 +456,20 @@ final class ModelManager {
             .appendingPathComponent("models/\(id)", isDirectory: true)
         let removed = removeDirectory(at: dir)
         llmStates[id] = .notDownloaded
+        return removed
+    }
+
+    /// Unload (if loaded) and remove the diarization bundle from disk. The
+    /// whole `<diarizationRoot>/speaker-diarization/` tree is wiped — that's
+    /// where FluidAudio's repo snapshot lives, and removing it cleanly forces
+    /// a fresh download next time the user asks for diarization.
+    @discardableResult
+    func removeDiarization(_ id: String, using service: DiarizerService) -> Bool {
+        service.unload(modelID: id)
+        let dir = ModelStorage.diarizationRoot()
+            .appendingPathComponent("speaker-diarization", isDirectory: true)
+        let removed = removeDirectory(at: dir)
+        diarizationStates[id] = .notDownloaded
         return removed
     }
 

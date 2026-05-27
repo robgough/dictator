@@ -95,9 +95,13 @@ The assistant prompt additionally substitutes `{{USER_NAME}}` in its few-shot ex
 
 ### Audio capture
 
-`Audio/AudioRecorder.swift` recreates `AVAudioEngine` on every `start()`. Reusing the engine after a device override can leave the AUHAL in an unstable state (`kAudioUnitErr_FormatNotSupported`). The preferred input device comes from `AudioDeviceManager`, which keeps an ordered list per machine; if `engine.start()` fails with the override, the recorder transparently retries on the system default.
+Two capture stacks coexist in the codebase, chosen per use case:
 
-Mid-recording device changes (AirPods connect, USB mic unplugged, hub power-cycle) fire `AVAudioEngineConfigurationChange`. The handler discards the buffer (old + new device usually have different rates) and silently restarts on whatever input is active now, instead of dumping the user back to the HUD with an error.
+- **`Audio/AudioRecorder.swift` (dictation) uses `AVCaptureSession`.** Capture-only workloads sit awkwardly inside `AVAudioEngine`'s audio-graph model — every recording paid for the graph machinery (AUHAL device-property overrides, tap format propagation, ConfigurationChange rebuilds) without using it, and that machinery was the source of most flakiness on USB devices that share clock with the output (Yeti, audio interfaces) where engine ConfigurationChange didn't always fire for subtle clock shifts. `AVCaptureSession` is the AVFoundation media-capture stack with explicit beginConfiguration/commitConfiguration hot-swaps, dedicated runtime-error / device-disconnect notifications, and a delegate-queue stream of `CMSampleBuffer`s.
+- **`Meetings/MeetingMicRecorder.swift` (meeting mic) uses `AVAudioEngine`.** Meetings need `setVoiceProcessingEnabled(true)` for echo cancellation against the speakers, which `AVCaptureSession` doesn't expose — only the `AVAudioEngine.inputNode` path does. Rebuilds the engine on `AVAudioEngineConfigurationChange` and continues writing to the same CAF when the post-swap native rate matches; drops post-swap buffers when rates diverge so the on-disk file stays decodable instead of getting silently corrupted.
+- **`Sources/DictatorIOS/IOSAudioRecorder.swift` (iOS dictation) uses `AVAudioEngine`.** Same shape as the meeting mic recorder, minus the voice processing.
+
+Preferred input device for both stacks comes from `AudioDeviceManager`, which keeps an ordered list per machine; if the override doesn't take the recorder falls back to the system default. `AudioDeviceEnumerator` extends that with output-side transport-type probes (`kAudioDevicePropertyTransportType`) so the meeting AEC's `.auto` mode can distinguish headphones (skip AEC) from built-in speakers (enable AEC).
 
 ### Text injection
 
@@ -113,8 +117,8 @@ Falls back to clipboard-only if Accessibility isn't granted; the HUD surfaces th
 
 These are non-obvious and load-bearing — don't "clean up" without understanding why:
 
-- **`@Sendable` on audio-thread closures**: `AVAudioEngine.installTap` invokes its block on the realtime audio queue. Without `@Sendable`, Swift 6 inherits `@MainActor` isolation from the enclosing method and dispatch traps the moment the audio thread fires the closure. See `AudioRecorder.configureAndStartEngine`.
-- **`format: nil` in `installTap`**: `outputFormat(forBus:)` returns a stale format right after `AudioUnitSetProperty(kAudioOutputUnitProperty_CurrentDevice, ...)` because the audio unit hasn't propagated the device switch yet. Passing `nil` lets AVAudioEngine pull the actual current format. Caching the format produces `Failed to create tap due to format mismatch`.
+- **`@Sendable` on audio-thread closures**: `AVAudioEngine.installTap` invokes its block on the realtime audio queue. Without `@Sendable`, Swift 6 inherits `@MainActor` isolation from the enclosing method and dispatch traps the moment the audio thread fires the closure. See `MeetingMicRecorder.configureAndStartEngine` and `IOSAudioRecorder` — both the live AVAudioEngine consumers in this repo. (`AudioRecorder` is `AVCaptureSession`-based and uses its own `@Sendable` `SampleBufferForwarder` shim for the same reason: the delegate callback hits an off-main queue.)
+- **`format: nil` in `installTap`**: `outputFormat(forBus:)` returns a stale format right after `AudioUnitSetProperty(kAudioOutputUnitProperty_CurrentDevice, ...)` because the audio unit hasn't propagated the device switch yet. Passing `nil` lets AVAudioEngine pull the actual current format. Caching the format produces `Failed to create tap due to format mismatch`. Same applies to `MeetingMicRecorder` after the voice-processing toggle + device override.
 - **`@ObservationIgnored` on heavy storage**: WhisperKit's `pipe`, MLX's `ModelContainer`, FluidAudio's `AsrModels` / `AsrManager`. These are not meaningfully observable values and tracking them adds churn.
 - **`@preconcurrency import WhisperKit` / `@preconcurrency import AVFoundation` / `@preconcurrency import FluidAudio`**: their public APIs aren't Sendable-annotated yet. Don't remove without re-verifying nothing trips strict-concurrency diagnostics.
 

@@ -81,10 +81,54 @@ enum AudioInterruption: String, Codable, Sendable, Hashable, CaseIterable {
     }
 }
 
+/// Whether the meeting microphone recorder should run macOS's built-in
+/// voice-processing chain (acoustic echo cancellation + noise suppression
+/// + automatic gain control) on the captured audio. The point is mostly
+/// the AEC: when the user isn't wearing headphones during a video call,
+/// the Mac's speakers play the remote audio and the mic picks it back up.
+/// Without AEC, every remote utterance appears twice in the merged
+/// transcript — once correctly on the system track, once incorrectly
+/// attributed to "Me" on the mic track. With AEC on, macOS subtracts the
+/// playback reference signal from the mic capture before it ever reaches
+/// the recorder, so the bleed simply isn't in the file.
+///
+/// - `auto` (default): AEC on when the active output looks like speakers
+///   (built-in laptop speakers, external monitor, anything that radiates
+///   into the room), off when it looks like headphones (AirPods / BT
+///   headset / a device whose name says "headphones"). Ambiguous outputs
+///   (external USB audio interface, HDMI, AirPlay) leave AEC OFF — the
+///   thinner-timbre failure mode of unnecessary AEC is more user-visible
+///   than the duplication failure mode of missing AEC, which the
+///   post-transcription dedup catches as backup.
+/// - `alwaysOn`: force AEC regardless of output. Useful if the auto
+///   heuristic guesses wrong and the user is consistently getting bleed.
+/// - `alwaysOff`: skip AEC. Useful on a setup where the user is always on
+///   headphones and the slight voice-timbre change AEC introduces is
+///   audible enough to bother them.
+enum MeetingMicEchoCancellation: String, Codable, Sendable, Hashable, CaseIterable {
+    case auto
+    case alwaysOn
+    case alwaysOff
+
+    var label: String {
+        switch self {
+        case .auto: return "Automatic"
+        case .alwaysOn: return "Always on"
+        case .alwaysOff: return "Always off"
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
     var parakeetModelID: String
+    /// Show a draft, two-tier transcript in the HUD while the user holds the
+    /// hotkey. Parakeet-only — runs FluidAudio's sliding-window streamer
+    /// alongside the recorder so the user sees roughly what's being captured.
+    /// Whisper doesn't have an equivalent streaming API in this version, so the
+    /// flag is ignored when Whisper is the active engine.
+    var realtimeInterimEnabled: Bool
     var llmEngine: LLMEngineKind
     /// Only meaningful when `llmEngine == .mlx`. Ignored for `.none` and `.apple`,
     /// but kept around so the user can flip back to MLX without losing their last
@@ -145,6 +189,55 @@ struct DictatorSettings: Codable, Equatable {
     /// model so the first hotkey press just works.
     var hasCompletedOnboarding: Bool
 
+    /// How long to keep recorded / imported meetings before pruning them
+    /// off disk. 0 = never delete. Per-Mac (local-settings.json) because
+    /// meetings live in App Support, not the synced folder — each Mac has
+    /// its own pile of meeting audio.
+    var meetingAutoDeleteAfterDays: Int = 0
+
+    /// Days after which a meeting's audio files (mic.caf, system.caf) are
+    /// pruned even though its transcript is kept. Lets users hold on to
+    /// the searchable transcript history forever while letting the bulky
+    /// audio age out. 0 = keep audio forever. Independent of
+    /// `meetingAutoDeleteAfterDays`: a meeting hit by both first loses
+    /// audio, then the whole record when the older window kicks in.
+    var meetingAudioRetentionDays: Int = 0
+
+    /// How the meeting mic recorder handles speaker-bleed (remote audio
+    /// played through the Mac speakers, picked up by the mic). See the
+    /// `MeetingMicEchoCancellation` enum doc-comment for the trade-offs
+    /// behind each value. Per-Mac because the right answer depends on
+    /// this machine's typical output device — a desktop with always-on
+    /// speakers wants `.alwaysOn`, a laptop the user always wears AirPods
+    /// with wants `.alwaysOff`.
+    var meetingMicEchoCancellation: MeetingMicEchoCancellation = .auto
+
+    /// When true, MeetingProcessor runs the structured LLM summary pass
+    /// automatically after each meeting finishes transcribing. Default
+    /// is ON — users overwhelmingly expect a summary to appear without
+    /// having to push a button. The "Generate summary" button still
+    /// works manually for re-runs and for installs where the user has
+    /// disabled this toggle.
+    var meetingSummaryEnabled: Bool = true
+    /// Appended under the built-in meeting summary prompt. Empty = no
+    /// addendum. Synced across Macs because it's a personal preference,
+    /// not hardware-dependent.
+    var meetingSummaryPromptAddendum: String = ""
+    /// When set, replaces the built-in summary prompt wholesale. nil =
+    /// use built-in + addendum.
+    var meetingSummaryPromptOverride: String?
+
+    /// When true, MeetingProcessor runs a post-transcription dedup pass that
+    /// drops mic-track words within ±300 ms of an identical (or near-identical)
+    /// system-track word. Only matters when the user isn't wearing headphones —
+    /// their mic picks up the remote speakers and the same words land on both
+    /// tracks. AEC usually catches this; the dedup is the belt-and-braces
+    /// layer for residual leakage (Bluetooth latency, AGC stomp).
+    /// Per-Mac because echo behaviour depends on this Mac's headphones-versus-
+    /// speakers setup. Default ON; off is the escape hatch if it ever eats
+    /// legitimate overlapping speech.
+    var meetingDedupeMicEchoes: Bool = true
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -156,6 +249,7 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: .parakeet,
         whisperModelID: ModelCatalog.defaultWhisper.id,
         parakeetModelID: ModelCatalog.defaultParakeet.id,
+        realtimeInterimEnabled: true,
         llmEngine: .apple,
         llmModelID: ModelCatalog.defaultLLM.id,
         pasteAutomatically: true,
@@ -178,6 +272,7 @@ struct DictatorSettings: Codable, Equatable {
         transcriptionEngine: TranscriptionEngine,
         whisperModelID: String,
         parakeetModelID: String,
+        realtimeInterimEnabled: Bool,
         llmEngine: LLMEngineKind,
         llmModelID: String,
         pasteAutomatically: Bool,
@@ -198,6 +293,7 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = transcriptionEngine
         self.whisperModelID = whisperModelID
         self.parakeetModelID = parakeetModelID
+        self.realtimeInterimEnabled = realtimeInterimEnabled
         self.llmEngine = llmEngine
         self.llmModelID = llmModelID
         self.pasteAutomatically = pasteAutomatically
@@ -226,6 +322,7 @@ struct DictatorSettings: Codable, Equatable {
         self.transcriptionEngine = try c.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? d.transcriptionEngine
         self.whisperModelID     = try c.decodeIfPresent(String.self,      forKey: .whisperModelID)     ?? d.whisperModelID
         self.parakeetModelID    = try c.decodeIfPresent(String.self,      forKey: .parakeetModelID)    ?? d.parakeetModelID
+        self.realtimeInterimEnabled = try c.decodeIfPresent(Bool.self,    forKey: .realtimeInterimEnabled) ?? d.realtimeInterimEnabled
         let decodedLLMID        = try c.decodeIfPresent(String.self,      forKey: .llmModelID)         ?? d.llmModelID
         self.llmModelID         = decodedLLMID == "none" ? d.llmModelID : decodedLLMID
         // Migration: pre-v3 installs only had `llmModelID`, with a "none" sentinel
@@ -295,6 +392,13 @@ struct DictatorSettings: Codable, Equatable {
         // already have models + permissions configured, and we don't want to
         // ambush them with a setup window on next launch.
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
+        self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
+        self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
+        self.meetingMicEchoCancellation = try c.decodeIfPresent(MeetingMicEchoCancellation.self, forKey: .meetingMicEchoCancellation) ?? d.meetingMicEchoCancellation
+        self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
+        self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
+        self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
+        self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -406,6 +510,15 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     // MARK: - Effective prompts
+
+    /// Resolved meeting summary prompt: override wins if set, otherwise
+    /// built-in + addendum. Same shape as `effectiveAssistantPrompt` —
+    /// the LLM never sees the raw addendum/override; only this.
+    var effectiveMeetingSummaryPrompt: String {
+        Self.combine(builtin: Self.builtinMeetingSummaryPrompt,
+                     override: meetingSummaryPromptOverride,
+                     addendum: meetingSummaryPromptAddendum)
+    }
 
     var effectiveAssistantPrompt: String {
         // Assistant Mode drafts emails, replies, messages — it's the one pass
@@ -679,6 +792,28 @@ struct DictatorSettings: Codable, Equatable {
     "we need three — sorry, four people on the call" → We need four people on the call.
     """
 
+    static let builtinMeetingSummaryPrompt = """
+    You produce a structured summary of a recorded meeting transcript. The transcript is segmented by speaker — speakers are anonymous (Speaker 1, Speaker 2, …) unless renamed by the user. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
+
+    Output STRICT JSON matching this exact shape, with no commentary, no preamble, no markdown fences:
+
+    {
+      "decisions": ["..."],
+      "actionItems": [{"owner": "Alice", "text": "..."}, {"owner": null, "text": "..."}],
+      "narrative": "..."
+    }
+
+    Rules:
+    - "decisions" lists CONCRETE AGREED OUTCOMES — things the participants chose to do or not do. NOT topics discussed. If nothing was decided, return [].
+    - "actionItems" lists tasks with an owner if the transcript names one, otherwise owner is null. Do NOT invent owners. Do NOT assign tasks to "Me" unless the transcript clearly attributes the commitment to the speaker labelled "Me". If there are no action items, return [].
+    - "narrative" is 3–6 sentences. Factual. No editorialising. No bullet points inside the narrative — it's prose.
+    - Use plain text inside the JSON strings. No markdown.
+    - If the meeting is short or trivial, still emit valid JSON with sensible empty arrays — do NOT refuse.
+    - Speaker names in actionItems are taken from the speaker labels in the transcript ("Me", "Speaker 1", or a rename like "Alice"). Never invent unrelated names.
+
+    Output ONLY the JSON object. Nothing before it. Nothing after it. No "Here is the summary:" preamble. No ```json fences.
+    """
+
     static let builtinAssistantPrompt = """
     You are the on-device writing assistant inside Dictator, a macOS dictation app. Your job is to help the user produce text — drafting, rewriting, restructuring, listing, or briefly answering factual questions. You run locally on the user's Mac.
 
@@ -904,6 +1039,7 @@ struct DictatorSettings: Codable, Equatable {
     /// below partition this set for the two-file layout.
     private enum CodingKeys: String, CodingKey {
         case transcriptionEngine, whisperModelID, parakeetModelID
+        case realtimeInterimEnabled
         case llmEngine, llmModelID
         case pasteAutomatically, playSounds
         case audioInterruption
@@ -913,6 +1049,13 @@ struct DictatorSettings: Codable, Equatable {
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
         case hasCompletedOnboarding
+        case meetingAutoDeleteAfterDays
+        case meetingAudioRetentionDays
+        case meetingMicEchoCancellation
+        case meetingSummaryEnabled
+        case meetingSummaryPromptAddendum
+        case meetingSummaryPromptOverride
+        case meetingDedupeMicEchoes
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -937,6 +1080,9 @@ struct DictatorSettings: Codable, Equatable {
         "defaultModeID",
         "assistantPromptAddendum",
         "assistantPromptOverride",
+        "meetingSummaryEnabled",
+        "meetingSummaryPromptAddendum",
+        "meetingSummaryPromptOverride",
     ]
 
     /// Keys that belong in the per-Mac file
@@ -950,6 +1096,7 @@ struct DictatorSettings: Codable, Equatable {
         "transcriptionEngine",
         "whisperModelID",
         "parakeetModelID",
+        "realtimeInterimEnabled",
         "llmEngine",
         "llmModelID",
         "preloadModelsOnLaunch",
@@ -957,6 +1104,10 @@ struct DictatorSettings: Codable, Equatable {
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
+        "meetingAutoDeleteAfterDays",
+        "meetingAudioRetentionDays",
+        "meetingDedupeMicEchoes",
+        "meetingMicEchoCancellation",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

@@ -1,6 +1,21 @@
 import Foundation
 @preconcurrency import FluidAudio
 
+/// One word from a word-aligned ASR pass with its time range in seconds from
+/// the start of the supplied sample buffer. Used by the meetings pipeline
+/// for diarizer alignment — not surfaced in the dictation path.
+public struct TimedWord: Sendable, Equatable {
+    public let start: TimeInterval
+    public let end: TimeInterval
+    public let text: String
+
+    public init(start: TimeInterval, end: TimeInterval, text: String) {
+        self.start = start
+        self.end = end
+        self.text = text
+    }
+}
+
 /// Parakeet TDT speech-to-text. Mirrors the surface of `TranscriptionService`
 /// so both engines slot into Pipeline through the same protocol.
 ///
@@ -18,8 +33,19 @@ final class ParakeetService: ASREngine {
     /// True while `ensureLoaded` is running. Drives the Verify-button spinner.
     private(set) var isLoading: Bool = false
 
-    @ObservationIgnored private var models: AsrModels?
+    @ObservationIgnored private(set) var models: AsrModels?
     @ObservationIgnored private var manager: AsrManager?
+
+    /// Ensure the models are downloaded and loaded; return them so a sibling
+    /// component (e.g. the streaming service) can share the weight load.
+    func loadedModels(forID modelID: String) async throws -> AsrModels {
+        try await ensureLoaded(modelID: modelID)
+        guard let models else {
+            throw NSError(domain: "Dictator", code: 12,
+                          userInfo: [NSLocalizedDescriptionKey: "Parakeet models not loaded"])
+        }
+        return models
+    }
 
     /// Resolve a catalogue ID to the FluidAudio version enum. Catalogue IDs
     /// happen to be the same string as `AsrModelVersion.repo.folderName`,
@@ -111,6 +137,56 @@ final class ParakeetService: ASREngine {
         var state = try TdtDecoderState()
         let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
         return result.text
+    }
+
+    /// Word-aligned transcription. Same audio shape as `transcribe(...)` but
+    /// surfaces SentencePiece tokens coalesced back into whitespace-separated
+    /// words with `(start, end)` timestamps. Used by the meetings pipeline so
+    /// the diarizer can attribute each word to a speaker.
+    ///
+    /// Returns an empty array (not an error) when the model produced no
+    /// timing information — callers should fall back to the plain text path
+    /// in that case.
+    func transcribeWithTimestamps(samples: [Float], modelID: String) async throws -> [TimedWord] {
+        try await ensureLoaded(modelID: modelID)
+        guard let manager else {
+            throw NSError(domain: "Dictator", code: 11,
+                          userInfo: [NSLocalizedDescriptionKey: "Parakeet not loaded"])
+        }
+        var state = try TdtDecoderState()
+        let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
+        guard let timings = result.tokenTimings, !timings.isEmpty else { return [] }
+        return Self.coalesceWords(from: timings)
+    }
+
+    /// Coalesce Parakeet's per-token timings into word-level ones.
+    ///
+    /// Parakeet TDT tokens come out of FluidAudio with SentencePiece's
+    /// word-boundary marker (`▁`, U+2581) already rewritten to a leading
+    /// space — see `AsrManager.normalizedTimingToken` in FluidAudio. So a
+    /// token whose `text` starts with a space opens a new word, and any
+    /// token without that space extends the previous one (punctuation,
+    /// sub-word continuations).
+    ///
+    /// We previously looked for the raw `▁` marker, which never matched
+    /// the post-normalization tokens — every token got appended to the
+    /// first word, producing run-on text like "Areyouready?".
+    nonisolated static func coalesceWords(from timings: [TokenTiming]) -> [TimedWord] {
+        var words: [TimedWord] = []
+        words.reserveCapacity(timings.count / 2)
+        for timing in timings {
+            let raw = timing.token
+            let isNewWord = raw.first == " " || words.isEmpty
+            let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { continue }
+            if isNewWord {
+                words.append(TimedWord(start: timing.startTime, end: timing.endTime, text: cleaned))
+            } else {
+                let last = words.removeLast()
+                words.append(TimedWord(start: last.start, end: timing.endTime, text: last.text + cleaned))
+            }
+        }
+        return words
     }
 
     // MARK: - Nonisolated bridge
