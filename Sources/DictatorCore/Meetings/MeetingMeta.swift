@@ -47,6 +47,11 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// the LLM summary pass. Old meetings decode this as nil and render
     /// without a summary section.
     var summary: MeetingSummaryResult?
+    /// Conversational shape of the meeting (1-on-1, stand-up, retro, …).
+    /// Drives which prompt addendum the summary pass tacks on. `.auto`
+    /// lets the model decide from the transcript; older meta.json blobs
+    /// that pre-date this field decode as `.auto`.
+    var meetingType: MeetingType
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -61,6 +66,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         audioFiles: AudioFiles,
         speakers: [Speaker],
         summary: MeetingSummaryResult? = nil,
+        meetingType: MeetingType = .auto,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -72,7 +78,33 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.audioFiles = audioFiles
         self.speakers = speakers
         self.summary = summary
+        self.meetingType = meetingType
         self.schemaVersion = schemaVersion
+    }
+
+    /// Backwards-compatible decode: every field added after v0.1
+    /// (`summary`, `meetingType`, `sourceFilename`) falls back to its
+    /// safe default when missing from the persisted JSON, so older
+    /// meeting folders keep loading after a Dictator update. Encodable
+    /// stays synthesised — the on-disk shape always carries every field.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.durationSeconds = try c.decode(Double.self, forKey: .durationSeconds)
+        self.source = try c.decode(Source.self, forKey: .source)
+        self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
+        self.audioFiles = try c.decode(AudioFiles.self, forKey: .audioFiles)
+        self.speakers = try c.decode([Speaker].self, forKey: .speakers)
+        self.summary = try c.decodeIfPresent(MeetingSummaryResult.self, forKey: .summary)
+        self.meetingType = try c.decodeIfPresent(MeetingType.self, forKey: .meetingType) ?? .auto
+        self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, createdAt, durationSeconds, source, sourceFilename
+        case audioFiles, speakers, summary, meetingType, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

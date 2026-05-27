@@ -63,6 +63,15 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingSummaryEnabled },
                     set: { s.settings.meetingSummaryEnabled = $0; state.save() }
                 ))
+                Picker("Default summary style", selection: Binding(
+                    get: { s.settings.defaultMeetingType },
+                    set: { s.settings.defaultMeetingType = $0; state.save() }
+                )) {
+                    ForEach(MeetingType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.menu)
                 Button {
                     showSummaryPromptSheet = true
                 } label: {
@@ -71,7 +80,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Summary")
             } footer: {
-                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting, extracting decisions, action items, and a short narrative. You can always trigger it manually from the meeting page — the toggle here just decides whether it runs automatically.")
+                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting, extracting decisions, action items, and a short narrative. The default style biases the summary toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Summarise as ▾.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -202,6 +202,25 @@
                 type="application/octet-stream"
                 sparkle:edSignature="vazIS/VG4hthaHHHWJNi4g+P3r8VAELRIrHNXkPfSInGR+QdI0uaydgA5CElGmHkBImIAZtCqRgFpJr4t8x2Bg==" />
         </item>
+        <item>
+            <title>Version 2026.5.12</title>
+            <pubDate>Tue, 26 May 2026 16:36:19 +0000</pubDate>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>2026.5.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Settings → About now shows lifetime usage in two colour-coded cards: Dictation (transcriptions, average words per transcription, words spoken, words delivered) and Assistant (turns, average words per instruction, instruction words, reply words). Counts live alongside your other synced settings, so a folder shared via iCloud Drive shows the combined totals across every Mac.</li>
+  <li>A third card below those shows total tokens generated locally by the LLM (across both the dictation cleanup passes and assistant turns), with input/output breakdown. Exact counts when MLX is the engine; approximate when Apple&#x27;s foundation model handled the call.</li>
+  <li>When more than one Mac is contributing to a shared stats file (via iCloud Drive), the LLM token card splits into a side-by-side comparison of this Mac vs. all Macs.</li>
+  <li>The Stats footer now keys off how many devices have actually contributed records, so it tells you exactly when totals are being pooled (and how many devices are involved) instead of guessing at sync providers — works regardless of whether your synced folder lives in iCloud Drive, Dropbox, Google Drive, or anywhere else.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.5.12/Dictator.dmg"
+                length="21214227"
+                type="application/octet-stream"
+                sparkle:edSignature="pWbsfjTAvEgXP+qalNFHWRrYmi9SExj/bPNdnjxhyOq4TUO6rz0j15wDCaB+W7HZl8XQ1eSlr8Gvo8rea7U7Bg==" />
+        </item>
+    
     
     
     

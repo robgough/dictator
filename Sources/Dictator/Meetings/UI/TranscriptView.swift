@@ -418,7 +418,7 @@ private struct SummaryPanel: View {
                     Spacer()
                 }
             } else if let summary = meta.summary {
-                SummaryBody(summary: summary)
+                SummaryBody(summary: summary, meta: meta)
             } else if state.settings.activeLLMEngine() == nil {
                 Text("Turn on an LLM in Settings → Models to summarise meetings.")
                     .font(.caption)
@@ -441,6 +441,12 @@ private struct SummaryPanel: View {
         )
     }
 
+    /// "Summarise as ▾" chevron menu — the primary verb (Generate / Re-run)
+    /// uses whatever type the user has already pinned to this meeting (or
+    /// the install-wide default when it's still on Auto-detect), and each
+    /// menu row both pins a new type to the meeting AND kicks off a
+    /// re-summary with it. Disabled while a summary is in flight or when
+    /// no LLM is configured.
     @ViewBuilder
     private var actionButton: some View {
         let isSummarising: Bool = {
@@ -448,18 +454,49 @@ private struct SummaryPanel: View {
             return false
         }()
         let isEnabled = state.settings.activeLLMEngine() != nil && !isSummarising
-        Button {
-            Task { await session.runSummary(settings: state.settings) }
+        let primaryLabel = meta.summary == nil ? "Generate" : "Re-run"
+
+        Menu {
+            Section("Summarise as") {
+                ForEach(MeetingType.allCases, id: \.self) { type in
+                    Button {
+                        runSummary(as: type)
+                    } label: {
+                        if type == meta.meetingType {
+                            Label(type.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(type.displayName)
+                        }
+                    }
+                }
+            }
         } label: {
-            Label(meta.summary == nil ? "Generate" : "Re-run", systemImage: "wand.and.stars")
+            Label(primaryLabel, systemImage: "wand.and.stars")
+        } primaryAction: {
+            Task { await session.runSummary(settings: state.settings) }
         }
         .controlSize(.small)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.visible)
+        .fixedSize()
         .disabled(!isEnabled)
+    }
+
+    /// Pin `type` to this meeting (store + session in lockstep) and kick
+    /// off a fresh summary so the user sees the result of their choice
+    /// immediately. The store write persists meta.json; the in-session
+    /// mutation makes sure the next `runSummary` resolves the new type
+    /// without round-tripping via the store.
+    private func runSummary(as type: MeetingType) {
+        MeetingsStore.shared.setMeetingType(id: meta.id, type: type)
+        session.meta.meetingType = type
+        Task { await session.runSummary(settings: state.settings) }
     }
 }
 
 private struct SummaryBody: View {
     let summary: MeetingSummaryResult
+    let meta: MeetingMeta
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -495,21 +532,67 @@ private struct SummaryBody: View {
                     ForEach(Array(summary.actionItems.enumerated()), id: \.offset) { _, item in
                         HStack(alignment: .top, spacing: 6) {
                             Text("•").foregroundStyle(.secondary)
-                            if let owner = item.owner, !owner.isEmpty {
-                                Text(.init("**\(owner)**: \(item.text)"))
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } else {
-                                Text(item.text)
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                            ActionItemRow(item: item, speakers: meta.speakers)
                         }
                         .font(.callout)
                     }
                 }
             }
         }
+    }
+}
+
+/// One action-item line. When `owner` matches a speaker's display name
+/// (case-insensitive), the owner renders as a coloured chip in the
+/// matching speaker hue — so scanning the action list reads as
+/// "at-a-glance: who's doing what". When the owner doesn't match any
+/// speaker (the LLM occasionally pulls a name from inside the
+/// transcript text rather than the speaker prefix), the chip falls
+/// back to a neutral secondary tint instead of guessing a colour.
+private struct ActionItemRow: View {
+    let item: MeetingSummaryResult.ActionItem
+    let speakers: [MeetingMeta.Speaker]
+
+    var body: some View {
+        if let owner = item.owner?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                OwnerChip(owner: owner, speakers: speakers)
+                Text(item.text)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text(item.text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct OwnerChip: View {
+    let owner: String
+    let speakers: [MeetingMeta.Speaker]
+
+    var body: some View {
+        let matched = speakers.first(where: { $0.displayName.compare(owner, options: .caseInsensitive) == .orderedSame })
+        let tint = matched.flatMap { Color(hex: $0.colorHex) }
+        // Slightly tinted background + matching foreground reads as
+        // belonging to the same colour family as the speaker chip up in
+        // the transcript header, without shouting for attention.
+        HStack(spacing: 4) {
+            Circle()
+                .fill(tint ?? Color.secondary)
+                .frame(width: 6, height: 6)
+            Text(owner)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill((tint ?? Color.secondary).opacity(matched == nil ? 0.15 : 0.18))
+        )
+        .foregroundStyle(tint ?? .secondary)
     }
 }
 
