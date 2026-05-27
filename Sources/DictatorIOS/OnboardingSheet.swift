@@ -38,11 +38,11 @@ struct OnboardingSheet: View {
     /// Pass-through so the sheet can read live model status without
     /// duplicating the view model's disk-check and download logic.
     /// Also lets the "Download model" CTA kick off the same task the
-    /// inline `downloadPrompt` would. Plain stored property —
-    /// `RecordingViewModel` is `@Observable`, so SwiftUI re-runs the
-    /// body when any read property changes; no `@Bindable` needed
-    /// since we never produce a binding from it here.
-    let viewModel: RecordingViewModel
+    /// inline download prompt would. `@Bindable` so the cellular-
+    /// confirmation alert below can bind `$viewModel.cellularConfirmationPending`
+    /// — without the projection the alert can't toggle the flag back to
+    /// false through `$viewModel`.
+    @Bindable var viewModel: RecordingViewModel
 
     /// Mirrors the persisted "onboarding done" flag. Flipped by both
     /// the natural completion path (step 4 → done) and the Skip button.
@@ -126,6 +126,26 @@ struct OnboardingSheet: View {
                 }
             }
             .interactiveDismissDisabled(true)
+            // Cellular guard, mirrored from ContentView. Before this, the
+            // sheet's "Download model" CTA was calling `downloadModel()`
+            // directly — bypassing the cellular check entirely. Now it
+            // routes through `confirmAndDownloadModel()`, which flips
+            // `cellularConfirmationPending` on a metered link and lets
+            // the alert here pick up the question. Without this attached
+            // to the sheet (and not just to ContentView underneath), the
+            // user on cellular saw absolutely nothing happen when they
+            // tapped the button.
+            .alert(
+                "Download over cellular?",
+                isPresented: $viewModel.cellularConfirmationPending
+            ) {
+                Button("Wait for Wi-Fi", role: .cancel) {}
+                Button("Download anyway", role: .destructive) {
+                    Task { await viewModel.downloadModel() }
+                }
+            } message: {
+                Text("The Parakeet speech model is about 460 MB. You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
+            }
         }
     }
 
@@ -308,6 +328,14 @@ struct OnboardingSheet: View {
                     .controlSize(.small)
                     .padding(.top, 4)
                 }
+                // Inline model-download state lives ON the row so the
+                // user gets real feedback (progress bar, MB readout,
+                // transfer rate, file count, pause / cancel) without
+                // the bottom CTA's single-line "Downloading… X%" being
+                // the only signal something is happening.
+                if isActive, step.kind == .model {
+                    modelInlineStatus
+                }
             }
             Spacer(minLength: 0)
         }
@@ -419,28 +447,27 @@ struct OnboardingSheet: View {
     /// Bottom CTA — single source of truth for "what should the user
     /// do next". Title changes with the active step; tap dispatches
     /// to the same `performAction` the row tap uses.
+    ///
+    /// Hidden while the model step is downloading, paused, or just
+    /// failed — the inline UI on the row carries the affordance in
+    /// those states, and a second progress indicator down here was
+    /// just noise. Reappears once the next step takes over.
     @ViewBuilder
     private var bottomCTA: some View {
         if let active = firstPendingKind, let step = steps.first(where: { $0.kind == active }) {
-            Button {
-                performAction(for: active)
-            } label: {
-                Group {
-                    if isBusy(for: active) {
-                        HStack(spacing: 10) {
-                            ProgressView().tint(.white)
-                            Text(busyTitle(for: active))
-                        }
-                    } else {
-                        Text(step.ctaWhenActive)
-                    }
+            if active == .model, hidesBottomCTAForModel {
+                EmptyView()
+            } else {
+                Button {
+                    performAction(for: active)
+                } label: {
+                    Text(step.ctaWhenActive)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .font(.body.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .font(.body.weight(.semibold))
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isBusy(for: active))
         } else {
             Button {
                 onboardingCompleted = true
@@ -456,33 +483,138 @@ struct OnboardingSheet: View {
         }
     }
 
-    /// Reflects in-flight system work — currently only the model
-    /// download has an observable "running" state. Mic permission
-    /// fires off a system alert; keyboard / open-access deep-link
-    /// out into Settings and there's no spinner-worthy state to show.
-    private func isBusy(for kind: Step.Kind) -> Bool {
-        switch kind {
-        case .model:
-            switch viewModel.modelDiskStatus {
-            case .downloading, .paused: return true
-            default: return false
-            }
+    /// True when the model row's inline state — downloading, paused,
+    /// or just failed — already presents an actionable affordance, so
+    /// the bottom CTA should retract rather than duplicate it.
+    private var hidesBottomCTAForModel: Bool {
+        switch viewModel.modelDiskStatus {
+        case .downloading, .paused, .failed: return true
         default: return false
         }
     }
 
-    private func busyTitle(for kind: Step.Kind) -> String {
-        switch kind {
-        case .model:
-            if case .downloading(let p, _) = viewModel.modelDiskStatus {
-                return "Downloading… \(Int(p * 100))%"
+    /// Inline progress / failure block rendered inside the active model
+    /// step row. Visually mirrors ContentView's full-screen `downloadingView`
+    /// but at a smaller scale — the row is a callout card inside a list,
+    /// not a takeover screen. Uses the rich `BackgroundModelDownloader.Progress`
+    /// snapshot the view model surfaces (bytes downloaded / total,
+    /// transfer rate, file count) plus pause / resume / cancel buttons.
+    @ViewBuilder
+    private var modelInlineStatus: some View {
+        switch viewModel.modelDiskStatus {
+        case .downloading(_, let snapshot):
+            downloadingInlineBlock(snapshot: snapshot, paused: false, pausedReason: nil)
+        case .paused(let snapshot, let reason):
+            downloadingInlineBlock(snapshot: snapshot, paused: true, pausedReason: reason)
+        case .failed(let reason):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Your progress so far is saved. Tap Try again to resume from where you left off.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await viewModel.confirmAndDownloadModel() }
+                } label: {
+                    Text("Try again")
+                        .font(.footnote.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            if case .paused = viewModel.modelDiskStatus {
-                return "Paused"
-            }
-            return "Downloading…"
-        default: return ""
+            .padding(.top, 6)
+        default:
+            EmptyView()
         }
+    }
+
+    /// Shared renderer for downloading + paused states. Mirrors
+    /// ContentView's `downloadingView` design — same byte / rate / file
+    /// formatting, same pause/resume/cancel button row, same
+    /// "you can leave the app" reassurance — at smaller font sizes so
+    /// it sits comfortably inside a step row.
+    @ViewBuilder
+    private func downloadingInlineBlock(
+        snapshot: BackgroundModelDownloader.Progress,
+        paused: Bool,
+        pausedReason: String?
+    ) -> some View {
+        let formatter: ByteCountFormatter = {
+            let f = ByteCountFormatter()
+            f.countStyle = .file
+            f.allowedUnits = [.useMB, .useGB]
+            return f
+        }()
+        let downloaded = formatter.string(fromByteCount: max(0, snapshot.bytesDownloaded))
+        let total = snapshot.bytesTotal > 0
+            ? formatter.string(fromByteCount: snapshot.bytesTotal)
+            : "—"
+        let percent = Int(snapshot.fraction * 100)
+        let rate: String? = (snapshot.bytesPerSecond > 1024 && !paused)
+            ? "\(formatter.string(fromByteCount: Int64(snapshot.bytesPerSecond)))/s"
+            : nil
+
+        VStack(alignment: .leading, spacing: 8) {
+            ProgressView(value: max(0, min(1, snapshot.fraction)))
+                .progressViewStyle(.linear)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(percent)%  ·  \(downloaded) of \(total)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let rate {
+                    Text(rate)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                if snapshot.totalFiles > 0 {
+                    Text("File \(min(snapshot.currentFileIndex + 1, snapshot.totalFiles)) of \(snapshot.totalFiles)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Text(paused
+                 ? "Tap Resume to continue where you left off."
+                 : "You can leave the app — the download keeps running in the background. Come back any time.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let pausedReason {
+                Text(pausedReason)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 10) {
+                if paused {
+                    Button {
+                        Task { await viewModel.downloadModel() }
+                    } label: {
+                        Text("Resume").font(.footnote.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                } else {
+                    Button {
+                        Task { await viewModel.pauseDownload() }
+                    } label: {
+                        Text("Pause").font(.footnote.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Button(role: .destructive) {
+                    Task { await viewModel.cancelDownload() }
+                } label: {
+                    Text("Cancel").font(.footnote.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.top, 6)
     }
 
     // MARK: - Actions
@@ -492,11 +624,14 @@ struct OnboardingSheet: View {
         case .microphone:
             Task { await viewModel.requestPermissionIfNeeded() }
         case .model:
-            // Mirrors the inline download CTA. The view model guards
-            // against double-kick: if a download is already in flight
-            // this is a no-op, which matches the disabled-state on
-            // the button.
-            Task { await viewModel.downloadModel() }
+            // Routes through the cellular-aware entry point so a user on
+            // metered data gets the confirmation alert before the 460 MB
+            // download starts. On Wi-Fi this falls straight through to
+            // `downloadModel()`. The view model guards against double-
+            // kick: if a download is already in flight the call is a
+            // no-op, which matches the inline-progress UI taking over
+            // the row.
+            Task { await viewModel.confirmAndDownloadModel() }
         case .keyboard, .openAccess:
             // Same destination for both — iOS doesn't expose deep-
             // links to the Keyboards screen specifically, so this
