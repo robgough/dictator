@@ -26,6 +26,18 @@ final class DiarizerService {
     @ObservationIgnored private var manager: OfflineDiarizerManager?
     @ObservationIgnored private var loadedModelID: String?
 
+    /// Clustering distance threshold passed to FluidAudio's
+    /// `OfflineDiarizerConfig`. FluidAudio's default of 0.6 is tuned for
+    /// clean studio audio (the pyannote community-1 benchmark suite);
+    /// VoIP / video-call audio is heavily codec-compressed which pulls
+    /// speaker embeddings closer together, causing the clusterer to merge
+    /// distinct voices into one. 0.5 is empirically the right ballpark for
+    /// Zoom/Meet/Teams audio — looser than studio defaults, but not so
+    /// loose that the same speaker over-segments into "speaker_1" and
+    /// "speaker_2". Exposed as a constant rather than a setting until we
+    /// see whether one threshold works for everyone.
+    private static let clusteringThreshold: Double = 0.5
+
     /// Directory passed to `OfflineDiarizerModels.load(from:)`. FluidAudio
     /// appends its own repo folder underneath.
     static func storageURL(forID _: String) -> URL {
@@ -72,7 +84,9 @@ final class DiarizerService {
         defer { isLoading = false }
 
         let directory = Self.storageURL(forID: modelID)
-        let mgr = OfflineDiarizerManager()
+        var config = OfflineDiarizerConfig.default
+        config.clustering.threshold = Self.clusteringThreshold
+        let mgr = OfflineDiarizerManager(config: config)
         try await mgr.prepareModels(directory: directory, configuration: nil, forceRedownload: false)
         self.manager = mgr
         self.loadedModelID = modelID
@@ -98,13 +112,27 @@ final class DiarizerService {
                           userInfo: [NSLocalizedDescriptionKey: "Diarizer not loaded"])
         }
         let result = try await manager.process(url)
-        return result.segments.map {
+        let segments = result.segments.map {
             DiarizationSegment(
                 start: TimeInterval($0.startTimeSeconds),
                 end: TimeInterval($0.endTimeSeconds),
                 speakerLabel: $0.speakerId
             )
         }
+        // Diagnostic: log how many speakers the clusterer surfaced. When
+        // users report "I had three people on the call but it's all one
+        // speaker", this is the first line to check — if `unique=1` then
+        // clustering collapsed the embeddings (probably codec/SNR), and
+        // we know to bring the threshold down rather than look elsewhere.
+        let labelTotals = Dictionary(grouping: segments, by: { $0.speakerLabel })
+            .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
+            .map { (label: $0.key, seconds: $0.value) }
+            .sorted { $0.seconds > $1.seconds }
+        let breakdown = labelTotals
+            .map { "\($0.label)=\(String(format: "%.1f", $0.seconds))s" }
+            .joined(separator: ", ")
+        NSLog("[Dictator] Diarizer: segments=\(segments.count) unique=\(labelTotals.count) breakdown=[\(breakdown)] (threshold=\(Self.clusteringThreshold))")
+        return segments
     }
 
     // MARK: - Nonisolated bridge
