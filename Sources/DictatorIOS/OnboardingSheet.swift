@@ -176,7 +176,7 @@ struct OnboardingSheet: View {
         Step(
             kind: .model,
             title: "Download the speech model",
-            body: "Parakeet, around 460 MB. Runs on-device — no audio leaves your device.",
+            body: "Parakeet, around 460 MB. Runs on-device — no audio leaves your device. You can leave the app while it downloads; it'll pick up where it left off if your connection drops.",
             ctaWhenActive: "Download model"
         ),
         Step(
@@ -463,8 +463,10 @@ struct OnboardingSheet: View {
     private func isBusy(for kind: Step.Kind) -> Bool {
         switch kind {
         case .model:
-            if case .downloading = viewModel.modelDiskStatus { return true }
-            return false
+            switch viewModel.modelDiskStatus {
+            case .downloading, .paused: return true
+            default: return false
+            }
         default: return false
         }
     }
@@ -472,8 +474,11 @@ struct OnboardingSheet: View {
     private func busyTitle(for kind: Step.Kind) -> String {
         switch kind {
         case .model:
-            if case .downloading(let p) = viewModel.modelDiskStatus {
+            if case .downloading(let p, _) = viewModel.modelDiskStatus {
                 return "Downloading… \(Int(p * 100))%"
+            }
+            if case .paused = viewModel.modelDiskStatus {
+                return "Paused"
             }
             return "Downloading…"
         default: return ""
