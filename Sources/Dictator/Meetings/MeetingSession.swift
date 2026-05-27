@@ -68,6 +68,21 @@ final class MeetingSession: Identifiable {
     /// and re-render the draft as new chunks land.
     private(set) var liveTranscriber: MeetingLiveTranscriber?
 
+    /// Active capture warnings — currently one per source ("mic" /
+    /// "system"), keyed so a re-warn from the same source overwrites
+    /// instead of stacking duplicates. Surfaced by `LiveRecordingView`
+    /// as a dismissible warning banner so the user can see (e.g.) that
+    /// FaceTime is blocking system capture or that the mic recorder
+    /// isn't getting buffers, instead of staring at flat meters.
+    private(set) var captureWarnings: [CaptureWarning] = []
+
+    struct CaptureWarning: Identifiable, Equatable {
+        enum Source: String { case mic, system }
+        let source: Source
+        let message: String
+        var id: String { source.rawValue }
+    }
+
     var micFileURL: URL? {
         guard meta.audioFiles.mic != nil else { return nil }
         return MeetingStorage.micURL(for: id)
@@ -138,6 +153,7 @@ final class MeetingSession: Identifiable {
     func startRecording(preferredMicDevice: AudioDevice?) async {
         guard case .idle = state else { return }
         state = .warmingUp
+        captureWarnings = []
 
         switch await ScreenRecordingPermission.probe() {
         case .granted:
@@ -167,10 +183,16 @@ final class MeetingSession: Identifiable {
             self.liveTranscriber = nil
             self.state = .failed(reason)
         }
+        recorder.onCaptureWarning = { [weak self] message in
+            self?.upsertCaptureWarning(source: .system, message: message)
+        }
         micRecorder.onLevel = { [weak self] mic in
             guard let self else { return }
             self.lastMicLevel = mic
             self.pushLevels()
+        }
+        micRecorder.onCaptureWarning = { [weak self] message in
+            self?.upsertCaptureWarning(source: .mic, message: message)
         }
 
         // Live transcript scaffolding. Constructed once we know recording
@@ -209,6 +231,23 @@ final class MeetingSession: Identifiable {
         } catch {
             state = .failed("Couldn't start recording: \(error.localizedDescription)")
         }
+    }
+
+    /// Insert (or overwrite by source) a capture warning. Keeping warnings
+    /// keyed by source means a re-fire from the same recorder doesn't
+    /// stack duplicates, but mic + system warnings happily coexist.
+    private func upsertCaptureWarning(source: CaptureWarning.Source, message: String) {
+        if let idx = captureWarnings.firstIndex(where: { $0.source == source }) {
+            captureWarnings[idx] = CaptureWarning(source: source, message: message)
+        } else {
+            captureWarnings.append(CaptureWarning(source: source, message: message))
+        }
+    }
+
+    /// Dismiss a banner from the live UI. The recorder itself is
+    /// unaffected — this just hides the message until the next recording.
+    func dismissCaptureWarning(source: CaptureWarning.Source) {
+        captureWarnings.removeAll { $0.source == source }
     }
 
     /// Push the current levels into `.recording` without waiting for the
