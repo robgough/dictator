@@ -227,6 +227,13 @@ struct DictatorSettings: Codable, Equatable {
     /// use built-in + addendum.
     var meetingSummaryPromptOverride: String?
 
+    /// Default meeting-type bias applied when the meeting itself is set
+    /// to `.auto` (i.e. the user hasn't picked a specific type on the
+    /// detail page). Synced across Macs because the right default
+    /// depends on what kind of meetings the user typically records, not
+    /// on which Mac is doing the recording.
+    var defaultMeetingType: MeetingType = .auto
+
     /// When true, MeetingProcessor runs a post-transcription dedup pass that
     /// drops mic-track words within ±300 ms of an identical (or near-identical)
     /// system-track word. Only matters when the user isn't wearing headphones —
@@ -398,6 +405,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
+        self.defaultMeetingType = try c.decodeIfPresent(MeetingType.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
         self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
     }
 
@@ -518,6 +526,27 @@ struct DictatorSettings: Codable, Equatable {
         Self.combine(builtin: Self.builtinMeetingSummaryPrompt,
                      override: meetingSummaryPromptOverride,
                      addendum: meetingSummaryPromptAddendum)
+    }
+
+    /// Resolved meeting summary prompt biased toward a specific meeting
+    /// shape (stand-up, retro, 1-on-1, …). Override still wins outright —
+    /// if the user has replaced the built-in wholesale they're in full
+    /// control and the type addendum is intentionally ignored. Otherwise
+    /// the prompt stacks as `builtin + type addendum + user addendum`,
+    /// so a user "always use British spelling" addendum continues to
+    /// apply on top of the per-type steer.
+    func effectiveMeetingSummaryPrompt(for type: MeetingType) -> String {
+        if let override = meetingSummaryPromptOverride { return override }
+        var stitched = Self.builtinMeetingSummaryPrompt
+        let typeAddendum = type.promptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typeAddendum.isEmpty {
+            stitched += "\n\nMEETING TYPE: \(type.displayName)\n" + typeAddendum
+        }
+        let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !userAddendum.isEmpty {
+            stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
+        }
+        return stitched
     }
 
     var effectiveAssistantPrompt: String {
@@ -793,7 +822,7 @@ struct DictatorSettings: Codable, Equatable {
     """
 
     static let builtinMeetingSummaryPrompt = """
-    You produce a structured summary of a recorded meeting transcript. The transcript is segmented by speaker — speakers are anonymous (Speaker 1, Speaker 2, …) unless renamed by the user. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
+    You produce a structured summary of a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
 
     Output STRICT JSON matching this exact shape, with no commentary, no preamble, no markdown fences:
 
@@ -805,11 +834,23 @@ struct DictatorSettings: Codable, Equatable {
 
     Rules:
     - "decisions" lists CONCRETE AGREED OUTCOMES — things the participants chose to do or not do. NOT topics discussed. If nothing was decided, return [].
-    - "actionItems" lists tasks with an owner if the transcript names one, otherwise owner is null. Do NOT invent owners. Do NOT assign tasks to "Me" unless the transcript clearly attributes the commitment to the speaker labelled "Me". If there are no action items, return [].
+    - "actionItems" lists tasks with an owner if the transcript attributes the commitment to a specific speaker, otherwise owner is null. If there are no action items, return [].
     - "narrative" is 3–6 sentences. Factual. No editorialising. No bullet points inside the narrative — it's prose.
     - Use plain text inside the JSON strings. No markdown.
     - If the meeting is short or trivial, still emit valid JSON with sensible empty arrays — do NOT refuse.
-    - Speaker names in actionItems are taken from the speaker labels in the transcript ("Me", "Speaker 1", or a rename like "Alice"). Never invent unrelated names.
+
+    ACTION ITEM ATTRIBUTION — read carefully, the UI maps `owner` back to a speaker chip and gets it wrong if the name doesn't match:
+
+    1. The `owner` field MUST be the EXACT display name shown in the transcript's `[Speaker · mm:ss]` prefix — "Me", "Speaker 1", "Speaker 2", or a renamed label like "Alice". Match the spelling and casing character-for-character. Do NOT add titles ("Mr. Alice"), do NOT abbreviate ("A." for Alice), do NOT translate ("Myself" for "Me"). Do NOT invent names that don't appear in the transcript prefixes.
+
+    2. Attribute aggressively when the transcript names the owner — explicitly OR implicitly:
+       - Explicit ("Alice, you're on rollout", "Bob will write the doc") → owner is the named person, exactly as they appear in the speaker prefixes.
+       - First-person commitment ("I'll send the doc", "I can take this", "let me follow up") → owner is whoever is currently speaking that line (the name in the `[Speaker · …]` prefix on that line). When that speaker is the recorder, the owner is literally "Me".
+       - Second-person assignment ("you'll handle X", "can you take Y?") agreed by the named person in a later line → owner is the named person being assigned to.
+
+    3. Only set `owner` to null when the task is genuinely unattributed — "someone should look at this", "we need to follow up on Y", or where the speaker is ambiguous and no later line clarifies. Don't guess and don't default to "Me" out of convenience.
+
+    4. Never put more than one name in `owner`. If two people are jointly responsible, pick the lead and mention the second in `text` ("with Bob"); if there's no lead, set owner to null and describe the shared ownership in `text`.
 
     Output ONLY the JSON object. Nothing before it. Nothing after it. No "Here is the summary:" preamble. No ```json fences.
     """
@@ -1055,6 +1096,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingSummaryEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
+        case defaultMeetingType
         case meetingDedupeMicEchoes
     }
 
@@ -1083,6 +1125,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingSummaryEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",
+        "defaultMeetingType",
     ]
 
     /// Keys that belong in the per-Mac file

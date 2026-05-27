@@ -44,17 +44,30 @@ enum MeetingSummaryService {
     /// Produce a summary using the currently-configured LLM engine.
     /// Updates `generatedAt` to now and stamps `modelID` with whichever
     /// engine ran.
+    ///
+    /// `meetingType` is the explicit override the caller wants this run
+    /// biased toward — UI surfaces it via the "Summarise as ▾" picker.
+    /// When nil (the auto-summary call path from MeetingProcessor),
+    /// we resolve in this order: `meta.meetingType` if the user has
+    /// already picked a non-`.auto` type for this meeting, otherwise
+    /// `settings.defaultMeetingType`.
     static func summarise(
         transcript: MeetingTranscript,
         meta: MeetingMeta,
-        settings: DictatorSettings
+        settings: DictatorSettings,
+        meetingType: MeetingType? = nil
     ) async throws -> MeetingSummaryResult {
         guard let engine = settings.activeLLMEngine() else {
             throw SummaryError.llmDisabled
         }
         try await engine.ensureReady()
 
-        let prompt = settings.effectiveMeetingSummaryPrompt
+        let resolvedType: MeetingType = {
+            if let explicit = meetingType { return explicit }
+            if meta.meetingType != .auto { return meta.meetingType }
+            return settings.defaultMeetingType
+        }()
+        let prompt = settings.effectiveMeetingSummaryPrompt(for: resolvedType)
         let modelID = engineModelID(settings: settings)
         let segments = transcript.segments
         guard !segments.isEmpty else { throw SummaryError.empty }
