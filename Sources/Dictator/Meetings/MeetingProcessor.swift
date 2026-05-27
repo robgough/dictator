@@ -32,6 +32,13 @@ final class MeetingProcessor {
     /// and the catalog id is the single source of truth.
     private let diarizationModelID = ModelCatalog.defaultDiarization.id
 
+    /// When true, `run` filters mic words that look like echoes of system
+    /// words (same token within ±300 ms). Wired from
+    /// `DictatorSettings.meetingDedupeMicEchoes` by the caller; default ON.
+    /// Held on the processor rather than read off Settings inline so the
+    /// dedup is testable without spinning up the settings stack.
+    var dedupeMicEchoes: Bool = true
+
     /// Run the pipeline. Updates `meta.json` with the final duration +
     /// speaker list, writes `transcript.json`. Throws on Parakeet load /
     /// ASR failure; the caller decides whether to surface that or retry.
@@ -120,6 +127,18 @@ final class MeetingProcessor {
         }
 
         onProgress(.writingTranscript, 0)
+
+        // Belt-and-braces ASR-side dedup. When the user isn't wearing
+        // headphones, their mic captures the remote speakers and the same
+        // words land on both tracks. AEC catches most of it; this pass
+        // mops up residual echoes (Bluetooth latency variance, AGC stomp).
+        // The system track wins for any echo — it's the canonical copy.
+        if dedupeMicEchoes, !micWords.isEmpty, !systemWords.isEmpty {
+            let originalCount = micWords.count
+            micWords = Self.dedupeMicEchoes(micWords: micWords, systemWords: systemWords)
+            let dropped = originalCount - micWords.count
+            NSLog("[Dictator] Mic-echo dedup: kept \(micWords.count) of \(originalCount) mic words (dropped \(dropped))")
+        }
 
         // Merge mic + system words by start time, then split into per-speaker
         // segments wherever the speaker changes or a long gap (≥700ms) opens.
@@ -230,6 +249,123 @@ final class MeetingProcessor {
             }
         }
         return best
+    }
+
+    // MARK: - Mic-echo dedup
+
+    /// Drop mic words that look like echoes of system words. For each mic
+    /// word, scans the system track for a word starting within ±300 ms whose
+    /// normalised text is identical (or within a small Levenshtein distance —
+    /// ASR variance — keyed to token length). Each system word is consumed at
+    /// most once so a single loud word on the system track can't wipe a run
+    /// of repeated mic words.
+    ///
+    /// The comparison is symmetric in the sense that words said by the user
+    /// AND echoed by the remote speaker get dropped from the mic side — the
+    /// system track is the canonical source for any echo. That's intentional;
+    /// the alternative (drop the system side) would put "Me" in the transcript
+    /// reading lines they actually heard rather than said.
+    nonisolated static func dedupeMicEchoes(
+        micWords: [SpeakerAttributedWord],
+        systemWords: [SpeakerAttributedWord]
+    ) -> [SpeakerAttributedWord] {
+        guard !micWords.isEmpty, !systemWords.isEmpty else { return micWords }
+
+        // ±300 ms window. Tuned in the report — wide enough to absorb
+        // Bluetooth round-trip plus diarizer drift, narrow enough that two
+        // genuinely-different "yeah"s a sentence apart don't collide.
+        let windowSeconds: Double = 0.3
+
+        // Pre-normalise the system side once. We index by original position
+        // so the "already matched" set stays well-defined.
+        let normalisedSystem: [(idx: Int, start: Double, text: String)] =
+            systemWords.enumerated().map { (idx, w) in
+                (idx, w.start, normaliseForCompare(w.text))
+            }
+
+        // For each mic word, scan the system track. The system track is
+        // sorted by start time after the merge upstream but we don't rely on
+        // that here — meetings rarely have more than a few thousand words and
+        // a linear pass is comfortably fast. If profiling shows this matters,
+        // swap to a binary search over `start`.
+        var matchedSystemIdx = Set<Int>()
+        var kept: [SpeakerAttributedWord] = []
+        kept.reserveCapacity(micWords.count)
+
+        for mic in micWords {
+            let micNorm = normaliseForCompare(mic.text)
+            // Skip empty normalisations — punctuation-only tokens can never
+            // be an echo, keep them on the mic side.
+            if micNorm.isEmpty {
+                kept.append(mic)
+                continue
+            }
+
+            var matchIdx: Int?
+            for entry in normalisedSystem {
+                if matchedSystemIdx.contains(entry.idx) { continue }
+                if abs(entry.start - mic.start) > windowSeconds { continue }
+                if entry.text.isEmpty { continue }
+                if entry.text == micNorm {
+                    matchIdx = entry.idx
+                    break
+                }
+                // Loose match: small ASR variance ("yeah" vs "yeh", "okay"
+                // vs "ok"). Distance threshold scales with token length so
+                // we don't collapse genuinely different short words.
+                let maxDist = entry.text.count <= 3 && micNorm.count <= 3 ? 1 : 2
+                if levenshtein(entry.text, micNorm) <= maxDist {
+                    matchIdx = entry.idx
+                    break
+                }
+            }
+
+            if let matchIdx {
+                matchedSystemIdx.insert(matchIdx)
+                // Drop the mic word — its system-track counterpart survives
+                // unchanged and represents this utterance in the transcript.
+            } else {
+                kept.append(mic)
+            }
+        }
+
+        return kept
+    }
+
+    /// Lowercase, strip everything that isn't a letter or digit, collapse
+    /// whitespace. Used only for echo comparison — the surviving word's
+    /// `text` field keeps its original casing and punctuation.
+    private nonisolated static func normaliseForCompare(_ s: String) -> String {
+        let lower = s.lowercased()
+        let scalars = lower.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
+    /// Standard two-row Levenshtein. Both arguments should already be
+    /// normalised (`normaliseForCompare`) — we don't lowercase or strip here.
+    /// Returns the edit distance between the two strings.
+    nonisolated static func levenshtein(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        if aChars.isEmpty { return bChars.count }
+        if bChars.isEmpty { return aChars.count }
+
+        var prev = Array(0...bChars.count)
+        var curr = [Int](repeating: 0, count: bChars.count + 1)
+
+        for i in 1...aChars.count {
+            curr[0] = i
+            for j in 1...bChars.count {
+                let cost = aChars[i - 1] == bChars[j - 1] ? 0 : 1
+                curr[j] = min(
+                    curr[j - 1] + 1,         // insertion
+                    prev[j] + 1,             // deletion
+                    prev[j - 1] + cost       // substitution
+                )
+            }
+            swap(&prev, &curr)
+        }
+        return prev[bChars.count]
     }
 
     // MARK: - Segment building

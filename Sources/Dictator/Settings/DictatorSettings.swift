@@ -179,6 +179,17 @@ struct DictatorSettings: Codable, Equatable {
     /// use built-in + addendum.
     var meetingSummaryPromptOverride: String?
 
+    /// When true, MeetingProcessor runs a post-transcription dedup pass that
+    /// drops mic-track words within ±300 ms of an identical (or near-identical)
+    /// system-track word. Only matters when the user isn't wearing headphones —
+    /// their mic picks up the remote speakers and the same words land on both
+    /// tracks. AEC usually catches this; the dedup is the belt-and-braces
+    /// layer for residual leakage (Bluetooth latency, AGC stomp).
+    /// Per-Mac because echo behaviour depends on this Mac's headphones-versus-
+    /// speakers setup. Default ON; off is the escape hatch if it ever eats
+    /// legitimate overlapping speech.
+    var meetingDedupeMicEchoes: Bool = true
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -338,6 +349,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
+        self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -993,6 +1005,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingSummaryEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
+        case meetingDedupeMicEchoes
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -1043,6 +1056,7 @@ struct DictatorSettings: Codable, Equatable {
         "hasCompletedOnboarding",
         "meetingAutoDeleteAfterDays",
         "meetingAudioRetentionDays",
+        "meetingDedupeMicEchoes",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

@@ -219,6 +219,10 @@ final class MeetingSession: Identifiable {
     func runProcessor(parakeetModelID: String) async {
         do {
             state = .loadingASR(progress: 0)
+            // Pull the dedup toggle off settings just before we run, so the
+            // user's last save wins — the processor instance is held for the
+            // lifetime of the session, but the setting is the source of truth.
+            processor.dedupeMicEchoes = AppState.shared.settings.meetingDedupeMicEchoes
             try await processor.run(session: self, parakeetModelID: parakeetModelID) { [weak self] stage, fraction in
                 guard let self else { return }
                 switch stage {
