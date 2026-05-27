@@ -496,8 +496,26 @@ final class RecordingViewModel {
     /// well over the historic ~200 MB threshold and would get pushed
     /// back at submission.
     func confirmAndDownloadModel() async {
-        guard case .notDownloaded = modelDiskStatus else { return }
-        if await Self.isOnCellular() {
+        // Accept `.notDownloaded`, `.failed`, or `.checking` as valid
+        // "try downloading" entry points. The pre-existing guard only
+        // accepted `.notDownloaded`, which silently no-op'd taps from
+        // the onboarding sheet when the view model hadn't yet finished
+        // its disk probe (`.checking`) OR when a previous attempt had
+        // failed (`.failed`) — looking exactly like "the button does
+        // nothing" from the user's side. Reset failed state so the
+        // downstream guard doesn't reject the retry.
+        switch modelDiskStatus {
+        case .downloaded, .downloading, .paused:
+            NSLog("[Dictator iOS] confirmAndDownloadModel: ignoring tap — already in \(modelDiskStatus)")
+            return
+        case .failed:
+            modelDiskStatus = .notDownloaded
+        case .notDownloaded, .checking:
+            break
+        }
+        let onCellular = await Self.isOnCellular()
+        NSLog("[Dictator iOS] confirmAndDownloadModel: cellular=\(onCellular)")
+        if onCellular {
             cellularConfirmationPending = true
         } else {
             await downloadModel()
@@ -572,9 +590,12 @@ final class RecordingViewModel {
     /// round trip.
     func downloadModel() async {
         switch modelDiskStatus {
-        case .downloaded, .checking: return
+        case .downloaded:
+            NSLog("[Dictator iOS] downloadModel: already downloaded, no-op")
+            return
         default: break
         }
+        NSLog("[Dictator iOS] downloadModel: starting BackgroundModelDownloader for \(selectedModelID)")
         startDownloaderObserverIfNeeded()
         await BackgroundModelDownloader.shared.startDownload(modelID: selectedModelID)
     }
