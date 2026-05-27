@@ -44,74 +44,108 @@ enum MeetingImporter {
         if let type = UTType(filenameExtension: ext), type.conforms(to: .audio) { return true }
         return false
     }
-    /// Build a session from a source audio file the user picked. The
-    /// session lands in `.captured` so the caller can immediately run the
-    /// processor. The source file is copied (not moved) so the user's
-    /// original isn't touched.
-    static func makeSession(from source: URL) throws -> MeetingSession {
+    /// Create a session for the import, write its meta, and return.
+    /// Heavy work (the chunked re-encode of the source audio into
+    /// `system.m4a`) does NOT happen here — call `reencodeAudio` from a
+    /// background context afterwards. This split exists because the old
+    /// single-shot `makeSession(from:)` blocked the main thread for the
+    /// length of the whole re-encode, beach-balling the UI on long
+    /// voice-memo imports. The session lands in `.importing(0)`, then
+    /// transitions to `.captured` once the re-encode completes.
+    @MainActor
+    static func makeShellSession(from source: URL) throws -> MeetingSession {
         let id = UUID()
-        let folder = MeetingStorage.folder(for: id)
+        _ = MeetingStorage.folder(for: id)
 
-        // Re-encode to a deterministic system.m4a. AVAudioFile reads any
-        // container CoreAudio supports (.m4a, .wav, .mp3, .aac, .flac,
-        // .caf) and re-writing to AAC keeps storage uniform.
-        let input = try AVAudioFile(forReading: source)
-        let processingFormat = input.processingFormat
-        let outputURL = MeetingStorage.systemURL(for: id)
-        try? FileManager.default.removeItem(at: outputURL)
+        // Reading just the file metadata is fast (microseconds) — safe
+        // to do on the main actor so we can populate the duration field
+        // up-front. The slow part is the per-frame re-encode loop, which
+        // moves off-main below.
+        let probe = try AVAudioFile(forReading: source)
+        let duration = Double(probe.length) / probe.processingFormat.sampleRate
 
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: processingFormat.sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 96_000,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-        ]
-        let output = try AVAudioFile(
-            forWriting: outputURL,
-            settings: outputSettings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
-
-        // Stream in chunks so we don't allocate a buffer for the entire
-        // file at once — long voice-memo imports could be hours.
-        let chunkFrames: AVAudioFrameCount = 16_384
-        var remaining = AVAudioFrameCount(input.length)
-        while remaining > 0 {
-            let toRead = min(chunkFrames, remaining)
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: toRead) else { break }
-            try input.read(into: buffer, frameCount: toRead)
-            if buffer.frameLength == 0 { break }
-            if processingFormat.channelCount > 1 {
-                try output.write(from: downmixToMono(buffer, sourceFormat: processingFormat))
-            } else {
-                try output.write(from: buffer)
-            }
-            remaining = remaining > buffer.frameLength ? remaining - buffer.frameLength : 0
-        }
-
-        let createdAt = Date()
         let title = source.deletingPathExtension().lastPathComponent
         let meta = MeetingMeta(
             id: id,
             title: title.isEmpty ? "Imported audio" : title,
-            createdAt: createdAt,
-            durationSeconds: Double(input.length) / processingFormat.sampleRate,
+            createdAt: Date(),
+            durationSeconds: duration,
             source: .fileImport,
             sourceFilename: source.lastPathComponent,
             audioFiles: .init(mic: nil, system: MeetingStorage.systemFilename),
             speakers: MeetingMeta.defaultImportSpeakers
         )
         try MeetingStorage.writeMeta(meta)
-        _ = folder // folder created by MeetingStorage on first touch
         MeetingsStore.shared.upsert(meta)
-
-        let session = MeetingSession(from: meta)
-        return session
+        return MeetingSession(forImport: meta)
     }
 
-    private static func downmixToMono(_ buffer: AVAudioPCMBuffer, sourceFormat: AVAudioFormat) throws -> AVAudioPCMBuffer {
+    /// Re-encode the source audio into a deterministic `system.m4a`
+    /// inside the session's folder. Runs off the main actor so the UI
+    /// stays responsive while a long voice-memo (hours of audio) is
+    /// being decoded + AAC-re-encoded. `progress` is invoked on the
+    /// main actor as the import advances (0…1). Caller is expected to
+    /// drive `MeetingSession.state = .importing(progress:)` from each
+    /// progress tick.
+    nonisolated static func reencodeAudio(
+        from source: URL,
+        to outputURL: URL,
+        progress: @escaping @Sendable @MainActor (Double) -> Void
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try? FileManager.default.removeItem(at: outputURL)
+            let input = try AVAudioFile(forReading: source)
+            let processingFormat = input.processingFormat
+
+            let outputSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: processingFormat.sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 96_000,
+                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+            ]
+            let output = try AVAudioFile(
+                forWriting: outputURL,
+                settings: outputSettings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+
+            let chunkFrames: AVAudioFrameCount = 16_384
+            let total = max(AVAudioFrameCount(1), AVAudioFrameCount(input.length))
+            var remaining = AVAudioFrameCount(input.length)
+            var processed: AVAudioFrameCount = 0
+            // Throttle the progress dispatch — one main-actor hop per
+            // ~50ms of audio progress is plenty for a smooth meter.
+            var lastReported: Double = 0
+            // Seed at 0 so the UI shows the bar immediately rather than
+            // jumping from "nothing" to "20%".
+            await progress(0)
+            while remaining > 0 {
+                try Task.checkCancellation()
+                let toRead = min(chunkFrames, remaining)
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: toRead) else { break }
+                try input.read(into: buffer, frameCount: toRead)
+                if buffer.frameLength == 0 { break }
+                if processingFormat.channelCount > 1 {
+                    try output.write(from: Self.downmixToMono(buffer, sourceFormat: processingFormat))
+                } else {
+                    try output.write(from: buffer)
+                }
+                let consumed = buffer.frameLength
+                remaining = remaining > consumed ? remaining - consumed : 0
+                processed += consumed
+                let fraction = min(1.0, Double(processed) / Double(total))
+                if fraction - lastReported >= 0.02 || remaining == 0 {
+                    lastReported = fraction
+                    await progress(fraction)
+                }
+            }
+            await progress(1)
+        }.value
+    }
+
+    nonisolated private static func downmixToMono(_ buffer: AVAudioPCMBuffer, sourceFormat: AVAudioFormat) throws -> AVAudioPCMBuffer {
         guard let monoFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sourceFormat.sampleRate,

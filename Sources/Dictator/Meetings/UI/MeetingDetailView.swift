@@ -77,6 +77,8 @@ struct MeetingDetailView: View {
                 ProcessingPill(text: "Recording · \(Self.formatDuration(elapsed))", color: .red)
             case .stopping:
                 ProcessingPill(text: "Finalising…", color: .orange)
+            case .importing(let p):
+                ProcessingPill(text: "Importing audio · \(Int(p * 100))%", color: .blue)
             case .captured:
                 ProcessingPill(text: "Ready to process", color: .gray)
             case .loadingASR(let p):
@@ -106,7 +108,7 @@ struct MeetingDetailView: View {
             LiveRecordingView(session: session, isWarming: true)
         case .recording:
             LiveRecordingView(session: session, isWarming: false)
-        case .loadingASR, .transcribingMic, .transcribingSystem,
+        case .importing, .loadingASR, .transcribingMic, .transcribingSystem,
              .loadingDiarizer, .diarizing, .merging:
             ProcessingPane(session: session)
         case .summarising:
@@ -147,13 +149,24 @@ struct MeetingDetailView: View {
     }
 
     private func reloadTranscriptIfNeeded() {
-        guard case .ready = session.state else {
-            // Reset on transition out of .ready so a re-process clears
-            // any stale rendered transcript before the new one lands.
-            if transcriptCache != nil { transcriptCache = nil }
+        // Only clear the cache when the new state could regenerate the
+        // transcript on disk — that's the transcribe / diarize / merge
+        // path. Other transitions (notably `.summarising`) leave the
+        // transcript file untouched, so keeping it on screen avoids a
+        // jarring blank flash mid-regenerate.
+        switch session.state {
+        case .ready:
+            transcriptCache = MeetingStorage.readTranscript(for: session.id)
+        case .summarising:
+            // The summary pass reads transcript.json without touching it.
+            // Keep whatever's already rendered visible.
             return
+        case .loadingASR, .transcribingMic, .transcribingSystem,
+             .loadingDiarizer, .diarizing, .merging:
+            if transcriptCache != nil { transcriptCache = nil }
+        default:
+            if transcriptCache != nil { transcriptCache = nil }
         }
-        transcriptCache = MeetingStorage.readTranscript(for: session.id)
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -291,8 +304,8 @@ private struct ProcessingPane: View {
 
     private var progressValue: Double {
         switch session.state {
-        case .loadingASR(let p), .transcribingMic(let p), .transcribingSystem(let p),
-             .loadingDiarizer(let p), .diarizing(let p):
+        case .importing(let p), .loadingASR(let p), .transcribingMic(let p),
+             .transcribingSystem(let p), .loadingDiarizer(let p), .diarizing(let p):
             return p
         case .merging: return 0.95
         default: return 0
@@ -301,6 +314,7 @@ private struct ProcessingPane: View {
 
     private var stageLabel: String {
         switch session.state {
+        case .importing(let p): return "Importing audio (\(Int(p * 100))%)…"
         case .loadingASR: return "Loading transcription model…"
         case .transcribingMic: return "Transcribing your microphone track…"
         case .transcribingSystem: return "Transcribing the system audio track…"

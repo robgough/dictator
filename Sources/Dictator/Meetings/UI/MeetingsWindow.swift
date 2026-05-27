@@ -194,16 +194,23 @@ struct MeetingsRootView: View {
     /// leaves the last-imported session selected when the batch is done.
     private func importFiles(_ urls: [URL]) async {
         for url in urls {
+            // Build the shell synchronously (fast — just reads file
+            // metadata). The session lands in `.importing(0)` so the
+            // detail pane immediately shows a progress bar instead of
+            // beach-balling for the duration of the AAC re-encode.
+            let session: MeetingSession
             do {
-                let session = try MeetingImporter.makeSession(from: url)
-                openSessions[session.id] = session
-                selectedID = session.id
-                liveSession = session
-                let modelID = state.settings.parakeetModelID
-                await session.runProcessor(parakeetModelID: modelID)
+                session = try MeetingImporter.makeShellSession(from: url)
             } catch {
                 permissionMessage = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
+                continue
             }
+            openSessions[session.id] = session
+            selectedID = session.id
+            liveSession = session
+            let modelID = state.settings.parakeetModelID
+            // runImport drives off-main re-encode → .captured → processor.
+            await session.runImport(from: url, parakeetModelID: modelID)
         }
     }
 }

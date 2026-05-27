@@ -21,6 +21,7 @@ final class MeetingSession: Identifiable {
         case warmingUp
         case recording(elapsed: TimeInterval, micLevel: Float, sysLevel: Float)
         case stopping
+        case importing(progress: Double)
         case captured
         case loadingASR(progress: Double)
         case transcribingMic(progress: Double)
@@ -34,7 +35,7 @@ final class MeetingSession: Identifiable {
 
         var isProcessing: Bool {
             switch self {
-            case .loadingASR, .transcribingMic, .transcribingSystem,
+            case .importing, .loadingASR, .transcribingMic, .transcribingSystem,
                  .loadingDiarizer, .diarizing, .merging, .summarising:
                 return true
             default: return false
@@ -84,6 +85,16 @@ final class MeetingSession: Identifiable {
             speakers: MeetingMeta.defaultLiveSpeakers
         )
         self.state = .idle
+    }
+
+    /// Construct a session for an in-progress file import. Lands in
+    /// `.importing(0)`; the caller drives `runImport` to do the
+    /// background re-encode (which advances progress) and then chains
+    /// into the post-capture processor.
+    init(forImport meta: MeetingMeta) {
+        self.id = meta.id
+        self.meta = meta
+        self.state = .importing(progress: 0)
     }
 
     /// Construct from on-disk meta. Lands in `.ready` if a transcript is
@@ -213,6 +224,29 @@ final class MeetingSession: Identifiable {
     }
 
     // MARK: - Import / re-process
+
+    /// Drive a freshly-shell'd import session: do the off-main audio
+    /// re-encode (advancing `.importing(progress:)` as it goes) and then
+    /// chain into the existing post-capture processor. The shell session
+    /// (constructed via `MeetingSession(forImport:)`) lands in
+    /// `.importing(0)` so the user sees activity immediately rather than
+    /// staring at a beach ball while the source file gets re-encoded.
+    func runImport(from source: URL, parakeetModelID: String) async {
+        guard case .importing = state else { return }
+        do {
+            try await MeetingImporter.reencodeAudio(
+                from: source,
+                to: MeetingStorage.systemURL(for: id)
+            ) { [weak self] fraction in
+                guard let self else { return }
+                self.state = .importing(progress: fraction)
+            }
+            state = .captured
+            await runProcessor(parakeetModelID: parakeetModelID)
+        } catch {
+            state = .failed("Couldn't import audio: \(error.localizedDescription)")
+        }
+    }
 
     /// Run (or re-run) the post-capture pipeline. Used after a fresh
     /// recording and from the "Process now" button on a meeting that

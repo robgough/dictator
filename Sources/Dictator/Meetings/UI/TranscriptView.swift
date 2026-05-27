@@ -58,7 +58,11 @@ struct TranscriptView: View {
                 SummaryPanel(session: session, transcript: transcript, meta: meta)
 
                 ForEach(Array(transcript.segments.enumerated()), id: \.offset) { _, segment in
-                    SegmentRow(segment: segment, meta: meta)
+                    SegmentRow(
+                        segment: segment,
+                        meta: meta,
+                        player: hasAudio ? player : nil
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,6 +134,9 @@ struct TranscriptView: View {
 private struct SegmentRow: View {
     let segment: MeetingTranscriptSegment
     let meta: MeetingMeta
+    /// nil when the meeting's audio has been pruned — the timestamp
+    /// still shows for context but the click affordance is hidden.
+    let player: MeetingPlayer?
 
     var body: some View {
         let speaker = meta.speakers.first(where: { $0.id == segment.speakerId })
@@ -139,15 +146,49 @@ private struct SegmentRow: View {
                 .fill(color)
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 4) {
-                Text(speaker?.displayName ?? segment.speakerId)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(color)
+                HStack(spacing: 8) {
+                    Text(speaker?.displayName ?? segment.speakerId)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(color)
+                    timestampButton
+                }
                 Text(segment.text)
                     .font(.body)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    @ViewBuilder
+    private var timestampButton: some View {
+        let label = Self.formatTimestamp(segment.start)
+        if let player {
+            Button {
+                player.seek(to: segment.start)
+                if !player.isPlaying { player.togglePlayPause() }
+            } label: {
+                Text(label)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Jump the audio playback to this turn and start playing.")
+        } else {
+            Text(label)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private static func formatTimestamp(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+        return String(format: "%d:%02d", m, s)
     }
 }
 

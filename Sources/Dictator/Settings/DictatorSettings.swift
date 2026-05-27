@@ -212,12 +212,13 @@ struct DictatorSettings: Codable, Equatable {
     /// with wants `.alwaysOff`.
     var meetingMicEchoCancellation: MeetingMicEchoCancellation = .auto
 
-    /// Opt-in: when true, MeetingProcessor runs the structured LLM summary
-    /// pass automatically after transcription. False by default — summary
-    /// is expensive on a long meeting and not everyone wants it. The
-    /// "Generate summary" button in the meeting detail view still works
-    /// when this is off; the toggle only governs the auto-run.
-    var meetingSummaryEnabled: Bool = false
+    /// When true, MeetingProcessor runs the structured LLM summary pass
+    /// automatically after each meeting finishes transcribing. Default
+    /// is ON — users overwhelmingly expect a summary to appear without
+    /// having to push a button. The "Generate summary" button still
+    /// works manually for re-runs and for installs where the user has
+    /// disabled this toggle.
+    var meetingSummaryEnabled: Bool = true
     /// Appended under the built-in meeting summary prompt. Empty = no
     /// addendum. Synced across Macs because it's a personal preference,
     /// not hardware-dependent.
