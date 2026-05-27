@@ -74,6 +74,18 @@ enum AudioDeviceEnumerator {
     /// mainMixer routing in the live meter, and surfacing "Connecting…" in
     /// the HUD so the user understands the ~2–5 s HFP negotiation delay.
     static func isBluetooth(deviceID: AudioDeviceID) -> Bool {
+        guard let transport = transportType(forDeviceID: deviceID) else { return false }
+        return transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// Reads the raw transport-type code for an arbitrary device. Returns
+    /// nil if the property isn't available (rare — every real device exposes
+    /// it). Used by the echo-cancellation auto-detector to decide whether
+    /// the active output is built-in speakers / external speakers (AEC
+    /// helpful) or headphones (AEC unnecessary, and slightly degrades
+    /// timbre).
+    static func transportType(forDeviceID id: AudioDeviceID) -> UInt32? {
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         var addr = AudioObjectPropertyAddress(
@@ -81,10 +93,8 @@ enum AudioDeviceEnumerator {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        let status = AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &transport)
-        guard status == noErr else { return false }
-        return transport == kAudioDeviceTransportTypeBluetooth
-            || transport == kAudioDeviceTransportTypeBluetoothLE
+        let status = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport)
+        return status == noErr ? transport : nil
     }
 
     static func systemDefaultInputDeviceID() -> AudioDeviceID? {
@@ -103,6 +113,68 @@ enum AudioDeviceEnumerator {
             &id
         )
         return status == noErr && id != kAudioObjectUnknown ? id : nil
+    }
+
+    /// Resolve whatever macOS currently treats as the system default
+    /// **output** device. Used by the meeting recorder's echo-cancellation
+    /// auto-mode to figure out whether the user is on speakers (mic will
+    /// pick up the remote side's audio, AEC wanted) or headphones (no
+    /// bleed, AEC unnecessary).
+    static func systemDefaultOutputDeviceID() -> AudioDeviceID? {
+        var id: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &addr,
+            0, nil,
+            &size,
+            &id
+        )
+        return status == noErr && id != kAudioObjectUnknown ? id : nil
+    }
+
+    /// Best-effort "does the active output look like a headphone or a
+    /// speaker?" probe used by the echo-cancellation auto-mode.
+    ///
+    /// The decision rule errs on the side of "treat as headphones" (and
+    /// therefore leave AEC OFF) in ambiguous cases — the failure mode of
+    /// unnecessary AEC on headphones (slightly thinner voice timbre) is
+    /// more user-noticeable than the failure mode of missing AEC on
+    /// speakers (the duplicated-remote-speech bleed, which the
+    /// post-transcription dedup pass still catches as backup).
+    ///
+    /// Heuristics, in order:
+    /// 1. Bluetooth transport → headphones (AirPods, BT headsets — the
+    ///    overwhelming Bluetooth output case for a Mac on a call).
+    /// 2. Device name contains "headphone" / "headset" / "earbud" /
+    ///    "airpod" / "earpod" (case-insensitive) → headphones. Catches
+    ///    USB headsets and the built-in 3.5 mm jack when something's
+    ///    plugged in (macOS retitles the built-in output to
+    ///    "Headphones").
+    /// 3. Built-in transport → speakers (laptop / iMac internal speakers).
+    /// 4. Anything else (external USB audio interface, HDMI, AirPlay) →
+    ///    headphones, on the conservative principle above.
+    static func outputLooksLikeHeadphones(deviceID: AudioDeviceID) -> Bool {
+        let transport = transportType(forDeviceID: deviceID)
+        if let transport,
+           transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE {
+            return true
+        }
+        let lowerName = (name(forDeviceID: deviceID) ?? "").lowercased()
+        let headphoneTokens = ["headphone", "headset", "earbud", "airpod", "earpod"]
+        if headphoneTokens.contains(where: { lowerName.contains($0) }) {
+            return true
+        }
+        if let transport, transport == kAudioDeviceTransportTypeBuiltIn {
+            return false
+        }
+        return true
     }
 
     // MARK: - Property listener for hardware changes
