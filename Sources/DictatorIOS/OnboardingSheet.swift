@@ -153,9 +153,11 @@ struct OnboardingSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.tint)
+            Image("AboutLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.bottom, 4)
             Text("A few quick steps")
                 .font(.title2.weight(.semibold))
