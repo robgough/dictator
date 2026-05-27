@@ -394,6 +394,13 @@ struct OnboardingSheet: View {
                 if isActive, step.kind == .chooseModel {
                     modelChoiceInline
                 }
+                // Done-state summary for the model-choice row. Shows
+                // which variant landed plus a pointer to Settings,
+                // and — if the download hasn't started yet — a
+                // "Change" affordance that re-opens the picker.
+                if s == .done, step.kind == .chooseModel {
+                    modelChoiceDoneSummary
+                }
             }
             Spacer(minLength: 0)
         }
@@ -409,17 +416,72 @@ struct OnboardingSheet: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            // Only the active row is interactive — taps on pending
-            // rows would pre-empt the linear flow, and taps on done
-            // rows have nothing useful to do.
+            // Done-state model-choice row stays interactive — the user
+            // can still change their mind right up to the moment the
+            // download starts (i.e. while step 3 is pending, not yet
+            // downloading). After the download begins, the choice is
+            // locked in: switching variants mid-flight would invalidate
+            // the partial bytes on disk.
+            if s == .done, step.kind == .chooseModel, modelChoiceIsReopenable {
+                modelChoiceConfirmed = false
+                return
+            }
+            // Only the active row is otherwise interactive — taps on
+            // pending rows would pre-empt the linear flow, and taps on
+            // done rows have nothing useful to do.
             guard isActive else { return }
-            // The model-choice row is special-cased: the row body hosts
-            // tappable picker cards, and the only way to commit the
-            // choice is the bottom CTA. A stray tap on the row chrome
-            // would otherwise latch `modelChoiceConfirmed` and skip the
-            // user's chance to actually pick.
+            // The active model-choice row is special-cased: the body
+            // hosts tappable picker cards, and the only way to commit
+            // the choice is the bottom CTA. A stray tap on the row
+            // chrome would otherwise latch `modelChoiceConfirmed` and
+            // skip the user's chance to actually pick.
             if step.kind == .chooseModel { return }
             performAction(for: step.kind)
+        }
+    }
+
+    /// True while the user can still go back to the picker — i.e.
+    /// before any download bytes have landed. Once the downloader
+    /// transitions into `.downloading` / `.paused` / `.downloaded` we
+    /// lock the choice in (and the Settings model picker is the
+    /// post-onboarding escape hatch).
+    private var modelChoiceIsReopenable: Bool {
+        switch viewModel.modelDiskStatus {
+        case .notDownloaded, .checking, .failed:
+            return true
+        case .downloading, .paused, .downloaded:
+            return false
+        }
+    }
+
+    /// Done-state summary for the `chooseModel` row. Names the chosen
+    /// variant, hints at the Settings escape hatch for later changes,
+    /// and surfaces a "Change" affordance while the download hasn't
+    /// started yet.
+    @ViewBuilder
+    private var modelChoiceDoneSummary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Selected: \(Self.modelDisplayName(for: viewModel.selectedModelID))")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+            if modelChoiceIsReopenable {
+                Text("Tap to change, or update later in Settings.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("Locked in for this download. Change later in Settings.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private static func modelDisplayName(for id: String) -> String {
+        switch id {
+        case "parakeet-tdt-0.6b-v3": return "Parakeet (multilingual)"
+        case "parakeet-tdt-0.6b-v2": return "Parakeet (English-only)"
+        default: return id
         }
     }
 
