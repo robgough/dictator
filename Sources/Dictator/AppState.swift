@@ -24,6 +24,15 @@ final class AppState {
     /// window. Set by MenuBarContent on first render.
     var openMeetingsAction: (@MainActor () -> Void)?
 
+    /// One-shot flag set by the menu bar's "Record meeting" entry. Read
+    /// (and immediately cleared) by `MeetingsRootView` the next time it
+    /// appears or observes a change — at which point it kicks off the
+    /// same `startRecording()` flow as the in-window Record button. The
+    /// flag dodges the "window doesn't exist yet" race: the menu bar
+    /// sets it *then* opens the window, so by the time the Meetings view
+    /// renders it can observe the request and consume it in one place.
+    var pendingMeetingRecording: Bool = false
+
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let assistantResultWindow = AssistantResultController()

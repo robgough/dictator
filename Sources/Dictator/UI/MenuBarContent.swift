@@ -22,6 +22,8 @@ struct MenuBarContent: View {
             Divider()
             statusRow
 
+            recordMeetingButton
+
             // Default mode picker — only shown once the user has more than the
             // built-in Quick (i.e. after migration or once they add a custom
             // mode). One mode = nothing to pick between.
@@ -254,6 +256,48 @@ struct MenuBarContent: View {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+
+    /// Primary affordance near the top of the popover: one-click start of
+    /// a meeting recording without first opening the Meetings window and
+    /// hunting for the toolbar button. Sets a pending flag on AppState,
+    /// then opens the window — MeetingsRootView consumes the flag from
+    /// its onAppear / onChange and drives the same startRecording() flow
+    /// the toolbar button uses, so there's a single code path for "begin
+    /// a meeting capture" regardless of who triggered it.
+    private var recordMeetingButton: some View {
+        Button {
+            state.pendingMeetingRecording = true
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "meetings")
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "record.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Record meeting")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.red.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the Meetings window and start recording immediately.")
     }
 
     private var statusText: String {

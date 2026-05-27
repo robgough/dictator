@@ -43,7 +43,29 @@ struct MeetingsRootView: View {
         }
         .onAppear {
             store.refresh()
+            consumePendingRecordingRequest()
         }
+        // Catches the case where the Meetings window is *already* open
+        // when the user hits "Record meeting" in the menu bar — onAppear
+        // won't fire again, but the @Observable flag flip does.
+        .onChange(of: state.pendingMeetingRecording) { _, isPending in
+            if isPending { consumePendingRecordingRequest() }
+        }
+    }
+
+    /// One-shot drain of `AppState.pendingMeetingRecording`. Set by the
+    /// menu bar's "Record meeting" entry before it opens the window;
+    /// cleared here so a subsequent reopen of the window doesn't
+    /// re-trigger a recording.
+    private func consumePendingRecordingRequest() {
+        guard state.pendingMeetingRecording else { return }
+        state.pendingMeetingRecording = false
+        // Don't kick off a second recording if one's already live or a
+        // session is mid-processing — same guard the toolbar button uses.
+        if liveSession?.state.isLive == true || liveSession?.state.isProcessing == true {
+            return
+        }
+        Task { await startRecording() }
     }
 
     /// Collect dropped URLs and feed them through the same import path
