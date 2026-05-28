@@ -13,10 +13,11 @@ import FoundationModels
 @MainActor
 enum AppleFoundationAssist {
     static var isAvailable: Bool {
-        if case .available = SystemLanguageModel.default.availability {
-            return true
-        }
-        return false
+        // Funnel through `availability` so the debug override (when
+        // present in DEBUG builds) flows through this boolean too —
+        // ContentView's assist button uses this to decide whether to
+        // render the purple tile at all.
+        availability == .available
     }
 
     /// Structured availability state, used by the UI (Settings explanation,
@@ -70,6 +71,21 @@ enum AppleFoundationAssist {
     }
 
     static var availability: Availability {
+        #if DEBUG
+        // Developer override — lets Settings → Debug force any of the
+        // unavailable states on a simulator that would otherwise
+        // inherit the host Mac's Apple Intelligence support. Stripped
+        // from release builds along with the rest of the debug
+        // surface.
+        if let forced = KeyboardBridge.debugForcedAssistAvailability {
+            switch forced {
+            case .available: return .available
+            case .notEnabled: return .notEnabled
+            case .deviceNotEligible: return .deviceNotEligible
+            case .modelNotReady: return .modelNotReady
+            }
+        }
+        #endif
         switch SystemLanguageModel.default.availability {
         case .available:
             return .available

@@ -122,7 +122,17 @@ final class KeyboardViewController: UIInputViewController {
     /// lives in `AppleFoundationAssist.availability` over in the host
     /// target — the keyboard only needs the binary "show the button or
     /// not" answer.
+    ///
+    /// In DEBUG builds the developer override
+    /// (`KeyboardBridge.debugForcedAssistAvailability`, set from
+    /// Settings → Debug in the host app) takes precedence. Stripped
+    /// from release.
     private static func isAssistCurrentlySupported() -> Bool {
+        #if DEBUG
+        if let forced = KeyboardBridge.debugForcedAssistAvailability {
+            return forced == .available
+        }
+        #endif
         if case .available = SystemLanguageModel.default.availability {
             return true
         }
@@ -221,11 +231,20 @@ final class KeyboardViewController: UIInputViewController {
             return true
         }()
         let canAssistChanged = nextCanAssist != lastCanAssist
-        if stateChanged || canAssistChanged || canPasteChanged || previewChanged {
+        // Pick up the assist-availability change inside the same
+        // 300ms tick so the developer debug picker in Settings (or a
+        // real-world Apple Intelligence toggle in iOS Settings)
+        // doesn't need a viewWillAppear / keyboard switch to take
+        // effect. Cheap — just a UserDefaults read in DEBUG and a
+        // single property check otherwise.
+        let nextAssistSupported = Self.isAssistCurrentlySupported()
+        let assistSupportedChanged = nextAssistSupported != assistSupported
+        if stateChanged || canAssistChanged || canPasteChanged || previewChanged || assistSupportedChanged {
             hostState = next
             canPaste = nextCanPaste
             pastePreview = nextPreview
             lastCanAssist = nextCanAssist
+            assistSupported = nextAssistSupported
             refreshRootView()
         }
     }

@@ -198,6 +198,10 @@ struct SettingsView: View {
                     Label("About Dictator", systemImage: "info.circle")
                 }
             }
+
+            #if DEBUG
+            debugSection
+            #endif
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -228,6 +232,50 @@ struct SettingsView: View {
         sharedFolderPath = SharedFolderBookmark.displayPath
         sharedFolderError = nil
     }
+
+    // MARK: - Debug
+
+    #if DEBUG
+    /// Developer-only Settings section that forces a fake
+    /// `SystemLanguageModel` availability state across the host app
+    /// AND the keyboard extension (the value is persisted to the App
+    /// Group so both processes pick it up). The simulator inherits
+    /// the host Mac's Apple Intelligence support, so simulating an
+    /// older-iPhone ".deviceNotEligible" path can't be done any
+    /// other way without flying a real device. Stripped from
+    /// release builds entirely.
+    @ViewBuilder
+    private var debugSection: some View {
+        Section {
+            Picker("Force Assist state", selection: forcedAssistBinding) {
+                Text("Real (from OS)").tag(Optional<KeyboardBridge.DebugAssistAvailability>.none)
+                Text("Available").tag(Optional(KeyboardBridge.DebugAssistAvailability.available))
+                Text("Not enabled").tag(Optional(KeyboardBridge.DebugAssistAvailability.notEnabled))
+                Text("Device not eligible").tag(Optional(KeyboardBridge.DebugAssistAvailability.deviceNotEligible))
+                Text("Model not ready").tag(Optional(KeyboardBridge.DebugAssistAvailability.modelNotReady))
+            }
+        } header: {
+            Text("Debug")
+        } footer: {
+            Text("Lets you force the Apple Intelligence availability path the rest of the app reads. Keyboard picks it up within ~300 ms. Debug-only — not in the release build.")
+        }
+    }
+
+    /// Two-way binding to the App Group-persisted override, plus a
+    /// local state refresh so the explanation section above re-renders
+    /// the moment the picker changes (without it the picker flips but
+    /// the rest of the Settings list stays stale until the next appear).
+    private var forcedAssistBinding: Binding<KeyboardBridge.DebugAssistAvailability?> {
+        Binding(
+            get: { KeyboardBridge.debugForcedAssistAvailability },
+            set: { newValue in
+                KeyboardBridge.setDebugForcedAssistAvailability(newValue)
+                assistAvailability = AppleFoundationAssist.availability
+                foundationAvailable = AppleFoundationCleanup.isAvailable
+            }
+        )
+    }
+    #endif
 
     /// Handles the `.fileImporter` callback. On success: save the
     /// bookmark, point the two opt-in stores at the new folder, and

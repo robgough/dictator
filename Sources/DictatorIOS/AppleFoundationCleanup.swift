@@ -22,11 +22,16 @@ enum AppleFoundationCleanup {
     /// True when the system model is currently usable. The settings UI
     /// reads this once on appear to decide whether to render the toggle
     /// at all. Cheap call — just a property access on a system actor.
+    ///
+    /// Funnels through `AppleFoundationAssist.isAvailable` so the
+    /// debug-only override (Settings → Debug → Force Assist state)
+    /// also hides this toggle — otherwise the cleanup row would stay
+    /// visible while the Assist explanation row fires in the same
+    /// list, which is contradictory. Both features back onto the
+    /// same Apple Intelligence model, so a single availability signal
+    /// gates both.
     static var isAvailable: Bool {
-        if case .available = SystemLanguageModel.default.availability {
-            return true
-        }
-        return false
+        AppleFoundationAssist.isAvailable
     }
 
     /// User-facing description of why the model isn't usable right now.

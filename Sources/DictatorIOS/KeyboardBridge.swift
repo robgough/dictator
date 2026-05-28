@@ -135,6 +135,40 @@ enum KeyboardBridge {
         UserDefaults(suiteName: appGroupID)
     }
 
+    #if DEBUG
+    /// Developer override for the Apple Intelligence availability check.
+    /// Set from Settings → Debug; read by both the host app
+    /// (`AppleFoundationAssist.availability`) and the keyboard extension
+    /// (`KeyboardViewController.isAssistCurrentlySupported`). When `nil`,
+    /// both fall through to the real `SystemLanguageModel.default.availability`.
+    /// Used to exercise the "Assist not available" UI on a simulator,
+    /// which otherwise inherits the host Mac's Apple Intelligence
+    /// support regardless of which iPhone model it's pretending to be.
+    /// Stripped out of release builds entirely.
+    enum DebugAssistAvailability: String {
+        case available
+        case notEnabled
+        case deviceNotEligible
+        case modelNotReady
+    }
+
+    private static let debugAssistAvailabilityKey = "debug.forced.assist.availability"
+
+    static var debugForcedAssistAvailability: DebugAssistAvailability? {
+        guard let raw = defaults?.string(forKey: debugAssistAvailabilityKey) else { return nil }
+        return DebugAssistAvailability(rawValue: raw)
+    }
+
+    static func setDebugForcedAssistAvailability(_ value: DebugAssistAvailability?) {
+        guard let defaults else { return }
+        if let value {
+            defaults.set(value.rawValue, forKey: debugAssistAvailabilityKey)
+        } else {
+            defaults.removeObject(forKey: debugAssistAvailabilityKey)
+        }
+    }
+    #endif
+
     // MARK: - Keyboard side
 
     /// Called from the keyboard. Stages a request and returns the
