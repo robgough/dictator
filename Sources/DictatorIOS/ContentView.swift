@@ -1417,10 +1417,26 @@ private struct TapStopButton: View {
 
 // MARK: - Hold-to-talk button
 
-/// Round press-and-hold button shared between the red mic (records
+/// Round dual-mode button shared between the red mic (records
 /// dictation) and the purple assist wand (records an instruction to
 /// apply to the current transcript). Same gesture shape, different
 /// tint + icon + action.
+///
+/// Two interaction modes resolved from the gesture itself:
+///   - **Tap** (press + release within ~0.35s): toggle-on. Recording
+///     starts on press and continues after the finger lifts; a second
+///     tap stops it. Useful for longer dictation sessions where you
+///     don't want to keep your thumb pinned.
+///   - **Hold** (press for longer than the threshold): push-to-talk.
+///     Recording starts on press and stops on release. Useful for
+///     quick voice messages — you don't have to consciously think
+///     about stopping it.
+///
+/// The mode is decided at release time from the press duration — no
+/// upfront commitment, no second gesture, no menu. From the parent's
+/// perspective the contract is unchanged: `onPress` fires once on
+/// initial touch, `onRelease` fires once when the recording should
+/// stop (on release for push-to-talk, on the second tap for toggle).
 ///
 /// `isMyTurn` is set by the parent based on `viewModel.recordingMode`
 /// — it lets the active button show the level-driven outer ring while
@@ -1437,6 +1453,20 @@ private struct HoldButton: View {
     let onRelease: () -> Void
 
     @State private var isPressed = false
+    /// True after a tap-and-release shorter than `holdThreshold` — the
+    /// button is now in "toggle on" mode and the next tap stops the
+    /// recording. False during push-to-talk (held longer than the
+    /// threshold) and after the recorder finishes for any reason.
+    @State private var isLatched = false
+    /// Wall-clock time the current press started, used at release time
+    /// to decide tap vs. hold. Cleared on release.
+    @State private var pressStartedAt: Date?
+
+    /// Press-duration boundary between "this was a tap" and "this is a
+    /// hold". 0.35s is short enough that a deliberate tap feels
+    /// instant and long enough that a momentary fumble doesn't get
+    /// misread as the toggle path.
+    private static let holdThreshold: TimeInterval = 0.35
 
     private var diameter: CGFloat { compact ? 52 : 96 }
 
@@ -1496,15 +1526,74 @@ private struct HoldButton: View {
         )
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
             // Tap-completion — unused; press/release fire via
-            // onPressingChanged so the recorder mirrors the touch.
+            // onPressingChanged so we can implement the tap-vs-hold
+            // split on release rather than committing up front.
         } onPressingChanged: { pressing in
             if pressing, !isPressed {
                 isPressed = true
-                onPress()
+                if isLatched {
+                    // Already toggled on from a previous tap — this
+                    // press is the tap-to-stop. Defer the stop to
+                    // release for consistency with how iOS native
+                    // toggle controls behave (touch-up-inside) and so
+                    // a fumbled touch doesn't kill the recording.
+                } else {
+                    pressStartedAt = Date()
+                    onPress()
+                }
             } else if !pressing, isPressed {
                 isPressed = false
-                onRelease()
+                if isLatched {
+                    // Second tap on a latched button — stop the
+                    // recording and clear the latch regardless of
+                    // press duration.
+                    isLatched = false
+                    onRelease()
+                } else {
+                    let elapsed = pressStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+                    pressStartedAt = nil
+                    if elapsed >= Self.holdThreshold {
+                        // Push-to-talk: held past the threshold, so
+                        // release stops the recording.
+                        onRelease()
+                    } else {
+                        // Tap: latch on, recording continues until the
+                        // next tap.
+                        isLatched = true
+                    }
+                }
             }
+        }
+        // Auto-clear the latch if the recorder finishes for any other
+        // reason (auto-finish, transcription error, the parent flipping
+        // to autoStartedRecordingActive, etc.) — otherwise a stale
+        // latch would leave the button thinking it's "on" with nothing
+        // actually recording, and the next tap would silently start a
+        // brand-new recording instead of cancelling the "active"
+        // state the user expects.
+        .onChange(of: isMyTurn) { _, nowMine in
+            if !nowMine { isLatched = false }
+        }
+        .onChange(of: statusKey) { _, _ in
+            if !status.isCapturing,
+               !{ if case .transcribing = status { return true } else { return false } }() {
+                isLatched = false
+            }
+        }
+    }
+
+    /// Coarse identifier for the current status case — used as the
+    /// `.onChange` value so we react when the recorder transitions
+    /// across phases (e.g. recording → transcribing → idle) without
+    /// firing on every level update inside `.recording(level:)`.
+    private var statusKey: String {
+        switch status {
+        case .idle: "idle"
+        case .warmingUp: "warmingUp"
+        case .recording: "recording"
+        case .transcribing: "transcribing"
+        case .ready: "ready"
+        case .error: "error"
         }
     }
 }
