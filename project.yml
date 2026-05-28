@@ -303,8 +303,16 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS
+        # iOS is NOT built by the release workflow (that's macOS/Sparkle
+        # only) — the app + keyboard are archived and uploaded to App
+        # Store Connect by hand, so these literals are what actually
+        # ship. Bump CURRENT_PROJECT_VERSION on every upload: App Store
+        # Connect rejects a duplicate build number under the same
+        # MARKETING_VERSION. Keep this in lockstep with the keyboard
+        # extension's value below — App Store validation rejects an
+        # extension whose version/build doesn't match its host app.
         MARKETING_VERSION: "2026.5.2"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -402,8 +410,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.Keyboard
+        # Must match the host app (DictatorIOS) version + build exactly.
         MARKETING_VERSION: "2026.5.2"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
