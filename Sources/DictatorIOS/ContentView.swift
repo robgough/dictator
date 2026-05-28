@@ -110,6 +110,18 @@ struct ContentView: View {
                 //      foregrounded so a stale `loaded: true` claim
                 //      can't outlive the host.
                 viewModel.applyForegroundState(new == .active)
+                // We don't run a background audio mode, so a recording
+                // in flight can't survive a real backgrounding. Finish
+                // it gracefully — stop and transcribe what we've got —
+                // rather than letting iOS suspend us mid-capture and
+                // drop the tail. Gate on `.background` specifically:
+                // `.inactive` also fires for transient interruptions
+                // (Control Center, a notification banner, the app
+                // switcher) where the user hasn't actually left and we
+                // shouldn't cut their recording short.
+                if new == .background {
+                    viewModel.handleEnteredBackground()
+                }
             }
             // No global tap-to-dismiss handler here. We used to have
             // `.contentShape(Rectangle()) + .onTapGesture` for that,

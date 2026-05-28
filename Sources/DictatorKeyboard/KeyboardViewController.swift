@@ -9,7 +9,6 @@ import FoundationModels
 /// later consume the result via `KeyboardBridge`.
 final class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardRootView>?
-    private var pendingSession: UUID?
     /// The most recent text the keyboard has fed into the field via
     /// `insertText`. Undo button delete-backwards by this many
     /// characters and clears the slot. Persists across re-renders
@@ -17,26 +16,9 @@ final class KeyboardViewController: UIInputViewController {
     /// stays available until the user uses it or types over the
     /// inserted text manually.
     private var lastInsertedText: String?
-    /// For assist-mode undo: the original text the result REPLACED,
-    /// captured before we launched the host. Without this, undo on
-    /// an assist insertion would just delete the transformed text
-    /// and leave the field empty — defeating the point of undo.
-    /// When non-nil, `undoLastInsertion` deletes the insertion AND
-    /// re-inserts this so the field returns to its pre-assist state.
-    private var lastReplacedText: String?
-    /// Holds the surrounding text snapshot taken at `launchHost`
-    /// time for assist mode, so when the result lands we can derive
-    /// `lastReplacedText` from the suffix matching the result's
-    /// `replacePrecedingCharacters` count. Cleared at the same time
-    /// `pendingSession` is.
-    private var pendingReplacedText: String?
-    /// Cached host-state snapshot. Drives the in-flight UI (Stop
-    /// button vs. mic/assist). Refreshed by the poll timer while the
-    /// keyboard is visible.
-    private var hostState: KeyboardBridge.HostState?
     /// Cached "is there something on the system clipboard?" so the
     /// always-on Paste pill can grey out when there's nothing to
-    /// paste. Polled via the same timer as host state — cheap, and
+    /// paste. Polled via the visible-while-active timer — cheap, and
     /// `UIPasteboard.hasStrings` doesn't trigger the iOS "Pasted from
     /// X" notification (only actually reading the value does).
     private var canPaste: Bool = false
@@ -60,7 +42,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Last-seen value of "field has text we can assist on", used
     /// to decide when to re-render the SwiftUI root so the Assist
     /// button's enabled state tracks the field content. Without
-    /// this, `refreshHostState` would only re-render on bridge
+    /// this, `refreshKeyboardState` would only re-render on bridge
     /// changes and the button would stick enabled or disabled
     /// across typing.
     private var lastCanAssist: Bool = false
@@ -110,7 +92,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func handlePasteboardChange() {
-        refreshHostState()
+        refreshKeyboardState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -141,7 +123,7 @@ final class KeyboardViewController: UIInputViewController {
             assistSupported = nextAssistSupported
             refreshRootView()
         }
-        refreshHostState()
+        refreshKeyboardState()
         startStatePolling()
     }
 
@@ -175,35 +157,20 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: (any UITextInput)?) {
         super.textDidChange(textInput)
-        refreshHostState()
+        refreshKeyboardState()
     }
 
 
-    /// Pulls a fresh snapshot of the host's recording state out of
-    /// the App Group container. Drives the keyboard's in-flight UI.
-    /// The host writes this throttled at ~10 Hz while a keyboard
-    /// session is in flight; clearing it (= nil here) means the
-    /// recording finished, was cancelled, or never started.
-    private func refreshHostState() {
-        var next = KeyboardBridge.readHostState()
-        // Treat a state record older than 10s as a dead host. The
-        // host heartbeats every 3s while a keyboard session is in
-        // flight (and throttles ~10Hz during actual recording), so
-        // 10s comfortably covers any live state but flips the
-        // keyboard UI back to idle quickly when the host crashed or
-        // an early-return path forgot to tear the slot down — the
-        // user shouldn't be stuck staring at a "listening" indicator
-        // for 30s while nothing is actually happening.
-        if let state = next, Date().timeIntervalSince(state.updatedAt) > 10 {
-            KeyboardBridge.clearHostState()
-            next = nil
-        }
-        // Recover the keyboard's own session when we missed it (e.g.
-        // the keyboard view was re-instantiated by iOS after the
-        // user switched apps).
-        if pendingSession == nil, let session = next?.session {
-            pendingSession = session
-        }
+    /// Re-derives the keyboard's clipboard-driven state — Paste
+    /// enabled/preview and Assist enabled — from the system pasteboard
+    /// and the host's last-dictation snapshot, and re-renders if any
+    /// of it changed. Called on appear, on pasteboard-change
+    /// notifications, on text changes, and on the visible-while-active
+    /// poll tick. There's no longer any host-recording state to read:
+    /// recording happens in Dictator's foreground, so the keyboard
+    /// never shows an in-flight UI — it just opens the app and waits
+    /// for the transcript to land on the clipboard.
+    private func refreshKeyboardState() {
         // `hasStrings` and `changeCount` are both metadata-only —
         // neither triggers the "Pasted from X" notification (only
         // reading the actual string does, which we defer to an
@@ -220,7 +187,6 @@ final class KeyboardViewController: UIInputViewController {
             guard currentChangeCount == last.pasteboardChangeCount else { return nil }
             return last.text
         }()
-        let stateChanged = next != hostState
         let canPasteChanged = nextCanPaste != canPaste
         let previewChanged = nextPreview != pastePreview
         // Assist enabled only when the user has copied something
@@ -268,8 +234,7 @@ final class KeyboardViewController: UIInputViewController {
         // single property check otherwise.
         let nextAssistSupported = Self.isAssistCurrentlySupported()
         let assistSupportedChanged = nextAssistSupported != assistSupported
-        if stateChanged || canAssistChanged || canPasteChanged || previewChanged || assistSupportedChanged {
-            hostState = next
+        if canAssistChanged || canPasteChanged || previewChanged || assistSupportedChanged {
             canPaste = nextCanPaste
             pastePreview = nextPreview
             lastCanAssist = nextCanAssist
@@ -284,7 +249,7 @@ final class KeyboardViewController: UIInputViewController {
     private func startStatePolling() {
         stopStatePolling()
         statePollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-            self?.refreshHostState()
+            self?.refreshKeyboardState()
         }
     }
 
@@ -337,19 +302,15 @@ final class KeyboardViewController: UIInputViewController {
             // visible on the same frame as the tap rather than
             // waiting up to a poll tick to flip.
             consumedAssistChangeCount = UIPasteboard.general.changeCount
-            refreshHostState()
+            refreshKeyboardState()
         }
-        let surrounding: String? = nil
+        // `record` and `assist` both source their text on the host
+        // side (a fresh transcript, or the system clipboard), so the
+        // keyboard hands over no surrounding text.
         let session = KeyboardBridge.enqueueRequest(
             mode: mode,
-            surroundingText: surrounding
+            surroundingText: nil
         )
-        self.pendingSession = session
-        // Stash the field's pre-launch contents so undo can put it
-        // back. The host doesn't touch the field; it only writes a
-        // result for us to insert, so this snapshot is still valid
-        // when the result eventually lands.
-        self.pendingReplacedText = surrounding
 
         var components = URLComponents()
         components.scheme = "dictator"
@@ -400,38 +361,26 @@ final class KeyboardViewController: UIInputViewController {
         guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
         textDocumentProxy.insertText(text)
         lastInsertedText = text
-        lastReplacedText = nil
-        pendingReplacedText = nil
-        pendingSession = nil
         refreshRootView()
     }
 
-    /// Undo the most recent paste — delete the inserted text and,
-    /// for assist results (which replaced existing content), put
-    /// the original text back so the field returns to its pre-assist
-    /// state. Without the restore step, undo on an assist result
-    /// would just leave the user with an empty field, which isn't
-    /// what "undo" means.
+    /// Undo the most recent paste — delete the inserted text.
     ///
     /// `String.count` is extended grapheme cluster count so one
     /// `deleteBackward` removes one composed character / emoji the
-    /// user can see. Both slots clear after running so subsequent
+    /// user can see. The slot clears after running so subsequent
     /// undo taps no-op until the next paste.
     private func undoLastInsertion() {
         guard let text = lastInsertedText, !text.isEmpty else { return }
         for _ in 0..<text.count {
             textDocumentProxy.deleteBackward()
         }
-        if let replaced = lastReplacedText, !replaced.isEmpty {
-            textDocumentProxy.insertText(replaced)
-        }
         lastInsertedText = nil
-        lastReplacedText = nil
         refreshRootView()
     }
 
-    /// Re-render the SwiftUI keyboard so `canUndo`, hostState, etc.
-    /// reflect the current state. UIHostingController is happy to
+    /// Re-render the SwiftUI keyboard so `canUndo`, the Paste pill,
+    /// etc. reflect the current state. UIHostingController is happy to
     /// have its rootView swapped at any time.
     private func refreshRootView() {
         hostingController?.rootView = makeRootView()
@@ -441,7 +390,6 @@ final class KeyboardViewController: UIInputViewController {
         KeyboardRootView(
             onMicPress: { [weak self] in self?.launchHost(mode: .record) },
             onAssistPress: { [weak self] in self?.launchHost(mode: .assist) },
-            onStop: { [weak self] in self?.requestStopFromKeyboard() },
             onUndo: { [weak self] in self?.undoLastInsertion() },
             onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
             onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
@@ -450,22 +398,10 @@ final class KeyboardViewController: UIInputViewController {
             onBackspacePress: { [weak self] in self?.startBackspaceHold() },
             onBackspaceRelease: { [weak self] in self?.endBackspaceHold() },
             canUndo: lastInsertedText != nil,
-            hostState: hostState,
             canPaste: canPaste,
             pastePreview: pastePreview,
             onPaste: { [weak self] in self?.pasteFromClipboard() }
         )
-    }
-
-    /// True when the system clipboard has text we can hand to the
-    /// host for the assist flow. Reusing the same `hasStrings` check
-    /// that drives the Paste pill — a single signal for "user has
-    /// pre-staged content for us to work on" across the keyboard's
-    /// two clipboard-consuming buttons. Reading `hasStrings` is
-    /// metadata-only and does NOT trigger iOS's "Pasted from X"
-    /// toast (only `string` does).
-    private func hasTextToAssist() -> Bool {
-        UIPasteboard.general.hasStrings
     }
 
     // MARK: - Backspace hold-to-repeat
@@ -541,22 +477,5 @@ final class KeyboardViewController: UIInputViewController {
         backspaceHoldTimer?.invalidate()
         backspaceHoldTimer = nil
         backspaceHoldStartedAt = nil
-    }
-
-    /// Stop button in the in-flight UI. Writes a stop request the
-    /// host's poller picks up. We also optimistically clear our local
-    /// hostState so the keyboard UI flips back to idle immediately —
-    /// without this, a host that crashed or got stuck (the user's
-    /// "keyboard mode stuck in listening" report) would leave the
-    /// keyboard staring at the stop button until the freshness
-    /// window expired. If the host is alive and processing, its own
-    /// teardown will keep the bridge clear too, so this is safe to
-    /// do unconditionally on Stop.
-    private func requestStopFromKeyboard() {
-        guard let session = hostState?.session else { return }
-        KeyboardBridge.requestStop(session: session)
-        KeyboardBridge.clearHostState()
-        hostState = nil
-        refreshRootView()
     }
 }

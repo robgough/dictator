@@ -2,15 +2,15 @@ import SwiftUI
 
 /// The keyboard's SwiftUI layout. Two big buttons (red mic, purple
 /// assist) plus a tiny secondary row with Undo / Return / Backspace.
-/// When the host is mid-recording or mid-transcribing for a keyboard
-/// session, the whole top area flips to an in-flight view with a Stop
-/// button + level pulse + status caption, so the user can drive
-/// Dictator entirely from the keyboard after switching back to their
-/// original app.
+/// The Dictate / Assist buttons just open the host app and start it
+/// listening — recording happens in Dictator's foreground (we don't
+/// run a background audio mode), so the keyboard never renders an
+/// in-flight recording UI. When the transcript lands it's auto-copied
+/// to the clipboard and the user drops it in with the always-on Paste
+/// pill.
 struct KeyboardRootView: View {
     let onMicPress: () -> Void
     let onAssistPress: () -> Void
-    let onStop: () -> Void
     let onUndo: () -> Void
     let onSpace: () -> Void
     let onReturn: () -> Void
@@ -33,9 +33,6 @@ struct KeyboardRootView: View {
     let onBackspacePress: () -> Void
     let onBackspaceRelease: () -> Void
     let canUndo: Bool
-    /// Non-nil while a keyboard-driven recording / transcription is
-    /// in flight. Drives the in-flight UI.
-    let hostState: KeyboardBridge.HostState?
     /// True when the system clipboard has a string to paste. Drives
     /// the always-on Paste pill's enabled state.
     let canPaste: Bool
@@ -67,9 +64,7 @@ struct KeyboardRootView: View {
             // proxy.
             pasteChip
 
-            if let state = hostState {
-                inFlightContent(state)
-            } else if showAssistHint && !canAssist && assistSupported {
+            if showAssistHint && !canAssist && assistSupported {
                 // Hint takes over the same slot as Dictate / Assist —
                 // a clean swap at matched height rather than pushing
                 // the secondary row off the bottom of the keyboard.
@@ -185,57 +180,6 @@ struct KeyboardRootView: View {
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    // MARK: - In flight (host is recording / transcribing)
-
-    @ViewBuilder
-    private func inFlightContent(_ state: KeyboardBridge.HostState) -> some View {
-        // Big Stop button. Level pulse around it scales with the
-        // host's last-published RMS so the user gets the same "yes
-        // I'm hearing you" feedback the main app shows. A rotating
-        // dashed ring sits outside the button face — the pulse is
-        // too soft to read under a thumb, so the spinning ring is
-        // the primary "yes, you're being heard" cue. During the
-        // transcribing phase the icon flips to an hourglass and the
-        // button disables until the result lands.
-        let isTranscribing = state.phase == .transcribing
-        let label: String = switch state.phase {
-        case .warmingUp: "Warming up…"
-        case .recording: "Recording — tap to stop"
-        case .transcribing: "Transcribing…"
-        }
-
-        ZStack {
-            Circle()
-                .fill(Color.red.opacity(0.18))
-                .frame(
-                    width: 100 + CGFloat(state.level) * 40,
-                    height: 100 + CGFloat(state.level) * 40
-                )
-                .animation(.easeOut(duration: 0.1), value: state.level)
-            if !isTranscribing {
-                ActiveListeningRing(tint: .red, diameter: 126, lineWidth: 3)
-            }
-            Button(action: onStop) {
-                Circle()
-                    .fill(.red)
-                    .frame(width: 100, height: 100)
-                    .overlay(
-                        Image(systemName: isTranscribing ? "hourglass" : "stop.fill")
-                            .font(.system(size: 36, weight: .semibold))
-                            .foregroundStyle(.white)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(isTranscribing)
-            .opacity(isTranscribing ? 0.6 : 1)
-        }
-        .frame(height: 140)
-
-        Text(label)
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
     }
 
     // MARK: - Paste row (always-on shortcut for the system clipboard)
@@ -487,45 +431,5 @@ struct KeyboardRootView: View {
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .accessibilityLabel(label)
-    }
-}
-
-/// Rotating dashed listening ring — duplicated from the main app
-/// because the keyboard extension is a separate Swift module and the
-/// helper isn't worth wiring through `project.yml` as a shared file
-/// for ~25 lines. Keep in sync with the version in `ContentView.swift`.
-///
-/// Driven by `TimelineView(.animation)` so the rotation is purely a
-/// function of `Date()` and survives view re-composition without the
-/// `@State` + `repeatForever` desync footgun.
-struct ActiveListeningRing: View {
-    let tint: Color
-    let diameter: CGFloat
-    let lineWidth: CGFloat
-    let period: Double
-
-    init(tint: Color, diameter: CGFloat, lineWidth: CGFloat = 3, period: Double = 4) {
-        self.tint = tint
-        self.diameter = diameter
-        self.lineWidth = lineWidth
-        self.period = period
-    }
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let elapsed = context.date.timeIntervalSinceReferenceDate
-            let rotation = (elapsed.truncatingRemainder(dividingBy: period) / period) * 360
-            Circle()
-                .strokeBorder(
-                    tint,
-                    style: StrokeStyle(
-                        lineWidth: lineWidth,
-                        lineCap: .round,
-                        dash: [6, 10]
-                    )
-                )
-                .frame(width: diameter, height: diameter)
-                .rotationEffect(.degrees(rotation))
-        }
     }
 }

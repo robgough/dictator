@@ -164,20 +164,6 @@ final class RecordingViewModel {
     /// serialise anyway, but doubling the work is wasteful.
     private var prewarmTask: Task<Void, Never>?
 
-    /// Polls `KeyboardBridge.consumeStopRequest` while a
-    /// keyboard-driven recording is in flight, so the user can stop
-    /// from the keyboard after switching back to the original app.
-    /// Cancelled in the cleanup path after `stopRecording`.
-    private var stopWatcherTask: Task<Void, Never>?
-
-    /// Periodic 3-second tick that re-stamps `updatedAt` on the host
-    /// state during long transcriptions (or any phase that doesn't
-    /// naturally produce its own updates). Keyboard side uses the
-    /// timestamp to detect a dead host — without this, transcripts
-    /// longer than the keyboard's staleness window would falsely
-    /// register as "host crashed".
-    private var heartbeatTask: Task<Void, Never>?
-
     /// Periodic re-write of the host-active flag in `KeyboardBridge`
     /// while the app is foregrounded. The keyboard extension's
     /// "don't render inside Dictator" check looks at the flag's
@@ -187,11 +173,6 @@ final class RecordingViewModel {
     /// up inside Dictator again. 30s interval keeps it well within
     /// the freshness budget. Cancelled when the app backgrounds.
     private var hostActiveHeartbeatTask: Task<Void, Never>?
-
-    /// Throttled timestamp of the last host-state write — keeps the
-    /// `onLevel` callback from hammering UserDefaults at the audio
-    /// buffer rate (~20 Hz). Caps writes to ~10 Hz instead.
-    private var lastHostStateWrite: Date = .distantPast
 
     /// Lightweight tactile feedback on press/release/result. Generators
     /// are held strongly so they're warm when the user taps — first-use
@@ -228,19 +209,16 @@ final class RecordingViewModel {
             } else if case .warmingUp = self.status {
                 self.status = .recording(level: level)
             }
-            self.publishHostState(phase: .recording, level: level)
         }
         recorder.onReady = { [weak self] in
             guard let self else { return }
             if case .warmingUp = self.status {
                 self.status = .recording(level: 0)
             }
-            self.publishHostState(phase: .recording, level: 0, force: true)
         }
         recorder.onStartFailed = { [weak self] error in
             guard let self else { return }
             self.status = .error(error.localizedDescription)
-            self.tearDownKeyboardHostState()
         }
         pressFeedback.prepare()
         resultFeedback.prepare()
@@ -336,13 +314,6 @@ final class RecordingViewModel {
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
             recorder.start()
-            // Drive the keyboard's "in flight" UI as soon as we
-            // start — onLevel/onReady will keep ticking but the
-            // initial .warmingUp lands without waiting for the first
-            // sample buffer.
-            publishHostState(phase: .warmingUp, level: 0, force: true)
-            startStopWatcher()
-            startHeartbeat()
         default:
             // Already capturing or busy.
             return
@@ -372,14 +343,6 @@ final class RecordingViewModel {
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
             recorder.start()
-            // Mirror the dictation-mode keyboard plumbing: publish a
-            // heartbeat + start the stop-request watcher when the
-            // assist flow was kicked off from the keyboard. No-ops
-            // when there's no keyboard session, so calling
-            // unconditionally is cheap.
-            publishHostState(phase: .warmingUp, level: 0, force: true)
-            startStopWatcher()
-            startHeartbeat()
         default:
             return
         }
@@ -396,15 +359,9 @@ final class RecordingViewModel {
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
-            // Empty-samples early-return used to skip the keyboard
-            // teardown, which left the keyboard side stuck on its
-            // "recording" UI until the 30s freshness window expired.
-            // Always clean up the host-state heartbeat and auto-record
-            // flag on the way out.
             status = .idle
             recordingMode = .dictation
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
             return
         }
         status = .transcribing
@@ -427,14 +384,10 @@ final class RecordingViewModel {
             let instruction = SpokenCues.apply(to: rawInstruction, options: DictatorIOSSettings.cueOptions)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !instruction.isEmpty else {
-                // Same teardown as the success path — the host wrote
-                // "transcribing" to the bridge above, the keyboard
-                // needs to see that we're no longer in flight.
                 transcribingStartedAt = nil
                 status = .ready
                 recordingMode = .dictation
                 autoStartedRecordingActive = false
-                tearDownKeyboardHostState()
                 return
             }
             let result = try await AppleFoundationAssist.transform(
@@ -456,11 +409,7 @@ final class RecordingViewModel {
                 wordsOut: UsageStatsStore.wordCount(result)
             )
 
-            // Per-recording teardown only — the keyboard session
-            // stays alive across multi-shot edits until the user
-            // explicitly hits Send.
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
 
             if let started = transcribingStartedAt {
                 lastTranscriptionDuration = Date().timeIntervalSince(started)
@@ -479,7 +428,6 @@ final class RecordingViewModel {
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
         }
         recordingMode = .dictation
     }
@@ -785,13 +733,11 @@ final class RecordingViewModel {
         guard !samples.isEmpty else {
             status = .idle
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
             return
         }
 
         status = .transcribing
         transcribingStartedAt = Date()
-        publishHostState(phase: .transcribing, level: 0, force: true)
 
         do {
             let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
@@ -851,12 +797,7 @@ final class RecordingViewModel {
                 wordsOut: UsageStatsStore.wordCount(processed)
             )
 
-            // Tear down per-recording heartbeat / stop-watcher. The
-            // keyboard session itself stays alive so the user can
-            // append more dictations or edit before hitting Send.
-            // Cheap no-op for the non-keyboard path.
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
 
             if let started = transcribingStartedAt {
                 lastTranscriptionDuration = Date().timeIntervalSince(started)
@@ -870,89 +811,7 @@ final class RecordingViewModel {
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
             autoStartedRecordingActive = false
-            tearDownKeyboardHostState()
         }
-    }
-
-    /// Publish a host-state heartbeat to the App Group container so
-    /// the Dictator keyboard can render a recording / transcribing
-    /// UI while it's visible. Fires for any recording (not just
-    /// keyboard-initiated ones) — in-app dictations also publish, but
-    /// the keyboard auto-dismisses inside Dictator so no one's
-    /// watching. Level writes are throttled to ~10 Hz; phase changes
-    /// always go through immediately so transitions like
-    /// .recording -> .transcribing land without lag.
-    private func publishHostState(phase: KeyboardBridge.HostState.Phase, level: Float, force: Bool = false) {
-        let now = Date()
-        if !force, now.timeIntervalSince(lastHostStateWrite) < 0.1 { return }
-        lastHostStateWrite = now
-        KeyboardBridge.writeHostState(.init(
-            session: UUID(),
-            phase: phase,
-            level: level,
-            updatedAt: now
-        ))
-    }
-
-    /// Kick off the background poll that watches for a Stop request
-    /// from the keyboard. Cheap — a UserDefaults read every 250 ms.
-    /// Runs for the duration of any recording; the keyboard only
-    /// sends stop requests when its in-flight UI is visible, so the
-    /// poll is a no-op for in-app recordings.
-    private func startStopWatcher() {
-        stopWatcherTask?.cancel()
-        stopWatcherTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
-                guard let self else { return }
-                guard self.status.isCapturing else { return }
-                if KeyboardBridge.consumeAnyStopRequest() {
-                    // Dispatch to the correct stop method based on
-                    // the current recording mode — assist needs to
-                    // run the transform, dictation just transcribes.
-                    if self.recordingMode == .assist {
-                        await self.stopAssistRecording()
-                    } else {
-                        await self.stopRecording()
-                    }
-                    return
-                }
-            }
-        }
-    }
-
-    /// Liveness heartbeat — re-stamps the host-state entry every 3s
-    /// so the keyboard's "is this still alive?" check sees a fresh
-    /// timestamp during long transcriptions. Without this the
-    /// keyboard would falsely treat any transcription past its
-    /// staleness threshold as a dead host.
-    private func startHeartbeat() {
-        heartbeatTask?.cancel()
-        heartbeatTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self else { return }
-                guard self.status.isCapturing || {
-                    if case .transcribing = self.status { return true } else { return false }
-                }() else { return }
-                if let current = KeyboardBridge.readHostState() {
-                    var fresh = current
-                    fresh.updatedAt = Date()
-                    KeyboardBridge.writeHostState(fresh)
-                }
-            }
-        }
-    }
-
-    /// Cancel the poll + heartbeat tasks and clear the state slot
-    /// the keyboard reads. Called from recording-end paths so the
-    /// keyboard's in-flight UI retracts promptly.
-    private func tearDownKeyboardHostState() {
-        stopWatcherTask?.cancel()
-        stopWatcherTask = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-        KeyboardBridge.clearHostState()
     }
 
     /// Abort a recording mid-flight without transcribing. Safe to
@@ -965,7 +824,6 @@ final class RecordingViewModel {
             resultFeedback.notificationOccurred(.warning)
         }
         autoStartedRecordingActive = false
-        tearDownKeyboardHostState()
     }
 
     /// Entry point called when the host is launched by the keyboard
@@ -1064,6 +922,45 @@ final class RecordingViewModel {
     private func stopHostActiveHeartbeat() {
         hostActiveHeartbeatTask?.cancel()
         hostActiveHeartbeatTask = nil
+    }
+
+    /// The app moved to the background. With no `audio` background
+    /// mode (removed for App Review 2.5.4), iOS suspends us within
+    /// seconds and tears down the live mic session — so any audio
+    /// captured after this point would be silently dropped. Rather
+    /// than leave the user with a truncated or stuck recording, finish
+    /// what we have: stop the recorder and transcribe the samples
+    /// captured up to now, wrapped in a short `beginBackgroundTask` so
+    /// Parakeet inference can complete before suspension. The result
+    /// auto-copies as usual, so it's already on the clipboard (and
+    /// primed in the keyboard's Paste pill) by the time the user is
+    /// back in their target app. No-op when nothing's recording.
+    func handleEnteredBackground() {
+        guard status.isCapturing else { return }
+        let mode = recordingMode
+        let app = UIApplication.shared
+        var taskID: UIBackgroundTaskIdentifier = .invalid
+        taskID = app.beginBackgroundTask(withName: "DictatorFinishTranscription") {
+            // Expiration: we ran out of background runway before the
+            // transcription finished. End the task so iOS doesn't kill
+            // us outright; the in-flight transcribe Task picks back up
+            // if the user foregrounds Dictator again.
+            if taskID != .invalid {
+                app.endBackgroundTask(taskID)
+                taskID = .invalid
+            }
+        }
+        Task { @MainActor in
+            if mode == .assist {
+                await stopAssistRecording()
+            } else {
+                await stopRecording()
+            }
+            if taskID != .invalid {
+                app.endBackgroundTask(taskID)
+                taskID = .invalid
+            }
+        }
     }
 
     /// Publish the model's disk + memory status to the App Group so

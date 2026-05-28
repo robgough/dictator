@@ -280,18 +280,17 @@ targets:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        # Keep the AVAudioSession (and the engine driving the mic)
-        # alive while the app is in the background. Without this iOS
-        # suspends the audio session the moment the keyboard sends
-        # the user back to their original app, the recorder stops
-        # receiving sample buffers, and everything spoken after the
-        # return is silently dropped. The audio background mode is
-        # the standard way for recording apps to keep capturing
-        # while the user is elsewhere; it's a documented App Store
-        # category and requires the NSMicrophoneUsageDescription
-        # above (which is already present).
-        UIBackgroundModes:
-          - audio
+        # Deliberately NO `audio` UIBackgroundMode. Dictation records
+        # only while Dictator is foregrounded; the moment the app
+        # backgrounds we stop and transcribe whatever we've captured
+        # so far (see RecordingViewModel.handleEnteredBackground)
+        # rather than keeping the mic live. App Review rejects the
+        # `audio` mode under guideline 2.5.4 for apps that aren't
+        # background *playback* (music / streaming) — the documented
+        # background-recording use isn't enough to satisfy a reviewer,
+        # and it cost us a submission. Don't re-add it without a
+        # deliberate App Review plan (a screen recording of the
+        # background capture attached to the App Review notes).
         # Custom URL scheme — the Dictator keyboard extension calls
         # `dictator://keyboard?mode=record` or `mode=assist` to wake
         # the host app, which then records / transforms and stages

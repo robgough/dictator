@@ -23,12 +23,6 @@ enum KeyboardBridge {
     /// Key the keyboard writes when it kicks off a session. Cleared
     /// by the host once consumed.
     private static let requestKey = "DictatorKeyboard.request"
-    /// Host-side state heartbeat — keyboard reads this while polling
-    /// to drive its in-flight UI.
-    private static let hostStateKey = "DictatorKeyboard.hostState"
-    /// Set by the keyboard when the user taps Stop. Host watches and
-    /// short-circuits the recorder when it sees its own session id.
-    private static let stopRequestKey = "DictatorKeyboard.stopRequest"
     /// Last-known model readiness — disk + memory status. Survives
     /// across host lifetimes (the keyboard reads this even when the
     /// host isn't running) but `loaded` is only trustworthy while
@@ -103,26 +97,6 @@ enum KeyboardBridge {
         var diskStatus: DiskStatus
         var modelID: String
         var loaded: Bool
-        var updatedAt: Date
-    }
-
-    /// Live in-flight signal the host writes during a keyboard-driven
-    /// recording so the keyboard can render a recording / transcribing
-    /// UI when the user switches back without waiting for the final
-    /// result. Cleared when the result is written (or when recording
-    /// is aborted), so its absence == "nothing in flight".
-    struct HostState: Codable, Sendable, Equatable {
-        enum Phase: String, Codable, Sendable, Equatable {
-            case warmingUp
-            case recording
-            case transcribing
-        }
-        var session: UUID
-        var phase: Phase
-        /// Most recent RMS level (0...1) for the keyboard's pulse
-        /// indicator. Updated by the host throttled to ~10 Hz so we
-        /// aren't hammering UserDefaults at the audio buffer cadence.
-        var level: Float
         var updatedAt: Date
     }
 
@@ -208,52 +182,6 @@ enum KeyboardBridge {
     static func clearRequest() {
         guard let defaults else { return }
         defaults.removeObject(forKey: requestKey)
-    }
-
-    // MARK: - Host state heartbeat
-
-    /// Host writes its current phase + level so the keyboard can
-    /// render a recording UI when the user switches back. Cheap-
-    /// enough at 10 Hz; callers should throttle to that cadence.
-    static func writeHostState(_ state: HostState) {
-        guard let defaults else { return }
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        defaults.set(data, forKey: hostStateKey)
-    }
-
-    static func readHostState() -> HostState? {
-        guard let defaults,
-              let data = defaults.data(forKey: hostStateKey),
-              let state = try? JSONDecoder().decode(HostState.self, from: data)
-        else { return nil }
-        return state
-    }
-
-    static func clearHostState() {
-        guard let defaults else { return }
-        defaults.removeObject(forKey: hostStateKey)
-    }
-
-    // MARK: - Stop request
-
-    /// Keyboard writes this when the user taps Stop. The host polls
-    /// while recording and aborts when it sees a stop request.
-    static func requestStop(session: UUID) {
-        guard let defaults else { return }
-        defaults.set(session.uuidString, forKey: stopRequestKey)
-    }
-
-    /// Host calls this once per poll tick. Returns true and clears
-    /// the slot if any stop request is pending. No longer
-    /// session-matched — with the host's keyboard-mode state gone,
-    /// there's only one host process and at most one recording in
-    /// flight, so the session ID is unnecessary disambiguation.
-    static func consumeAnyStopRequest() -> Bool {
-        guard let defaults,
-              defaults.string(forKey: stopRequestKey) != nil
-        else { return false }
-        defaults.removeObject(forKey: stopRequestKey)
-        return true
     }
 
     // MARK: - Model readiness
