@@ -1482,6 +1482,15 @@ private struct HoldButton: View {
         if isMyTurn, case .transcribing = status {
             return "hourglass"
         }
+        if isMyTurn, isLatched {
+            // Latched into tap-to-toggle mode — swap the resting icon
+            // for `stop.fill` so the next-tap-stops affordance is
+            // obvious. The hold path doesn't get an icon swap because
+            // the user's thumb is on the button while the press is
+            // active; the scaleEffect + listening ring already cover
+            // "you are recording".
+            return "stop.fill"
+        }
         return restingIcon
     }
 
