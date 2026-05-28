@@ -93,8 +93,8 @@ struct KeyboardShowcase: View {
     }
 
     /// Paste button + preview pill, matching `KeyboardRootView.pasteChip`.
-    /// Both render at cornerRadius 14 to share a shape family with the
-    /// primary tiles.
+    /// Both render at cornerRadius 10 + fixed 36pt height so they share
+    /// the shape family of the secondary-row tiles below.
     private var pasteRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
@@ -105,9 +105,9 @@ struct KeyboardShowcase: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .frame(height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.accentColor)
             )
 
@@ -116,17 +116,17 @@ struct KeyboardShowcase: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text("· 14 words")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color(.tertiarySystemBackground))
             )
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

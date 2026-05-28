@@ -250,10 +250,16 @@ struct KeyboardRootView: View {
     /// something unrelated from another app.
     @ViewBuilder
     private var pasteChip: some View {
-        // Match the Dictate/Assist tiles' rounded-rectangle shape
-        // (cornerRadius 14) rather than a fully-rounded capsule so
-        // the whole keyboard reads as one family. Same goes for the
-        // preview pill on the right.
+        // Both halves share a fixed height (36pt) and cornerRadius 10
+        // so they read as the same shape family as the secondary-row
+        // tiles (Undo / Space / Return / Backspace are also 10pt
+        // radius). The previous cornerRadius 14 looked pill-shaped on
+        // such a short element — 14 reads as "rounded rectangle" on
+        // the 56pt-tall Dictate / Assist tiles, but on a 24pt-tall
+        // chip the corners are nearly half the height and the whole
+        // thing collapses to a capsule.
+        let chipHeight: CGFloat = 36
+        let chipCornerRadius: CGFloat = 10
         HStack(spacing: 8) {
             Button(action: onPaste) {
                 HStack(spacing: 6) {
@@ -264,9 +270,9 @@ struct KeyboardRootView: View {
                 }
                 .foregroundStyle(canPaste ? .white : .secondary)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .frame(height: chipHeight)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
                         .fill(canPaste ? Color.accentColor : Color(.tertiarySystemBackground))
                 )
             }
@@ -274,27 +280,51 @@ struct KeyboardRootView: View {
             .disabled(!canPaste)
             .opacity(canPaste ? 1 : 0.6)
 
+            // Always render the preview pill so the row has a stable
+            // shape — an empty trailing Spacer made the right half of
+            // the keyboard look broken when the user hadn't copied
+            // anything yet, or after another app had overwritten the
+            // clipboard. Three states for the copy: the preview
+            // itself if we have it; an honest "from another app"
+            // when there's something pasteable but no snippet (we
+            // can't peek into the clipboard string without triggering
+            // iOS's "Pasted from X" toast, so we only get a snippet
+            // when Dictator was the one who wrote); and "nothing on
+            // the clipboard" when there's nothing to paste at all.
+            previewPill(height: chipHeight, cornerRadius: chipCornerRadius)
+        }
+    }
+
+    @ViewBuilder
+    private func previewPill(height: CGFloat, cornerRadius: CGFloat) -> some View {
+        HStack(spacing: 6) {
             if let preview = pastePreview {
-                HStack(spacing: 6) {
-                    Text(previewSnippet(preview))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text("· \(wordCount(preview)) words")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color(.tertiarySystemBackground))
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(previewSnippet(preview))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("· \(wordCount(preview)) words")
+                    .foregroundStyle(.tertiary)
+            } else if canPaste {
+                Image(systemName: "doc.on.clipboard")
+                    .font(.caption2)
+                Text("Content from another app")
+                    .lineLimit(1)
             } else {
-                Spacer(minLength: 0)
+                Image(systemName: "tray")
+                    .font(.caption2)
+                Text("Nothing on the clipboard")
+                    .lineLimit(1)
             }
         }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: height)
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color(.tertiarySystemBackground))
+        )
     }
 
     /// Single-line snippet for the preview pill — collapses
