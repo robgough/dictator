@@ -36,6 +36,12 @@ struct SettingsView: View {
     /// flip Apple Intelligence on/off, which would deactivate the app
     /// and re-render the view on return anyway.
     @State private var foundationAvailable: Bool = AppleFoundationCleanup.isAvailable
+    /// Structured availability for the Assist feature, used to render
+    /// an explanation row that tells the user why the purple button
+    /// isn't there — distinguishes "your phone can't run this" from
+    /// "you just need to turn Apple Intelligence on" so the copy
+    /// matches what the user can do about it.
+    @State private var assistAvailability: AppleFoundationAssist.Availability = AppleFoundationAssist.availability
 
     var body: some View {
         List {
@@ -69,6 +75,23 @@ struct SettingsView: View {
                     Text("Apple Intelligence")
                 } footer: {
                     Text("Runs Apple's on-device foundation model after transcription to drop \"um\", \"uh\", repeated stutters, and false-starts. Strict content-preservation check reverts to the raw transcript if the model paraphrases.")
+                }
+            } else if let explanation = assistAvailability.explanation {
+                // Mirror-image of the section above: when the foundation
+                // model isn't reachable we tell the user why, so they're
+                // not left wondering where Assist went. Copy differs per
+                // reason — see `AppleFoundationAssist.Availability` —
+                // because "buy a new phone" and "flip a switch" are very
+                // different asks. No deep link: iOS doesn't expose a
+                // public URL for the Apple Intelligence settings page,
+                // and Apple has clamped down on the `App-prefs:` shim.
+                Section {
+                    Text(explanation)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    Text(assistAvailability.sectionTitle)
                 }
             }
 
@@ -178,7 +201,13 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { refreshSharedFolderState() }
+        .onAppear {
+            refreshSharedFolderState()
+            // Re-query so the explanation section updates if the user
+            // flipped Apple Intelligence in iOS Settings since launch.
+            foundationAvailable = AppleFoundationCleanup.isAvailable
+            assistAvailability = AppleFoundationAssist.availability
+        }
         .fileImporter(
             isPresented: $showingFolderPicker,
             allowedContentTypes: [.folder],

@@ -19,6 +19,70 @@ enum AppleFoundationAssist {
         return false
     }
 
+    /// Structured availability state, used by the UI (Settings explanation,
+    /// keyboard button visibility) to distinguish "off because the user
+    /// hasn't enabled Apple Intelligence" — which we can recover from —
+    /// from "off because the hardware doesn't support it" — which we
+    /// can't, and shouldn't keep dangling the button in front of the user.
+    ///
+    /// All four cases share the same upstream signal
+    /// (`SystemLanguageModel.default.availability`) so they're queried
+    /// fresh each time — Apple Intelligence can be toggled in iOS Settings
+    /// without restarting the app.
+    enum Availability: Equatable {
+        case available
+        case notEnabled
+        case deviceNotEligible
+        case modelNotReady
+        case unknown(String)
+
+        /// Short user-facing copy that fits a Settings footer.
+        /// Returns nil for `.available` — when the model's ready, the
+        /// cleanup toggle's footer covers the explanation, no need to
+        /// duplicate.
+        var explanation: String? {
+            switch self {
+            case .available:
+                return nil
+            case .notEnabled:
+                return "Assist requires Apple Intelligence. Turn it on in Settings → Apple Intelligence & Siri to enable Assist in the app and the Dictator keyboard."
+            case .deviceNotEligible:
+                return "Assist features require an iPhone with Apple Intelligence (iPhone 15 Pro, iPhone 15 Pro Max, or any iPhone 16). Dictation works on all supported devices."
+            case .modelNotReady:
+                return "Apple Intelligence is still downloading the on-device model. Assist will switch on automatically once it's ready."
+            case .unknown(let reason):
+                return "Assist isn't available right now: \(reason)."
+            }
+        }
+
+        /// Section header to render alongside `explanation`. Different
+        /// headers for "you can fix this" vs "you can't" keeps the
+        /// disabled-hardware case from looking like a missed step.
+        var sectionTitle: String {
+            switch self {
+            case .available: "Assist"
+            case .notEnabled: "Turn on Assist"
+            case .deviceNotEligible: "Assist not available"
+            case .modelNotReady: "Assist setting up"
+            case .unknown: "Assist unavailable"
+            }
+        }
+    }
+
+    static var availability: Availability {
+        switch SystemLanguageModel.default.availability {
+        case .available:
+            return .available
+        case .unavailable(let reason):
+            switch reason {
+            case .appleIntelligenceNotEnabled: return .notEnabled
+            case .deviceNotEligible: return .deviceNotEligible
+            case .modelNotReady: return .modelNotReady
+            @unknown default: return .unknown(String(describing: reason))
+            }
+        }
+    }
+
     enum AssistError: LocalizedError {
         case unavailable(String)
         case empty

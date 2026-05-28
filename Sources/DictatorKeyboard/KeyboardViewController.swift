@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import FoundationModels
 
 /// Custom keyboard entry point. iOS hands every keyboard extension
 /// a `UIInputViewController` instance to drive — we host a SwiftUI
@@ -63,6 +64,15 @@ final class KeyboardViewController: UIInputViewController {
     /// changes and the button would stick enabled or disabled
     /// across typing.
     private var lastCanAssist: Bool = false
+    /// True when the on-device foundation model is reachable —
+    /// Apple Intelligence is supported on the hardware AND the user
+    /// has turned it on AND the model has finished downloading. When
+    /// false, we hide the Assist button entirely so the keyboard
+    /// shows a single full-width Dictate tile rather than dangling a
+    /// purple button that can never do anything. Re-queried on every
+    /// `viewWillAppear` because the user can toggle Apple Intelligence
+    /// in iOS Settings without restarting either process.
+    private var assistSupported: Bool = isAssistCurrentlySupported()
     /// Backspace press-and-hold state. `holdStartedAt` lets the
     /// running timer decide when to escalate from per-character to
     /// per-word deletion; `holdTimer` runs until the user releases.
@@ -93,8 +103,30 @@ final class KeyboardViewController: UIInputViewController {
             advanceToNextInputMode()
             return
         }
+        // Re-check on every appearance so toggling Apple Intelligence
+        // in iOS Settings updates the keyboard layout — the user goes
+        // to Settings, flips it, switches back to their app, and the
+        // next time the keyboard surfaces it picks up the new state.
+        let nextAssistSupported = Self.isAssistCurrentlySupported()
+        if nextAssistSupported != assistSupported {
+            assistSupported = nextAssistSupported
+            refreshRootView()
+        }
         refreshHostState()
         startStatePolling()
+    }
+
+    /// Snapshots `SystemLanguageModel.default.availability` into a
+    /// single boolean. Static so it can be used as a default value for
+    /// the stored property at declaration time. The structured reason
+    /// lives in `AppleFoundationAssist.availability` over in the host
+    /// target — the keyboard only needs the binary "show the button or
+    /// not" answer.
+    private static func isAssistCurrentlySupported() -> Bool {
+        if case .available = SystemLanguageModel.default.availability {
+            return true
+        }
+        return false
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -172,6 +204,11 @@ final class KeyboardViewController: UIInputViewController {
         // clipboard — i.e. the user (or another app) genuinely
         // copied new content.
         let nextCanAssist: Bool = {
+            // On hardware where assist will never light up (no Apple
+            // Intelligence), short-circuit so the rest of the gating
+            // logic doesn't run — and so the polling code never thinks
+            // there's a state change to react to.
+            guard assistSupported else { return false }
             guard nextCanPaste else { return false }
             if let last = KeyboardBridge.readLastDictation(),
                currentChangeCount == last.pasteboardChangeCount {
@@ -360,6 +397,7 @@ final class KeyboardViewController: UIInputViewController {
             onUndo: { [weak self] in self?.undoLastInsertion() },
             onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
             onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
+            assistSupported: assistSupported,
             canAssist: lastCanAssist,
             onBackspacePress: { [weak self] in self?.startBackspaceHold() },
             onBackspaceRelease: { [weak self] in self?.endBackspaceHold() },

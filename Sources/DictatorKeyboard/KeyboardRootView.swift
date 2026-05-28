@@ -14,6 +14,13 @@ struct KeyboardRootView: View {
     let onUndo: () -> Void
     let onSpace: () -> Void
     let onReturn: () -> Void
+    /// True when the host device + iOS Settings combination can
+    /// actually run Apple Intelligence. When false we hide the
+    /// Assist button entirely — older iPhones (pre-15 Pro) will
+    /// never get an Assist that works, so dangling it disabled is
+    /// worse than hiding it. The Settings screen in the host app
+    /// explains why.
+    let assistSupported: Bool
     /// True when there's text before the cursor for assist to
     /// transform. When false the Assist button greys out — tapping
     /// it with an empty field would launch the host with nothing to
@@ -62,11 +69,14 @@ struct KeyboardRootView: View {
 
             if let state = hostState {
                 inFlightContent(state)
-            } else if showAssistHint && !canAssist {
+            } else if showAssistHint && !canAssist && assistSupported {
                 // Hint takes over the same slot as Dictate / Assist —
                 // a clean swap at matched height rather than pushing
                 // the secondary row off the bottom of the keyboard.
-                // Auto-reverts after the hide task fires.
+                // Auto-reverts after the hide task fires. We never
+                // surface the hint when assist isn't supported — the
+                // Assist button itself is hidden in that case so
+                // there's no greyed control for the user to prod.
                 assistHintBanner
             } else {
                 idleContent
@@ -134,44 +144,46 @@ struct KeyboardRootView: View {
                 action: onMicPress,
                 enabled: true
             )
-            // Assist reads the system clipboard for the text to
-            // transform (selectedText is unreliable across iOS
-            // apps — see KeyboardViewController). When there's
-            // nothing fresh to act on, the button looks disabled
-            // (greyed, "Copy first" label) but stays tappable so we
-            // can pop a hint explaining what to do — a true
-            // SwiftUI .disabled() button can't fire any action,
-            // which leaves the user prodding a dead control.
-            Button {
-                if canAssist {
-                    onAssistPress()
-                } else {
-                    showAssistHint = true
-                    hintHideTask?.cancel()
-                    hintHideTask = Task {
-                        try? await Task.sleep(for: .seconds(3))
-                        guard !Task.isCancelled else { return }
-                        showAssistHint = false
+            if assistSupported {
+                // Assist reads the system clipboard for the text to
+                // transform (selectedText is unreliable across iOS
+                // apps — see KeyboardViewController). When there's
+                // nothing fresh to act on, the button looks disabled
+                // (greyed, "Copy first" label) but stays tappable so we
+                // can pop a hint explaining what to do — a true
+                // SwiftUI .disabled() button can't fire any action,
+                // which leaves the user prodding a dead control.
+                Button {
+                    if canAssist {
+                        onAssistPress()
+                    } else {
+                        showAssistHint = true
+                        hintHideTask?.cancel()
+                        hintHideTask = Task {
+                            try? await Task.sleep(for: .seconds(3))
+                            guard !Task.isCancelled else { return }
+                            showAssistHint = false
+                        }
                     }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: canAssist ? "wand.and.stars" : "doc.on.clipboard")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text(canAssist ? "Assist" : "Copy first")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.purple)
+                    )
+                    .opacity(canAssist ? 1 : 0.4)
                 }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: canAssist ? "wand.and.stars" : "doc.on.clipboard")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(canAssist ? "Assist" : "Copy first")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 56)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.purple)
-                )
-                .opacity(canAssist ? 1 : 0.4)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
