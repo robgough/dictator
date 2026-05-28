@@ -3,7 +3,7 @@
 
 # Xcode build / user state
 DerivedData/
-.derivedData/
+.derivedData*/
 build/
 *.xcuserstate
 *.xcuserdatad/
