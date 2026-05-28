@@ -83,14 +83,26 @@ struct ContentView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
-            .onChange(of: keyboardRequest, initial: true) { _, new in
-                // Arrival from the keyboard URL launch is now a
-                // one-shot trigger: pre-populate the transcript,
-                // auto-start the recording, dismiss the keyboard-
-                // onboarding card (clear signal the user has it
-                // installed), then immediately clear the binding so
-                // we don't re-fire on subsequent renders.
-                guard let req = new else { return }
+            // Arrival from the keyboard URL launch is a one-shot
+            // trigger: pre-populate the transcript, auto-start the
+            // recording, dismiss the keyboard-onboarding card (clear
+            // signal the user has it installed), then clear the
+            // binding so we don't re-fire.
+            //
+            // Driven by `.task(id:)` rather than `.onChange(initial:)`
+            // on purpose: on a cold launch via `dictator://…`,
+            // `onOpenURL` sets `keyboardRequest` before the first
+            // render, so an `initial: true` onChange would run
+            // `beginKeyboardRecording` *during* SwiftUI's initial
+            // update — and that mutates observed state the view reads
+            // (status, recordingMode, transcript, …), tripping the
+            // "Modifying state during view update" runtime warning.
+            // `.task(id:)` runs after the view is installed, off the
+            // update pass; it also re-fires on each id change, so the
+            // `keyboardRequest = nil` write below just runs the guard
+            // and returns.
+            .task(id: keyboardRequest) {
+                guard let req = keyboardRequest else { return }
                 keyboardOnboardingDismissed = true
                 if viewModel.permission == .granted {
                     viewModel.beginKeyboardRecording(
