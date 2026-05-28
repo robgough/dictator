@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+/// Reference-type cache backing `MeetingsRootView.session(for:)`. See
+/// the `sessionCache` declaration for the rationale — in short, it's
+/// filled lazily during `body`, and mutating a class is invisible to
+/// SwiftUI's update tracking, so it sidesteps the "Modifying state
+/// during view update" warning a `@State` dictionary would raise.
+/// Main-actor-isolated to match `MeetingSession`; only ever touched
+/// from the view's main-actor methods.
+@MainActor
+private final class SessionCache {
+    var byID: [UUID: MeetingSession] = [:]
+}
+
 /// Root view of the Meetings window. NavigationSplitView with a sidebar
 /// listing every saved meeting and a detail pane that renders either a
 /// live recording, a processing run, or a finished transcript.
@@ -9,11 +21,21 @@ struct MeetingsRootView: View {
     @Environment(AppState.self) private var state
     @State private var store = MeetingsStore.shared
     @State private var selectedID: UUID?
-    /// One session per selected meeting. Cached so the detail view doesn't
-    /// rebuild its @Observable owner on every redraw — and so a live
-    /// session in flight keeps its state across selection changes.
     @State private var liveSession: MeetingSession?
-    @State private var openSessions: [UUID: MeetingSession] = [:]
+    /// One session per opened meeting, memoised so the detail pane
+    /// doesn't rebuild its @Observable owner on every redraw and a
+    /// session keeps its in-flight state across selection changes.
+    ///
+    /// Deliberately a reference type rather than a `@State` dictionary:
+    /// `session(for:)` fills it lazily from inside `detail`, i.e.
+    /// *during* `body` evaluation, and writing through a `@State`
+    /// collection there trips SwiftUI's "Modifying state during view
+    /// update" runtime warning. Mutating a plain class is invisible to
+    /// SwiftUI's update tracking — which is fine here, because nothing
+    /// renders off this cache directly (the detail pane keys off
+    /// `liveSession` / `selectedID`), so the fill doesn't need to drive
+    /// an invalidation.
+    @State private var sessionCache = SessionCache()
     @State private var showingPermissionBanner = false
     @State private var permissionMessage: String?
     @State private var deviceManager = AudioDeviceManager.shared
@@ -107,7 +129,7 @@ struct MeetingsRootView: View {
                 MeetingSidebarList(selection: $selectedID, metas: store.metas) { id in
                     store.delete(id: id)
                     if selectedID == id { selectedID = nil }
-                    openSessions.removeValue(forKey: id)
+                    sessionCache.byID.removeValue(forKey: id)
                 }
                 .frame(maxHeight: .infinity)
             }
@@ -133,10 +155,10 @@ struct MeetingsRootView: View {
     }
 
     private func session(for id: UUID) -> MeetingSession? {
-        if let cached = openSessions[id] { return cached }
+        if let cached = sessionCache.byID[id] { return cached }
         guard let meta = store.meta(id: id) else { return nil }
         let s = MeetingSession(from: meta)
-        openSessions[id] = s
+        sessionCache.byID[id] = s
         return s
     }
 
@@ -194,7 +216,7 @@ struct MeetingsRootView: View {
         let session = MeetingSession(forLiveRecording: UUID())
         liveSession = session
         selectedID = session.id
-        openSessions[session.id] = session
+        sessionCache.byID[session.id] = session
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
         await session.startRecording(preferredMicDevice: preferred)
     }
@@ -227,7 +249,7 @@ struct MeetingsRootView: View {
                 permissionMessage = "Couldn't import \(url.lastPathComponent): \(error.localizedDescription)"
                 continue
             }
-            openSessions[session.id] = session
+            sessionCache.byID[session.id] = session
             selectedID = session.id
             liveSession = session
             let modelID = state.settings.parakeetModelID
