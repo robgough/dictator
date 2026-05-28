@@ -297,6 +297,14 @@ struct KeyboardRootView: View {
 
     @ViewBuilder
     private func previewPill(height: CGFloat, cornerRadius: CGFloat) -> some View {
+        // Three flavours of pill content, kept terse and parallel so
+        // the row reads cleanly at a glance. We deliberately don't say
+        // "from another app" for the no-snippet case — it framed the
+        // message from Dictator's perspective ("not us") and confused
+        // users who'd just copied something in the host app; the
+        // shorter "Ready" sidesteps the framing entirely. "Empty" is
+        // similarly the shortest honest answer when there's nothing to
+        // paste at all.
         HStack(spacing: 6) {
             if let preview = pastePreview {
                 Text(previewSnippet(preview))
@@ -307,12 +315,12 @@ struct KeyboardRootView: View {
             } else if canPaste {
                 Image(systemName: "doc.on.clipboard")
                     .font(.caption2)
-                Text("Content from another app")
+                Text("Ready")
                     .lineLimit(1)
             } else {
                 Image(systemName: "tray")
                     .font(.caption2)
-                Text("Nothing on the clipboard")
+                Text("Empty")
                     .lineLimit(1)
             }
         }

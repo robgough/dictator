@@ -82,6 +82,35 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         installSwiftUI()
+        // The 300ms polling timer is the fallback, but copy events
+        // also fire UIPasteboard.changedNotification — listening for
+        // it means the Paste preview pill flips from "Empty" to the
+        // user's snippet within one runloop tick of them tapping Copy,
+        // instead of waiting up to 300ms for the next poll. The
+        // notification fires in any process that has the pasteboard
+        // observed, including a keyboard extension hosted by another
+        // app, so an in-app copy inside Mail / Notes / Safari surfaces
+        // immediately.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePasteboardChange),
+            name: UIPasteboard.changedNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        // `addObserver(_:selector:name:object:)` keeps a strong
+        // reference to self until removed. UIInputViewController
+        // can live for the lifetime of the keyboard process, but
+        // belt-and-braces this — a re-instantiation by iOS during a
+        // keyboard switch otherwise leaves a stale observer pointing
+        // at a dead controller.
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handlePasteboardChange() {
+        refreshHostState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
