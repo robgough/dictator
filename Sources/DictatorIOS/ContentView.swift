@@ -533,9 +533,25 @@ struct ContentView: View {
                 .foregroundStyle(.red)
             Text("Microphone access is off.")
                 .font(.headline)
-            Text("Open the Settings app and turn on the microphone for Dictator to use this prototype.")
+            Text("Turn on the microphone for Dictator in Settings so it can transcribe your voice.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+            // Deep-link straight to Dictator's per-app Settings page so
+            // the user doesn't have to hunt through the Settings tree.
+            // Matches `KeyboardSetupSheet.openSettings`'s use of
+            // `openSettingsURLString` (iOS 16+ resolves it to the app
+            // page; older versions fall back to the Settings root).
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Label("Open Settings", systemImage: "arrow.up.right.square")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.horizontal)
             Spacer()
         }
     }

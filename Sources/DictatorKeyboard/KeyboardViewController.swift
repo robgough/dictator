@@ -1,6 +1,5 @@
 import UIKit
 import SwiftUI
-import FoundationModels
 
 /// Custom keyboard entry point. iOS hands every keyboard extension
 /// a `UIInputViewController` instance to drive — we host a SwiftUI
@@ -63,6 +62,13 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Stamp the durable "this keyboard has run with Full Access"
+        // proof. The write only succeeds when the user has granted
+        // Open Access (otherwise the shared-container handle is nil
+        // and it no-ops), so a successful write is exactly the signal
+        // the host's onboarding uses to light up the Open Access step
+        // — without it the host has no API to detect Full Access.
+        KeyboardBridge.markKeyboardRanWithFullAccess()
         installSwiftUI()
         // The 300ms polling timer is the fallback, but copy events
         // also fire UIPasteboard.changedNotification — listening for
@@ -127,27 +133,36 @@ final class KeyboardViewController: UIInputViewController {
         startStatePolling()
     }
 
-    /// Snapshots `SystemLanguageModel.default.availability` into a
-    /// single boolean. Static so it can be used as a default value for
-    /// the stored property at declaration time. The structured reason
-    /// lives in `AppleFoundationAssist.availability` over in the host
-    /// target — the keyboard only needs the binary "show the button or
-    /// not" answer.
+    /// Reads the assist-availability boolean the host published into
+    /// the App Group, instead of querying FoundationModels here. The
+    /// keyboard extension deliberately doesn't link the Apple
+    /// Intelligence framework — pulling it into the tightly
+    /// memory-capped appex (and re-querying it on the 300ms poll)
+    /// was a jetsam risk for no benefit, since the host already does
+    /// the real `SystemLanguageModel.default.availability` check and
+    /// publishes the binary result via `RecordingViewModel.publishModelReadiness`.
+    /// Static so it can seed the stored property at declaration time.
     ///
     /// In DEBUG builds the developer override
     /// (`KeyboardBridge.debugForcedAssistAvailability`, set from
-    /// Settings → Debug in the host app) takes precedence. Stripped
-    /// from release.
+    /// Settings → Debug in the host app) takes precedence. It lives
+    /// in `KeyboardBridge` and needs no FoundationModels symbols, so
+    /// it's safe to read here. Stripped from release.
+    ///
+    /// Default conservatively to unavailable when the host has never
+    /// published a value: a user can enable the keyboard in Settings
+    /// before ever opening the host, in which case there's no
+    /// snapshot yet. The host publishes on first launch / foreground,
+    /// so the keyboard picks up the real value on its next appearance
+    /// — better to show a single full-width Dictate tile briefly than
+    /// to flash a greyed Assist button that may never light up.
     private static func isAssistCurrentlySupported() -> Bool {
         #if DEBUG
         if let forced = KeyboardBridge.debugForcedAssistAvailability {
             return forced == .available
         }
         #endif
-        if case .available = SystemLanguageModel.default.availability {
-            return true
-        }
-        return false
+        return KeyboardBridge.readAssistAvailable() ?? false
     }
 
     override func viewWillDisappear(_ animated: Bool) {

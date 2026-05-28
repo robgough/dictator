@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- If you've turned down microphone access, the reminder screen now has an Open Settings button that jumps straight to Dictator's settings, with clearer wording.
 - Dictation now records only while Dictator is open. If you switch to another app or lock your phone mid-recording, Dictator finishes transcribing what you've said so far and copies it to the clipboard, ready to paste, instead of the recording carrying on invisibly in the background.
 - Dictate and Assist on the main screen now do two things: tap them to toggle recording on, tap them again to stop, OR hold them down for push-to-talk — release stops the recording. Anything shorter than ~0.35 seconds reads as a tap; anything longer reads as a hold. Lets you choose whichever feels right for the moment without changing a setting.
 - The Dictator keyboard's Paste row now reads as part of the same family of buttons as the rest of the keys — both the Paste button and the clipboard preview share the same rounded-rectangle shape and height. The preview is also always visible: it shows your last Dictator transcript when that's still on the clipboard, "Content from another app" when something pasteable is there but Dictator can't peek at it without triggering the iOS "Pasted from X" toast, and "Nothing on the clipboard" when there's nothing to paste.

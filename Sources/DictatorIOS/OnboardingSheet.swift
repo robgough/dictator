@@ -27,11 +27,12 @@ import UIKit
 ///     using the keyboard's bundle identifier as the primary signal,
 ///     with a "I've installed it" confirmation as a fallback for
 ///     when the host hasn't been re-foregrounded yet.
-///   - Open Access: no direct API. The cleanest indirect signal is a
-///     prior keyboard handshake recorded in the App Group (request,
-///     host-state, or readiness write from the keyboard's side); if
-///     the user gets that far we know Open Access was on at some
-///     point. Otherwise, "I've enabled it" confirmation.
+///   - Open Access: no direct API. The cleanest indirect signal is
+///     the keyboard having written a sticky flag to the App Group
+///     (`KeyboardBridge.keyboardRanWithFullAccess`) — a write only
+///     possible with Full Access on, so it's proof the access was
+///     granted at some point. Otherwise, "I've enabled it"
+///     confirmation.
 ///
 /// Once step 4 flips to done — either automatically or via the
 /// confirmation tap — the sheet auto-dismisses and writes the
@@ -332,23 +333,20 @@ struct OnboardingSheet: View {
     }
 
     /// Open Access is impossible to query directly. The cleanest
-    /// indirect signal: the keyboard extension has written *something*
-    /// to the App Group container, which is only possible with Full
-    /// Access turned on. We check for any of the three writes the
-    /// keyboard makes — a pending request, a host-state heartbeat
-    /// from a prior session, or a stop request — and treat any of
-    /// them as proof the access was granted. Otherwise we wait for
-    /// the user to confirm via the inline button.
+    /// indirect signal: the keyboard extension has written something
+    /// durable to the App Group container, which is only possible
+    /// with Full Access turned on. The keyboard stamps a sticky flag
+    /// in `viewDidLoad` (`KeyboardBridge.markKeyboardRanWithFullAccess`);
+    /// the host never clears it, so it's monotonic proof the access
+    /// was granted at least once. (The previous request / host-state /
+    /// stop-request writes this checked are gone — the host consumed
+    /// and cleared the request, and the other two no longer exist —
+    /// so the detection had silently died.) Otherwise we wait for the
+    /// user to confirm via the inline button.
     private var openAccessGranted: Bool {
         if openAccessConfirmed { return true }
         _ = refreshTick
-        guard let defaults = UserDefaults(suiteName: KeyboardBridge.appGroupID) else { return false }
-        // Any of these means the keyboard has successfully written
-        // to the shared container at least once.
-        if defaults.data(forKey: "DictatorKeyboard.request") != nil { return true }
-        if defaults.data(forKey: "DictatorKeyboard.hostState") != nil { return true }
-        if defaults.string(forKey: "DictatorKeyboard.stopRequest") != nil { return true }
-        return false
+        return KeyboardBridge.keyboardRanWithFullAccess()
     }
 
     // MARK: - Row + CTA
@@ -550,11 +548,7 @@ struct OnboardingSheet: View {
 
     private var openAccessGrantedViaProbe: Bool {
         _ = refreshTick
-        guard let defaults = UserDefaults(suiteName: KeyboardBridge.appGroupID) else { return false }
-        if defaults.data(forKey: "DictatorKeyboard.request") != nil { return true }
-        if defaults.data(forKey: "DictatorKeyboard.hostState") != nil { return true }
-        if defaults.string(forKey: "DictatorKeyboard.stopRequest") != nil { return true }
-        return false
+        return KeyboardBridge.keyboardRanWithFullAccess()
     }
 
     private func inlineConfirmTitle(for kind: Step.Kind) -> String {

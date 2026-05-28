@@ -46,6 +46,25 @@ enum KeyboardBridge {
     /// the clipboard the keyboard's local changeCount won't match
     /// the stored one and the preview hides itself.
     private static let lastDictationKey = "DictatorKeyboard.lastDictation"
+    /// Sticky "the keyboard has run with Open/Full Access" proof. A
+    /// keyboard extension can only read or write the App Group's
+    /// shared `UserDefaults` once the user has granted Full Access —
+    /// so the keyboard successfully writing *any* value here is
+    /// itself the proof onboarding's step 5 needs. Monotonic: the
+    /// keyboard sets it once it's live and the host NEVER clears it
+    /// (a one-way "this happened at least once" signal — clearing it
+    /// would re-arm a step the user already completed). Distinct from
+    /// the request / readiness keys, which the host consumes and
+    /// overwrites, so they can't serve as durable proof.
+    private static let keyboardRanWithFullAccessKey = "DictatorKeyboard.keyboardRanWithFullAccess"
+    /// Whether the host's last availability check found Apple
+    /// Intelligence assist usable on this device. Published by the
+    /// host (which can freely link FoundationModels) so the keyboard
+    /// extension doesn't have to — keeping the Apple Intelligence
+    /// framework out of the tightly memory-capped appex and off the
+    /// keyboard's 300ms poll. The keyboard reads this to decide
+    /// whether to show the Assist button at all.
+    private static let assistAvailableKey = "DictatorKeyboard.assistAvailable"
 
     /// Snapshot of "what we just wrote to the system clipboard". The
     /// keyboard's preview pill renders `text` when the system
@@ -162,6 +181,26 @@ enum KeyboardBridge {
         return request.session
     }
 
+    /// Called by the keyboard once it's live (e.g. `viewDidLoad`).
+    /// The write only lands if Full Access is granted — when it's
+    /// off, `defaults` is `nil` and this is a silent no-op — so a
+    /// successful write is durable proof the access was on at least
+    /// once. Idempotent: writing `true` repeatedly is harmless, and
+    /// we never write `false` (the flag is one-way).
+    static func markKeyboardRanWithFullAccess() {
+        guard let defaults else { return }
+        defaults.set(true, forKey: keyboardRanWithFullAccessKey)
+    }
+
+    /// Onboarding reads this to light up the "Open Access granted"
+    /// step. True once the keyboard has ever written to the shared
+    /// container with Full Access on. Never reset by the host — it's
+    /// monotonic proof, not live state.
+    static func keyboardRanWithFullAccess() -> Bool {
+        guard let defaults else { return false }
+        return defaults.bool(forKey: keyboardRanWithFullAccessKey)
+    }
+
     // MARK: - Host side
 
     /// Host reads the latest request when it's foregrounded with a
@@ -198,6 +237,33 @@ enum KeyboardBridge {
               let readiness = try? JSONDecoder().decode(ModelReadiness.self, from: data)
         else { return nil }
         return readiness
+    }
+
+    // MARK: - Assist availability
+
+    /// Host publishes whether Apple Intelligence assist is usable on
+    /// this device, computed from its own (FoundationModels-backed)
+    /// availability check. Called wherever `publishModelReadiness` is
+    /// — at launch and on each foreground — so the keyboard's button
+    /// layout tracks the user toggling Apple Intelligence in Settings.
+    static func writeAssistAvailable(_ available: Bool) {
+        guard let defaults else { return }
+        defaults.set(available, forKey: assistAvailableKey)
+    }
+
+    /// Keyboard reads the host's last-published assist availability.
+    /// Returns `nil` when the host has never published — distinct
+    /// from `false` so the caller can default conservatively (the
+    /// user may have enabled the keyboard before ever opening the
+    /// host). `UserDefaults.bool` would collapse "absent" into
+    /// `false`, which happens to be the safe default here, but the
+    /// optional keeps the "never published" case explicit at the
+    /// call site.
+    static func readAssistAvailable() -> Bool? {
+        guard let defaults,
+              defaults.object(forKey: assistAvailableKey) != nil
+        else { return nil }
+        return defaults.bool(forKey: assistAvailableKey)
     }
 
     // MARK: - Last dictation (clipboard preview hint)

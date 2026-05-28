@@ -968,6 +968,14 @@ final class RecordingViewModel {
     /// downloaded" hint. Called at every lifecycle transition that
     /// touches model state. Cheap — single JSON encode + UserDefaults
     /// write, fires only on transitions, not in any hot path.
+    ///
+    /// Also republishes assist availability in the same breath. The
+    /// keyboard can't link FoundationModels (memory ceiling + jetsam
+    /// risk in the appex), so the host owns the availability check and
+    /// hands the keyboard a plain boolean to gate its Assist button.
+    /// Piggybacking on this method means availability stays fresh at
+    /// exactly the points the keyboard cares about — launch and every
+    /// foreground — without a second set of call sites to keep in sync.
     private func publishModelReadiness() {
         let disk: KeyboardBridge.ModelReadiness.DiskStatus
         switch modelDiskStatus {
@@ -980,6 +988,12 @@ final class RecordingViewModel {
             loaded: isModelLoaded,
             updatedAt: Date()
         ))
+        // `isAvailable` funnels through `AppleFoundationAssist.availability`,
+        // which honours the DEBUG override and re-queries the live
+        // `SystemLanguageModel` each call — so toggling Apple
+        // Intelligence in iOS Settings is reflected on the next
+        // foreground publish.
+        KeyboardBridge.writeAssistAvailable(AppleFoundationAssist.isAvailable)
     }
 
     /// True when there's a meaningful snapshot to swap to. Used by

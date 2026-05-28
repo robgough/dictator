@@ -260,7 +260,7 @@ targets:
         CFBundleDisplayName: Dictator
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSMicrophoneUsageDescription: "Dictator transcribes your voice on-device to turn speech into text you can copy or paste."
+        NSMicrophoneUsageDescription: "Dictator transcribes your voice on-device to turn speech into text, whether you dictate in the app or from the Dictator keyboard."
         # Dictator only uses encryption via the standard HTTPS stack
         # (the one-time Hugging Face model download). That qualifies
         # for the App Store's exempt-encryption category, and setting

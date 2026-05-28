@@ -36,7 +36,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dictator transcribes your voice on-device to turn speech into text you can copy or paste.</string>
+	<string>Dictator transcribes your voice on-device to turn speech into text, whether you dictate in the app or from the Dictator keyboard.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
