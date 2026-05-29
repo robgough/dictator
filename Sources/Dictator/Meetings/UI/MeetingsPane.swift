@@ -41,24 +41,6 @@ struct MeetingsPane: View {
             }
 
             Section {
-                Picker("Echo cancellation", selection: Binding(
-                    get: { s.settings.meetingMicEchoCancellation },
-                    set: { s.settings.meetingMicEchoCancellation = $0; state.save() }
-                )) {
-                    ForEach(MeetingMicEchoCancellation.allCases, id: \.self) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .pickerStyle(.menu)
-            } header: {
-                Text("Microphone")
-            } footer: {
-                Text("On a video call without headphones, your Mac's speakers play the remote audio and the mic picks it back up — so every remote utterance appears twice in the transcript, once correctly on the system track and once incorrectly tagged as you. Echo cancellation lets macOS subtract the playback signal from the mic capture before recording, so the bleed never makes it to disk. Automatic turns it on when the active output looks like speakers (built-in / external monitor) and off when it looks like headphones (AirPods, USB headset).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
                 Toggle("Summarise meetings automatically", isOn: Binding(
                     get: { s.settings.meetingSummaryEnabled },
                     set: { s.settings.meetingSummaryEnabled = $0; state.save() }

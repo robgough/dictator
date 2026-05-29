@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Meeting recording now captures your microphone reliably, including USB mics and audio interfaces like the Blue Yeti that previously recorded a silent or half-length "Me" track. The mic now uses the same capture path as dictation.
+- Removed the Meetings "Echo cancellation" setting. Remote-speaker bleed onto your mic track is now handled entirely by the existing "Drop echoes captured by my microphone" cleanup that runs after recording, which is more reliable than the live version was.
 - New Parakeet-only setting in Settings → Models: "Show real-time transcription in HUD". When on, a draft transcript streams into the HUD while you're holding the hotkey, so you can see whether your speech is being captured correctly. The cleanup passes still run on the full recording at the end, so the final output is unchanged. Disabled when Whisper is the active engine — Whisper doesn't ship a streaming API in this version.
 - Settings → About now shows lifetime usage in two colour-coded cards: Dictation (transcriptions, average words per transcription, words spoken, words delivered) and Assistant (turns, average words per instruction, instruction words, reply words). Counts live alongside your other synced settings, so a folder shared via iCloud Drive shows the combined totals across every Mac.
 - A third card below those shows total tokens generated locally by the LLM (across both the dictation cleanup passes and assistant turns), with input/output breakdown. Exact counts when MLX is the engine; approximate when Apple's foundation model handled the call.

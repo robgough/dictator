@@ -5,8 +5,9 @@ import CoreMedia
 import Observation
 
 /// Drives a live, draft transcript while a meeting is being recorded. Sits
-/// alongside the two recorders (system-audio SCStream + mic AVAudioEngine)
-/// and consumes their buffers as they arrive, runs them through Parakeet in
+/// alongside the two recorders (system-audio process tap + mic
+/// AVCaptureSession) and consumes their buffers as they arrive, runs them
+/// through Parakeet in
 /// chunks larger than dictation uses, and exposes a continuously-growing
 /// `interimText` the Meetings detail view reads.
 ///
@@ -75,12 +76,14 @@ final class MeetingLiveTranscriber {
         self.isRunning = true
     }
 
-    /// Receive a mic buffer from `MeetingMicRecorder`. Called from an
-    /// off-main audio queue — we hop straight back to the main actor to
-    /// touch the chunk state, since `[Float]` mutation and `Task` launch
-    /// both belong on a single actor for this class.
-    nonisolated func feedMicBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let samples = Self.resampleToMono16k(buffer: buffer) else { return }
+    /// Receive mono Float32 mic audio (at the device's native rate) from
+    /// `MeetingMicRecorder`. Called from the off-main capture queue — we
+    /// resample to 16 kHz here, then hop to the main actor to touch the chunk
+    /// state, since `[Float]` mutation and `Task` launch both belong on a
+    /// single actor for this class.
+    nonisolated func feedMicSamples(_ mono: [Float], sampleRate: Double) {
+        guard sampleRate > 0, !mono.isEmpty else { return }
+        guard let samples = AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000) else { return }
         Task { @MainActor [weak self] in
             self?.appendMic(samples: samples)
         }
@@ -170,44 +173,5 @@ final class MeetingLiveTranscriber {
             NSLog("[Dictator] Meeting live transcribe chunk failed: \(error)")
         }
         scheduleChunkIfReady()
-    }
-
-    // MARK: - Audio conversion
-
-    /// Convert an `AVAudioPCMBuffer` (any rate / channel count) to a flat
-    /// Float32 mono array at 16 kHz, the rate Parakeet expects. Done
-    /// off-main so the audio queue isn't blocked waiting for the main
-    /// actor. Returns nil on any conversion failure — those are surfaced
-    /// by dropping the buffer (live transcription is best-effort).
-    private nonisolated static func resampleToMono16k(buffer: AVAudioPCMBuffer) -> [Float]? {
-        guard let floatData = buffer.floatChannelData else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        let channels = Int(buffer.format.channelCount)
-        let sampleRate = buffer.format.sampleRate
-        guard channels > 0, sampleRate > 0 else { return nil }
-
-        // Downmix to mono first — Parakeet wants mono Float32 anyway.
-        var mono = [Float](repeating: 0, count: frameCount)
-        if channels == 1 {
-            let src = floatData[0]
-            mono.withUnsafeMutableBufferPointer { dst -> Void in
-                memcpy(dst.baseAddress!, src, frameCount * MemoryLayout<Float>.size)
-            }
-        } else {
-            let invChannels = 1 / Float(channels)
-            mono.withUnsafeMutableBufferPointer { dst -> Void in
-                let base = dst.baseAddress!
-                for i in 0..<frameCount {
-                    var sum: Float = 0
-                    for c in 0..<channels { sum += floatData[c][i] }
-                    base[i] = sum * invChannels
-                }
-            }
-        }
-
-        // Then resample to 16 kHz via the shared helper that the dictation
-        // path and meeting processor both use.
-        return AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000)
     }
 }

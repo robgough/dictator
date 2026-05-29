@@ -209,27 +209,22 @@ final class MeetingSession: Identifiable {
         recorder.onBuffer = { [weak live] sampleBuffer in
             live?.feedSystemBuffer(sampleBuffer)
         }
-        micRecorder.onBuffer = { [weak live] buffer in
-            live?.feedMicBuffer(buffer)
+        micRecorder.onBuffer = { [weak live] mono, sampleRate in
+            live?.feedMicSamples(mono, sampleRate: sampleRate)
         }
 
         do {
             let folder = MeetingStorage.folder(for: id)
             try await recorder.start(folder: folder, preferredMicUID: nil)
-            // Mic capture runs on its own AVAudioEngine alongside the
-            // CATap system recorder — voice-processing AEC against the
-            // speakers is only exposed via AVAudioEngine. Failure to start
-            // mic isn't fatal: system-only recording is still useful (and
-            // surfaces in the UI via didCaptureMic).
-            do {
-                try await micRecorder.start(
-                    at: MeetingStorage.micURL(for: id),
-                    preferredDevice: preferredMicDevice,
-                    echoCancellation: AppState.shared.settings.meetingMicEchoCancellation
-                )
-            } catch {
-                NSLog("[Dictator] Meeting mic capture failed to start: \(error)")
-            }
+            // Mic capture runs on its own AVCaptureSession alongside the
+            // CATap system recorder. Failure to start mic isn't fatal:
+            // system-only recording is still useful (and surfaces in the UI
+            // via didCaptureMic). Mic trouble is reported via onCaptureWarning
+            // rather than thrown, so there's nothing to catch here.
+            await micRecorder.start(
+                at: MeetingStorage.micURL(for: id),
+                preferredDevice: preferredMicDevice
+            )
         } catch {
             state = .failed("Couldn't start recording: \(error.localizedDescription)")
         }
