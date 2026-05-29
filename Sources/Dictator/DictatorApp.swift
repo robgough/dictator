@@ -134,6 +134,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single-instance guard. Two copies with the same bundle ID can run
+        // side by side when they live at different paths — the installed
+        // ~/Applications build alongside a DerivedData ⌘R build, say —
+        // because Launch Services only dedupes launches by path. Each instance
+        // registers the global hotkeys and pastes independently, so the user
+        // sees every dictation twice. Defer to whoever's already running and
+        // bail before we bootstrap anything of our own.
+        if let existing = Self.alreadyRunningInstance() {
+            NSLog("[Dictator] Another instance (pid \(existing.processIdentifier)) is already running; quitting this one.")
+            NSApp.terminate(nil)
+            return
+        }
+
         NSApp.setActivationPolicy(.accessory)
         // When the user closes the Settings window (which we may have
         // opened via the dictator://settings URL — and which forces
@@ -169,5 +182,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // requiring a logout.
         NSApp.servicesProvider = learnWordProvider
         NSUpdateDynamicServices()
+    }
+
+    /// The already-running Dictator instance, if any, excluding this process.
+    /// Matches on bundle identifier so it catches a copy launched from a
+    /// different path (the installed ~/Applications build vs a DerivedData
+    /// ⌘R build) — Launch Services only dedupes by path, so those otherwise
+    /// run side by side.
+    private static func alreadyRunningInstance() -> NSRunningApplication? {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return nil }
+        let myPID = NSRunningApplication.current.processIdentifier
+        return NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleID)
+            .first { $0.processIdentifier != myPID }
     }
 }
