@@ -25,6 +25,12 @@ final class MeetingPlayer {
     private var systemPlayer: AVAudioPlayer?
     private var timerTask: Task<Void, Never>?
 
+    /// True between `beginScrub` and `endScrub` while the user drags the
+    /// slider. Suspends the progress timer's writes to `currentTime` so the
+    /// thumb follows the finger instead of fighting the playhead.
+    @ObservationIgnored private var isScrubbing = false
+    @ObservationIgnored private var wasPlayingBeforeScrub = false
+
     init() {}
 
     /// Load the available tracks. `micURL` / `systemURL` may each be
@@ -56,6 +62,7 @@ final class MeetingPlayer {
         micPlayer = nil
         systemPlayer = nil
         isPlaying = false
+        isScrubbing = false
         currentTime = 0
         duration = 0
     }
@@ -66,14 +73,13 @@ final class MeetingPlayer {
 
     func play() {
         guard micPlayer != nil || systemPlayer != nil else { return }
-        // If we're at the end, start over. Each rewind is also a seek
-        // because the user might have scrubbed all the way to the right.
-        if currentTime >= duration - 0.05 {
-            seek(to: 0)
-        }
-        micPlayer?.play()
-        systemPlayer?.play()
+        // If we're sitting at the end, start over.
+        if currentTime >= duration - 0.05 { currentTime = 0 }
         isPlaying = true
+        // Align both players to the playhead and start whichever still has
+        // audio left there. Setting isPlaying first lets positionPlayers kick
+        // each track into play().
+        positionPlayers(to: currentTime)
         startTimer()
     }
 
@@ -82,26 +88,74 @@ final class MeetingPlayer {
         systemPlayer?.pause()
         isPlaying = false
         stopTimer()
-        // Latch the visible currentTime to whichever player has the most
-        // accurate clock — the system track is the canonical one (mic may
-        // be missing on an imported meeting).
-        currentTime = systemPlayer?.currentTime ?? micPlayer?.currentTime ?? currentTime
+        // `currentTime` is already fresh from the progress timer (updated
+        // ≤50 ms ago), so we don't re-derive it from a player here — reading
+        // back an exhausted track's clock would jump the playhead.
     }
 
-    /// Seek both players. We clamp to [0, duration] so a slider drag past
-    /// the end just snaps to the end.
+    /// Seek both players. We clamp to [0, duration]; a track with no audio
+    /// left at the target is paused rather than pinned to its end.
     func seek(to seconds: TimeInterval) {
         let t = max(0, min(seconds, duration))
-        // AVAudioPlayer's currentTime is direct — assigning it seeks.
-        // For tracks shorter than `duration`, clamp to that player's own
-        // duration so we don't blow past the file.
-        if let p = micPlayer {
-            p.currentTime = min(t, p.duration)
-        }
-        if let p = systemPlayer {
-            p.currentTime = min(t, p.duration)
-        }
         currentTime = t
+        positionPlayers(to: t)
+    }
+
+    // MARK: - Scrubbing (slider drag)
+
+    /// Slider drag began. Pause playback for the duration of the drag so the
+    /// progress timer doesn't fight the thumb and we don't spray a seek at the
+    /// players on every slider tick. The original play/pause state is restored
+    /// in `endScrub`.
+    func beginScrub() {
+        guard !isScrubbing else { return }
+        wasPlayingBeforeScrub = isPlaying
+        isScrubbing = true
+        micPlayer?.pause()
+        systemPlayer?.pause()
+        stopTimer()
+        isPlaying = false
+    }
+
+    /// Slider value changed mid-drag. Move the visible playhead only — the
+    /// players are repositioned once on release, which is cheaper and avoids
+    /// audible stutter from seeking every frame.
+    func scrub(to seconds: TimeInterval) {
+        currentTime = max(0, min(seconds, duration))
+    }
+
+    /// Slider drag ended. Land the players at the final playhead and resume
+    /// playback if we were playing when the drag started.
+    func endScrub() {
+        guard isScrubbing else { return }
+        isScrubbing = false
+        if wasPlayingBeforeScrub {
+            play() // positions both players to currentTime and starts them
+        } else {
+            positionPlayers(to: currentTime)
+        }
+        wasPlayingBeforeScrub = false
+    }
+
+    // MARK: - Player positioning
+
+    /// Move each player to `t`. A track whose audio ends before `t` is paused
+    /// instead of being pinned to its end: assigning `currentTime == duration`
+    /// to a *playing* `AVAudioPlayer` makes it wrap back to 0 and audibly
+    /// restart — that was the "scrub jumps to the beginning" bug when the mic
+    /// and system tracks had different lengths. When we're playing, a track
+    /// that has audio at `t` is (re)started so a backward seek revives a track
+    /// that had already finished.
+    private func positionPlayers(to t: TimeInterval) {
+        for player in [micPlayer, systemPlayer].compactMap({ $0 }) {
+            if t < player.duration - 0.01 {
+                player.currentTime = t
+                if isPlaying && !player.isPlaying { player.play() }
+            } else {
+                if player.isPlaying { player.pause() }
+                player.currentTime = max(0, player.duration - 0.01)
+            }
+        }
     }
 
     private func startTimer() {
@@ -109,16 +163,17 @@ final class MeetingPlayer {
         timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(50))
-                guard let self, self.isPlaying else { return }
-                let t = self.systemPlayer?.currentTime ?? self.micPlayer?.currentTime ?? 0
-                self.currentTime = t
-                let micDone = self.micPlayer.map { !$0.isPlaying } ?? true
-                let sysDone = self.systemPlayer.map { !$0.isPlaying } ?? true
-                if micDone && sysDone {
+                guard let self, self.isPlaying, !self.isScrubbing else { return }
+                let players = [self.micPlayer, self.systemPlayer].compactMap { $0 }
+                let playing = players.filter { $0.isPlaying }
+                // Both tracks done — even at different lengths, the longer one
+                // finishing is what ends playback.
+                if playing.isEmpty {
                     self.isPlaying = false
                     self.currentTime = self.duration
                     return
                 }
+                self.currentTime = playing.map { $0.currentTime }.max() ?? self.currentTime
             }
         }
     }

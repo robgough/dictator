@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Meeting recordings now capture the other side of the call correctly when your speakers or audio interface run at a high sample rate or with more than two channels (for example a 192 kHz USB interface). Previously the remote audio could be recorded very quiet, distorted, and many times longer than the call actually was — which also made the transcript attribute almost everything to you and left only one speaker. Recordings already made with this fault can't be repaired, but new recordings are correct.
+- The meeting playback bar now scrubs properly: dragging the slider jumps to that point in the call instead of snapping back to the start, the time it shows matches the real call length, and clicking a transcript timestamp lands in the right place.
 - Dictator now refuses to launch a second copy of itself. If an instance is already running, a newly launched one quits immediately instead of running alongside it — which previously meant every dictation got pasted twice.
 - Meeting recording now captures your microphone reliably, including USB mics and audio interfaces like the Blue Yeti that previously recorded a silent or half-length "Me" track. The mic now uses the same capture path as dictation.
 - Removed the Meetings "Echo cancellation" setting. Remote-speaker bleed onto your mic track is now handled entirely by the existing "Drop echoes captured by my microphone" cleanup that runs after recording, which is more reliable than the live version was.

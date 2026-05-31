@@ -93,6 +93,15 @@ final class MeetingAudioRecorder {
 
     private var lastSystemLevel: Float = 0
 
+    /// The real sample rate the aggregate device clocks the IOProc at — read
+    /// from the running aggregate after `AudioDeviceStart`, **not** from the
+    /// tap's advertised format. The aggregate inherits its clock from the
+    /// default output device, so a 192 kHz interface delivers 192 kHz buffers
+    /// even though the tap advertises 48 kHz. `write` opens `system.caf` at
+    /// this rate so the on-disk duration matches wall-clock. 0 until `start`
+    /// resolves it; `write` no-ops until then.
+    @ObservationIgnored private var captureSampleRate: Double = 0
+
     init() {}
 
     /// Build the tap + aggregate device + IOProc, open the AVAudioFile
@@ -201,6 +210,11 @@ final class MeetingAudioRecorder {
         let bufferSink = onBuffer
         let queueFormat = tapFormat
         let firstFlag = firstAudioBufferFlag
+        // How many channels the tap itself carries (stereo here). The aggregate
+        // can prepend the output device's *own* input channels (e.g. a Scarlett
+        // interface's 6 inputs) ahead of the tap in the buffer list, so we use
+        // this to pick out just the tap's audio in `extractTapMono`.
+        let tapChannels = max(1, Int(streamDesc.mChannelsPerFrame))
 
         var procID: AudioDeviceIOProcID?
         // `@Sendable` is load-bearing for the same reason MeetingMicRecorder's
@@ -231,10 +245,7 @@ final class MeetingAudioRecorder {
                ) {
                 bufferSink(sample)
             }
-            guard let (samples, format) = Self.extractMonoFloat32(
-                bufferList: inInputData,
-                streamDescription: queueFormat?.streamDescription.pointee
-            ) else { return }
+            guard let samples = Self.extractTapMono(bufferList: inInputData, tapChannels: tapChannels) else { return }
             let level = Self.rms(samples: samples)
 
             let wasFirst = firstFlag.withLock { seen -> Bool in
@@ -243,11 +254,19 @@ final class MeetingAudioRecorder {
                 return true
             }
             if wasFirst {
-                NSLog("[Dictator] MeetingSystem: first audio buffer — format=\(format.sampleRate)/\(format.channelCount), frames=\(samples.count), rmsLevel=\(level)")
+                // One-shot diagnostic of the *real* delivered layout so any
+                // residual duration inflation can be pinned to channel count
+                // vs. sample rate. Pair this with the "capture sample rate"
+                // line logged at start.
+                let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInputData))
+                let layout = abl.isEmpty
+                    ? "empty"
+                    : "buffers=\(abl.count) ch0=\(abl[0].mNumberChannels) bytes0=\(abl[0].mDataByteSize)"
+                NSLog("[Dictator] MeetingSystem: first audio buffer — frames=\(samples.count), rmsLevel=\(level), layout[\(layout)]")
             }
 
             Task { @MainActor [weak self] in
-                self?.write(samples: samples, format: format, level: level)
+                self?.write(samples: samples, level: level)
             }
         }
         guard createErr == noErr, let procID else {
@@ -284,6 +303,14 @@ final class MeetingAudioRecorder {
         }
 
         NSLog("[Dictator] MeetingSystem: CATap IOProc started — tap=#\(tapID) aggregate=#\(aggID)")
+
+        // Resolve the real rate the aggregate clocks buffers at. It inherits
+        // the default output device's rate, which may differ from the tap's
+        // advertised `streamDesc.mSampleRate` (e.g. a 192 kHz interface). Fall
+        // back to the tap rate if the read fails — better than 0.
+        let realRate = Self.readNominalSampleRate(deviceID: aggID) ?? streamDesc.mSampleRate
+        self.captureSampleRate = realRate
+        NSLog("[Dictator] MeetingSystem: capture sample rate = \(realRate) Hz (tap advertised \(streamDesc.mSampleRate) Hz)")
 
         self.running = true
         self.startedAt = Date()
@@ -361,8 +388,19 @@ final class MeetingAudioRecorder {
     // MARK: - Disk write (main actor)
 
     @MainActor
-    private func write(samples: [Float], format: AVAudioFormat, level: Float) {
+    private func write(samples: [Float], level: Float) {
         guard running else { return }
+        // Open + write at the aggregate's real clock rate (resolved in `start`).
+        // Using the tap's stale advertised rate here wrote the file several
+        // times too long on non-48 kHz outputs, so playback ran slowed/quiet
+        // and ASR saw garbled speech. No samples until the rate is known.
+        guard captureSampleRate > 0,
+              let format = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: captureSampleRate,
+                  channels: 1,
+                  interleaved: false
+              ) else { return }
         do {
             if systemFile == nil, let url = systemURL {
                 systemFile = try Self.openFile(at: url, source: format)
@@ -420,83 +458,79 @@ final class MeetingAudioRecorder {
 
     // MARK: - PCM extraction (off-main)
 
-    /// Pull mono Float32 samples + the source format out of an
-    /// `AudioBufferList` delivered by CATap. The tap is configured stereo
-    /// global Float32, but we tolerate either interleaved or non-interleaved
-    /// layouts (the ASBD's `kAudioFormatFlagIsNonInterleaved` says which).
-    /// Returns `nil` on any shape we can't handle — the cycle is dropped.
-    private nonisolated static func extractMonoFloat32(
+    /// Downmix **just the tap's** audio out of the IOProc's `AudioBufferList`
+    /// to mono Float32.
+    ///
+    /// The aggregate device's input buffer list is the concatenation of every
+    /// sub-device's input channels followed by the tap's channels. When the
+    /// default output device is a plain DAC (built-in speakers, AirPods) it has
+    /// no input channels, so the list is just the tap and any reasonable parse
+    /// works. But when the output is an audio interface with its own inputs —
+    /// e.g. a Scarlett 4i4 with 6 input channels — those 6 channels arrive
+    /// *ahead* of the tap in the list. The old parse mistook them for the tap:
+    /// it sized frames off the wrong (6-channel) buffer (writing ~6× too many
+    /// samples → slowed playback) and downmixed the interface's silent inputs
+    /// instead of the tap (→ near-silent remote audio).
+    ///
+    /// Taps are appended last, so we walk the buffer list from the end and
+    /// collect exactly `tapChannels` channels' worth of buffers — that's the
+    /// tap, regardless of what the interface prepended — then average them.
+    /// Each `AudioBuffer` may itself be interleaved (`mNumberChannels > 1`) or a
+    /// single channel; we handle both. Float32 is assumed (tap + file are both
+    /// Float32). Returns `nil` on an empty / zero-frame cycle so it's dropped.
+    private nonisolated static func extractTapMono(
         bufferList: UnsafePointer<AudioBufferList>,
-        streamDescription: AudioStreamBasicDescription?
-    ) -> ([Float], AVAudioFormat)? {
-        guard let asbd = streamDescription else { return nil }
-        let sampleRate = asbd.mSampleRate
-        let channels = Int(asbd.mChannelsPerFrame)
-        guard channels > 0, sampleRate > 0 else { return nil }
-
-        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        guard isFloat else { return nil }
-        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
-
+        tapChannels: Int
+    ) -> [Float]? {
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
-        guard !abl.isEmpty else { return nil }
+        guard !abl.isEmpty, tapChannels > 0 else { return nil }
 
-        let frameCount: Int
-        if isNonInterleaved {
-            // One buffer per channel; each buffer holds `frameCount` Float32s.
-            frameCount = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size
-        } else {
-            // Single interleaved buffer of `frameCount * channels` Float32s.
-            frameCount = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size / channels
+        // Gather trailing buffers until we've covered the tap's channel count.
+        var tapBuffers: [AudioBuffer] = []
+        var gathered = 0
+        var i = abl.count - 1
+        while i >= 0 && gathered < tapChannels {
+            let b = abl[i]
+            tapBuffers.append(b)
+            gathered += max(1, Int(b.mNumberChannels))
+            i -= 1
         }
+        tapBuffers.reverse()
+        guard let first = tapBuffers.first else { return nil }
+
+        // Frame count comes from the first tap buffer (all tap buffers in a
+        // cycle share the same frame count).
+        let firstChannels = max(1, Int(first.mNumberChannels))
+        let frameCount = Int(first.mDataByteSize) / MemoryLayout<Float>.size / firstChannels
         guard frameCount > 0 else { return nil }
 
         var mono = [Float](repeating: 0, count: frameCount)
-        let invChannels = 1 / Float(channels)
-
-        if isNonInterleaved {
-            // Each AudioBuffer is one channel.
-            mono.withUnsafeMutableBufferPointer { dst in
-                let base = dst.baseAddress!
-                if channels == 1, let raw = abl[0].mData {
-                    let src = raw.assumingMemoryBound(to: Float.self)
-                    memcpy(base, src, frameCount * MemoryLayout<Float>.size)
-                    return
-                }
-                for c in 0..<channels {
-                    guard c < abl.count, let raw = abl[c].mData else { continue }
-                    let src = raw.assumingMemoryBound(to: Float.self)
-                    for f in 0..<frameCount {
-                        let s = src[f] * invChannels
-                        if c == 0 { base[f] = s } else { base[f] += s }
+        var contributingChannels = 0
+        mono.withUnsafeMutableBufferPointer { dst in
+            let base = dst.baseAddress!
+            for b in tapBuffers {
+                guard let raw = b.mData else { continue }
+                let ch = max(1, Int(b.mNumberChannels))
+                let bufFrames = Int(b.mDataByteSize) / MemoryLayout<Float>.size / ch
+                let n = min(frameCount, bufFrames)
+                guard n > 0 else { continue }
+                let src = raw.assumingMemoryBound(to: Float.self)
+                if ch == 1 {
+                    for f in 0..<n { base[f] += src[f] }
+                } else {
+                    for f in 0..<n {
+                        let start = f * ch
+                        for c in 0..<ch { base[f] += src[start + c] }
                     }
                 }
+                contributingChannels += ch
             }
-        } else {
-            guard let raw = abl[0].mData else { return nil }
-            let src = raw.assumingMemoryBound(to: Float.self)
-            mono.withUnsafeMutableBufferPointer { dst in
-                let base = dst.baseAddress!
-                if channels == 1 {
-                    memcpy(base, src, frameCount * MemoryLayout<Float>.size)
-                    return
-                }
-                for f in 0..<frameCount {
-                    var sum: Float = 0
-                    let frameStart = f * channels
-                    for c in 0..<channels { sum += src[frameStart + c] }
-                    base[f] = sum * invChannels
-                }
+            if contributingChannels > 1 {
+                let inv = 1 / Float(contributingChannels)
+                for f in 0..<frameCount { base[f] *= inv }
             }
         }
-
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: 1,
-            interleaved: false
-        ) else { return nil }
-        return (mono, format)
+        return mono
     }
 
     private nonisolated static func rms(samples: [Float]) -> Float {
@@ -716,6 +750,23 @@ final class MeetingAudioRecorder {
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't read default system output device (OSStatus \(err))"])
         }
         return value
+    }
+
+    /// Read a device's current nominal sample rate. Used on the aggregate
+    /// after start to learn the real rate buffers arrive at (it inherits the
+    /// default output device's clock). Returns nil on failure / 0 so the
+    /// caller can fall back to the tap's advertised rate.
+    private static func readNominalSampleRate(deviceID: AudioObjectID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let err = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
+        guard err == noErr, rate > 0 else { return nil }
+        return rate
     }
 
     private static func readDeviceUID(deviceID: AudioDeviceID) throws -> String {

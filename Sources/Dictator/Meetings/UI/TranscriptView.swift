@@ -220,9 +220,12 @@ private struct PlaybackBar: View {
             Slider(
                 value: Binding(
                     get: { player.currentTime },
-                    set: { player.seek(to: $0) }
+                    set: { player.scrub(to: $0) }
                 ),
-                in: 0...max(0.001, player.duration)
+                in: 0...max(0.001, player.duration),
+                onEditingChanged: { editing in
+                    if editing { player.beginScrub() } else { player.endScrub() }
+                }
             )
 
             Text(Self.format(player.duration))
