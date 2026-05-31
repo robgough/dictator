@@ -7,7 +7,21 @@ import SwiftUI
 /// to the controller, which knows how to launch the host app and
 /// later consume the result via `KeyboardBridge`.
 final class KeyboardViewController: UIInputViewController {
-    private var hostingController: UIHostingController<KeyboardRootView>?
+    private var hostingController: UIHostingController<AnyView>?
+    /// Last-applied Full Access state. Drives a rebuild + height change when
+    /// the user toggles "Allow Full Access" in Settings and returns. `nil`
+    /// until the first `viewWillAppear`, so the first appearance always
+    /// applies the correct layout. Without Full Access we show a basic typing
+    /// keyboard (`KeyboardTypingView`); with it, the dictation pad
+    /// (`KeyboardRootView`). Dictation can't work without Full Access (no mic,
+    /// no host handoff), so the typing fallback is what keeps the extension
+    /// useful — and satisfies App Review guideline 4.4.1.
+    private var lastHadFullAccess: Bool?
+    /// Explicit height constraint, active only in typing mode — the QWERTY
+    /// layout is taller than iOS' default keyboard height, which would clip
+    /// the bottom row otherwise. The dictation pad fits the default height, so
+    /// we leave it unconstrained there.
+    private var keyboardHeightConstraint: NSLayoutConstraint?
     /// The most recent text the keyboard has fed into the field via
     /// `insertText`. Undo button delete-backwards by this many
     /// characters and clears the slot. Persists across re-renders
@@ -116,10 +130,30 @@ final class KeyboardViewController: UIInputViewController {
         // — the heartbeat is what keeps this check accurate beyond
         // the 60s freshness window when the user is sitting in
         // Dictator without backgrounding.
-        if KeyboardBridge.isHostActive() {
+        let fullAccess = hasFullAccess
+
+        // The host-active bounce and the dictation state machinery only make
+        // sense with Full Access — without it the App Group and clipboard are
+        // unreadable anyway.
+        if fullAccess, KeyboardBridge.isHostActive() {
             advanceToNextInputMode()
             return
         }
+
+        // Rebuild + resize when Full Access flips (the user can toggle it in
+        // Settings and come back), and on the first appearance.
+        if lastHadFullAccess != fullAccess {
+            lastHadFullAccess = fullAccess
+            applyKeyboardHeight(typing: !fullAccess)
+            refreshRootView()
+        }
+
+        guard fullAccess else {
+            // Typing fallback is pure document-proxy — no polling needed.
+            stopStatePolling()
+            return
+        }
+
         // Re-check on every appearance so toggling Apple Intelligence
         // in iOS Settings updates the keyboard layout — the user goes
         // to Settings, flips it, switches back to their app, and the
@@ -401,7 +435,14 @@ final class KeyboardViewController: UIInputViewController {
         hostingController?.rootView = makeRootView()
     }
 
-    private func makeRootView() -> KeyboardRootView {
+    /// The keyboard's content depends on Full Access: the dictation pad needs
+    /// the App Group + clipboard (both Full-Access-only), so without it we fall
+    /// back to a basic typing keyboard that drives only the text document proxy.
+    private func makeRootView() -> AnyView {
+        hasFullAccess ? AnyView(makeDictationView()) : AnyView(makeTypingView())
+    }
+
+    private func makeDictationView() -> KeyboardRootView {
         KeyboardRootView(
             onMicPress: { [weak self] in self?.launchHost(mode: .record) },
             onAssistPress: { [weak self] in self?.launchHost(mode: .assist) },
@@ -417,6 +458,32 @@ final class KeyboardViewController: UIInputViewController {
             pastePreview: pastePreview,
             onPaste: { [weak self] in self?.pasteFromClipboard() }
         )
+    }
+
+    private func makeTypingView() -> KeyboardTypingView {
+        KeyboardTypingView(
+            onInsert: { [weak self] text in self?.textDocumentProxy.insertText(text) },
+            onDeletePress: { [weak self] in self?.startBackspaceHold() },
+            onDeleteRelease: { [weak self] in self?.endBackspaceHold() },
+            onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
+            onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() },
+            showsNextKeyboard: needsInputModeSwitchKey
+        )
+    }
+
+    /// In typing mode the QWERTY layout is taller than iOS' default keyboard
+    /// height; pin an explicit height so the bottom row isn't clipped. The
+    /// dictation pad fits the default height, so we leave it unconstrained.
+    /// Priority just below required so we never fight the system's own
+    /// input-view constraints.
+    private func applyKeyboardHeight(typing: Bool) {
+        keyboardHeightConstraint?.isActive = false
+        keyboardHeightConstraint = nil
+        guard typing else { return }
+        let constraint = view.heightAnchor.constraint(equalToConstant: 250)
+        constraint.priority = UILayoutPriority(999)
+        constraint.isActive = true
+        keyboardHeightConstraint = constraint
     }
 
     // MARK: - Backspace hold-to-repeat

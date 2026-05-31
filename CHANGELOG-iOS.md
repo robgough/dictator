@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The Dictator keyboard now works as a basic typing keyboard (letters, numbers, and symbols) even when you haven't given it Full Access — instead of showing buttons that can't do anything without it. A slim banner reminds you to turn on Full Access in Settings for dictation, since the keyboard can't reach the microphone on its own. With Full Access on, the Dictate/Assist keyboard is unchanged.
 - If you've turned down microphone access, the reminder screen now has an Open Settings button that jumps straight to Dictator's settings, with clearer wording.
 - Dictation now records only while Dictator is open. If you switch to another app or lock your phone mid-recording, Dictator finishes transcribing what you've said so far and copies it to the clipboard, ready to paste, instead of the recording carrying on invisibly in the background.
 - Dictate and Assist on the main screen now do two things: tap them to toggle recording on, tap them again to stop, OR hold them down for push-to-talk — release stops the recording. Anything shorter than ~0.35 seconds reads as a tap; anything longer reads as a hold. Lets you choose whichever feels right for the moment without changing a setting.
