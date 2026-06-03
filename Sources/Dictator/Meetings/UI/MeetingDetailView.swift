@@ -8,6 +8,7 @@ struct MeetingDetailView: View {
     @Bindable var session: MeetingSession
     @State private var titleDraft: String = ""
     @State private var transcriptCache: MeetingTranscript?
+    @State private var titleHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,10 +17,20 @@ struct MeetingDetailView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 12)
             Divider()
-            ScrollView {
+            // The live-recording view is a fill-the-height two-column layout
+            // (notes on the left, controls + transcript on the right) with its
+            // own internal scrolling, so it bypasses the outer ScrollView the
+            // processing / ready states use.
+            if session.state.isLive {
                 content
                     .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ScrollView {
+                    content
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             }
         }
         .onAppear {
@@ -49,6 +60,15 @@ struct MeetingDetailView: View {
                 })
                 .textFieldStyle(.plain)
                 .font(.title3.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(titleHovered ? Color.secondary.opacity(0.12) : .clear)
+                )
+                .onHover { titleHovered = $0 }
+                .help("Click to rename this meeting.")
+                .padding(.horizontal, -6)
                 Text(headerSubtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -60,10 +80,18 @@ struct MeetingDetailView: View {
 
     private var headerSubtitle: String {
         let date = Self.dateFormatter.string(from: session.meta.createdAt)
+        var parts = [date]
         if session.meta.durationSeconds > 0 {
-            return "\(date) · \(Self.formatDuration(session.meta.durationSeconds))"
+            parts.append(Self.formatDuration(session.meta.durationSeconds))
         }
-        return date
+        // Acknowledge a system-only capture (you listened, didn't speak) so the
+        // absence of a "Me" speaker reads as intentional, not broken.
+        if !session.state.isLive,
+           session.meta.source == .live,
+           session.meta.audioFiles.mic == nil {
+            parts.append("Listen-only")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var statePill: some View {
@@ -94,7 +122,7 @@ struct MeetingDetailView: View {
             case .merging:
                 ProcessingPill(text: "Writing transcript…", color: .blue)
             case .summarising:
-                ProcessingPill(text: "Summarising…", color: .purple)
+                ProcessingPill(text: "Writing notes…", color: .purple)
             case .failed:
                 ProcessingPill(text: "Failed", color: .red)
             }
@@ -113,9 +141,9 @@ struct MeetingDetailView: View {
             ProcessingPane(session: session)
         case .summarising:
             // The transcript is already on disk by the time we're
-            // summarising — keep it visible so the user can read while
-            // the LLM works. The SummaryPanel inside TranscriptView
-            // renders its own "Summarising…" placeholder.
+            // writing notes — keep it visible so the user can read while
+            // the LLM works. The NotesPanel inside TranscriptView
+            // renders its own "Writing notes…" placeholder.
             TranscriptView(meta: session.meta, transcript: transcriptCache, session: session)
         case .captured:
             VStack(spacing: 12) {
@@ -202,22 +230,109 @@ private struct ProcessingPill: View {
     }
 }
 
-/// Live-recording body: timer + two stacked level meters + stop button.
+/// Live-recording body. Two columns: the notes the meeting is producing on the
+/// left (the star of the show), and the recording controls + live transcript
+/// stacked on the right. The notes are shown in a read-only text field so
+/// they're easy to select and copy and read like a notes app.
 struct LiveRecordingView: View {
     @Environment(AppState.self) private var state
     @Bindable var session: MeetingSession
     let isWarming: Bool
 
     var body: some View {
-        VStack(spacing: 20) {
-            timerView
+        HStack(alignment: .top, spacing: 16) {
+            notesColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            controlsColumn
+                .frame(width: 300)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: - Notes column (left, emphasised)
+
+    private var notesColumn: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.purple)
+                Text("Quick notes")
+                    .font(.headline)
+                Spacer()
+                if let notes = session.notesAccumulator?.liveNotes, !notes.isEmpty {
+                    CopyButton(text: notes, label: "Copy")
+                }
+            }
+            if let acc = session.notesAccumulator {
+                NotesStatusLine(accumulator: acc)
+            }
+            notesField
+        }
+    }
+
+    @ViewBuilder
+    private var notesField: some View {
+        if let accumulator = session.notesAccumulator {
+            LiveNotesField(accumulator: accumulator)
+        } else {
+            Text(notesDisabledMessage)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+        }
+    }
+
+    private var notesDisabledMessage: String {
+        if state.settings.activeLLMEngine() == nil {
+            return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
+        }
+        return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
+    }
+
+    // MARK: - Controls column (right, de-emphasised)
+
+    private var controlsColumn: some View {
+        VStack(spacing: 14) {
+            // Status band — timer + honest meters + capture confidence.
+            VStack(spacing: 12) {
+                timerView
+                if isWarming {
+                    Label("Connecting microphone and call audio…", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    LabeledWaveform(label: "You", level: levels.mic, tint: .accentColor, heard: session.micHeard)
+                    LabeledWaveform(
+                        label: "Other side",
+                        level: levels.system,
+                        tint: .indigo,
+                        heard: session.systemHeard,
+                        waitingHint: systemWaitingHint
+                    )
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
 
             // Capture warnings (mic and / or system) — surfaced when a
-            // recorder fails to deliver buffers within its bring-up
-            // watchdog window. Sits above the meters so the user
-            // notices it instead of staring at a flat bar. Dismissible
-            // per source; the dismissal is UI-only and resets next
-            // recording.
+            // recorder fails to deliver buffers within its bring-up watchdog
+            // window. Dismissible per source; UI-only, resets next recording.
             if !session.captureWarnings.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(session.captureWarnings) { warning in
@@ -228,44 +343,84 @@ struct LiveRecordingView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 16) {
-                LabeledWaveform(label: "Mic (Me)", level: levels.mic, tint: .accentColor)
-                LabeledWaveform(label: "System (Other)", level: levels.system, tint: .indigo)
-            }
-            .padding(20)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.secondary.opacity(0.08))
-            )
-
-            // Draft transcript pane. Only present while a live transcriber
-            // exists on the session — the post-capture / processing / ready
-            // states render the canonical transcript via TranscriptView and
-            // never see this pane.
+            // Live transcript — the running draft, given the column's spare
+            // vertical room (it's the live proof of capture).
             if let transcriber = session.liveTranscriber {
-                LiveTranscriptPane(transcriber: transcriber)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Live transcript")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    LiveTranscriptPane(transcriber: transcriber)
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                Spacer(minLength: 0)
             }
 
-            Button(role: .destructive) {
-                Task {
-                    await session.stopRecording(parakeetModelID: state.settings.parakeetModelID)
-                }
-            } label: {
-                Label("Stop recording", systemImage: "stop.circle.fill")
-                    .frame(minWidth: 160)
+            // Footer — configuration + the deliberate end-of-session control.
+            VStack(spacing: 10) {
+                meetingTypeRow
+                stopButton
             }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(isWarming)
         }
-        .frame(maxWidth: 520)
-        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// Soft hint when the remote side has stayed silent a while into the call
+    /// despite the mic being live — usually means call audio isn't routed
+    /// through this Mac for the system tap to capture.
+    private var systemWaitingHint: String? {
+        guard case .recording(let elapsed, _, _) = session.state else { return nil }
+        guard !session.systemHeard, session.micHeard, elapsed > 6 else { return nil }
+        return "Silent so far — is call audio playing through this Mac?"
+    }
+
+    /// Meeting-type picker as a compact chip, settable mid-recording so the
+    /// end-of-meeting notes pass is biased toward the right shape (stand-up,
+    /// retro, 1-on-1, …). Bound straight to the live session's meta; persisted
+    /// when recording stops along with the rest of the meta.
+    private var meetingTypeRow: some View {
+        HStack(spacing: 6) {
+            Text("Notes style")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Notes style", selection: $session.meta.meetingType) {
+                ForEach(MeetingType.allCases, id: \.self) { type in
+                    Text(type.displayName).tag(type)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            Spacer()
+        }
+    }
+
+    private var stopButton: some View {
+        Button(role: .destructive) {
+            performStop()
+        } label: {
+            Label("Stop recording", systemImage: "stop.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .controlSize(.large)
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .disabled(isWarming)
+        // Respond on the FIRST click even when the Meetings window is inactive,
+        // instead of the click just focusing the window and needing a second.
+        .overlay(FirstMouseCatcher(isEnabled: !isWarming, action: performStop))
+    }
+
+    private func performStop() {
+        Task {
+            await session.stopRecording(parakeetModelID: state.settings.parakeetModelID)
+        }
     }
 
     private var timerView: some View {
         Text(timerText)
-            .font(.system(size: 44, weight: .semibold, design: .rounded))
+            .font(.system(size: 30, weight: .semibold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(.primary)
     }
@@ -296,58 +451,203 @@ struct LiveRecordingView: View {
     }
 }
 
-private struct LabeledWaveform: View {
-    let label: String
-    let level: Float
-    let tint: Color
+/// Transparent overlay that makes its host respond to the *first* click even
+/// when the window is inactive — fixing the "click Stop, the app just focuses,
+/// click again" two-step. When enabled it intercepts the click and forwards it
+/// to `action`; when disabled it's hit-transparent so the view beneath behaves
+/// normally.
+private struct FirstMouseCatcher: NSViewRepresentable {
+    var isEnabled: Bool
+    let action: () -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            Waveform(level: level, tint: tint)
+    func makeNSView(context: Context) -> NSView {
+        let v = CatcherView()
+        v.onClick = action
+        v.isEnabledCatch = isEnabled
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let v = nsView as? CatcherView else { return }
+        v.onClick = action
+        v.isEnabledCatch = isEnabled
+    }
+
+    final class CatcherView: NSView {
+        var onClick: (() -> Void)?
+        var isEnabledCatch = true
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            isEnabledCatch ? super.hitTest(point) : nil
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            // Claim the mouse session so we also receive the matching mouseUp.
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard isEnabledCatch else { return }
+            let p = convert(event.locationInWindow, from: nil)
+            if bounds.contains(p) { onClick?() }
         }
     }
 }
 
+private struct LabeledWaveform: View {
+    let label: String
+    let level: Float
+    let tint: Color
+    /// Once this side has delivered real audio, show an affirmative check —
+    /// positive proof the source is being captured.
+    var heard: Bool = false
+    /// Soft hint shown under the meter when this side has stayed silent while
+    /// the other is active (e.g. call audio not routed through this Mac).
+    var waitingHint: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                if heard {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                        .help("Audio is being captured from this source.")
+                }
+                Spacer()
+            }
+            Waveform(level: level, tint: tint, honest: true)
+            if let waitingHint {
+                Text(waitingHint)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .animation(.easeOut(duration: 0.3), value: heard)
+    }
+}
+
+private enum StepStatus { case done, active, pending }
+
 private struct ProcessingPane: View {
     @Bindable var session: MeetingSession
 
+    private static let steps: [(title: String, symbol: String)] = [
+        ("Transcribing what was said", "waveform"),
+        ("Identifying who spoke", "person.2.wave.2"),
+        ("Writing the transcript", "doc.text"),
+        ("Writing your notes", "sparkles"),
+    ]
+
     var body: some View {
-        VStack(spacing: 16) {
-            ProgressView(value: progressValue)
-                .progressViewStyle(.linear)
-                .frame(maxWidth: 480)
-            Text(stageLabel)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headline)
+                    .font(.headline)
+                ProgressView(value: overall)
+                    .progressViewStyle(.linear)
+                    .accessibilityValue("\(Int(overall * 100)) percent")
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(Self.steps.enumerated()), id: \.offset) { idx, step in
+                    StepRow(title: step.title, status: status(for: idx))
+                }
+            }
+
+            // Keep the rough live notes visible while the full pass computes —
+            // never go fully blank, and the handoff to the final notes reads
+            // as a refinement of what the user already watched.
+            if let notes = session.meta.notes, !notes.markdown.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notes so far")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        MarkdownNotesView(markdown: notes.markdown, speakers: session.meta.speakers)
+                            .padding(14)
+                    }
+                    .frame(maxHeight: 280)
+                    .notesSurface()
+                }
+            }
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
-    private var progressValue: Double {
+    private var headline: String {
+        if case .importing(let p) = session.state { return "Importing audio · \(Int(p * 100))%" }
+        return "Processing your meeting…"
+    }
+
+    private var activeIndex: Int {
         switch session.state {
-        case .importing(let p), .loadingASR(let p), .transcribingMic(let p),
-             .transcribingSystem(let p), .loadingDiarizer(let p), .diarizing(let p):
-            return p
-        case .merging: return 0.95
+        case .importing, .loadingASR, .transcribingMic, .transcribingSystem: return 0
+        case .loadingDiarizer, .diarizing: return 1
+        case .merging: return 2
+        case .summarising: return 3
         default: return 0
         }
     }
 
-    private var stageLabel: String {
+    private var fraction: Double {
         switch session.state {
-        case .importing(let p): return "Importing audio (\(Int(p * 100))%)…"
-        case .loadingASR: return "Loading transcription model…"
-        case .transcribingMic: return "Transcribing your microphone track…"
-        case .transcribingSystem: return "Transcribing the system audio track…"
-        case .loadingDiarizer: return "Loading speaker-identification model…"
-        case .diarizing: return "Identifying who spoke when…"
-        case .merging: return "Writing the transcript…"
-        default: return ""
+        case .importing(let p), .loadingASR(let p), .transcribingMic(let p),
+             .transcribingSystem(let p), .loadingDiarizer(let p), .diarizing(let p):
+            return p
+        case .merging: return 0.6
+        case .summarising: return 0.5
+        default: return 0
         }
+    }
+
+    /// One monotonic 0…1 across all steps, so the bar climbs steadily instead
+    /// of snapping back to zero at every stage boundary.
+    private var overall: Double {
+        (Double(activeIndex) + min(1, max(0, fraction))) / Double(Self.steps.count)
+    }
+
+    private func status(for idx: Int) -> StepStatus {
+        if idx < activeIndex { return .done }
+        if idx == activeIndex { return .active }
+        return .pending
+    }
+}
+
+private struct StepRow: View {
+    let title: String
+    let status: StepStatus
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                switch status {
+                case .done:
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                case .active:
+                    ProgressView().controlSize(.small)
+                case .pending:
+                    Image(systemName: "circle").foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 18, height: 18)
+            Text(title)
+                .font(.callout)
+                .fontWeight(status == .active ? .semibold : .regular)
+                .foregroundStyle(status == .pending ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -395,6 +695,189 @@ private struct CaptureWarningBanner: View {
 /// post-capture processor finishes. No speaker attribution in this view —
 /// that's the post-pass's job. Empty state shows a "Listening…" placeholder
 /// so the user can see the pane wired up even before the first chunk lands.
+/// One-line status under the live "Notes" header: a calm "Updating…" pulse
+/// while a pass runs, otherwise a stat that visibly climbs ("3 topics · 8
+/// points · updated 12s ago"). The relative time re-renders each second via a
+/// TimelineView so the cadence is always legible between passes.
+private struct NotesStatusLine: View {
+    @Bindable var accumulator: MeetingNotesAccumulator
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 6) {
+                if accumulator.isThinking {
+                    PulsingDot()
+                    Text("Updating notes…")
+                } else {
+                    Text(statText(now: context.date))
+                }
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(height: 14)
+    }
+
+    private func statText(now: Date) -> String {
+        let topics = accumulator.topicCount
+        let points = accumulator.pointCount
+        guard points > 0 else { return "Listening for the first points…" }
+        var parts: [String] = []
+        if topics > 0 { parts.append("\(topics) topic\(topics == 1 ? "" : "s")") }
+        parts.append("\(points) point\(points == 1 ? "" : "s")")
+        if let last = accumulator.lastUpdateAt {
+            parts.append("updated \(Self.relative(now.timeIntervalSince(last)))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func relative(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds))
+        if s < 3 { return "just now" }
+        if s < 60 { return "\(s)s ago" }
+        return "\(s / 60)m ago"
+    }
+}
+
+/// A slow-pulsing dot — a calmer "working" affordance than a spinner.
+private struct PulsingDot: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .fill(Color.purple)
+            .frame(width: 6, height: 6)
+            .opacity(on ? 1 : 0.3)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: on)
+            .onAppear { on = true }
+    }
+}
+
+/// The live first-pass notes shown during recording. Streams the structured
+/// outline — new bullets animate in under their topic and briefly highlight —
+/// rather than re-rendering the whole document each pass. Auto-scrolls to the
+/// bottom only when the reader is already there; otherwise a "New notes" pill
+/// appears. Read-only but selectable, so it's easy to copy straight out.
+private struct LiveNotesField: View {
+    @Bindable var accumulator: MeetingNotesAccumulator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pinnedToBottom = true
+    @State private var showJumpPill = false
+    private static let bottomAnchor = "live-notes-bottom"
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    Group {
+                        if accumulator.outline.isEmpty {
+                            Text("Notes will appear here as the meeting gets going…")
+                                .italic()
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            LiveOutlineView(
+                                outline: accumulator.outline,
+                                freshIDs: accumulator.freshBulletIDs,
+                                reduceMotion: reduceMotion
+                            )
+                        }
+                        Color.clear.frame(height: 1).id(Self.bottomAnchor)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 28
+                } action: { _, nearBottom in
+                    pinnedToBottom = nearBottom
+                    if nearBottom { showJumpPill = false }
+                }
+                .onChange(of: accumulator.outline) { _, _ in
+                    if pinnedToBottom {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                        }
+                    } else {
+                        showJumpPill = true
+                    }
+                }
+
+                if showJumpPill {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                        }
+                        showJumpPill = false
+                    } label: {
+                        Label("New notes", systemImage: "arrow.down")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.thinMaterial))
+                            .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.2)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .notesSurface()
+    }
+}
+
+/// Renders the accumulator's structured outline with per-bullet identity, so
+/// SwiftUI keeps unchanged rows in place and only animates genuinely new ones
+/// (and washes them with a brief highlight). Motion is gated on reduce-motion.
+private struct LiveOutlineView: View {
+    let outline: [MeetingNotesAccumulator.NoteGroup]
+    let freshIDs: Set<String>
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(outline) { group in
+                VStack(alignment: .leading, spacing: 6) {
+                    if !group.heading.isEmpty {
+                        inlineMarkdownText(group.heading).font(.headline)
+                    } else if !group.bullets.isEmpty {
+                        Text("General")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(group.bullets) { bullet in
+                        bulletRow(bullet)
+                            .transition(reduceMotion
+                                ? .opacity
+                                : .opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: outline)
+        .animation(.easeInOut(duration: 0.8), value: freshIDs)
+    }
+
+    private func bulletRow(_ bullet: MeetingNotesAccumulator.NoteBullet) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(bullet.indent > 0 ? "◦" : "•").foregroundStyle(.secondary)
+            inlineMarkdownText(bullet.text).font(.callout)
+        }
+        .padding(.leading, CGFloat(bullet.indent) * 18)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 1)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(freshIDs.contains(bullet.id) ? Color.accentColor.opacity(0.14) : .clear)
+        )
+    }
+}
+
 private struct LiveTranscriptPane: View {
     @Bindable var transcriber: MeetingLiveTranscriber
 
@@ -423,7 +906,7 @@ private struct LiveTranscriptPane: View {
                 }
                 .padding(14)
             }
-            .frame(maxHeight: 240)
+            .frame(maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.secondary.opacity(0.08))

@@ -207,22 +207,6 @@ final class MeetingProcessor {
             systemWords = [SpeakerAttributedWord(start: 0, end: systemDuration, text: systemFallbackText, speakerId: "other")]
         }
 
-        // Decide the final speaker ID list in encounter order across both
-        // tracks. If diarization didn't run for one (or both) tracks we fall
-        // back to the v0.2 shape: mic → "me", system → "other".
-        let usedSpeakerIDs = Self.discoveredSpeakerIDsInOrder(
-            micWords: micWords,
-            systemWords: systemWords
-        )
-
-        // Post-merge diagnostic — corresponds to the "merged final speaker
-        // count" line the task spec calls out as a useful single-meeting
-        // health check. Logs alongside the per-track lines DiarizerService
-        // already emits.
-        let micUniqueCount = micDiar?.clusterCentroids.count ?? 0
-        let systemUniqueCount = systemDiar?.clusterCentroids.count ?? 0
-        NSLog("[Dictator] Diarizer[merged]: micClusters=\(micUniqueCount) systemClusters=\(systemUniqueCount) finalSpeakers=\(usedSpeakerIDs.count) ids=\(usedSpeakerIDs.joined(separator: ","))")
-
         onProgress(.writingTranscript, 0)
 
         // Belt-and-braces ASR-side dedup. When the user isn't wearing
@@ -237,10 +221,37 @@ final class MeetingProcessor {
             NSLog("[Dictator] Mic-echo dedup: kept \(micWords.count) of \(originalCount) mic words (dropped \(dropped))")
         }
 
+        // Decide the final speaker ID list in encounter order across both
+        // tracks, AFTER echo-dedup — so a mic track that was entirely speaker
+        // bleed (every "me" word dropped as an echo of the remote side) doesn't
+        // seed a phantom "Me" speaker on a meeting where you only listened. If
+        // diarization didn't run for a track we'd already have fallen back to
+        // mic → "me", system → "other" above; those survive here only if they
+        // actually produced words.
+        let usedSpeakerIDs = Self.discoveredSpeakerIDsInOrder(
+            micWords: micWords,
+            systemWords: systemWords
+        )
+        let micUniqueCount = micDiar?.clusterCentroids.count ?? 0
+        let systemUniqueCount = systemDiar?.clusterCentroids.count ?? 0
+        NSLog("[Dictator] Diarizer[merged]: micClusters=\(micUniqueCount) systemClusters=\(systemUniqueCount) finalSpeakers=\(usedSpeakerIDs.count) ids=\(usedSpeakerIDs.joined(separator: ","))")
+
         // Merge mic + system words by start time, then split into per-speaker
         // segments wherever the speaker changes or a long gap (≥700ms) opens.
         let allWords = (micWords + systemWords).sorted { $0.start < $1.start }
-        let segments = Self.buildSegments(from: allWords)
+        var segments = Self.buildSegments(from: allWords)
+        // Deterministic vocabulary pass — the same user dictionary dictation
+        // uses (names, jargon, preferred spellings), applied whole-word to each
+        // segment so the transcript AND the notes (built from it) pick up the
+        // corrections. No-op when the dictionary is empty.
+        let vocab = VocabularyStore.shared.entries
+        if !vocab.isEmpty {
+            segments = segments.map { seg in
+                var s = seg
+                s.text = Vocabulary.apply(vocab, to: seg.text)
+                return s
+            }
+        }
         let transcript = MeetingTranscript(segments: segments)
         try MeetingStorage.writeTranscript(transcript, for: session.id)
 

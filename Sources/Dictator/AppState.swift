@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import Observation
 import SwiftUI
+import KeyboardShortcuts
 
 @MainActor
 @Observable
@@ -32,6 +33,72 @@ final class AppState {
     /// sets it *then* opens the window, so by the time the Meetings view
     /// renders it can observe the request and consume it in one place.
     var pendingMeetingRecording: Bool = false
+
+    /// When a meeting is actively recording, the moment it started — mirrored
+    /// from the live `MeetingSession` so the always-visible menu-bar icon can
+    /// show a recording indicator even when the Meetings window is closed or
+    /// backgrounded. nil when no meeting is recording.
+    var meetingRecordingStartedAt: Date?
+    var isRecordingMeeting: Bool { meetingRecordingStartedAt != nil }
+
+    /// True while the Meetings window is the key window. Set by
+    /// `MeetingsRootView` from its `controlActiveState`. Drives both the
+    /// assistant-hotkey routing (below) and the "Hold ⌘⌥A to ask" affordance
+    /// on the notes view, which only makes sense when the window is focused.
+    var meetingsWindowIsKey: Bool = false
+
+    /// The assistant controller for the meeting currently shown in the detail
+    /// pane, registered by the notes view while it's on screen. Lets the
+    /// assistant hotkey operate on the meeting's notes instead of the global
+    /// selection when the Meetings window is focused. Weak + observation-
+    /// ignored: it's a routing target, never rendered from here.
+    @ObservationIgnored weak var meetingAssistant: MeetingAssistantController?
+    /// Remembers which path the in-flight assistant press took, so the matching
+    /// release goes to the same place even with tap-to-toggle (where the start
+    /// and stop are seconds and a focus-change apart).
+    @ObservationIgnored private weak var inFlightMeetingAssistant: MeetingAssistantController?
+
+    /// The meeting assistant the hotkey should drive right now — only when the
+    /// Meetings window is key and it actually has notes to act on. Otherwise
+    /// nil, so the hotkey falls through to the normal selection-based assistant.
+    /// Human-readable form of the assistant hotkey, for on-screen hints like
+    /// "Hold ⌘⌥A to ask". Uses the live keyboard-combo when that mode is set,
+    /// otherwise the modifier-key label.
+    var assistantHotkeyDisplay: String {
+        if settings.assistantTriggerMode == .keyboardShortcut {
+            let s = KeyboardShortcuts.getShortcut(for: .toggleAssistant)?
+                .description.trimmingCharacters(in: .whitespaces)
+            return (s?.isEmpty == false) ? s! : "⌘⌥A"
+        }
+        return settings.assistantTriggerMode.label
+    }
+
+    private func routableMeetingAssistant() -> MeetingAssistantController? {
+        guard meetingsWindowIsKey, let controller = meetingAssistant, controller.canRun else { return nil }
+        return controller
+    }
+
+    /// Assistant-hotkey press. Routes to the focused meeting's notes assistant
+    /// when one is available, else the global Assistant Mode flow.
+    private func assistantPress() {
+        if let controller = routableMeetingAssistant() {
+            inFlightMeetingAssistant = controller
+            controller.beginListening()
+        } else {
+            inFlightMeetingAssistant = nil
+            pipeline.startAssistant()
+        }
+    }
+
+    /// Assistant-hotkey release. Mirrors whatever `assistantPress` routed to.
+    private func assistantRelease() {
+        if let controller = inFlightMeetingAssistant {
+            inFlightMeetingAssistant = nil
+            controller.endListeningAndRun()
+        } else {
+            pipeline.finishAssistant()
+        }
+    }
 
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
@@ -65,6 +132,16 @@ final class AppState {
         SyncedStorage.migrateFromAppSupport(filename: "history.json")
         SyncedStorage.migrateFromAppSupport(filename: "conversations.json")
         SyncedStorage.cleanupLegacyBackups()
+
+        // Meeting notes + transcripts live in the synced folder so a meeting
+        // recorded on one Mac can be read on another; the large audio tracks
+        // stay per-Mac in Application Support. Point MeetingStorage at the
+        // synced folder, then reconcile on-disk meetings to that split (pulling
+        // any audio that an earlier build synced back out to local). Must run
+        // before MeetingsStore.shared is first referenced so its initial scan
+        // reads the synced location.
+        MeetingStorage.syncedBaseURL = SyncedStorage.directory
+        MeetingStorage.migrateToSplitStorage()
 
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy
@@ -109,12 +186,14 @@ final class AppState {
         dictationHotkey.bind(
             mode: settings.triggerMode,
             onPress: { [weak self] in self?.pipeline.startRecording() },
-            onRelease: { [weak self] in self?.pipeline.finishRecording() }
+            onRelease: { [weak self] in self?.pipeline.finishRecording() },
+            tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
         assistantHotkey.bind(
             mode: settings.assistantTriggerMode,
-            onPress: { [weak self] in self?.pipeline.startAssistant() },
-            onRelease: { [weak self] in self?.pipeline.finishAssistant() }
+            onPress: { [weak self] in self?.assistantPress() },
+            onRelease: { [weak self] in self?.assistantRelease() },
+            tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
         if settings.preloadModelsOnLaunch {
             preloadModels()
@@ -177,6 +256,11 @@ final class AppState {
         pipeline.settingsChanged(settings)
         dictationHotkey.setMode(settings.triggerMode)
         assistantHotkey.setMode(settings.assistantTriggerMode)
+        // Keep meetings pointed at the (possibly just-changed) synced folder so
+        // new recordings land there. Existing meetings aren't auto-moved on a
+        // folder change — only the initial Application Support migration moves
+        // them — so a relocate leaves prior meetings where they were.
+        MeetingStorage.syncedBaseURL = SyncedStorage.directory
     }
 
     /// Used by the Settings UI's "Reset" button next to the keyboard-shortcut recorder.

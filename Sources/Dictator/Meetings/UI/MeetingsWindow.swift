@@ -19,9 +19,11 @@ private final class SessionCache {
 /// live recording, a processing run, or a finished transcript.
 struct MeetingsRootView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.controlActiveState) private var controlActiveState
     @State private var store = MeetingsStore.shared
     @State private var selectedID: UUID?
     @State private var liveSession: MeetingSession?
+    @State private var searchText = ""
     /// One session per opened meeting, memoised so the detail pane
     /// doesn't rebuild its @Observable owner on every redraw and a
     /// session keeps its in-flight state across selection changes.
@@ -39,10 +41,22 @@ struct MeetingsRootView: View {
     @State private var showingPermissionBanner = false
     @State private var permissionMessage: String?
     @State private var deviceManager = AudioDeviceManager.shared
+    /// Raised when the user tries to record/import but the Parakeet speech
+    /// model isn't on disk. Meetings always transcribe with Parakeet (on the
+    /// ANE, so live notes don't fight the summary LLM for the GPU), so it's a
+    /// hard requirement — we'd rather prompt to download it up front than kick
+    /// off a multi-hundred-MB download in the middle of a live recording.
+    @State private var showingParakeetGate = false
+
+    /// Whether the Parakeet model meetings depend on is downloaded and ready.
+    private var parakeetReady: Bool {
+        ParakeetService.modelsExist(id: state.settings.parakeetModelID)
+    }
 
     var body: some View {
         NavigationSplitView {
             sidebar
+                .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
         } detail: {
             detail
         }
@@ -50,22 +64,47 @@ struct MeetingsRootView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 micPicker
-                Button {
-                    Task { await startRecording() }
-                } label: {
-                    Label("Record", systemImage: "record.circle")
+                if liveSession?.state.isLive == true {
+                    Button(role: .destructive) {
+                        Task {
+                            await liveSession?.stopRecording(parakeetModelID: state.settings.parakeetModelID)
+                        }
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .tint(.red)
+                    .keyboardShortcut("r", modifiers: .command)
+                } else {
+                    Button {
+                        Task { await startRecording() }
+                    } label: {
+                        Label("Record", systemImage: "record.circle")
+                    }
+                    .disabled(liveSession?.state.isProcessing == true)
+                    .keyboardShortcut("r", modifiers: .command)
                 }
-                .disabled(liveSession?.state.isLive == true || liveSession?.state.isProcessing == true)
                 Button {
                     Task { await importFile() }
                 } label: {
                     Label("Import…", systemImage: "square.and.arrow.down")
                 }
+                .disabled(liveSession?.state.isLive == true)
             }
         }
         .onAppear {
             store.refresh()
             consumePendingRecordingRequest()
+            state.meetingsWindowIsKey = (controlActiveState == .key)
+        }
+        .onDisappear { state.meetingsWindowIsKey = false }
+        // Track key-window state so the assistant hotkey routes to the focused
+        // meeting (and the "Hold ⌘⌥A to ask" hint shows) only while this window
+        // is frontmost. Re-scan the synced folder on focus too, so meetings
+        // another Mac recorded show up when you switch back to this one.
+        .onChange(of: controlActiveState) { _, newValue in
+            let becameKey = (newValue == .key)
+            state.meetingsWindowIsKey = becameKey
+            if becameKey { store.refresh() }
         }
         // Catches the case where the Meetings window is *already* open
         // when the user hits "Record meeting" in the menu bar — onAppear
@@ -73,6 +112,28 @@ struct MeetingsRootView: View {
         .onChange(of: state.pendingMeetingRecording) { _, isPending in
             if isPending { consumePendingRecordingRequest() }
         }
+        .alert("Download the Parakeet speech model", isPresented: $showingParakeetGate) {
+            Button("Download") {
+                ModelManager.shared.downloadParakeet(
+                    state.settings.parakeetModelID,
+                    using: ParakeetServiceHolder.shared
+                )
+                state.openSettingsAction?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Meetings transcribe on-device with Parakeet, which isn’t downloaded yet. Download it (about a minute on a fast connection) and you can watch progress in Settings → Models, then start your meeting.")
+        }
+    }
+
+    /// Block a record/import attempt when Parakeet isn't ready, raising the
+    /// download prompt instead. Returns true when it's safe to proceed.
+    private func ensureParakeetReady() -> Bool {
+        guard parakeetReady else {
+            showingParakeetGate = true
+            return false
+        }
+        return true
     }
 
     /// One-shot drain of `AppState.pendingMeetingRecording`. Set by the
@@ -110,9 +171,28 @@ struct MeetingsRootView: View {
         }
     }
 
+    /// Meetings matching the search box — title, notes body, or legacy summary
+    /// narrative. Transcript-text search is deferred (it'd mean loading every
+    /// transcript.json); title + notes covers the common "which meeting was
+    /// that" case from already-loaded metadata.
+    private var filteredMetas: [MeetingMeta] {
+        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return store.metas }
+        return store.metas.filter { m in
+            m.title.lowercased().contains(q)
+                || (m.notes?.markdown.lowercased().contains(q) ?? false)
+                || (m.summary?.narrative.lowercased().contains(q) ?? false)
+        }
+    }
+
     @ViewBuilder
     private var sidebar: some View {
         VStack(spacing: 0) {
+            // Pinned "return to recording" banner while a meeting records and
+            // the user has navigated away to browse another.
+            if let live = liveSession, live.state.isLive, selectedID != live.id {
+                RecordingReturnBanner(session: live) { selectedID = live.id }
+            }
             if store.metas.isEmpty {
                 // SwiftUI renders the empty state in the detail pane; the
                 // sidebar collapses to a hint.
@@ -126,22 +206,33 @@ struct MeetingsRootView: View {
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                MeetingSidebarList(selection: $selectedID, metas: store.metas) { id in
+                MeetingSidebarList(selection: $selectedID, metas: filteredMetas) { id in
                     store.delete(id: id)
                     if selectedID == id { selectedID = nil }
                     sessionCache.byID.removeValue(forKey: id)
                 }
                 .frame(maxHeight: .infinity)
+                .overlay {
+                    if filteredMetas.isEmpty && !searchText.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                    }
+                }
             }
             SidebarDropZone { urls in
                 handleDroppedURLs(urls)
             }
+            SyncExplainerFooter()
         }
     }
 
     @ViewBuilder
     private var detail: some View {
-        if let live = liveSession, live.state.isLive || live.state.isProcessing {
+        // Selecting a different meeting while one records lets you browse it —
+        // the recording keeps running (menu-bar dot + the sidebar "return"
+        // banner). Otherwise the live session owns the detail pane.
+        if let id = selectedID, id != liveSession?.id, let session = session(for: id) {
+            MeetingDetailView(session: session)
+        } else if let live = liveSession, live.state.isLive || live.state.isProcessing {
             MeetingDetailView(session: live)
         } else if let id = selectedID, let session = session(for: id) {
             MeetingDetailView(session: session)
@@ -204,6 +295,10 @@ struct MeetingsRootView: View {
     }
 
     private func startRecording() async {
+        // Parakeet is a hard dependency for meetings — gate before we touch
+        // permissions or the recorder so the user gets the download prompt
+        // rather than a stalled live-notes pane mid-recording.
+        guard ensureParakeetReady() else { return }
         // Probe permission first so the user gets the deep-link banner
         // before we try to bring up the CATap recorder.
         switch await AudioRecordingPermission.probe() {
@@ -222,6 +317,7 @@ struct MeetingsRootView: View {
     }
 
     private func importFile() async {
+        guard ensureParakeetReady() else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -237,6 +333,7 @@ struct MeetingsRootView: View {
     /// load + run the ASR model in parallel across multiple files, and
     /// leaves the last-imported session selected when the batch is done.
     private func importFiles(_ urls: [URL]) async {
+        guard ensureParakeetReady() else { return }
         for url in urls {
             // Build the shell synchronously (fast — just reads file
             // metadata). The session lands in `.importing(0)` so the
@@ -256,6 +353,76 @@ struct MeetingsRootView: View {
             // runImport drives off-main re-encode → .captured → processor.
             await session.runImport(from: url, parakeetModelID: modelID)
         }
+    }
+}
+
+/// Persistent one-line explainer at the foot of the sidebar so the sync model
+/// isn't a surprise: the small text (notes + transcript) travels between your
+/// Macs via the synced Dictator folder; the large audio recordings stay on the
+/// Mac that recorded them. The full story is in the tooltip.
+private struct SyncExplainerFooter: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.caption2)
+            Text("Notes & transcripts sync to your Macs · audio stays local")
+                .font(.caption2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .help("Each meeting's notes and transcript are saved in your synced Dictator folder (Settings → General → Synced folder), so they appear on all your Macs. The audio recordings are large, so they stay on the Mac that recorded them — you'll see the notes and transcript everywhere, with playback on the recording Mac.")
+    }
+}
+
+/// Pinned to the top of the sidebar while a meeting records and the user has
+/// navigated away to browse another — one click returns to the live session.
+/// Reads the session's `.recording` state (which ticks every 250 ms) for the
+/// elapsed time, so it counts up in place.
+private struct RecordingReturnBanner: View {
+    @Bindable var session: MeetingSession
+    let onReturn: () -> Void
+
+    var body: some View {
+        Button(action: onReturn) {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text("Recording")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(elapsedText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.red.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.25))
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .help("Return to the meeting being recorded.")
+    }
+
+    private var elapsedText: String {
+        if case .recording(let elapsed, _, _) = session.state {
+            let t = Int(elapsed.rounded())
+            return t >= 3600
+                ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
+                : String(format: "%d:%02d", (t % 3600) / 60, t % 60)
+        }
+        return "0:00"
     }
 }
 

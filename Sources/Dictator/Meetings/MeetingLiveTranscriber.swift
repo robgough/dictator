@@ -6,10 +6,11 @@ import Observation
 
 /// Drives a live, draft transcript while a meeting is being recorded. Sits
 /// alongside the two recorders (system-audio process tap + mic
-/// AVCaptureSession) and consumes their buffers as they arrive, runs them
-/// through Parakeet in
-/// chunks larger than dictation uses, and exposes a continuously-growing
-/// `interimText` the Meetings detail view reads.
+/// AVCaptureSession) and consumes both their sample streams as they arrive,
+/// runs them through Parakeet in chunks larger than dictation uses, and
+/// exposes a continuously-growing `interimText` the Meetings detail view
+/// reads plus a structured `transcriptLines` the live-notes accumulator
+/// consumes.
 ///
 /// The canonical, diarized transcript is still produced by `MeetingProcessor`
 /// after the user stops the recording — this is purely a "watch the meeting
@@ -17,56 +18,144 @@ import Observation
 /// logged + dropped, the recording keeps running, and the post-pass
 /// transcript is unaffected.
 ///
-/// **Track strategy (v1):** mic-only. The system-audio feed is accepted (so
-/// the wiring is in place for a future upgrade), but the v1 transcriber only
-/// runs ASR on the mic chunks. Two parallel Parakeet runs would either
-/// fight for the ANE or require a second model load — and the live UI has
-/// no speaker attribution anyway, so the value of also streaming the system
-/// track is bounded. The post-pass diarizer still produces both sides of
-/// the conversation in the final transcript.
+/// **Track strategy:** both sides. Mic samples are tagged "Me", system
+/// samples "Them". A single serial Parakeet queue handles both — we never run
+/// two inferences at once, so there's no ANE contention and no second model
+/// load. The labels are coarse (mic-vs-system, not per-person diarization);
+/// the post-pass diarizer still produces the fine-grained speaker split in
+/// the final transcript. Mic windows that are really speaker bleed of the
+/// remote audio (you're only *listening* to remote voices) are dropped rather
+/// than mislabelled as "Me" — the system track already carries that speech.
 ///
-/// **Chunking:** non-overlapping 8-second windows. Each window runs through
-/// the same `ParakeetServiceHolder.shared.transcribe(samples:modelID:)` call
-/// the dictation flow uses — no new public API on `ParakeetService`, no
+/// **Chunking:** non-overlapping 8-second windows per source. Each window runs
+/// through the same `ParakeetServiceHolder.shared.transcribe(samples:modelID:)`
+/// call the dictation flow uses — no new public API on `ParakeetService`, no
 /// separate model load. The shared service is the same one the post-capture
-/// processor will reach for moments later, so the model stays warm across
-/// the boundary instead of being thrashed. Non-overlapping windows mean a
-/// word that straddles the boundary may get cut — we accept that for the
-/// draft view; the post-pass transcript is the authoritative one. The
-/// alternative (overlap with dedup) is brittle for too little gain.
+/// processor will reach for moments later, so the model stays warm across the
+/// boundary instead of being thrashed. Non-overlapping windows mean a word
+/// that straddles the boundary may get cut — we accept that for the draft
+/// view; the post-pass transcript is the authoritative one.
 @MainActor
 @Observable
 final class MeetingLiveTranscriber {
-    /// The growing draft transcript. Each completed chunk appends to this.
+    /// One labelled line of live transcript. `speaker` is the coarse source
+    /// label ("Me" / "Them"); the accumulator feeds these to the LLM.
+    struct LiveLine: Sendable, Equatable {
+        let speaker: String
+        let text: String
+    }
+
+    static let meLabel = "Me"
+    static let themLabel = "Them"
+
+    /// The growing draft transcript, rendered with `Me:` / `Them:` labels.
     /// Observable so the SwiftUI pane re-renders as new text lands.
     private(set) var interimText: String = ""
 
-    /// True while at least one chunk has been kicked off and the transcriber
-    /// hasn't been stopped. Observed by the UI to decide whether to show the
-    /// "Listening…" placeholder vs. the running transcript text.
+    /// Structured form of the same draft — read by `MeetingNotesAccumulator`
+    /// on its own cadence. Not observed (the notes pane renders the LLM output,
+    /// not this), so it doesn't churn the UI.
+    @ObservationIgnored private(set) var transcriptLines: [LiveLine] = []
+
+    /// True while the transcriber is live (between init and `stop()`).
+    /// Observed by the UI to choose the "Listening…" placeholder vs. text.
     private(set) var isRunning: Bool = false
 
     private let parakeetModelID: String
 
-    /// 16 kHz mono samples not yet flushed into a chunk. Mic only — the
-    /// system buffers are accepted by `feedSystemBuffer` but dropped in v1.
+    /// 16 kHz mono samples not yet flushed into a chunk, one buffer per source.
     @ObservationIgnored private var micBuffer: [Float] = []
+    @ObservationIgnored private var systemBuffer: [Float] = []
+
+    /// Trailing audio of the last *committed* utterance per source, prepended
+    /// as context when settling the next.
+    @ObservationIgnored private var micContext: [Float] = []
+    @ObservationIgnored private var systemContext: [Float] = []
+
+    /// Segmented-but-not-yet-committed utterance audio per source. We hold the
+    /// most recent few back and only commit the oldest once enough have piled
+    /// up behind it — re-transcribing it together with the following speech so
+    /// a continued thought isn't punctuated as a finished sentence. Only
+    /// committed lines reach the transcript and the notes.
+    @ObservationIgnored private var pendingMic: [[Float]] = []
+    @ObservationIgnored private var pendingSystem: [[Float]] = []
+
+    /// True while `finishPending()` is draining the held-back utterances on
+    /// stop — suppresses the normal scheduler so it doesn't fight the drain.
+    @ObservationIgnored private var finishing = false
 
     /// Task running the current chunk transcribe, if any. Cancelled on
     /// `stop()` so the in-flight inference doesn't outlive the meeting.
     @ObservationIgnored private var inflightTask: Task<Void, Never>?
 
-    /// True iff we've started transcribing at least one chunk. Lets `stop()`
-    /// distinguish "user never had a hot mic" from "we're between chunks".
-    @ObservationIgnored private var hasStarted: Bool = false
+    /// Label of the last line appended, so consecutive same-source chunks
+    /// merge onto one line instead of restarting the prefix each window.
+    @ObservationIgnored private var lastSpeaker: String?
 
-    /// Target chunk size (samples at 16 kHz). 8 s × 16 kHz = 128 000.
-    private static let chunkSamples: Int = 8 * 16_000
+    // MARK: Voice-activity chunking
+    //
+    // Rather than slice fixed 8 s windows (which cut mid-word and hand Parakeet
+    // half-utterances), we wait for a natural pause and flush one complete
+    // utterance at a time. A complete phrase is what Parakeet transcribes best,
+    // and pause boundaries are also where the live notes most naturally update.
+
+    /// Analysis frame for the energy/VAD scan. 320 samples = 20 ms at 16 kHz.
+    private static let frameSamples = 320
+
+    /// RMS at/above which a frame counts as speech (not silence). Above the
+    /// `silenceRMS` floor so room tone doesn't read as voice.
+    private static let vadRMS: Float = 0.01
+
+    /// A pause this long (in frames) after speech ends an utterance → flush.
+    /// 30 frames ≈ 0.6 s — long enough that a mid-sentence breath (which is
+    /// usually < 0.5 s) doesn't get treated as the end of a thought and
+    /// punctuated like one, while still keeping the transcript responsive.
+    private static let pauseFrames = 30
+
+    /// How much of the previous utterance's audio (per source) to prepend as
+    /// context when transcribing the next one. Giving Parakeet the run-up
+    /// means a continued thought isn't transcribed as a fresh standalone
+    /// sentence; we keep only the newly-spoken words (by timestamp). ~2.5 s.
+    private static let maxContextSamples = Int(2.5 * 16_000)
+
+    /// Keep this much audio before speech onset so we never clip the first
+    /// phoneme, and this much after speech ends so trailing consonants survive.
+    private static let prerollFrames = 8   // ≈ 160 ms
+    private static let tailFrames = 6      // ≈ 120 ms
+
+    /// Force a cut after this long with no pause (someone monologuing) so a
+    /// single long turn still streams instead of buffering forever.
+    private static let maxChunkSamples = 22 * 16_000
+
+    /// Keep this many freshly-segmented utterances pending (uncommitted) per
+    /// source, so each can be re-transcribed with the speech that follows
+    /// before it's committed — fixing fragments that were cut at a mid-thought
+    /// pause and would otherwise read as finished sentences.
+    private static let holdback = 2
+    /// How many following utterances to fold in as context when settling one.
+    private static let lookahead = 1
 
     /// Don't bother running ASR on anything shorter than this; FluidAudio's
     /// AsrManager hard-rejects sub-0.3 s inputs as `.invalidAudioData`. We
     /// pad the floor up to 0.4 s to stay clear of that edge.
     private static let minChunkSamples: Int = Int(0.4 * 16_000)
+
+    /// RMS floor below which a chunk is treated as silence and skipped — saves
+    /// ANE cycles on dead air (especially the system track between remote
+    /// utterances) and avoids Parakeet hallucinating tokens from near-silence.
+    /// ~-48 dBFS; comfortably below conversational speech.
+    private static let silenceRMS: Float = 0.004
+
+    /// Below this concurrent system level the remote side is essentially quiet,
+    /// so a hot mic is the user genuinely speaking — never treated as bleed.
+    private static let bleedSystemFloor: Float = 0.012
+
+    /// A mic window quieter than this fraction of the concurrent system level
+    /// is treated as speaker bleed (and dropped) rather than the user. Bleed
+    /// lands at ~0.1–0.3× the remote audio's direct level; near-field speech
+    /// at ~1× or above — so 0.5× cleanly separates the two without dropping
+    /// the user talking over the call.
+    private static let bleedFraction: Float = 0.5
 
     /// `modelID` is captured here so the transcriber never reaches into
     /// settings — keeps the dependency explicit and matches the way the
@@ -85,93 +174,285 @@ final class MeetingLiveTranscriber {
         guard sampleRate > 0, !mono.isEmpty else { return }
         guard let samples = AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000) else { return }
         Task { @MainActor [weak self] in
-            self?.appendMic(samples: samples)
+            self?.append(samples: samples, to: .mic)
         }
     }
 
-    /// Receive a system-audio sample buffer from `MeetingAudioRecorder`.
-    /// v1 ignores it (mic-only strategy) but the hook is wired so a future
-    /// "live both tracks" upgrade only needs to flip a flag and add the
-    /// chunk dispatch.
-    nonisolated func feedSystemBuffer(_ sampleBuffer: CMSampleBuffer) {
-        _ = sampleBuffer
+    /// Receive mono Float32 system audio (the remote side of the call) from
+    /// `MeetingAudioRecorder`. Already main-actor (the recorder fires
+    /// `onSystemSamples` from its `write`), but we resample off the hot path
+    /// is unnecessary here — the buffers are small. Resample to 16 kHz and
+    /// append to the system buffer.
+    func feedSystemSamples(_ mono: [Float], sampleRate: Double) {
+        guard sampleRate > 0, !mono.isEmpty else { return }
+        guard let samples = AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000) else { return }
+        append(samples: samples, to: .system)
     }
 
-    /// Cleanly stop the live transcriber. Cancels the in-flight chunk task,
-    /// drops the pending buffer, and drops the model reference so a meeting
-    /// that ran for an hour doesn't keep extra state alive. The actual
-    /// Parakeet weights live in `ParakeetServiceHolder.shared` and are
-    /// shared with `MeetingProcessor`, which will start its post-capture
-    /// pass on this same warm model microseconds after this returns — so
-    /// we deliberately *don't* unload the holder here.
+    /// Cleanly stop the live transcriber. Cancels the in-flight chunk task and
+    /// drops the pending buffers. The Parakeet weights live in
+    /// `ParakeetServiceHolder.shared` and are shared with `MeetingProcessor`,
+    /// which starts its post-capture pass on this same warm model microseconds
+    /// after this returns — so we deliberately *don't* unload the holder here.
     func stop() {
         guard isRunning else { return }
         isRunning = false
         inflightTask?.cancel()
         inflightTask = nil
         micBuffer.removeAll(keepingCapacity: false)
+        systemBuffer.removeAll(keepingCapacity: false)
+        micContext.removeAll(keepingCapacity: false)
+        systemContext.removeAll(keepingCapacity: false)
+        pendingMic.removeAll(keepingCapacity: false)
+        pendingSystem.removeAll(keepingCapacity: false)
     }
 
     // MARK: - Main-actor state
 
-    private func appendMic(samples: [Float]) {
+    private enum Source { case mic, system }
+
+    private func append(samples: [Float], to source: Source) {
         guard isRunning, !samples.isEmpty else { return }
-        micBuffer.append(contentsOf: samples)
+        switch source {
+        case .mic:    micBuffer.append(contentsOf: samples)
+        case .system: systemBuffer.append(contentsOf: samples)
+        }
         scheduleChunkIfReady()
     }
 
-    /// If we have enough buffered audio for a chunk AND there's no chunk
-    /// already in flight, slice off the front `chunkSamples` and queue it
-    /// for transcription. Only one chunk at a time — the ANE can run
-    /// Parakeet concurrently in principle, but stacking inferences when a
-    /// long meeting falls behind real time just builds an unbounded queue.
-    /// When we're behind we let the buffer grow, then flush the front 8 s
-    /// as soon as the current transcribe returns; the buffered audio
-    /// eventually drains. Live transcription is best-effort.
+    /// Pull every ready utterance out of the audio buffers and queue it as
+    /// pending, then settle the oldest if enough have piled up behind it. Loops
+    /// so consuming stale silence or a dropped bleed window doesn't stall.
     private func scheduleChunkIfReady() {
         guard isRunning else { return }
-        guard inflightTask == nil else { return }
-        guard micBuffer.count >= Self.chunkSamples else { return }
 
-        let chunk = Array(micBuffer.prefix(Self.chunkSamples))
-        micBuffer.removeFirst(Self.chunkSamples)
+        while true {
+            if let (chunk, consume) = Self.voiceChunk(micBuffer) {
+                micBuffer.removeFirst(consume)
+                if chunk.isEmpty { continue }
+                // Drop mic utterances that are really speaker bleed of the
+                // remote audio (you're only listening) rather than mislabelling
+                // them as "Me" — the system track already carries that speech.
+                if Self.isLikelyBleed(mic: chunk, systemBuffer: systemBuffer) { continue }
+                pendingMic.append(chunk)
+                continue
+            }
+            if let (chunk, consume) = Self.voiceChunk(systemBuffer) {
+                systemBuffer.removeFirst(consume)
+                if chunk.isEmpty { continue }
+                pendingSystem.append(chunk)
+                continue
+            }
+            break
+        }
+        settleIfReady()
+    }
+
+    /// Commit the oldest pending utterance once `holdback` more sit behind it,
+    /// re-transcribing it together with the following audio (and the previous
+    /// committed tail) so its punctuation reflects the continuation rather than
+    /// treating a mid-thought pause as the end of a sentence.
+    private func settleIfReady() {
+        guard isRunning, !finishing, inflightTask == nil else { return }
+
+        let source: Source
+        if pendingMic.count > Self.holdback { source = .mic }
+        else if pendingSystem.count > Self.holdback { source = .system }
+        else { return }
 
         inflightTask = Task { @MainActor [weak self] in
-            await self?.transcribe(chunk: chunk)
+            await self?.settle(source: source)
         }
     }
 
-    private func transcribe(chunk: [Float]) async {
-        defer {
-            // Always clear inflightTask before potentially scheduling the
-            // next chunk so the guard in `scheduleChunkIfReady` lets the
-            // next slice through.
-            inflightTask = nil
-        }
+    private func settle(source: Source) async {
+        defer { inflightTask = nil }
         guard isRunning else { return }
-        guard chunk.count >= Self.minChunkSamples else { return }
-        do {
-            let text = try await ParakeetServiceHolder.shared.transcribe(
-                samples: chunk,
-                modelID: parakeetModelID
-            )
-            guard isRunning, !Task.isCancelled else { return }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                scheduleChunkIfReady()
-                return
-            }
-            if hasStarted, !interimText.isEmpty {
-                interimText.append(" ")
-            }
-            interimText.append(trimmed)
-            hasStarted = true
-        } catch {
-            // Live transcription failures are non-fatal — log and keep
-            // recording. The post-capture transcript is the authoritative
-            // one; this is just a draft.
-            NSLog("[Dictator] Meeting live transcribe chunk failed: \(error)")
+        await settleOne(source: source)
+        if !finishing { scheduleChunkIfReady() }
+    }
+
+    /// Re-transcribe and commit the oldest pending utterance for `source`,
+    /// folding in the previous committed tail and the following utterance so
+    /// its punctuation reflects the surrounding speech.
+    private func settleOne(source: Source) async {
+        let pending = source == .mic ? pendingMic : pendingSystem
+        guard let oldest = pending.first else { return }
+        let following = pending[1...].prefix(Self.lookahead).reduce(into: [Float]()) { $0 += $1 }
+        let prevContext = source == .mic ? micContext : systemContext
+        let speaker = source == .mic ? Self.meLabel : Self.themLabel
+
+        let text = (try? await transcribeSettling(oldest: oldest, following: following, prevContext: prevContext)) ?? ""
+        guard !Task.isCancelled else { return }
+        if source == .mic {
+            if !pendingMic.isEmpty { pendingMic.removeFirst() }
+            micContext = Array(oldest.suffix(Self.maxContextSamples))
+        } else {
+            if !pendingSystem.isEmpty { pendingSystem.removeFirst() }
+            systemContext = Array(oldest.suffix(Self.maxContextSamples))
         }
-        scheduleChunkIfReady()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { appendLine(speaker: speaker, text: trimmed) }
+    }
+
+    /// Settle and commit every held-back utterance, so stopping a recording
+    /// doesn't drop the last couple of phrases from the live transcript and
+    /// quick notes. Call (and await) this before `stop()`.
+    func finishPending() async {
+        guard isRunning else { return }
+        finishing = true
+        await inflightTask?.value
+        inflightTask = nil
+        // Let any in-flight sample-forwarding tasks land, then force the
+        // trailing buffer (speech after the last pause, which never triggered a
+        // cut) into pending so the very last words aren't lost.
+        try? await Task.sleep(for: .milliseconds(60))
+        if micBuffer.count >= Self.minChunkSamples { pendingMic.append(micBuffer) }
+        micBuffer.removeAll(keepingCapacity: false)
+        if systemBuffer.count >= Self.minChunkSamples { pendingSystem.append(systemBuffer) }
+        systemBuffer.removeAll(keepingCapacity: false)
+        while isRunning, !(pendingMic.isEmpty && pendingSystem.isEmpty) {
+            if !pendingMic.isEmpty { await settleOne(source: .mic) }
+            if !pendingSystem.isEmpty { await settleOne(source: .system) }
+        }
+    }
+
+    /// Transcribe `[prevContext + oldest + following]` and keep only the words
+    /// that fall in the oldest utterance's own time range — so it's recognised
+    /// and punctuated with both the previous and the following speech in view.
+    private func transcribeSettling(oldest: [Float], following: [Float], prevContext: [Float]) async throws -> String {
+        if prevContext.isEmpty, following.isEmpty {
+            return try await ParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
+        }
+        let combined = prevContext + oldest + following
+        let prevDur = Double(prevContext.count) / 16_000
+        let oldestDur = Double(oldest.count) / 16_000
+        let words = try await ParakeetServiceHolder.shared.transcribeWithTimestamps(
+            samples: combined, modelID: parakeetModelID
+        )
+        guard !words.isEmpty else {
+            return try await ParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
+        }
+        let lo = prevDur - 0.05
+        let hi = prevDur + oldestDur + 0.05
+        return words.filter { $0.start >= lo && $0.start < hi }.map(\.text).joined(separator: " ")
+    }
+
+    /// Find a complete utterance at the front of `buf`: trim leading silence,
+    /// then return the speech up to the next pause (plus a small pre-roll/tail)
+    /// and the number of samples to consume (speech + the detected pause).
+    /// Returns nil while speech is still ongoing and no pause has appeared yet.
+    /// An empty chunk with a positive consume means "only stale silence here —
+    /// drop it."
+    private static func voiceChunk(_ buf: [Float]) -> (chunk: [Float], consume: Int)? {
+        let n = buf.count
+        let frameCount = n / frameSamples
+        guard frameCount >= 1 else { return nil }
+
+        // Voiced flag per frame.
+        var voiced = [Bool](repeating: false, count: frameCount)
+        for f in 0..<frameCount {
+            voiced[f] = frameRMS(buf, at: f * frameSamples) >= vadRMS
+        }
+
+        guard let firstVoiced = voiced.firstIndex(of: true) else {
+            // All silence so far. Drop everything but a short tail so the
+            // buffer doesn't grow unbounded during quiet stretches.
+            let keep = prerollFrames * frameSamples
+            return n > keep ? ([], n - keep) : nil
+        }
+
+        let startSample = max(0, (firstVoiced - prerollFrames) * frameSamples)
+
+        // Walk forward looking for a pause (pauseFrames consecutive unvoiced).
+        var lastVoiced = firstVoiced
+        var silenceRun = 0
+        for f in firstVoiced..<frameCount {
+            if voiced[f] {
+                lastVoiced = f
+                silenceRun = 0
+            } else {
+                silenceRun += 1
+                if silenceRun >= pauseFrames {
+                    let endSample = min(n, (lastVoiced + 1 + tailFrames) * frameSamples)
+                    let consume = min(n, (f + 1) * frameSamples)
+                    if endSample - startSample >= minChunkSamples {
+                        return (Array(buf[startSample..<endSample]), consume)
+                    }
+                    // Too short to be real speech — drop through the pause.
+                    return ([], consume)
+                }
+            }
+        }
+
+        // No pause yet. Force a cut if a single turn has run on too long.
+        if n >= maxChunkSamples {
+            let endSample = maxChunkSamples
+            if endSample - startSample >= minChunkSamples {
+                return (Array(buf[startSample..<endSample]), endSample)
+            }
+            return ([], endSample)
+        }
+        return nil
+    }
+
+    private static func frameRMS(_ buf: [Float], at start: Int) -> Float {
+        let end = min(start + frameSamples, buf.count)
+        guard end > start else { return 0 }
+        var ms: Float = 0
+        buf.withUnsafeBufferPointer { ptr in
+            vDSP_measqv(ptr.baseAddress! + start, 1, &ms, vDSP_Length(end - start))
+        }
+        return ms.squareRoot()
+    }
+
+    /// Append a transcribed window to both the structured lines and the
+    /// rendered `interimText`. Consecutive windows from the same source merge
+    /// onto one line; a source change starts a fresh `Label: …` line.
+    private func appendLine(speaker: String, text: String) {
+        // Deterministic vocabulary pass — same dictionary dictation uses, so
+        // names/jargon land correctly in the live transcript (and the live
+        // notes built from it).
+        let entries = VocabularyStore.shared.entries
+        let line = entries.isEmpty ? text : Vocabulary.apply(entries, to: text)
+        transcriptLines.append(LiveLine(speaker: speaker, text: line))
+        if interimText.isEmpty {
+            interimText = "\(speaker): \(line)"
+        } else if speaker == lastSpeaker {
+            interimText.append(" " + line)
+        } else {
+            interimText.append("\n\(speaker): \(line)")
+        }
+        lastSpeaker = speaker
+    }
+
+
+    /// True when a mic window looks like speaker bleed of the concurrent
+    /// system audio rather than the user actually speaking. Compares the mic
+    /// window's energy to the front of the system buffer (roughly the same
+    /// wall-clock window, since we've only consumed from the mic side). When
+    /// the remote side is essentially silent, a hot mic is the user, never
+    /// bleed.
+    private static func isLikelyBleed(mic: [Float], systemBuffer: [Float]) -> Bool {
+        let n = min(mic.count, systemBuffer.count)
+        guard n >= minChunkSamples else { return false }
+        let sysRMS = rms(systemBuffer, count: n)
+        guard sysRMS > bleedSystemFloor else { return false }
+        // Acoustic bleed from speakers into the mic is attenuated well below
+        // the remote audio's direct level; near-field user speech sits at
+        // roughly the same level or louder. So a mic window much quieter than
+        // the concurrent system audio is almost certainly bleed.
+        return rms(mic) < bleedFraction * sysRMS
+    }
+
+    /// RMS over the first `count` samples (the whole array when `count` is nil).
+    private static func rms(_ samples: [Float], count: Int? = nil) -> Float {
+        let n = min(count ?? samples.count, samples.count)
+        guard n > 0 else { return 0 }
+        var ms: Float = 0
+        samples.withUnsafeBufferPointer { ptr in
+            vDSP_measqv(ptr.baseAddress!, 1, &ms, vDSP_Length(n))
+        }
+        return ms.squareRoot()
     }
 }

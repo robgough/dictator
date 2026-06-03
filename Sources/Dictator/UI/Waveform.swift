@@ -4,6 +4,12 @@ import SwiftUI
 struct Waveform: View {
     let level: Float
     var tint: Color = .accentColor
+    /// When true, map level honestly on a dB scale with no boost or jitter —
+    /// the meter reads flat on genuine silence and responds in proportion to
+    /// real input. Meetings use this because the meter is the user's proof
+    /// each side is being heard; the dictation HUD keeps the livelier,
+    /// slightly-boosted default.
+    var honest: Bool = false
     @State private var bars: [Double] = Array(repeating: 0.05, count: barCount)
     private static let barCount = 28
 
@@ -27,17 +33,30 @@ struct Waveform: View {
             tick(with: Double(new))
         }
         .onAppear { tick(with: Double(level)) }
+        .accessibilityElement()
+        .accessibilityLabel("Audio level")
+        .accessibilityValue("\(Int((Self.normalized(Double(level), honest: honest)) * 100)) percent")
+    }
+
+    /// Map a raw RMS level to a 0…1 bar height. Honest mode uses a dB scale
+    /// (−60 dB → 0, 0 dB → 1) so the meter is truthful; the default biases
+    /// toward filling for legibility on the dictation HUD.
+    private static func normalized(_ level: Double, honest: Bool) -> Double {
+        if honest {
+            let db = 20 * (log10(max(level, 0.0001)))
+            return max(0.04, min(1.0, (db + 60) / 60))
+        }
+        return max(0.05, min(1.0, level * 1.7))
     }
 
     private func tick(with newLevel: Double) {
-        // Shift existing bars left, append fresh sample with a touch of randomness for life.
+        // Shift existing bars left, append a fresh sample.
         var next = bars
         next.removeFirst()
-        let jitter = Double.random(in: 0.85...1.0)
-        // Bias toward filling the meter for typical speech — loud syllables
-        // pinning at 1.0 briefly is fine; visually-flat bars when someone
-        // *is* talking is worse than occasional clipping at the top.
-        let target = max(0.05, min(1.0, newLevel * jitter * 1.7))
+        // Honest mode: truthful dB mapping, no jitter. Default: a touch of
+        // randomness for life on the dictation HUD.
+        let jitter = honest ? 1.0 : Double.random(in: 0.85...1.0)
+        let target = Self.normalized(newLevel * jitter, honest: honest)
         next.append(target)
 
         // Light smoothing across neighbours so it doesn't look stuttery.

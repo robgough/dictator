@@ -55,7 +55,9 @@ enum MeetingImporter {
     @MainActor
     static func makeShellSession(from source: URL) throws -> MeetingSession {
         let id = UUID()
-        _ = MeetingStorage.folder(for: id)
+        // Ensure the local audio folder exists for the re-encode target; the
+        // synced meta/transcript folder is created lazily on first write.
+        _ = MeetingStorage.audioFolder(for: id)
 
         // Reading just the file metadata is fast (microseconds) — safe
         // to do on the main actor so we can populate the duration field

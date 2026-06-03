@@ -17,16 +17,35 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         var displayName: String         // user-editable
         var colorHex: String            // "#RRGGBB"
         var isMe: Bool
+        /// True when `displayName` was set by the automatic speaker-name
+        /// guess (`MeetingSpeakerNamer`) rather than the diarizer's default
+        /// "Speaker N" or a manual rename. Lets re-runs overwrite a previous
+        /// guess while still never clobbering a name the user typed, and lets
+        /// the UI flag a name as auto-detected so it gets a second look.
+        var nameInferred: Bool
 
         enum CodingKeys: String, CodingKey {
-            case id, displayName, colorHex = "color", isMe
+            case id, displayName, colorHex = "color", isMe, nameInferred
         }
 
-        init(id: String, displayName: String, colorHex: String, isMe: Bool = false) {
+        init(id: String, displayName: String, colorHex: String, isMe: Bool = false, nameInferred: Bool = false) {
             self.id = id
             self.displayName = displayName
             self.colorHex = colorHex
             self.isMe = isMe
+            self.nameInferred = nameInferred
+        }
+
+        /// Backwards-compatible decode — `nameInferred` (and defensively
+        /// `isMe`) fall back to false when missing, so speaker entries written
+        /// before this field decode cleanly. Encode stays synthesised.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decode(String.self, forKey: .id)
+            self.displayName = try c.decode(String.self, forKey: .displayName)
+            self.colorHex = try c.decode(String.self, forKey: .colorHex)
+            self.isMe = try c.decodeIfPresent(Bool.self, forKey: .isMe) ?? false
+            self.nameInferred = try c.decodeIfPresent(Bool.self, forKey: .nameInferred) ?? false
         }
     }
 
@@ -43,9 +62,19 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     var sourceFilename: String?
     var audioFiles: AudioFiles
     var speakers: [Speaker]
-    /// Optional — present only after the user (or the auto-run path) has run
-    /// the LLM summary pass. Old meetings decode this as nil and render
-    /// without a summary section.
+    /// Markdown meeting notes — the primary artifact. Present once the live
+    /// first-pass (`isFinal == false`) or the end-of-meeting pass
+    /// (`isFinal == true`) has run. New meetings populate this; older meetings
+    /// that pre-date it decode as nil and fall back to `summary`.
+    var notes: MeetingNotes?
+    /// The rough first-pass notes built live during the recording, kept even
+    /// after the full pass overwrites `notes`. The live pass accumulates as the
+    /// meeting runs so it's often more complete (if less polished) than the
+    /// compressed final rewrite — worth keeping around to compare against.
+    var rawNotes: MeetingNotes?
+    /// Legacy structured summary. Superseded by `notes` for new meetings, but
+    /// kept so meetings recorded before the markdown-notes switch still render
+    /// and export. Old meetings decode this; new meetings leave it nil.
     var summary: MeetingSummaryResult?
     /// Conversational shape of the meeting (1-on-1, stand-up, retro, …).
     /// Drives which prompt addendum the summary pass tacks on. `.auto`
@@ -65,6 +94,8 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         sourceFilename: String? = nil,
         audioFiles: AudioFiles,
         speakers: [Speaker],
+        notes: MeetingNotes? = nil,
+        rawNotes: MeetingNotes? = nil,
         summary: MeetingSummaryResult? = nil,
         meetingType: MeetingType = .auto,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
@@ -77,6 +108,8 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.sourceFilename = sourceFilename
         self.audioFiles = audioFiles
         self.speakers = speakers
+        self.notes = notes
+        self.rawNotes = rawNotes
         self.summary = summary
         self.meetingType = meetingType
         self.schemaVersion = schemaVersion
@@ -97,6 +130,8 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.sourceFilename = try c.decodeIfPresent(String.self, forKey: .sourceFilename)
         self.audioFiles = try c.decode(AudioFiles.self, forKey: .audioFiles)
         self.speakers = try c.decode([Speaker].self, forKey: .speakers)
+        self.notes = try c.decodeIfPresent(MeetingNotes.self, forKey: .notes)
+        self.rawNotes = try c.decodeIfPresent(MeetingNotes.self, forKey: .rawNotes)
         self.summary = try c.decodeIfPresent(MeetingSummaryResult.self, forKey: .summary)
         self.meetingType = try c.decodeIfPresent(MeetingType.self, forKey: .meetingType) ?? .auto
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
@@ -104,7 +139,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
-        case audioFiles, speakers, summary, meetingType, schemaVersion
+        case audioFiles, speakers, notes, rawNotes, summary, meetingType, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

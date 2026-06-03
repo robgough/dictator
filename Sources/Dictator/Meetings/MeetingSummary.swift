@@ -1,21 +1,25 @@
 import Foundation
 
-/// LLM summary pass for meetings. Runs the user's currently-configured
-/// LLM engine over the transcript and parses a strict-JSON
-/// MeetingSummaryResult out the other side.
+/// LLM notes pass for meetings. Runs the user's currently-configured LLM
+/// engine over the transcript and returns finished meeting notes as Markdown
+/// (`MeetingNotes`) — the model authors the markdown directly; there's no
+/// intermediate JSON schema.
 ///
 /// Strategy:
 ///   - Short transcripts (≤ singlePassBudget tokens of estimated input):
-///     one assist() call, parse JSON.
+///     one assist() call.
 ///   - Long transcripts: split into windowed chunks at segment boundaries,
-///     summarise each into a partial JSON, then run a final reduce-pass
-///     that merges the partials into the final MeetingSummaryResult.
+///     write per-window markdown notes, then run a final reduce-pass that
+///     merges the windows into one notes document.
 ///
 /// We piggy-back on the engine's `assist()` method instead of inventing
 /// a new protocol surface — `assist()` accepts an arbitrary system prompt
 /// + selection + instruction, and the LLMTextUtilities.parseAssistant
 /// fallback path returns the model's output verbatim when no `MODE:` marker
 /// is present (which our prompt forbids).
+///
+/// Also still owns the short, cheap title-suggestion call (`suggestTitle`),
+/// which is independent of the notes shape.
 @MainActor
 enum MeetingSummaryService {
     enum SummaryError: LocalizedError {
@@ -41,32 +45,39 @@ enum MeetingSummaryService {
     /// caps and leaves room for the system prompt + reply.
     private static let singlePassInputBudgetTokens = 6_000
 
-    /// Produce a summary using the currently-configured LLM engine.
-    /// Updates `generatedAt` to now and stamps `modelID` with whichever
-    /// engine ran.
+    /// Produce the finished markdown meeting notes using the currently-
+    /// configured LLM engine. Stamps `modelID` with whichever engine ran and
+    /// `generatedAt` with now, and marks the result `isFinal` — this is the
+    /// end-of-meeting pass that supersedes any live first-pass.
     ///
     /// `meetingType` is the explicit override the caller wants this run
     /// biased toward — UI surfaces it via the "Summarise as ▾" picker.
-    /// When nil (the auto-summary call path from MeetingProcessor),
+    /// When nil (the auto-run call path from MeetingProcessor),
     /// we resolve in this order: `meta.meetingType` if the user has
     /// already picked a non-`.auto` type for this meeting, otherwise
     /// `settings.defaultMeetingType`.
-    static func summarise(
+    static func generateNotes(
         transcript: MeetingTranscript,
         meta: MeetingMeta,
         settings: DictatorSettings,
         meetingType: MeetingType? = nil
-    ) async throws -> MeetingSummaryResult {
+    ) async throws -> MeetingNotes {
         guard let engine = settings.activeLLMEngine() else {
             throw SummaryError.llmDisabled
         }
         try await engine.ensureReady()
 
-        let resolvedType: MeetingType = {
+        var resolvedType: MeetingType = {
             if let explicit = meetingType { return explicit }
             if meta.meetingType != .auto { return meta.meetingType }
             return settings.defaultMeetingType
         }()
+        // Listen-only recording (no "Me" speaker — you weren't a participant)
+        // left on auto-detect → treat it as a conversation/podcast, since none
+        // of the participant-shaped types fit and the model often guesses wrong.
+        if resolvedType == .auto, !meta.speakers.contains(where: { $0.isMe }) {
+            resolvedType = .conversation
+        }
         let prompt = settings.effectiveMeetingSummaryPrompt(for: resolvedType)
         let modelID = engineModelID(settings: settings)
         let segments = transcript.segments
@@ -75,23 +86,36 @@ enum MeetingSummaryService {
         let rendered = renderSegments(segments, speakers: meta.speakers)
         let approxTokens = rendered.count / 4
 
-        let jsonText: String
+        // The rough live outline (captured during the meeting) is fed in as a
+        // completeness checklist — small models compress hard on the rewrite,
+        // and the live pass is often the more complete record.
+        let rawOutline = meta.rawNotes?.markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let raw: String
         if approxTokens <= singlePassInputBudgetTokens {
-            jsonText = try await runSinglePass(
+            raw = try await runSinglePass(
                 engine: engine,
                 systemPrompt: prompt,
-                renderedTranscript: rendered
+                renderedTranscript: rendered,
+                rawOutline: rawOutline
             )
         } else {
-            jsonText = try await runMapReduce(
+            raw = try await runMapReduce(
                 engine: engine,
                 systemPrompt: prompt,
                 segments: segments,
-                speakers: meta.speakers
+                speakers: meta.speakers,
+                rawOutline: rawOutline
             )
         }
 
-        return try parse(jsonText: jsonText, modelID: modelID)
+        let markdown = try cleanNotesMarkdown(raw)
+        return MeetingNotes(
+            markdown: markdown,
+            modelID: modelID,
+            generatedAt: Date(),
+            isFinal: true
+        )
     }
 
     // MARK: - Engine calls
@@ -99,11 +123,18 @@ enum MeetingSummaryService {
     private static func runSinglePass(
         engine: any LLMEngine,
         systemPrompt: String,
-        renderedTranscript: String
+        renderedTranscript: String,
+        rawOutline: String?
     ) async throws -> String {
+        var selection = renderedTranscript
+        var instruction = "Write the meeting notes for the transcript above as Markdown, following the sections and rules in the system prompt. Output ONLY the Markdown."
+        if let rawOutline, !rawOutline.isEmpty {
+            selection += "\n\n--- ROUGH LIVE OUTLINE (captured during the meeting; may be incomplete) ---\n\(rawOutline)"
+            instruction = "Write the meeting notes for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. A rough live outline follows the transcript — use it as a completeness checklist so you don't miss anything it captured (where the transcript supports it), and make your notes at least as complete. Output ONLY the Markdown."
+        }
         let result = try await engine.assist(
-            selection: renderedTranscript,
-            instruction: "Summarise the meeting transcript above into the strict JSON shape the system prompt specifies. Output ONLY the JSON object.",
+            selection: selection,
+            instruction: instruction,
             systemPrompt: systemPrompt,
             priorTurns: [],
             summary: nil,
@@ -113,13 +144,14 @@ enum MeetingSummaryService {
     }
 
     /// Chunk the segments at speaker-turn boundaries until each chunk fits
-    /// the input budget, summarise each chunk into a JSON fragment, then
-    /// run a final pass over the concatenated fragments.
+    /// the input budget, write per-window markdown notes for each chunk, then
+    /// run a final reduce-pass that merges the windows into one notes doc.
     private static func runMapReduce(
         engine: any LLMEngine,
         systemPrompt: String,
         segments: [MeetingTranscriptSegment],
-        speakers: [MeetingMeta.Speaker]
+        speakers: [MeetingMeta.Speaker],
+        rawOutline: String?
     ) async throws -> String {
         let chunkBudgetChars = singlePassInputBudgetTokens * 4
         let chunks = chunk(segments: segments, maxCharsPerChunk: chunkBudgetChars)
@@ -131,7 +163,7 @@ enum MeetingSummaryService {
             let rendered = renderSegments(chunk, speakers: speakers)
             let result = try await engine.assist(
                 selection: rendered,
-                instruction: "This is one window of a longer meeting. Produce the same strict JSON shape covering ONLY this window — decisions agreed in this window, action items captured in this window, narrative for this window only. Output ONLY the JSON object.",
+                instruction: "This is ONE window of a longer meeting. Write Markdown notes covering ONLY this window, using the same sections and rules as the system prompt. Output ONLY the Markdown.",
                 systemPrompt: systemPrompt,
                 priorTurns: [],
                 summary: nil,
@@ -142,16 +174,22 @@ enum MeetingSummaryService {
 
         try Task.checkCancellation()
 
-        // Reduce pass — feed the concatenated partials back through and
-        // ask for a single merged JSON. The system prompt is unchanged
-        // so the same schema rules apply.
-        let merged = partials.enumerated().map { idx, body in
+        // Reduce pass — feed the concatenated per-window notes back through
+        // and ask for one merged Markdown document. The system prompt is
+        // unchanged so the same section contract and attribution rules apply.
+        var merged = partials.enumerated().map { idx, body in
             "WINDOW \(idx + 1) OF \(partials.count):\n\(body)"
         }.joined(separator: "\n\n---\n\n")
 
+        var instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order. Merge them into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting, then `## Discussion`/`## Decisions`/`## Action items`, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows; only collapse genuine duplicates. Do NOT shorten for brevity — a long meeting must yield thorough notes. Output ONLY the merged Markdown."
+        if let rawOutline, !rawOutline.isEmpty {
+            merged += "\n\n--- ROUGH LIVE OUTLINE (captured during the meeting; may be incomplete) ---\n\(rawOutline)"
+            instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order, followed by a rough live outline captured during the meeting. Merge the windows into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary`, then `## Discussion`/`## Decisions`/`## Action items`, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows, and cross-check against the live outline so nothing it captured is dropped. Only collapse genuine duplicates; do NOT shorten for brevity. Output ONLY the merged Markdown."
+        }
+
         let finalResult = try await engine.assist(
             selection: merged,
-            instruction: "The selection contains per-window JSON summaries from a long meeting. Merge them into a single JSON object in the same shape — deduplicate decisions and action items, combine narrative windows into one coherent 3–6-sentence narrative covering the whole meeting. Output ONLY the JSON object.",
+            instruction: instruction,
             systemPrompt: systemPrompt,
             priorTurns: [],
             summary: nil,
@@ -214,54 +252,33 @@ enum MeetingSummaryService {
         return String(format: "%d:%02d", m, s)
     }
 
-    // MARK: - Parsing
+    // MARK: - Markdown cleanup
 
-    /// Pulls the first `{ ... }` JSON object out of the LLM's reply and
-    /// decodes it. Tolerant of preambles, trailing commentary, and
-    /// surrounding markdown fences (LLMTextUtilities.clean strips the
-    /// fences; the brace scan handles the rest).
-    nonisolated static func parse(jsonText: String, modelID: String) throws -> MeetingSummaryResult {
-        let cleaned = LLMTextUtilities.clean(jsonText)
-        guard let start = cleaned.firstIndex(of: "{"),
-              let end = cleaned.lastIndex(of: "}"),
-              start <= end else {
-            throw SummaryError.parseFailed("no JSON object in output")
-        }
-        let body = String(cleaned[start...end])
+    /// Tidy the model's markdown reply into the notes body we persist. Strips
+    /// surrounding ``` fences and stray preamble via `LLMTextUtilities.clean`,
+    /// drops any leading `#` title the model emitted despite being told not to
+    /// (we render the meeting title as the H1 ourselves), and trims. Validates
+    /// that something notes-shaped survived — a non-empty body with at least a
+    /// heading or a bullet — so a refusal or empty reply surfaces as an error
+    /// the caller can fall back from rather than persisting junk.
+    nonisolated static func cleanNotesMarkdown(_ raw: String) throws -> String {
+        var text = LLMTextUtilities.clean(raw).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        struct Partial: Decodable {
-            let decisions: [String]?
-            let actionItems: [MeetingSummaryResult.ActionItem]?
-            let narrative: String?
+        // Drop a leading H1 title line if the model added one — the UI/exporter
+        // supply the title separately, and a duplicated title reads badly.
+        if text.hasPrefix("# ") {
+            let firstBreak = text.firstIndex(of: "\n")
+            text = firstBreak
+                .map { String(text[text.index(after: $0)...]) }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         }
-        do {
-            let partial = try JSONDecoder().decode(Partial.self, from: Data(body.utf8))
-            let decisions = (partial.decisions ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-            let actionItems = (partial.actionItems ?? []).compactMap { item -> MeetingSummaryResult.ActionItem? in
-                let trimmedText = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmedText.isEmpty else { return nil }
-                let owner = item.owner?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return MeetingSummaryResult.ActionItem(
-                    owner: (owner?.isEmpty ?? true) ? nil : owner,
-                    text: trimmedText
-                )
-            }
-            let narrative = (partial.narrative ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if decisions.isEmpty, actionItems.isEmpty, narrative.isEmpty {
-                throw SummaryError.empty
-            }
-            return MeetingSummaryResult(
-                decisions: decisions,
-                actionItems: actionItems,
-                narrative: narrative,
-                modelID: modelID,
-                generatedAt: Date()
-            )
-        } catch let summaryError as SummaryError {
-            throw summaryError
-        } catch {
-            throw SummaryError.parseFailed("\(error)")
+
+        guard !text.isEmpty else { throw SummaryError.empty }
+        let looksLikeNotes = text.contains("#") || text.contains("- ") || text.contains("* ")
+        guard looksLikeNotes else {
+            throw SummaryError.parseFailed("output wasn't markdown notes")
         }
+        return text
     }
 
     // MARK: - Title suggestion
@@ -403,7 +420,7 @@ enum MeetingSummaryService {
 
     // MARK: - Engine id
 
-    private static func engineModelID(settings: DictatorSettings) -> String {
+    static func engineModelID(settings: DictatorSettings) -> String {
         switch settings.llmEngine {
         case .none:   return "none"
         case .apple:  return "apple-foundation"

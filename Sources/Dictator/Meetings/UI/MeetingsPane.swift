@@ -41,11 +41,15 @@ struct MeetingsPane: View {
             }
 
             Section {
-                Toggle("Summarise meetings automatically", isOn: Binding(
+                Toggle("Write notes automatically", isOn: Binding(
                     get: { s.settings.meetingSummaryEnabled },
                     set: { s.settings.meetingSummaryEnabled = $0; state.save() }
                 ))
-                Picker("Default summary style", selection: Binding(
+                Toggle("Build a first pass while recording", isOn: Binding(
+                    get: { s.settings.meetingLiveNotesEnabled },
+                    set: { s.settings.meetingLiveNotesEnabled = $0; state.save() }
+                ))
+                Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }
                 )) {
@@ -57,12 +61,12 @@ struct MeetingsPane: View {
                 Button {
                     showSummaryPromptSheet = true
                 } label: {
-                    Label("Customise summary prompt…", systemImage: "wand.and.stars")
+                    Label("Customise notes prompt…", systemImage: "wand.and.stars")
                 }
             } header: {
-                Text("Summary")
+                Text("Notes")
             } footer: {
-                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting, extracting decisions, action items, and a short narrative. The default style biases the summary toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Summarise as ▾.")
+                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting and writes markdown notes — a summary, the key discussion points, decisions, and action items. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery); the full notes are rewritten when the meeting ends.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -108,7 +112,7 @@ private struct SummaryPromptSheet: View {
         @Bindable var s = state
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Meeting summary prompt")
+                Text("Meeting notes prompt")
                     .font(.headline)
                 Spacer()
                 Button("Done") { isPresented = false }
@@ -117,7 +121,7 @@ private struct SummaryPromptSheet: View {
             .padding()
             Divider()
             PromptCustomiser(
-                description: "Used when Dictator summarises a meeting. The model is asked for strict JSON with decisions, action items, and a 3–6 sentence narrative.",
+                description: "Used when Dictator writes notes for a meeting. The model is asked for markdown with a summary, key discussion points, decisions, and action items.",
                 builtin: DictatorSettings.builtinMeetingSummaryPrompt,
                 addendum: $s.settings.meetingSummaryPromptAddendum,
                 override: $s.settings.meetingSummaryPromptOverride

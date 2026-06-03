@@ -83,6 +83,14 @@ final class MeetingAudioRecorder {
     /// any actor hop. Set once at `start` time and never reassigned.
     var onBuffer: (@Sendable (CMSampleBuffer) -> Void)?
 
+    /// Optional sink for the mono Float32 system-audio samples we already
+    /// extract for the on-disk write, delivered **on the main actor** at the
+    /// aggregate's real capture rate alongside each write. The live
+    /// transcriber consumes this to run the remote side of the call through
+    /// Parakeet — reusing the same downmix we do for the file, so there's no
+    /// second CMSampleBuffer decode on the live path. Set once at `start`.
+    var onSystemSamples: (@MainActor (_ samples: [Float], _ sampleRate: Double) -> Void)?
+
     /// Flipped on the CATap audio queue the first time a real audio buffer
     /// arrives. Read on the main actor by the bring-up watchdog 5 s after
     /// start. `OSAllocatedUnfairLock<Bool>` is the async-safe primitive:
@@ -401,6 +409,10 @@ final class MeetingAudioRecorder {
                   channels: 1,
                   interleaved: false
               ) else { return }
+        // Hand the live transcriber the same mono samples we're about to
+        // write, now that the real capture rate is known. Fired before the
+        // file write so a disk hiccup never starves the live path.
+        onSystemSamples?(samples, captureSampleRate)
         do {
             if systemFile == nil, let url = systemURL {
                 systemFile = try Self.openFile(at: url, source: format)

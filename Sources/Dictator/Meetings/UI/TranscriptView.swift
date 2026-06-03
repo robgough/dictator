@@ -12,51 +12,145 @@ struct TranscriptView: View {
     @Bindable var session: MeetingSession
     @State private var player = MeetingPlayer()
     @State private var hasAudio: Bool = false
+    @State private var tab: Tab = .notes
+
+    /// Notes are the primary surface; the rough live "raw" notes (when kept)
+    /// and the transcript live behind the other tabs.
+    enum Tab: Hashable { case notes, raw, transcript }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            switch tab {
+            case .notes:
+                NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
+            case .raw:
+                rawTab
+            case .transcript:
+                transcriptTab
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { loadAudio() }
+        .onDisappear { player.unload() }
+        .onChange(of: meta.id) { _, _ in
+            loadAudio()
+            if tab == .raw, !hasRawNotes { tab = .notes }
+        }
+        .background {
+            // Keyboard shortcuts for the tab switch (hidden, zero-size).
+            Button("") { tab = .notes }.keyboardShortcut("1", modifiers: .command)
+            Button("") { tab = .transcript }.keyboardShortcut("2", modifiers: .command)
+        }
+    }
+
+    /// Tab switcher + the document-level actions (copy / export / re-process).
+    /// These live above both tabs so the primary verb — copy the notes as
+    /// markdown — is always one click away.
+    private var header: some View {
+        HStack(spacing: 8) {
+            Picker("View", selection: $tab) {
+                Text("Transcript").tag(Tab.transcript)
+                if hasRawNotes {
+                    Text("Quick notes").tag(Tab.raw)
+                }
+                Text("Final notes").tag(Tab.notes)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+
+            Spacer()
+
+            if let md = currentTabCopyText {
+                CopyButton(text: md, label: copyLabel)
+                    .help("Copy the current view as Markdown.")
+            }
+            if let transcript {
+                Button {
+                    exportTranscript(transcript: transcript)
+                } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+                .controlSize(.small)
+            }
+            if hasAnyAudioOnDisk {
+                Button {
+                    Task {
+                        await session.runProcessor(
+                            parakeetModelID: state.settings.parakeetModelID
+                        )
+                    }
+                } label: {
+                    Label("Re-process", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .help("Re-run the transcription and diarization pipeline from the recorded audio. Useful after a fix that improved transcript quality.")
+                .disabled(session.state.isProcessing)
+            }
+        }
+    }
+
+    private var hasRawNotes: Bool {
+        guard let raw = meta.rawNotes else { return false }
+        return !raw.markdown.isEmpty
+    }
+
+    /// The rough notes captured live during the meeting, kept alongside the
+    /// polished final notes. Read-only; selectable + copyable.
+    @ViewBuilder
+    private var rawTab: some View {
+        if let raw = meta.rawNotes {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").foregroundStyle(.purple)
+                    Text("Quick notes").font(.headline)
+                    Text("captured live").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                MarkdownNotesView(markdown: raw.markdown, speakers: meta.speakers, onSeek: seekFromNotes)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .notesSurface()
+                Text("Rough notes captured live as the meeting ran — kept because they're often more complete than the polished final notes.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        } else {
+            Text("No raw notes for this meeting.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// Jump from a note's timestamp pill into the transcript + audio so the
+    /// user can verify what was actually said.
+    private func seekFromNotes(_ seconds: Double) {
+        tab = .transcript
+        guard hasAudio else { return }
+        player.seek(to: seconds)
+        if !player.isPlaying { player.togglePlayPause() }
+    }
+
+    @ViewBuilder
+    private var transcriptTab: some View {
         if let transcript, !transcript.segments.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
-                    SpeakerCountChip(count: meta.speakers.count)
+                    SpeakerCountChip(count: meta.speakers.count, suspicious: speakerCountLooksOff)
                     ForEach(meta.speakers, id: \.id) { speaker in
                         EditableSpeakerChip(speaker: speaker, session: session)
                     }
                     Spacer()
-                    Button {
-                        copyAll(transcript: transcript)
-                    } label: {
-                        Label("Copy all", systemImage: "doc.on.doc")
-                    }
-                    .controlSize(.small)
-                    Button {
-                        exportTranscript(transcript: transcript)
-                    } label: {
-                        Label("Export…", systemImage: "square.and.arrow.up")
-                    }
-                    .controlSize(.small)
-                    if hasAnyAudioOnDisk {
-                        Button {
-                            Task {
-                                await session.runProcessor(
-                                    parakeetModelID: state.settings.parakeetModelID
-                                )
-                            }
-                        } label: {
-                            Label("Re-process", systemImage: "arrow.clockwise")
-                        }
-                        .controlSize(.small)
-                        .help("Re-run the transcription and diarization pipeline from the recorded audio. Useful after a fix that improved transcript quality.")
-                        .disabled(session.state.isProcessing)
-                    }
                 }
 
                 if hasAudio {
                     PlaybackBar(player: player)
                 } else {
-                    AudioMissingNote()
+                    AudioMissingNote(
+                        audioOnAnotherMac: meta.audioFiles.mic != nil || meta.audioFiles.system != nil
+                    )
                 }
-
-                SummaryPanel(session: session, transcript: transcript, meta: meta)
 
                 ForEach(Array(transcript.segments.enumerated()), id: \.offset) { _, segment in
                     SegmentRow(
@@ -66,10 +160,6 @@ struct TranscriptView: View {
                     )
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onAppear { loadAudio() }
-            .onDisappear { player.unload() }
-            .onChange(of: meta.id) { _, _ in loadAudio() }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "text.bubble")
@@ -102,10 +192,41 @@ struct TranscriptView: View {
         return micPresent || sysPresent
     }
 
-    private func copyAll(transcript: MeetingTranscript) {
-        let rendered = MeetingExporter.plainText(transcript: transcript, meta: meta)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(rendered, forType: .string)
+    /// The whole meeting as Markdown — notes lead, transcript follows. This is
+    /// the primary "give me something to paste into my notes app" payload.
+    /// Falls back to a title + notes body when there's no transcript; nil when
+    /// there's nothing to copy.
+    /// Heuristic for an implausible diarization result, used to flag the
+    /// speaker-count chip. Only an improbably HIGH count is flagged — a single
+    /// speaker is perfectly normal (solo brainstorming, or recording a video
+    /// you're watching), so we don't cry wolf on it.
+    private var speakerCountLooksOff: Bool {
+        meta.speakers.count >= 8
+    }
+
+    private var copyLabel: String {
+        switch tab {
+        case .notes: return "Copy notes"
+        case .raw: return "Copy quick notes"
+        case .transcript: return "Copy transcript"
+        }
+    }
+
+    /// Markdown for the currently-selected tab, so Copy gives you exactly what
+    /// you're looking at — notes, raw notes, or the transcript.
+    private var currentTabCopyText: String? {
+        switch tab {
+        case .notes:
+            if let notes = meta.notes { return "# \(meta.title)\n\n\(notes.markdown)" }
+            if let transcript { return MeetingExporter.markdown(transcript: transcript, meta: meta) }
+            return nil
+        case .raw:
+            if let raw = meta.rawNotes { return "# \(meta.title)\n\n\(raw.markdown)" }
+            return nil
+        case .transcript:
+            guard let transcript, !transcript.segments.isEmpty else { return nil }
+            return MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
+        }
     }
 
     /// NSSavePanel-driven export. The picker's allowed types determine
@@ -258,18 +379,27 @@ private struct PlaybackBar: View {
     }
 }
 
-/// Surfaced in place of the playback bar when a meeting's audio has been
-/// pruned (per the retention setting) but its transcript is still on
-/// disk. Tells the user why there's no play button so they don't think
-/// it's broken.
+/// Surfaced in place of the playback bar when a meeting's audio isn't
+/// playable here. Two reasons, two messages: the recording lives on another
+/// Mac (only notes + transcript sync — audio stays put), or the audio was
+/// pruned by the retention sweep. Tells the user why there's no play button so
+/// they don't think it's broken.
 private struct AudioMissingNote: View {
+    /// True when the meeting's metadata says it has audio but the files aren't
+    /// on this Mac — i.e. it was recorded on another Mac. False when the audio
+    /// was genuinely removed locally by the retention sweep.
+    var audioOnAnotherMac: Bool
+
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "speaker.slash")
+            Image(systemName: audioOnAnotherMac ? "laptopcomputer.and.arrow.down" : "speaker.slash")
                 .foregroundStyle(.secondary)
-            Text("Audio files for this meeting have been deleted to save space. The transcript is preserved.")
+            Text(audioOnAnotherMac
+                 ? "This recording stays on the Mac it was made on — only the notes and transcript sync between your Macs. Open the meeting on that Mac to play the audio."
+                 : "Audio files for this meeting have been deleted to save space. The transcript is preserved.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -292,19 +422,29 @@ private struct AudioMissingNote: View {
 /// task that introduced this chip.
 private struct SpeakerCountChip: View {
     let count: Int
+    /// True when the detected count looks implausible for the audio captured —
+    /// e.g. a single speaker on a two-sided call, or an improbably high count.
+    /// The chip turns amber and hints at Re-process so we're honest about
+    /// diarization uncertainty rather than presenting a wrong count as fact.
+    var suspicious: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "person.2.wave.2")
+            Image(systemName: suspicious ? "person.2.wave.2" : "person.2.wave.2")
                 .font(.caption2)
             Text(label)
                 .font(.caption.weight(.semibold))
+            if suspicious {
+                Image(systemName: "exclamationmark.triangle.fill").font(.caption2)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(Color.secondary.opacity(0.08)))
-        .foregroundStyle(.secondary)
-        .help("Number of distinct speakers detected. Click any speaker chip to rename or recolour.")
+        .background(Capsule().fill((suspicious ? Color.orange : Color.secondary).opacity(suspicious ? 0.16 : 0.08)))
+        .foregroundStyle(suspicious ? Color.orange : Color.secondary)
+        .help(suspicious
+            ? "This speaker count looks off for the audio captured. If it's wrong, use Re-process to run diarization again."
+            : "Number of distinct speakers detected. Click any speaker chip to rename or recolour.")
     }
 
     private var label: String {
@@ -333,6 +473,11 @@ private struct EditableSpeakerChip: View {
                     .frame(width: 8, height: 8)
                 Text(speaker.displayName)
                     .font(.caption.weight(.semibold))
+                if speaker.nameInferred {
+                    Image(systemName: "sparkles")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -340,6 +485,9 @@ private struct EditableSpeakerChip: View {
             .foregroundStyle(.primary)
         }
         .buttonStyle(.plain)
+        .help(speaker.nameInferred
+            ? "“\(speaker.displayName)” was auto-detected from the conversation — click to correct it."
+            : "Click to rename or recolour this speaker.")
         .popover(isPresented: $isEditing, arrowEdge: .top) {
             SpeakerEditor(
                 speaker: speaker,
@@ -388,6 +536,11 @@ private struct SpeakerEditor: View {
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { onCommit() }
                 .frame(minWidth: 200)
+            if speaker.nameInferred {
+                Label("Auto-detected from the conversation — double-check it.", systemImage: "sparkles")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             Text("Colour")
                 .font(.caption.weight(.semibold))
@@ -421,60 +574,149 @@ private struct SpeakerEditor: View {
     }
 }
 
-/// LLM summary block rendered above the transcript. Three states:
-///   1. No summary yet, no LLM configured → muted hint pointing at Settings.
-///   2. No summary yet, LLM configured → "Generate summary" button.
-///   3. Summary present → decisions / action items / narrative, re-run button.
-private struct SummaryPanel: View {
+/// Meeting notes block — the primary content of the Notes tab. States:
+///   1. Notes present → rendered markdown (editable), re-run button.
+///   2. Legacy structured summary present (old meeting) → rendered via the
+///      back-compat `SummaryBody`.
+///   3. No notes yet, no LLM configured → muted hint pointing at Settings.
+///   4. No notes yet, LLM configured → "Generate" button + hint.
+private struct NotesPanel: View {
     @Environment(AppState.self) private var state
     @Bindable var session: MeetingSession
-    let transcript: MeetingTranscript
     let meta: MeetingMeta
+    var onSeek: ((Double) -> Void)?
+    @State private var assistant = MeetingAssistantController()
+
+    /// There's something for the assistant to act on — notes exist and an LLM
+    /// is configured. Gates both the prominent button and the hotkey hint.
+    private var canUseAssistant: Bool {
+        meta.notes != nil && state.settings.activeLLMEngine() != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(.purple)
-                Text("Summary")
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
+                Text("Notes")
+                    .font(.headline)
+                if let notes = meta.notes, !notes.isFinal {
+                    DraftChip()
+                }
                 Spacer()
+                if canUseAssistant {
+                    Button { assistant.present() } label: {
+                        Label("Assistant", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.assistantIndigo)
+                    .controlSize(.small)
+                    .help("Ask about or edit these notes with the on-device assistant.")
+                }
                 actionButton
             }
-
-            if case .summarising = session.state {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(meta.summary == nil ? "Generating summary…" : "Regenerating summary…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-            } else if let summary = meta.summary {
-                SummaryBody(summary: summary, meta: meta)
-            } else if state.settings.activeLLMEngine() == nil {
-                Text("Turn on an LLM in Settings → Models to summarise meetings.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Generate a structured summary of decisions, action items, and the narrative arc of this meeting.")
-                    .font(.caption)
+            if canUseAssistant, state.meetingsWindowIsKey {
+                Label("\(state.settings.hotkeyTapToToggleEnabled ? "Tap" : "Hold") \(state.assistantHotkeyDisplay) to ask the assistant — by voice, hands-free.", systemImage: "mic")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            content
+            if let err = session.notesError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let notes = meta.notes {
+                provenanceFooter(notes)
+            }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.purple.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.purple.opacity(0.18), lineWidth: 1)
-        )
+        .onAppear {
+            assistant.bind(session: session)
+            state.meetingAssistant = assistant
+        }
+        .onChange(of: session.id) { _, _ in
+            assistant.bind(session: session)
+            state.meetingAssistant = assistant
+        }
+        .onDisappear {
+            assistant.dialogClosed()
+            if state.meetingAssistant === assistant { state.meetingAssistant = nil }
+        }
+        .sheet(isPresented: $assistant.isPresented) {
+            NotesAssistantSheet(assistant: assistant)
+        }
     }
+
+    /// "Written by <model> · 2:14 PM" — turns the notes from an anonymous blob
+    /// into an authored, timestamped artifact.
+    @ViewBuilder
+    private func provenanceFooter(_ notes: MeetingNotes) -> some View {
+        HStack(spacing: 4) {
+            Text(notes.isFinal ? "Written by" : "Draft by")
+            Text(Self.modelDisplayName(notes.modelID)).foregroundStyle(.secondary)
+            Text("·")
+            Text(notes.generatedAt, format: .dateTime.hour().minute())
+            Spacer()
+        }
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+    }
+
+    private static func modelDisplayName(_ id: String) -> String {
+        switch id {
+        case "apple-foundation": return "Apple Foundation"
+        case "none", "": return "the on-device model"
+        default: return id.split(separator: "/").last.map(String.init) ?? id
+        }
+    }
+
+    /// The notes body. When there are actual notes (or a legacy summary) they
+    /// sit in the same `.notesSurface()` card the live-recording pane uses, so
+    /// the finished notes read like the rough first pass did. The transient
+    /// states (writing, hints) stay light.
+    @ViewBuilder
+    private var content: some View {
+        if case .summarising = session.state {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(hasContent ? "Rewriting notes…" : "Writing notes…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        } else if let notes = meta.notes {
+            MarkdownNotesView(
+                markdown: notes.markdown,
+                speakers: meta.speakers,
+                onCommit: { session.updateNotesMarkdown($0) },
+                onSeek: onSeek,
+                onAssistant: nil   // entry point is the prominent header button now
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .notesSurface()
+        } else if let summary = meta.summary {
+            SummaryBody(summary: summary, meta: meta)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .notesSurface()
+        } else if state.settings.activeLLMEngine() == nil {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Turn on an LLM to generate meeting notes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Open Settings → Models") { state.openSettingsAction?() }
+                    .controlSize(.small)
+            }
+        } else {
+            Text("Generate markdown notes — a summary, the key discussion points, decisions, and action items for this meeting.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var hasContent: Bool { meta.notes != nil || meta.summary != nil }
 
     /// "Summarise as ▾" chevron menu — the primary verb (Generate / Re-run)
     /// uses whatever type the user has already pinned to this meeting (or
@@ -489,13 +731,13 @@ private struct SummaryPanel: View {
             return false
         }()
         let isEnabled = state.settings.activeLLMEngine() != nil && !isSummarising
-        let primaryLabel = meta.summary == nil ? "Generate" : "Re-run"
+        let primaryLabel = (meta.notes == nil && meta.summary == nil) ? "Generate" : "Re-run"
 
         Menu {
-            Section("Summarise as") {
+            Section("Notes for") {
                 ForEach(MeetingType.allCases, id: \.self) { type in
                     Button {
-                        runSummary(as: type)
+                        generateNotes(as: type)
                     } label: {
                         if type == meta.meetingType {
                             Label(type.displayName, systemImage: "checkmark")
@@ -508,7 +750,7 @@ private struct SummaryPanel: View {
         } label: {
             Label(primaryLabel, systemImage: "wand.and.stars")
         } primaryAction: {
-            Task { await session.runSummary(settings: state.settings) }
+            Task { await session.generateNotes(settings: state.settings) }
         }
         .controlSize(.small)
         .menuStyle(.borderlessButton)
@@ -518,14 +760,30 @@ private struct SummaryPanel: View {
     }
 
     /// Pin `type` to this meeting (store + session in lockstep) and kick
-    /// off a fresh summary so the user sees the result of their choice
+    /// off a fresh notes pass so the user sees the result of their choice
     /// immediately. The store write persists meta.json; the in-session
-    /// mutation makes sure the next `runSummary` resolves the new type
+    /// mutation makes sure the next `generateNotes` resolves the new type
     /// without round-tripping via the store.
-    private func runSummary(as type: MeetingType) {
+    private func generateNotes(as type: MeetingType) {
         MeetingsStore.shared.setMeetingType(id: meta.id, type: type)
         session.meta.meetingType = type
-        Task { await session.runSummary(settings: state.settings) }
+        Task { await session.generateNotes(settings: state.settings) }
+    }
+}
+
+/// Small "Draft" pill shown on the notes header while the notes are the live
+/// first-pass (`!isFinal`) — so a rough draft is never mistaken for the
+/// finished, full-transcript notes.
+private struct DraftChip: View {
+    var body: some View {
+        Text("Draft")
+            .font(.caption2.weight(.semibold))
+            .textCase(.uppercase)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.orange.opacity(0.18)))
+            .foregroundStyle(.orange)
+            .help("These are the rough notes built while recording. Re-run to write the full notes from the complete transcript.")
     }
 }
 
@@ -632,6 +890,10 @@ private struct OwnerChip: View {
 }
 
 private extension Color {
+    /// The assistant's brand indigo (≈#5E5CE6), matching the dictation HUD's
+    /// Assistant-Mode accent so the meeting assistant reads as the same feature.
+    static let assistantIndigo = Color(red: 0.369, green: 0.361, blue: 0.902)
+
     /// Parse "#RRGGBB" hex strings stored in MeetingMeta.Speaker.
     init?(hex: String) {
         var trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -641,5 +903,98 @@ private extension Color {
         let g = Double((value >> 8) & 0xff) / 255
         let b = Double(value & 0xff) / 255
         self = Color(red: r, green: g, blue: b)
+    }
+}
+
+/// Runs the on-device assistant against the meeting notes. Ask a question → get
+/// an answer (the model returns DRAFT); ask for an edit → preview a rewrite and
+/// apply it (REPLACE). Reuses the same `assist()` path and prompt as Assistant
+/// Mode, with the notes passed as the selection so it has the full context.
+private struct NotesAssistantSheet: View {
+    @Bindable var assistant: MeetingAssistantController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Notes assistant", systemImage: "wand.and.stars")
+                    .font(.headline)
+                    .foregroundStyle(Color.assistantIndigo)
+                Spacer()
+                Button("Done") { assistant.isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            Text("Ask a question about these notes, or tell it how to edit them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                TextField("e.g. “What did we decide about pricing?” or “tighten the action items”", text: $assistant.instruction, axis: .vertical)
+                    .lineLimit(1...3)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { assistant.run() }
+                Button {
+                    assistant.toggleListening()
+                } label: {
+                    Image(systemName: assistant.isListening ? "mic.fill" : "mic")
+                        .foregroundStyle(assistant.isListening ? .red : .secondary)
+                }
+                .help(assistant.isListening ? "Stop and transcribe" : "Speak your instruction")
+                .disabled(assistant.isTranscribing || assistant.isRunning)
+                Button("Ask") { assistant.run() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.assistantIndigo)
+                    .disabled(assistant.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || assistant.isRunning || assistant.isListening)
+            }
+
+            if assistant.isListening {
+                Label("Listening… tap the mic (or release the hotkey) to finish.", systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if assistant.isTranscribing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Transcribing…").foregroundStyle(.secondary)
+                }
+                .font(.caption)
+            }
+
+            if assistant.isRunning {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Thinking…").foregroundStyle(.secondary)
+                }
+                .font(.caption)
+            }
+            if let errorText = assistant.errorText {
+                Label(errorText, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let result = assistant.result {
+                Divider()
+                Text(result.mode == .replace ? "Suggested edit" : "Answer")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    MarkdownNotesView(markdown: result.text, speakers: assistant.speakers)
+                        .padding(12)
+                }
+                .frame(maxHeight: 280)
+                .notesSurface()
+                HStack {
+                    CopyButton(text: result.text, label: "Copy")
+                    Spacer()
+                    if result.mode == .replace {
+                        Button("Replace notes") { assistant.applyReplace() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.assistantIndigo)
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 580)
+        .onDisappear { assistant.dialogClosed() }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 
 /// State machine for ONE meeting. Mirrors `Pipeline.swift` in shape but is
 /// owned by the Meetings window, not the HUD — meetings and dictation are
@@ -61,12 +62,29 @@ final class MeetingSession: Identifiable {
     private var lastMicLevel: Float = 0
     private var lastSystemLevel: Float = 0
 
+    /// Whether each source has delivered any above-floor audio during this
+    /// recording. Drives the affirmative "✓ hearing you / them" cues — once
+    /// true, the user has positive proof that side is being captured. Reset at
+    /// the start of each recording.
+    private(set) var micHeard = false
+    private(set) var systemHeard = false
+
     /// Draft transcript service, live for the duration of a recording. Nil
     /// outside of an active recording (and for sessions opened from disk
     /// or via import — those go straight to the post-capture processor).
     /// Exposed so `LiveRecordingView` can subscribe to its `interimText`
     /// and re-render the draft as new chunks land.
     private(set) var liveTranscriber: MeetingLiveTranscriber?
+
+    /// Live first-pass notes builder, present for the duration of a recording
+    /// when live notes are enabled and an LLM is configured. Exposed so
+    /// `LiveRecordingView` can render its growing `liveNotes`.
+    private(set) var notesAccumulator: MeetingNotesAccumulator?
+
+    /// Set when the most recent notes pass failed, so the UI can surface it
+    /// instead of silently leaving stale/empty notes. Cleared when a new pass
+    /// starts or succeeds.
+    private(set) var notesError: String?
 
     /// Active capture warnings — currently one per source ("mic" /
     /// "system"), keyed so a re-warn from the same source overwrites
@@ -156,6 +174,8 @@ final class MeetingSession: Identifiable {
         guard case .idle = state else { return }
         state = .warmingUp
         captureWarnings = []
+        micHeard = false
+        systemHeard = false
 
         switch await AudioRecordingPermission.probe() {
         case .granted:
@@ -168,6 +188,7 @@ final class MeetingSession: Identifiable {
         recorder.onReady = { [weak self] in
             guard let self else { return }
             self.state = .recording(elapsed: 0, micLevel: 0, sysLevel: 0)
+            AppState.shared.meetingRecordingStartedAt = Date()
             self.startTimerLoop()
         }
         // System level updates land immediately so the HUD's right meter
@@ -175,6 +196,7 @@ final class MeetingSession: Identifiable {
         recorder.onLevel = { [weak self] _, sys in
             guard let self else { return }
             self.lastSystemLevel = sys
+            if sys > 0.02 { self.systemHeard = true }
             self.pushLevels()
         }
         recorder.onUnexpectedStop = { [weak self] reason in
@@ -183,6 +205,9 @@ final class MeetingSession: Identifiable {
             self.timerTask = nil
             self.liveTranscriber?.stop()
             self.liveTranscriber = nil
+            _ = self.notesAccumulator?.stop()
+            self.notesAccumulator = nil
+            AppState.shared.meetingRecordingStartedAt = nil
             self.state = .failed(reason)
         }
         recorder.onCaptureWarning = { [weak self] message in
@@ -191,6 +216,7 @@ final class MeetingSession: Identifiable {
         micRecorder.onLevel = { [weak self] mic in
             guard let self else { return }
             self.lastMicLevel = mic
+            if mic > 0.02 { self.micHeard = true }
             self.pushLevels()
         }
         micRecorder.onCaptureWarning = { [weak self] message in
@@ -206,15 +232,28 @@ final class MeetingSession: Identifiable {
         let liveModelID = AppState.shared.settings.parakeetModelID
         let live = MeetingLiveTranscriber(parakeetModelID: liveModelID)
         liveTranscriber = live
-        recorder.onBuffer = { [weak live] sampleBuffer in
-            live?.feedSystemBuffer(sampleBuffer)
+        recorder.onSystemSamples = { [weak live] mono, sampleRate in
+            live?.feedSystemSamples(mono, sampleRate: sampleRate)
         }
         micRecorder.onBuffer = { [weak live] mono, sampleRate in
             live?.feedMicSamples(mono, sampleRate: sampleRate)
         }
 
+        // Live first-pass notes. Opt-in (it runs the LLM during the call) and
+        // only when an LLM is configured. Pulls from the same transcriber the
+        // UI shows, so the notes track what the user is watching take shape.
+        if AppState.shared.settings.meetingLiveNotesEnabled,
+           AppState.shared.settings.activeLLMEngine() != nil {
+            let accumulator = MeetingNotesAccumulator(
+                transcriber: live,
+                settings: AppState.shared.settings
+            )
+            notesAccumulator = accumulator
+            accumulator.start()
+        }
+
         do {
-            let folder = MeetingStorage.folder(for: id)
+            let folder = MeetingStorage.audioFolder(for: id)
             try await recorder.start(folder: folder, preferredMicUID: nil)
             // Mic capture runs on its own AVCaptureSession alongside the
             // CATap system recorder. Failure to start mic isn't fatal:
@@ -264,6 +303,7 @@ final class MeetingSession: Identifiable {
     func stopRecording(parakeetModelID: String) async {
         guard state.isLive else { return }
         state = .stopping
+        AppState.shared.meetingRecordingStartedAt = nil
         timerTask?.cancel()
         timerTask = nil
         // Tear down both recorders in parallel so we don't double the wait.
@@ -276,8 +316,18 @@ final class MeetingSession: Identifiable {
         // in-flight chunk task. The Parakeet weights themselves live in
         // `ParakeetServiceHolder.shared` and stay warm — the processor
         // about to run will reuse them immediately.
+        // Finalise the live transcript + quick notes before tearing them down:
+        // settle the held-back tail (the last couple of phrases) into the
+        // transcript, then run one last notes pass so the quick notes are
+        // complete. Persisted below (isFinal=false) so they survive even if the
+        // post-capture notes pass doesn't run (auto-notes off) or fails; the
+        // full pass overwrites them with isFinal=true when it succeeds.
+        await liveTranscriber?.finishPending()
+        let liveNotesMarkdown = ((await notesAccumulator?.finish()) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         liveTranscriber?.stop()
         liveTranscriber = nil
+        notesAccumulator = nil
         // Reflect what actually landed on disk. The CATap process tap owns
         // the system track; the parallel AVAudioEngine owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(
@@ -285,6 +335,18 @@ final class MeetingSession: Identifiable {
             system: systemResult.didCaptureSystem ? MeetingStorage.systemFilename : nil
         )
         meta.durationSeconds = systemResult.durationSeconds
+        if !liveNotesMarkdown.isEmpty {
+            let live = MeetingNotes(
+                markdown: liveNotesMarkdown,
+                modelID: MeetingSummaryService.engineModelID(settings: AppState.shared.settings),
+                generatedAt: Date(),
+                isFinal: false
+            )
+            // `notes` shows immediately; `rawNotes` is the kept copy that
+            // survives the full rewrite so it stays available to compare.
+            meta.notes = live
+            meta.rawNotes = live
+        }
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
         state = .captured
@@ -340,6 +402,14 @@ final class MeetingSession: Identifiable {
             MeetingsStore.shared.upsert(meta)
             state = .ready
 
+            // Guess real speaker names from the conversation before titling or
+            // writing notes, so both pick up "Rory" / "Pat" instead of
+            // "Speaker 1". Conservative and non-destructive — only touches
+            // default/previously-guessed labels, never a manual rename.
+            if AppState.shared.settings.activeLLMEngine() != nil {
+                await inferSpeakerNames(settings: AppState.shared.settings)
+            }
+
             // Auto title suggestion. Always runs when an LLM is
             // available — the call is short and cheap, and a meeting
             // titled "Q3 launch planning" is dramatically more useful
@@ -351,14 +421,20 @@ final class MeetingSession: Identifiable {
                 await maybeAutoRename(settings: AppState.shared.settings)
             }
 
-            // Optional auto-summary. The toggle is opt-in because the
-            // structured summary is expensive on a long meeting and not
-            // every user wants one; when it's off the user can still
-            // hit the "Generate summary" button on the meeting detail
-            // view.
+            // Optional auto-notes. The toggle is opt-in because the notes
+            // pass is expensive on a long meeting and not every user wants
+            // one; when it's off the user can still hit the "Generate" button
+            // on the meeting detail view.
             if AppState.shared.settings.meetingSummaryEnabled,
                AppState.shared.settings.activeLLMEngine() != nil {
-                await runSummary(settings: AppState.shared.settings)
+                await generateNotes(settings: AppState.shared.settings)
+            }
+
+            // Tell the user their notes are ready if they recorded and walked
+            // away. Only for live recordings, and only when we're backgrounded
+            // (if they're looking at the window they can already see it).
+            if meta.source == .live, !NSApp.isActive {
+                MeetingNotifier.notifyNotesReady(meetingTitle: meta.title)
             }
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
@@ -383,31 +459,64 @@ final class MeetingSession: Identifiable {
         }
     }
 
-    /// Run the LLM summary pass on the current transcript and persist the
-    /// result on meta. Non-destructive: a failure surfaces in NSLog and
-    /// leaves the transcript intact (state returns to .ready). Used both
-    /// by the auto-run after processing and the manual "Generate summary"
-    /// button.
-    func runSummary(settings: DictatorSettings) async {
+    /// Guess real speaker names from the transcript and apply any confident
+    /// matches to `meta.speakers`. Silent and non-destructive: failures are
+    /// swallowed (the speakers just keep their "Speaker N" labels) and only
+    /// default/previously-guessed labels are ever touched, so a manual rename
+    /// survives. Persists only when something actually changed.
+    private func inferSpeakerNames(settings: DictatorSettings) async {
+        guard let transcript = MeetingStorage.readTranscript(for: id) else { return }
+        let updated = await MeetingSpeakerNamer.inferNames(
+            transcript: transcript,
+            speakers: meta.speakers,
+            settings: settings
+        )
+        guard updated != meta.speakers else { return }
+        meta.speakers = updated
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+    }
+
+    /// Run the LLM notes pass on the current transcript and persist the
+    /// finished markdown notes on meta. Non-destructive: a failure surfaces
+    /// in NSLog and leaves the transcript (and any prior notes) intact (state
+    /// returns to .ready). Used both by the auto-run after processing and the
+    /// manual "Generate" / "Re-run" button.
+    func generateNotes(settings: DictatorSettings) async {
         guard let transcript = MeetingStorage.readTranscript(for: id) else {
-            NSLog("[Dictator] Skipping summary: no transcript on disk for \(id)")
+            NSLog("[Dictator] Skipping notes: no transcript on disk for \(id)")
             return
         }
+        notesError = nil
         state = .summarising
         do {
-            let result = try await MeetingSummaryService.summarise(
+            let notes = try await MeetingSummaryService.generateNotes(
                 transcript: transcript,
                 meta: meta,
                 settings: settings
             )
-            meta.summary = result
+            meta.notes = notes
             try? MeetingStorage.writeMeta(meta)
             MeetingsStore.shared.upsert(meta)
             state = .ready
         } catch {
-            NSLog("[Dictator] Meeting summary failed for \(id): \(error)")
+            NSLog("[Dictator] Meeting notes failed for \(id): \(error)")
+            notesError = (error as? LocalizedError)?.errorDescription
+                ?? "Couldn't write the notes. Tap Generate to try again."
             state = .ready
         }
+    }
+
+    /// Persist a user edit to the notes markdown. Keeps the model/time/`isFinal`
+    /// stamps from the existing notes — only the body changes. No-op when there
+    /// are no notes to edit or the text is unchanged.
+    func updateNotesMarkdown(_ markdown: String) {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var notes = meta.notes, notes.markdown != trimmed else { return }
+        notes.markdown = trimmed
+        meta.notes = notes
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
     }
 
     // MARK: - Title editing
@@ -429,6 +538,9 @@ final class MeetingSession: Identifiable {
         guard let idx = meta.speakers.firstIndex(where: { $0.id == id }) else { return }
         guard meta.speakers[idx].displayName != trimmed else { return }
         meta.speakers[idx].displayName = trimmed
+        // A hand-typed name is authoritative — drop the "auto-detected" flag so
+        // it loses the sparkle and a re-process never overwrites it.
+        meta.speakers[idx].nameInferred = false
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
     }

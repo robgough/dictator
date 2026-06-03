@@ -173,6 +173,20 @@ struct DictatorSettings: Codable, Equatable {
     /// works manually for re-runs and for installs where the user has
     /// disabled this toggle.
     var meetingSummaryEnabled: Bool = true
+    /// Build a rough first-pass of the notes *while the meeting records* —
+    /// the LLM runs periodically over the live transcript and appends bullet
+    /// points, superseded by the full pass once the meeting stops. Default
+    /// ON: watching the notes take shape is the point of the feature. It runs
+    /// the LLM on the GPU during the call, so the toggle is there for users who
+    /// want to save battery, but it's on out of the box.
+    var meetingLiveNotesEnabled: Bool = true
+    /// How a tap of the dictation / assistant hotkey behaves. ON (default):
+    /// a quick tap-and-release (under ~0.35 s) latches listening ON — tap
+    /// again to stop — while holding past the threshold is push-to-talk
+    /// (release stops). OFF: always push-to-talk. Matches the iOS app's
+    /// hold button. Synced across Macs — it's a personal interaction
+    /// preference, not hardware-dependent.
+    var hotkeyTapToToggleEnabled: Bool = true
     /// Appended under the built-in meeting summary prompt. Empty = no
     /// addendum. Synced across Macs because it's a personal preference,
     /// not hardware-dependent.
@@ -356,6 +370,8 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
+        self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
+        self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
         self.defaultMeetingType = try c.decodeIfPresent(MeetingType.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
@@ -775,37 +791,45 @@ struct DictatorSettings: Codable, Equatable {
     """
 
     static let builtinMeetingSummaryPrompt = """
-    You produce a structured summary of a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
+    You write clean, copy-pasteable meeting notes in Markdown from a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
 
-    Output STRICT JSON matching this exact shape, with no commentary, no preamble, no markdown fences:
+    Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
 
-    {
-      "decisions": ["..."],
-      "actionItems": [{"owner": "Alice", "text": "..."}, {"owner": null, "text": "..."}],
-      "narrative": "..."
-    }
+    Use EXACTLY these sections, in this order, each introduced by a `##` heading:
+
+    ## Summary
+    A factual prose recap of what the meeting was about and where it landed — 2–3 sentences for a short meeting, up to a short paragraph for a long one. No bullet points here — it's prose. No editorialising.
+
+    ## Discussion
+    The substantive points discussed, as plain `-` bullets (use a two-space indent `  -` for detail under a point). Write each point in your own words. Do NOT start a bullet with the speaker's name, and do NOT copy the transcript's `[Speaker · mm:ss]` line prefixes into the notes. Be THOROUGH: capture every distinct point that was actually discussed, not just a headline few. A long, dense meeting must produce correspondingly thorough notes — never collapse it to a handful of bullets. Distil each point (don't transcribe verbatim), but do not drop real content for the sake of brevity. This is the body of the notes.
+
+    ## Decisions
+    Concrete AGREED OUTCOMES as `-` bullets — things the participants chose to do or not do, NOT topics merely discussed.
+
+    ## Action items
+    Tasks as Markdown checkboxes, each in the shape `- [ ] **Owner** — the task`. Always use the `- [ ]` checkbox form. Use the owner-attribution rules below. When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix.
 
     Rules:
-    - "decisions" lists CONCRETE AGREED OUTCOMES — things the participants chose to do or not do. NOT topics discussed. If nothing was decided, return [].
-    - "actionItems" lists tasks with an owner if the transcript attributes the commitment to a specific speaker, otherwise owner is null. If there are no action items, return [].
-    - "narrative" is 3–6 sentences. Factual. No editorialising. No bullet points inside the narrative — it's prose.
-    - Use plain text inside the JSON strings. No markdown.
-    - If the meeting is short or trivial, still emit valid JSON with sensible empty arrays — do NOT refuse.
+    - Plain Markdown: `##` headings, `-` bullets, and `- [ ]` task checkboxes (Action items only). A two-space indent makes a sub-point. Bold (`**…**`) is allowed for action-item owners. No tables, no HTML.
+    - OMIT a section entirely (heading and all) when it has no content — EXCEPT always include `## Summary`. A short or trivial meeting might be just a Summary. Never refuse and never emit placeholder text like "N/A".
+    - You MAY end a Discussion, Decisions, or Action items bullet with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
+    - Never wrap the notes, or any individual section, in ``` code fences.
+    - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said.
 
-    ACTION ITEM ATTRIBUTION — read carefully, the UI maps `owner` back to a speaker chip and gets it wrong if the name doesn't match:
+    ACTION ITEM ATTRIBUTION — read carefully:
 
-    1. The `owner` field MUST be the EXACT display name shown in the transcript's `[Speaker · mm:ss]` prefix — "Me", "Speaker 1", "Speaker 2", or a renamed label like "Alice". Match the spelling and casing character-for-character. Do NOT add titles ("Mr. Alice"), do NOT abbreviate ("A." for Alice), do NOT translate ("Myself" for "Me"). Do NOT invent names that don't appear in the transcript prefixes.
+    1. The owner MUST be the EXACT display name shown in the transcript's `[Speaker · mm:ss]` prefix — "Me", "Speaker 1", "Speaker 2", or a renamed label like "Alice". Match spelling and casing character-for-character. Do NOT add titles ("Mr. Alice"), do NOT abbreviate ("A." for Alice), do NOT translate ("Myself" for "Me"). Do NOT invent names that don't appear in the transcript prefixes.
 
     2. Attribute aggressively when the transcript names the owner — explicitly OR implicitly:
        - Explicit ("Alice, you're on rollout", "Bob will write the doc") → owner is the named person, exactly as they appear in the speaker prefixes.
        - First-person commitment ("I'll send the doc", "I can take this", "let me follow up") → owner is whoever is currently speaking that line (the name in the `[Speaker · …]` prefix on that line). When that speaker is the recorder, the owner is literally "Me".
        - Second-person assignment ("you'll handle X", "can you take Y?") agreed by the named person in a later line → owner is the named person being assigned to.
 
-    3. Only set `owner` to null when the task is genuinely unattributed — "someone should look at this", "we need to follow up on Y", or where the speaker is ambiguous and no later line clarifies. Don't guess and don't default to "Me" out of convenience.
+    3. Only leave a task unowned (no `**Owner** —` prefix) when it is genuinely unattributed — "someone should look at this", "we need to follow up on Y", or where the speaker is ambiguous and no later line clarifies. Don't guess and don't default to "Me" out of convenience.
 
-    4. Never put more than one name in `owner`. If two people are jointly responsible, pick the lead and mention the second in `text` ("with Bob"); if there's no lead, set owner to null and describe the shared ownership in `text`.
+    4. Never put more than one name in the owner. If two people are jointly responsible, pick the lead and mention the second in the task text ("with Bob"); if there's no lead, leave it unowned and describe the shared ownership in the task text.
 
-    Output ONLY the JSON object. Nothing before it. Nothing after it. No "Here is the summary:" preamble. No ```json fences.
+    Output the Markdown notes ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
     """
 
     static let builtinAssistantPrompt = """
@@ -1046,6 +1070,8 @@ struct DictatorSettings: Codable, Equatable {
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
         case meetingSummaryEnabled
+        case meetingLiveNotesEnabled
+        case hotkeyTapToToggleEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
         case defaultMeetingType
@@ -1075,6 +1101,8 @@ struct DictatorSettings: Codable, Equatable {
         "assistantPromptAddendum",
         "assistantPromptOverride",
         "meetingSummaryEnabled",
+        "meetingLiveNotesEnabled",
+        "hotkeyTapToToggleEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",
         "defaultMeetingType",

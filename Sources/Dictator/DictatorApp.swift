@@ -23,8 +23,17 @@ struct DictatorApp: App {
                 .environment(appState)
                 .onOpenURL { url in handleURL(url) }
         } label: {
-            Image(systemName: appState.pipeline.state.iconName)
-                .symbolRenderingMode(.hierarchical)
+            // A live meeting takes priority over the dictation pipeline icon —
+            // the always-visible menu bar is the user's proof a recording is
+            // actually happening, even with the Meetings window closed.
+            if appState.isRecordingMeeting {
+                Image(systemName: "record.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.red, .red)
+            } else {
+                Image(systemName: appState.pipeline.state.iconName)
+                    .symbolRenderingMode(.hierarchical)
+            }
         }
         .menuBarExtraStyle(.window)
 

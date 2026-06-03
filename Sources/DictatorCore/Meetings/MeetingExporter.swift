@@ -13,7 +13,13 @@ enum MeetingExporter {
         lines.append(meta.title)
         lines.append(formatHeader(meta: meta))
         lines.append("")
-        if let summary = meta.summary {
+        // Notes lead. New meetings carry markdown `notes`; older meetings only
+        // have the structured `summary`. Markdown reads fine as plain text, so
+        // we emit it verbatim for the .txt path too.
+        if let notes = meta.notes, !notes.markdown.isEmpty {
+            lines.append(notes.markdown)
+            lines.append("")
+        } else if let summary = meta.summary {
             lines.append(contentsOf: plainSummary(summary: summary))
             lines.append("")
         }
@@ -36,12 +42,33 @@ enum MeetingExporter {
         lines.append("")
         lines.append("_\(formatHeader(meta: meta))_")
         lines.append("")
-        if let summary = meta.summary {
+        // Notes lead. New meetings carry an LLM-authored markdown `notes`
+        // body (emitted verbatim — it already uses `##` section headings);
+        // older meetings fall back to rendering the structured `summary`.
+        if let notes = meta.notes, !notes.markdown.isEmpty {
+            lines.append(notes.markdown)
+            lines.append("")
+        } else if let summary = meta.summary {
             lines.append(contentsOf: markdownSummary(summary: summary))
             lines.append("")
         }
         lines.append("## Transcript")
         lines.append("")
+        for seg in transcript.segments {
+            let name = nameByID[seg.speakerId] ?? seg.speakerId
+            lines.append("**\(name)** · `\(formatTime(seg.start))`")
+            lines.append("")
+            lines.append(seg.text)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Transcript only, as Markdown — title + header + speaker turns, no notes
+    /// section. Used when the user copies from the Transcript tab specifically.
+    static func transcriptMarkdown(transcript: MeetingTranscript, meta: MeetingMeta) -> String {
+        let nameByID = Dictionary(uniqueKeysWithValues: meta.speakers.map { ($0.id, $0.displayName) })
+        var lines: [String] = ["# \(meta.title)", "", "_\(formatHeader(meta: meta))_", ""]
         for seg in transcript.segments {
             let name = nameByID[seg.speakerId] ?? seg.speakerId
             lines.append("**\(name)** · `\(formatTime(seg.start))`")

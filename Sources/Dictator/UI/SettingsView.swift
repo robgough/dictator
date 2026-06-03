@@ -1847,6 +1847,11 @@ private struct GeneralPane: View {
                 }
             } header: { Text("Dictation hotkey") }
             Section {
+                Toggle("Tap to start and stop (hands-free)", isOn: $s.settings.hotkeyTapToToggleEnabled)
+                    .onChange(of: s.settings.hotkeyTapToToggleEnabled) { _, _ in state.save() }
+                SectionFootnote("Applies to both hotkeys. A quick tap starts recording and latches it on — tap again to stop. Hold the key down instead for classic push-to-talk (release to stop).")
+            } header: { Text("Hotkey behaviour") }
+            Section {
                 Picker("Trigger", selection: $s.settings.assistantTriggerMode) {
                     ForEach(TriggerMode.allCases.filter { mode in
                         mode == .keyboardShortcut || mode != s.settings.triggerMode
