@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Automatic speaker-name guessing is much better at telling who's who: when someone says a name ("thanks, Rory", "over to you, Sam"), they're almost always addressing the other person, so that name is now attributed to the speaker being addressed rather than to the one talking — only a genuine self-introduction ("I'm Rory") names the person speaking.
 - Finished meeting notes now show which conversation style they were written for — the type you picked, or, when left on Auto-detect, the one Dictator worked out from the transcript (shown with a sparkle, like guessed speaker names). Re-run ▾ still lets you override it.
 - The live notes taken while a meeting is recording can now correct themselves as the conversation moves on — if a decision is reversed or a number is restated later, the relevant point is revised or dropped rather than left stale. (New toggle under Meetings settings, "Correct live notes as the conversation moves on"; on by default.)
 - Meetings now tell apart the people on a call more reliably — a fix to the speaker-grouping sensitivity that was, in effect, the most aggressive at merging distinct voices, so a two-person call no longer collapses into a single speaker.

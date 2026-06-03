@@ -31,9 +31,12 @@ enum MeetingSpeakerNamer {
 
         // Eligible = non-me speakers whose name is still inference-owned. If
         // nothing is eligible (e.g. the user already named everyone), skip the
-        // call entirely.
-        let hasEligible = speakers.contains { !$0.isMe && (isDefaultName($0.displayName) || $0.nameInferred) }
-        guard hasEligible else { return speakers }
+        // call entirely. We also feed the exact labels to the model so it names
+        // a closed set rather than inventing labels.
+        let eligibleLabels = speakers
+            .filter { !$0.isMe && (isDefaultName($0.displayName) || $0.nameInferred) }
+            .map { $0.displayName }
+        guard !eligibleLabels.isEmpty else { return speakers }
 
         let segments = transcript.segments
         guard !segments.isEmpty else { return speakers }
@@ -50,7 +53,7 @@ enum MeetingSpeakerNamer {
             try await engine.ensureReady()
             let result = try await engine.assist(
                 selection: rendered,
-                instruction: "Identify the speakers' real names from the transcript above. Output ONLY the JSON object mapping each speaker label to a name.",
+                instruction: "Work out the real names of these speakers: \(eligibleLabels.joined(separator: ", ")). Remember the direction rule from the system prompt — a name a speaker says almost always belongs to a DIFFERENT speaker (the one being addressed or referred to), except in a self-introduction. Output ONLY the JSON object mapping each of those labels to a name, omitting any label whose name you can't determine.",
                 systemPrompt: systemPrompt,
                 priorTurns: [],
                 summary: nil,
@@ -115,22 +118,34 @@ enum MeetingSpeakerNamer {
     You identify the real names of the people speaking in a meeting transcript.
 
     Each line is prefixed with a speaker label and a timestamp, like:
-    [Speaker 1 · 0:12] thanks, Rory, that's a great point
-    [Speaker 2 · 0:18] no problem, happy to help
+    [Speaker 1 · 0:12] So Priya, how did the rollout go?
+    [Speaker 2 · 0:18] Pretty smoothly, thanks for asking.
 
-    Work out each label's real name ONLY from evidence in the spoken words:
-    - self-introduction ("I'm Rory", "this is Pat", "Pat here")
-    - being addressed by name ("thanks, Rory", "what do you think, Sam?", "over to you, Priya")
-    - being clearly referred to by name by another speaker
+    WHO A SPOKEN NAME REFERS TO — this is the crux; getting the direction right matters more than anything else:
+
+    People almost never say their OWN name to address themselves. So when a speaker says a name, that name almost always belongs to a DIFFERENT speaker — the person they are talking TO or ABOUT — NOT the speaker who said it.
+    - Direct address: "Thanks, Rory" / "What do you think, Rory?" / "Over to you, Rory" — said by Speaker 1 → it is the OTHER person (the one Speaker 1 is speaking to) who is Rory, NOT Speaker 1. In a two-person conversation that means the other speaker is Rory.
+    - Reference: "As Rory said earlier…" / "Rory raises a good point" — Rory is whoever earlier said the thing being referred to, again NOT the speaker saying this line.
+
+    The ONE exception is a self-introduction, where the name belongs to the speaker talking: "I'm Rory", "This is Rory", "Rory here", "My name is Rory" → that speaker is Rory.
+
+    So: a name attaches to the speaker being ADDRESSED or REFERRED TO — except in a self-introduction, where it attaches to the speaker talking.
+
+    Worked example:
+    [Speaker 1 · 0:03] Hi, I'm Dana — thanks for making the time.
+    [Speaker 2 · 0:07] Thanks, Dana. Good to finally meet.
+    [Speaker 1 · 0:12] So Marcus, walk me through your last project.
+    [Speaker 2 · 0:18] Sure — so last year I led a migration…
+    Reasoning: Speaker 1 introduces herself ("I'm Dana") → Speaker 1 is Dana. Speaker 2 saying "Thanks, Dana" is addressing the OTHER person, so it does NOT make Speaker 2 "Dana" — it confirms Speaker 1 is Dana. Speaker 1 saying "So Marcus, …" addresses the other person by name → Speaker 2 is Marcus.
+    Correct mapping: {"Speaker 1": "Dana", "Speaker 2": "Marcus"}
 
     Rules:
     - Use the person's FIRST name (or a full name only if it's clearly stated as theirs).
     - NEVER guess a name from someone's role, company, or the topic. NEVER invent a name that isn't actually spoken in the transcript.
-    - If you can't tell which label a spoken name belongs to, leave that label out.
-    - Returning an empty object is correct and expected when no names are clearly identifiable — do not force a guess.
+    - Never give two speakers the same name.
+    - If you can't tell which speaker a spoken name belongs to, leave that label out. Returning an empty object is correct and expected when no names are clearly identifiable — do not force a guess.
 
-    Output ONLY a JSON object mapping the exact speaker label (the text inside the brackets, e.g. "Speaker 1") to the person's name. No commentary, no code fences.
-    Example: {"Speaker 1": "Rory", "Speaker 2": "Pat"}
+    Output ONLY a JSON object mapping the exact speaker label (the text inside the brackets, e.g. "Speaker 1") to the person's name. No commentary, no reasoning, no code fences — just the JSON.
     If you can't confidently name anyone, output exactly: {}
     """
 
