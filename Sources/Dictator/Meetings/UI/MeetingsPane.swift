@@ -49,6 +49,12 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingLiveNotesEnabled },
                     set: { s.settings.meetingLiveNotesEnabled = $0; state.save() }
                 ))
+                Toggle("Correct live notes as the conversation moves on", isOn: Binding(
+                    get: { s.settings.meetingLiveNotesSelfCorrectEnabled },
+                    set: { s.settings.meetingLiveNotesSelfCorrectEnabled = $0; state.save() }
+                ))
+                .disabled(!s.settings.meetingLiveNotesEnabled)
+                .padding(.leading, 18)
                 Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }

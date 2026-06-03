@@ -221,24 +221,33 @@ final class MeetingProcessor {
             NSLog("[Dictator] Mic-echo dedup: kept \(micWords.count) of \(originalCount) mic words (dropped \(dropped))")
         }
 
-        // Decide the final speaker ID list in encounter order across both
-        // tracks, AFTER echo-dedup — so a mic track that was entirely speaker
-        // bleed (every "me" word dropped as an echo of the remote side) doesn't
-        // seed a phantom "Me" speaker on a meeting where you only listened. If
-        // diarization didn't run for a track we'd already have fallen back to
-        // mic → "me", system → "other" above; those survive here only if they
-        // actually produced words.
-        let usedSpeakerIDs = Self.discoveredSpeakerIDsInOrder(
-            micWords: micWords,
-            systemWords: systemWords
-        )
+        // Merge mic + system words by start time. From here on we work on the
+        // single merged timeline.
+        var allWords = (micWords + systemWords).sorted { $0.start < $1.start }
+
+        // Fold away phantom speakers — a diarizer cluster (or a stray "me" from
+        // a single surviving bleed word) that contributed only a token or two
+        // of speech to the whole meeting. These show up as a spurious chip with
+        // one misattributed word; the canonical example is a listen-only call
+        // where exactly one mic word slips past echo-dedup and seeds a "Me"
+        // speaker. Raising the clustering threshold (see DiarizerService) also
+        // surfaces the odd ~2 s blip cluster, so this guard pairs with it.
+        // Conservative on purpose: only ≤2-word, ≤2 s speakers are folded into
+        // the temporally-nearest surviving speaker, so a real brief interjection
+        // ("yeah, makes sense") is never merged away.
+        allWords = Self.foldTrivialSpeakers(words: allWords)
+
+        // Decide the final speaker ID list in encounter order along the merged,
+        // folded timeline. A speaker survives here only if it actually kept
+        // words after echo-dedup and trivial-fold — so a mic track that was
+        // entirely bleed doesn't seed a phantom "Me" on a listen-only meeting.
+        let usedSpeakerIDs = Self.discoveredSpeakerIDsInOrder(words: allWords)
         let micUniqueCount = micDiar?.clusterCentroids.count ?? 0
         let systemUniqueCount = systemDiar?.clusterCentroids.count ?? 0
         NSLog("[Dictator] Diarizer[merged]: micClusters=\(micUniqueCount) systemClusters=\(systemUniqueCount) finalSpeakers=\(usedSpeakerIDs.count) ids=\(usedSpeakerIDs.joined(separator: ","))")
 
-        // Merge mic + system words by start time, then split into per-speaker
-        // segments wherever the speaker changes or a long gap (≥700ms) opens.
-        let allWords = (micWords + systemWords).sorted { $0.start < $1.start }
+        // Split the merged timeline into per-speaker segments wherever the
+        // speaker changes or a long gap (≥700ms) opens.
         var segments = Self.buildSegments(from: allWords)
         // Deterministic vocabulary pass — the same user dictionary dictation
         // uses (names, jargon, preferred spellings), applied whole-word to each
@@ -533,24 +542,82 @@ final class MeetingProcessor {
         return dot / denom
     }
 
-    /// Walk both attributed tracks in time order and emit the speaker IDs
-    /// that actually appear in the transcript, in first-occurrence order
-    /// across the merged timeline. Anything `unifySpeakerSpace` allocated
-    /// that didn't survive (because all its words got dedup'd, or its
-    /// cluster produced zero words) is excluded — the chip row should
-    /// reflect reality, not the diarizer's intent.
+    /// Walk the merged, time-ordered word timeline and emit the speaker IDs
+    /// that actually appear in the transcript, in first-occurrence order.
+    /// Anything `unifySpeakerSpace` allocated that didn't survive (because all
+    /// its words got dedup'd or folded, or its cluster produced zero words) is
+    /// excluded — the chip row should reflect reality, not the diarizer's intent.
+    /// `words` must already be sorted by start time.
     nonisolated static func discoveredSpeakerIDsInOrder(
-        micWords: [SpeakerAttributedWord],
-        systemWords: [SpeakerAttributedWord]
+        words: [SpeakerAttributedWord]
     ) -> [String] {
-        let merged = (micWords + systemWords).sorted { $0.start < $1.start }
         var seen = Set<String>()
         var order: [String] = []
-        for w in merged where !seen.contains(w.speakerId) {
+        for w in words where !seen.contains(w.speakerId) {
             seen.insert(w.speakerId)
             order.append(w.speakerId)
         }
         return order
+    }
+
+    // MARK: - Trivial-speaker fold
+
+    /// A speaker with at most this many surviving words AND no more than
+    /// `trivialSpeakerMaxSeconds` of total speech is treated as a phantom and
+    /// folded into the nearest real speaker. Two words is deliberately tight:
+    /// it catches a single stray bleed word that seeded a "Me" chip, or a ~2 s
+    /// diarizer blip cluster, while leaving a genuine brief interjection
+    /// ("yeah, makes sense" — three words) untouched.
+    private nonisolated static let trivialSpeakerMaxWords = 2
+    private nonisolated static let trivialSpeakerMaxSeconds: Double = 2.0
+
+    /// Re-attribute the words of phantom speakers to the temporally-nearest
+    /// surviving (non-trivial) speaker, so a spurious one- or two-word cluster
+    /// doesn't surface as its own chip. The words themselves are kept — only
+    /// their `speakerId` changes — so no transcript content is lost; the stray
+    /// token just joins the adjacent turn it almost certainly belonged to.
+    ///
+    /// No-ops unless there is at least one non-trivial speaker to fold into
+    /// (so a recording that is genuinely just a few words under one speaker is
+    /// left exactly as-is). `words` must be sorted by start time; the result
+    /// preserves that order.
+    nonisolated static func foldTrivialSpeakers(
+        words: [SpeakerAttributedWord]
+    ) -> [SpeakerAttributedWord] {
+        guard words.count > 1 else { return words }
+
+        // Per-speaker word count + total duration across the whole timeline.
+        var wordCount: [String: Int] = [:]
+        var duration: [String: Double] = [:]
+        for w in words {
+            wordCount[w.speakerId, default: 0] += 1
+            duration[w.speakerId, default: 0] += max(0, w.end - w.start)
+        }
+
+        let trivial = Set(wordCount.keys.filter { id in
+            (wordCount[id] ?? 0) <= trivialSpeakerMaxWords
+                && (duration[id] ?? 0) <= trivialSpeakerMaxSeconds
+        })
+        guard !trivial.isEmpty else { return words }
+
+        // Need a real speaker to fold into; if every speaker is trivial (e.g. a
+        // recording that is just two stray words) leave the timeline untouched.
+        let survivors = words.filter { !trivial.contains($0.speakerId) }
+        guard !survivors.isEmpty else { return words }
+
+        return words.map { w in
+            guard trivial.contains(w.speakerId) else { return w }
+            let mid = (w.start + w.end) / 2
+            // Nearest surviving word in time wins the re-attribution.
+            var bestID = survivors[0].speakerId
+            var bestDist = Double.infinity
+            for s in survivors {
+                let sMid = (s.start + s.end) / 2
+                let d = abs(sMid - mid)
+                if d < bestDist { bestDist = d; bestID = s.speakerId }
+            }
+            return SpeakerAttributedWord(start: w.start, end: w.end, text: w.text, speakerId: bestID)
+        }
     }
 
     // MARK: - Mic-echo dedup

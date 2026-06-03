@@ -26,17 +26,32 @@ final class DiarizerService {
     @ObservationIgnored private var manager: OfflineDiarizerManager?
     @ObservationIgnored private var loadedModelID: String?
 
-    /// Clustering distance threshold passed to FluidAudio's
-    /// `OfflineDiarizerConfig`. FluidAudio's default of 0.6 is tuned for
-    /// clean studio audio (the pyannote community-1 benchmark suite);
-    /// VoIP / video-call audio is heavily codec-compressed which pulls
-    /// speaker embeddings closer together, causing the clusterer to merge
-    /// distinct voices into one. 0.5 is empirically the right ballpark for
-    /// Zoom/Meet/Teams audio — looser than studio defaults, but not so
-    /// loose that the same speaker over-segments into "speaker_1" and
-    /// "speaker_2". Exposed as a constant rather than a setting until we
-    /// see whether one threshold works for everyone.
-    private static let clusteringThreshold: Double = 0.5
+    /// Clustering threshold passed to FluidAudio's `OfflineDiarizerConfig`.
+    ///
+    /// IMPORTANT — direction of this knob (it is NOT "distance" despite the
+    /// field name elsewhere). FluidAudio treats this value as a cosine-style
+    /// *similarity* and converts it to an AHC dendrogram cut distance via
+    /// `sqrt(2 - 2·threshold)`. So a HIGHER threshold → a SMALLER cut distance
+    /// → MORE clusters (speakers kept apart); a LOWER threshold → a LARGER cut
+    /// distance → MORE merging (distinct voices collapsed into one). The old
+    /// value here (0.5) and its comment had this exactly backwards: 0.5
+    /// produces the *largest* cut distance of any sane value and so the most
+    /// aggressive merging.
+    ///
+    /// Measured on real meeting audio (scratch/diar-eval threshold sweep,
+    /// 6-minute system-track slices):
+    ///   - A two-person interview that collapsed to a single speaker in
+    ///     production stayed merged (unique=1) at 0.40–0.55 and split correctly
+    ///     into two voices (unique=2) at 0.60–0.80.
+    ///   - Two already-correct multi-speaker clips were unchanged across the
+    ///     whole 0.50–0.80 range — i.e. raising the threshold fixed the
+    ///     collapse with no over-segmentation cost.
+    /// 0.60–0.80 is a flat plateau on that data; 0.65 sits inside it with a
+    /// margin above the 0.55→0.60 transition so codec variation that nudges
+    /// embeddings slightly doesn't drop a call back into the collapsed regime.
+    /// Exposed as a constant rather than a setting until we see whether one
+    /// threshold works for everyone.
+    private static let clusteringThreshold: Double = 0.65
 
     /// Directory passed to `OfflineDiarizerModels.load(from:)`. FluidAudio
     /// appends its own repo folder underneath.

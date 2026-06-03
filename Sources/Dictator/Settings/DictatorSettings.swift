@@ -180,6 +180,14 @@ struct DictatorSettings: Codable, Equatable {
     /// the LLM on the GPU during the call, so the toggle is there for users who
     /// want to save battery, but it's on out of the box.
     var meetingLiveNotesEnabled: Bool = true
+    /// While building the live first-pass notes, periodically ask the LLM to
+    /// REVISE points the later conversation has contradicted or superseded — a
+    /// reversed decision, a corrected number — instead of only ever appending.
+    /// The model emits a small diff (drop/edit a numbered bullet), applied
+    /// deterministically, so the document is never wholesale-rewritten (which
+    /// small local models truncate). Only matters when `meetingLiveNotesEnabled`
+    /// is on; default ON.
+    var meetingLiveNotesSelfCorrectEnabled: Bool = true
     /// How a tap of the dictation / assistant hotkey behaves. ON (default):
     /// a quick tap-and-release (under ~0.35 s) latches listening ON — tap
     /// again to stop — while holding past the threshold is push-to-talk
@@ -371,6 +379,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
         self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
+        self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
@@ -834,6 +843,7 @@ struct DictatorSettings: Codable, Equatable {
     - You MAY end a Discussion, Decisions, or Action items bullet with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
     - Never wrap the notes, or any individual section, in ``` code fences.
     - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said.
+    - ATTRIBUTION DISCIPLINE (applies to every section, not just Action items): a point being ABOUT a person is NOT the same as that person saying it. Credit a statement, view, preference, question, or commitment to someone ONLY when the transcript shows THAT speaker saying it — i.e. it appears under their `[Name · mm:ss]` prefix. "Speaker 1 says Bob should own rollout" means Speaker 1 said it; it does NOT mean Bob said anything. When the transcript doesn't make the speaker clear, state the point without naming who said it rather than guessing. The transcript's speaker prefixes are the ONLY evidence of who said what — never infer a speaker from the content of a line.
 
     ACTION ITEM ATTRIBUTION — read carefully:
 
@@ -873,7 +883,7 @@ struct DictatorSettings: Codable, Equatable {
     ## Action items
     Include this section ONLY if a task was actually mentioned. Each item in the shape `- [ ] **Owner** — the task`, owner being the EXACT display name from the `[Speaker · mm:ss]` prefix (use "Me" for the recorder's own first-person commitments). When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix. If no task was mentioned, OMIT this section entirely — heading and all.
 
-    Do NOT add `## Discussion` or `## Decisions` sections — a note this short doesn't warrant them. Be faithful to the transcript: do not invent tasks, owners, decisions, or names that aren't supported by what was said. Never refuse and never emit placeholder text like "N/A".
+    Do NOT add `## Discussion` or `## Decisions` sections — a note this short doesn't warrant them. Be faithful to the transcript: do not invent tasks, owners, decisions, or names that aren't supported by what was said. A point being ABOUT a person is not the same as that person saying it — credit a statement or task to someone only when it appears under their `[Name · mm:ss]` prefix, and leave it unattributed when the speaker isn't clear. Never refuse and never emit placeholder text like "N/A".
 
     Output the Markdown ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
     """
@@ -1117,6 +1127,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingAudioRetentionDays
         case meetingSummaryEnabled
         case meetingLiveNotesEnabled
+        case meetingLiveNotesSelfCorrectEnabled
         case hotkeyTapToToggleEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
@@ -1148,6 +1159,7 @@ struct DictatorSettings: Codable, Equatable {
         "assistantPromptOverride",
         "meetingSummaryEnabled",
         "meetingLiveNotesEnabled",
+        "meetingLiveNotesSelfCorrectEnabled",
         "hotkeyTapToToggleEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",

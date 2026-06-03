@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The live notes taken while a meeting is recording can now correct themselves as the conversation moves on — if a decision is reversed or a number is restated later, the relevant point is revised or dropped rather than left stale. (New toggle under Meetings settings, "Correct live notes as the conversation moves on"; on by default.)
+- Meetings now tell apart the people on a call more reliably — a fix to the speaker-grouping sensitivity that was, in effect, the most aggressive at merging distinct voices, so a two-person call no longer collapses into a single speaker.
+- A stray word or two bleeding in from the other side of a call no longer creates a phantom "Me" (or an extra) speaker on a meeting where you were only listening.
+- Meeting notes are stricter about who said what: a point that's merely about a person is no longer mis-stated as something that person said, and the final notes now trust the transcript's speaker labels over the rougher live outline captured during the call.
 - Speakers in a meeting are now told apart by shape as well as colour — each speaker gets a distinct little symbol next to their name — so they stay distinguishable if you're colour-blind or reading in greyscale.
 - The Meetings screens now respect your system text size: labels, chips, and notes scale with the Display & Text Size setting instead of being pinned to fixed sizes.
 - Very short recordings get a lighter note — a brief one-to-three-sentence summary, plus action items only if there were any — instead of being padded out with empty Discussion and Decisions sections.

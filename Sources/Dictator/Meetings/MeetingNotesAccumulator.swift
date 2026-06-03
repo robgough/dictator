@@ -81,6 +81,11 @@ final class MeetingNotesAccumulator {
     @ObservationIgnored private var inflight = false
     @ObservationIgnored private var stopped = false
     @ObservationIgnored private var ticksSincePass = 0
+    /// Ticks since the last correction pass, and how far through the transcript
+    /// that pass had seen — the correction cadence is independent of the
+    /// additive pass's `consumedLineCount`.
+    @ObservationIgnored private var ticksSinceCorrection = 0
+    @ObservationIgnored private var lastCorrectionLineCount = 0
 
     /// One topic group in the running outline: a heading (empty for the
     /// general/un-grouped bucket) and its bullet lines (each already
@@ -98,6 +103,36 @@ final class MeetingNotesAccumulator {
     private static let maxIdleTicks = 3   // 10 s × 3 ≈ 30 s
     /// Cap on the existing-heading context we feed back for placement.
     private static let maxContextHeadings = 16
+
+    // MARK: Correction cadence
+    //
+    // The correction pass is the "self-correct on the fly" path: rather than
+    // only appending, it periodically asks the model whether the latest
+    // conversation has *contradicted* an earlier point (a reversed decision, a
+    // corrected number) and applies a small diff. It runs much less often than
+    // the additive pass and emits a tiny output (drop/edit lines, usually
+    // nothing), so it never enters the truncation regime a whole-document
+    // rewrite would on a small local model.
+
+    /// Run a correction pass at most once every this many ticks (≈ 60 s).
+    private static let correctionEveryTicks = 6
+    /// Don't bother correcting an outline smaller than this — too little to
+    /// have gone stale, and the cost isn't worth it.
+    private static let minBulletsForCorrection = 4
+    /// Trailing transcript lines handed to the correction pass as "what just
+    /// changed". The whole outline is shown as numbered context, but only
+    /// recent speech can justify a correction.
+    private static let maxRecentLinesForCorrection = 12
+    /// Cap on how many bullets we number into the correction prompt (the most
+    /// recent ones) — bounds the prompt and keeps the model's attention on
+    /// plausibly-revisable content.
+    private static let maxBulletsInCorrectionPrompt = 50
+    /// Blast-radius cap: apply at most this many corrections per pass, so a
+    /// confused model can't rewrite the whole outline in one go.
+    private static let maxCorrectionsPerPass = 3
+    /// Reject an edited bullet longer than this — a correction should be a
+    /// terse replacement, not a paragraph.
+    private nonisolated static let maxEditedBulletChars = 200
 
     init(transcriber: MeetingLiveTranscriber, settings: DictatorSettings) {
         self.transcriber = transcriber
@@ -192,23 +227,37 @@ final class MeetingNotesAccumulator {
     private func tick() async {
         guard !stopped, !inflight else { return }
         guard let transcriber else { return }
-
         let lines = transcriber.transcriptLines
-        guard lines.count > consumedLineCount else { return }
+        ticksSinceCorrection += 1
 
-        let newLines = Array(lines[consumedLineCount...])
-        let newChars = newLines.reduce(0) { $0 + $1.text.count }
-        ticksSincePass += 1
+        // ── Additive pass: fold genuinely new transcript into the outline. ──
+        if lines.count > consumedLineCount {
+            let newLines = Array(lines[consumedLineCount...])
+            let newChars = newLines.reduce(0) { $0 + $1.text.count }
+            ticksSincePass += 1
+            let enoughText = newChars >= Self.minNewChars
+            let waitedLongEnough = ticksSincePass >= Self.maxIdleTicks && newChars > 0
+            if enoughText || waitedLongEnough {
+                // Claim this batch up front so a pass failure doesn't replay
+                // the same window forever.
+                consumedLineCount = lines.count
+                ticksSincePass = 0
+                await runPass(newLines: newLines)
+            }
+        }
 
-        let enoughText = newChars >= Self.minNewChars
-        let waitedLongEnough = ticksSincePass >= Self.maxIdleTicks && newChars > 0
-        guard enoughText || waitedLongEnough else { return }
-
-        // Claim this batch up front so concurrent ticks don't double-process,
-        // and so a pass failure doesn't replay the same window forever.
-        consumedLineCount = lines.count
-        ticksSincePass = 0
-        await runPass(newLines: newLines)
+        // ── Correction pass: on a slower cadence, revise points the later ──
+        // conversation has contradicted. Runs independently of the additive
+        // cursor (it may fire on the same tick that just appended) so a fast
+        // meeting doesn't starve it.
+        guard !stopped, settings.meetingLiveNotesSelfCorrectEnabled else { return }
+        guard ticksSinceCorrection >= Self.correctionEveryTicks else { return }
+        guard pointCount >= Self.minBulletsForCorrection else { return }
+        guard lines.count > lastCorrectionLineCount else { return }
+        let recent = Array(Array(lines[lastCorrectionLineCount...]).suffix(Self.maxRecentLinesForCorrection))
+        lastCorrectionLineCount = lines.count
+        ticksSinceCorrection = 0
+        await runCorrectionPass(recentLines: recent)
     }
 
     private func runPass(newLines: [MeetingLiveTranscriber.LiveLine]) async {
@@ -262,6 +311,220 @@ final class MeetingNotesAccumulator {
             NSLog("[Dictator] Live notes pass failed: \(error)")
         }
     }
+
+    // MARK: - Correction pass
+
+    /// One correction the model asked for against the numbered outline.
+    private enum Correction {
+        case drop(Int)
+        case edit(Int, String)
+    }
+
+    /// Show the model the current outline (numbered) plus the most recent
+    /// transcript, and apply any drop/edit corrections it returns. Output is a
+    /// tiny diff, so this stays clear of the rewrite-truncation that asking a
+    /// small local model to re-emit the whole document would hit.
+    private func runCorrectionPass(recentLines: [MeetingLiveTranscriber.LiveLine]) async {
+        guard let engine = settings.activeLLMEngine() else { return }
+        guard !recentLines.isEmpty else { return }
+        let (numbered, refs) = numberedOutlineForCorrection()
+        guard refs.count >= Self.minBulletsForCorrection else { return }
+
+        inflight = true
+        isThinking = true
+        defer { inflight = false; isThinking = false }
+
+        let snippet = recentLines
+            .map { "\($0.speaker): \($0.text)" }
+            .joined(separator: "\n")
+        let selection = """
+        CURRENT NOTES (numbered):
+        \(numbered)
+
+        RECENT TRANSCRIPT:
+        \(snippet)
+        """
+
+        do {
+            let result = try await engine.assist(
+                selection: selection,
+                instruction: "Review the numbered notes against the recent transcript. Output ONLY the DROP/EDIT corrections the recent transcript clearly justifies, or nothing at all.",
+                systemPrompt: Self.correctionPrompt,
+                priorTurns: [],
+                summary: nil,
+                cancellation: { Task.isCancelled }
+            )
+            guard !stopped else { return }
+            let corrections = Self.parseCorrections(LLMTextUtilities.clean(result.text))
+            guard !corrections.isEmpty else { return }
+            let previousIDs = Set(outline.flatMap { $0.bullets.map(\.id) })
+            guard applyCorrections(corrections, refs: refs) else { return }
+            rebuildOutline()
+            liveNotes = render()
+            // Edited bullets get a new id (their text changed); wash those in.
+            // Pure drops just vanish — nothing to highlight.
+            let newIDs = Set(outline.flatMap { $0.bullets.map(\.id) })
+            freshBulletIDs = newIDs.subtracting(previousIDs)
+            lastUpdateAt = Date()
+            scheduleHighlightClear()
+        } catch {
+            NSLog("[Dictator] Live notes correction pass failed: \(error)")
+        }
+    }
+
+    /// Flatten the outline's bullets into a numbered list (most recent
+    /// `maxBulletsInCorrectionPrompt`), grouped under their headings, and return
+    /// it alongside a 0-based `refs` array mapping displayed number → the
+    /// `(group, line)` it points at. The numbering and the refs are built from
+    /// the same snapshot, so applying a correction by number is exact.
+    private func numberedOutlineForCorrection() -> (text: String, refs: [(g: Int, l: Int)]) {
+        var flat: [(g: Int, l: Int, indent: Bool, body: String)] = []
+        for (gi, group) in groups.enumerated() {
+            for (li, line) in group.lines.enumerated() {
+                let indent = line.hasPrefix("  ")
+                var body = line.trimmingCharacters(in: .whitespaces)
+                for marker in ["- ", "* ", "+ "] where body.hasPrefix(marker) {
+                    body = String(body.dropFirst(marker.count)); break
+                }
+                flat.append((gi, li, indent, body))
+            }
+        }
+        let kept = Array(flat.suffix(Self.maxBulletsInCorrectionPrompt))
+
+        var rendered: [String] = []
+        var refs: [(g: Int, l: Int)] = []
+        var lastHeadingShown: String?
+        for (idx, entry) in kept.enumerated() {
+            let heading = groups[entry.g].heading
+            if heading != lastHeadingShown {
+                if !heading.isEmpty { rendered.append("## \(heading)") }
+                lastHeadingShown = heading
+            }
+            let pad = entry.indent ? "  " : ""
+            rendered.append("\(pad)\(idx + 1). \(entry.body)")
+            refs.append((entry.g, entry.l))
+        }
+        return (rendered.joined(separator: "\n"), refs)
+    }
+
+    /// Apply parsed corrections to `groups` (capped at `maxCorrectionsPerPass`).
+    /// Drops and edits are gathered keyed by `(group, line)` first, then applied
+    /// in a single rebuild so list indices never shift mid-apply. Returns true
+    /// if anything actually changed.
+    private func applyCorrections(_ corrections: [Correction], refs: [(g: Int, l: Int)]) -> Bool {
+        func key(_ g: Int, _ l: Int) -> String { "\(g):\(l)" }
+        var drops = Set<String>()
+        var edits: [String: String] = [:]
+        var applied = 0
+
+        for correction in corrections {
+            if applied >= Self.maxCorrectionsPerPass { break }
+            switch correction {
+            case .drop(let n):
+                guard n >= 1, n <= refs.count else { continue }
+                let ref = refs[n - 1]
+                let k = key(ref.g, ref.l)
+                guard !drops.contains(k) else { continue }
+                drops.insert(k)
+                edits[k] = nil
+                applied += 1
+            case .edit(let n, let text):
+                guard n >= 1, n <= refs.count else { continue }
+                guard let body = Self.sanitiseCorrectionText(text) else { continue }
+                let ref = refs[n - 1]
+                let k = key(ref.g, ref.l)
+                guard !drops.contains(k) else { continue }
+                edits[k] = body
+                applied += 1
+            }
+        }
+        guard applied > 0 else { return false }
+
+        var changed = false
+        for gi in groups.indices {
+            var newLines: [String] = []
+            newLines.reserveCapacity(groups[gi].lines.count)
+            for (li, line) in groups[gi].lines.enumerated() {
+                let k = key(gi, li)
+                if drops.contains(k) { changed = true; continue }
+                if let body = edits[k] {
+                    let rebuilt = (line.hasPrefix("  ") ? "  - " : "- ") + body
+                    if rebuilt != line { changed = true }
+                    newLines.append(rebuilt)
+                } else {
+                    newLines.append(line)
+                }
+            }
+            groups[gi].lines = newLines
+        }
+        let groupsBefore = groups.count
+        groups.removeAll { $0.lines.isEmpty }
+        if groups.count != groupsBefore { changed = true }
+        return changed
+    }
+
+    /// Tidy a model-proposed replacement bullet: strip any leading markers it
+    /// echoed, trim, and reject if empty or implausibly long.
+    private nonisolated static func sanitiseCorrectionText(_ raw: String) -> String? {
+        let body = stripLeadingBulletMarkers(raw.trimmingCharacters(in: .whitespaces))
+            .trimmingCharacters(in: .whitespaces)
+        guard !body.isEmpty, body.count <= maxEditedBulletChars else { return nil }
+        return body
+    }
+
+    /// Parse the model's reply into `DROP n` / `EDIT n: text` corrections.
+    /// Anything that isn't one of those two shapes is ignored, so stray prose
+    /// can't leak in.
+    private nonisolated static func parseCorrections(_ raw: String) -> [Correction] {
+        var out: [Correction] = []
+        for rawLine in raw.components(separatedBy: .newlines) {
+            let line = stripLeadingBulletMarkers(rawLine.trimmingCharacters(in: .whitespaces))
+                .trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            let lower = line.lowercased()
+            if lower.hasPrefix("drop") {
+                if let n = firstInt(in: line) { out.append(.drop(n)) }
+            } else if lower.hasPrefix("edit") {
+                // `EDIT n: replacement text` — the colon is the reliable split.
+                guard let n = firstInt(in: line), let colon = line.firstIndex(of: ":") else { continue }
+                let text = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty { out.append(.edit(n, String(text))) }
+            }
+        }
+        return out
+    }
+
+    /// First run of digits in `s` as an Int, or nil.
+    private nonisolated static func firstInt(in s: String) -> Int? {
+        var digits = ""
+        var started = false
+        for ch in s {
+            if ch.isNumber { digits.append(ch); started = true }
+            else if started { break }
+        }
+        return Int(digits)
+    }
+
+    private static let correctionPrompt = """
+    You are reviewing the running notes of a meeting that is STILL IN PROGRESS, to fix points that LATER conversation has corrected, reversed, or made obsolete.
+
+    You receive the current notes as a NUMBERED list of bullets (grouped under their `##` headings), and a RECENT TRANSCRIPT snippet labelled `Me:` / `Them:`.
+
+    Output ONLY corrections the recent transcript clearly justifies, one per line, in exactly these forms:
+    - `DROP n` — remove bullet n (it was withdrawn or reversed, or is now plainly wrong).
+    - `EDIT n: <corrected text>` — replace bullet n's text (a changed decision, a corrected fact or number).
+
+    Rules:
+    - Correct ONLY what the RECENT TRANSCRIPT actually changes. If an earlier note is still accurate, leave it alone.
+    - Do NOT rewrite for style, do NOT add new points, do NOT renumber, do NOT restate unchanged bullets. This is a correction pass, not a rewrite.
+    - Keep an edited bullet short, in the same terse voice as the others. Do not attribute it to a named person.
+    - If nothing needs correcting, output NOTHING AT ALL — an empty reply is correct and expected, and is the common case.
+
+    Example — if bullet 4 reads "Decided to launch in Q3" and the recent transcript is "Them: actually, let's push the launch to Q4", output exactly:
+    EDIT 4: Decided to launch in Q4
+
+    No preamble, no commentary. Only DROP/EDIT lines, or nothing.
+    """
 
     // MARK: - Merge
 
@@ -393,6 +656,7 @@ final class MeetingNotesAccumulator {
     - REUSE an existing heading verbatim when the new content belongs to a topic already open — only create a new heading for a genuinely new topic.
     - Output ONLY headings and bullets for points that are NEW in this snippet. Do not repeat points already captured.
     - Keep bullets short and concrete. At most about 6 bullets total per snippet.
+    - ATTRIBUTION: you only know two labels — `Me` (the recorder) and `Them` (everyone else on the call). When more than one person is on the other side they are ALL `Them`, so you CANNOT tell which of them said any given thing. Never guess a person's name and never write "<Name> said/wants/will…". Write each point topically (what was said), not as a quote credited to a named individual. A point being ABOUT a person ("they think Jacob should…") is NOT the same as that person saying it — do not flip it into "Jacob said…". Only "Me"/"you" may be used, and only for a line that is clearly from `Me:`.
     - If the new snippet has nothing worth noting (small talk, filler, repetition), output NOTHING AT ALL — an empty reply is correct and expected.
     - No preamble, no commentary. Markdown headings and bullets only, or nothing.
     """
