@@ -115,38 +115,21 @@ enum MeetingSpeakerNamer {
     // MARK: - Prompt
 
     private static let systemPrompt = """
-    You identify the real names of the people speaking in a meeting transcript.
+    You identify the real names of the people speaking in a meeting transcript. Each line is prefixed with a speaker label and timestamp, e.g. "[Speaker 1 · 0:12] …".
 
-    Each line is prefixed with a speaker label and a timestamp, like:
-    [Speaker 1 · 0:12] So Priya, how did the rollout go?
-    [Speaker 2 · 0:18] Pretty smoothly, thanks for asking.
-
-    WHO A SPOKEN NAME REFERS TO — this is the crux; getting the direction right matters more than anything else:
-
-    People almost never say their OWN name to address themselves. So when a speaker says a name, that name almost always belongs to a DIFFERENT speaker — the person they are talking TO or ABOUT — NOT the speaker who said it.
-    - Direct address: "Thanks, Rory" / "What do you think, Rory?" / "Over to you, Rory" — said by Speaker 1 → it is the OTHER person (the one Speaker 1 is speaking to) who is Rory, NOT Speaker 1. In a two-person conversation that means the other speaker is Rory.
-    - Reference: "As Rory said earlier…" / "Rory raises a good point" — Rory is whoever earlier said the thing being referred to, again NOT the speaker saying this line.
-
-    The ONE exception is a self-introduction, where the name belongs to the speaker talking: "I'm Rory", "This is Rory", "Rory here", "My name is Rory" → that speaker is Rory.
-
-    So: a name attaches to the speaker being ADDRESSED or REFERRED TO — except in a self-introduction, where it attaches to the speaker talking.
-
-    Worked example:
-    [Speaker 1 · 0:03] Hi, I'm Dana — thanks for making the time.
-    [Speaker 2 · 0:07] Thanks, Dana. Good to finally meet.
-    [Speaker 1 · 0:12] So Marcus, walk me through your last project.
-    [Speaker 2 · 0:18] Sure — so last year I led a migration…
-    Reasoning: Speaker 1 introduces herself ("I'm Dana") → Speaker 1 is Dana. Speaker 2 saying "Thanks, Dana" is addressing the OTHER person, so it does NOT make Speaker 2 "Dana" — it confirms Speaker 1 is Dana. Speaker 1 saying "So Marcus, …" addresses the other person by name → Speaker 2 is Marcus.
-    Correct mapping: {"Speaker 1": "Dana", "Speaker 2": "Marcus"}
+    WHICH SPEAKER A SPOKEN NAME BELONGS TO — get this direction right:
+    A person almost never says their own name. So a name a speaker says belongs to a DIFFERENT speaker — the one they are addressing or referring to — NOT to the speaker who said it.
+    - Direct address — "Thanks, Rory" / "What do you think, Rory?" / "Over to you, Rory" said by Speaker 1 → the OTHER speaker (the one Speaker 1 is talking to) is Rory, not Speaker 1. In a two-person call, that's the other speaker.
+    - Reference — "As Rory said" / "Rory's point" → Rory is whoever said that earlier, not the speaker saying this line.
+    - Self-introduction is the ONE exception — "I'm Rory", "this is Rory", "Rory here" → that speaker is Rory.
 
     Rules:
-    - Use the person's FIRST name (or a full name only if it's clearly stated as theirs).
-    - NEVER guess a name from someone's role, company, or the topic. NEVER invent a name that isn't actually spoken in the transcript.
+    - Use the person's FIRST name (a full name only if clearly stated as theirs).
+    - NEVER guess from a role, company, or topic. NEVER use a name that isn't actually spoken somewhere in the transcript.
     - Never give two speakers the same name.
-    - If you can't tell which speaker a spoken name belongs to, leave that label out. Returning an empty object is correct and expected when no names are clearly identifiable — do not force a guess.
+    - Omit a label whose name isn't clear. Naming only some of the speakers is fine.
 
-    Output ONLY a JSON object mapping the exact speaker label (the text inside the brackets, e.g. "Speaker 1") to the person's name. No commentary, no reasoning, no code fences — just the JSON.
-    If you can't confidently name anyone, output exactly: {}
+    Output ONLY a JSON object mapping each speaker label (exactly as written in the brackets, e.g. "Speaker 1") to a first name — nothing before or after it, no reasoning, no code fences. If you genuinely can't name anyone, output exactly: {}
     """
 
     // MARK: - Parsing & validation
@@ -156,17 +139,55 @@ enum MeetingSpeakerNamer {
     /// and tolerates surrounding prose / fences.
     private static func parseMapping(_ raw: String) -> [String: String] {
         let cleaned = LLMTextUtilities.clean(raw)
-        guard let start = cleaned.firstIndex(of: "{"),
-              let end = cleaned.lastIndex(of: "}"),
-              start < end else { return [:] }
-        let json = String(cleaned[start...end])
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        // Extract every balanced top-level {…} object independently and merge
+        // them (later keys win). This is robust to a model that emits prose
+        // reasoning around the JSON, or echoes an example object before its real
+        // answer — the old "first { … last }" span would glue two objects into
+        // invalid JSON and parse nothing. Any bogus name that slips through here
+        // is still caught downstream by the spoken-token check.
         var out: [String: String] = [:]
-        for (k, v) in obj {
-            if let s = v as? String { out[k] = s }
+        for objStr in balancedJSONObjects(in: cleaned) {
+            guard let data = objStr.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            for (k, v) in obj where v is String {
+                out[k] = v as? String
+            }
         }
         return out
+    }
+
+    /// Pull out each top-level balanced `{…}` substring, respecting quoted
+    /// strings so a brace inside a value can't desync the matching. Returns them
+    /// in document order.
+    private static func balancedJSONObjects(in s: String) -> [String] {
+        let chars = Array(s)
+        var result: [String] = []
+        var i = 0
+        while i < chars.count {
+            guard chars[i] == "{" else { i += 1; continue }
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var j = i
+            while j < chars.count {
+                let c = chars[j]
+                if inString {
+                    if escaped { escaped = false }
+                    else if c == "\\" { escaped = true }
+                    else if c == "\"" { inString = false }
+                } else if c == "\"" {
+                    inString = true
+                } else if c == "{" {
+                    depth += 1
+                } else if c == "}" {
+                    depth -= 1
+                    if depth == 0 { result.append(String(chars[i...j])); break }
+                }
+                j += 1
+            }
+            i = j > i ? j + 1 : i + 1
+        }
+        return result
     }
 
     /// Filler / pronoun / role words a small model sometimes returns as a
