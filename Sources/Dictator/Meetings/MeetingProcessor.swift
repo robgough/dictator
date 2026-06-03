@@ -104,21 +104,23 @@ final class MeetingProcessor {
             micDuration = Double(micSamples.count) / 16_000
         }
 
-        // ── Mic-bleed gate ───────────────────────────────────────────────
+        // ── Mic-bleed gate + cross-track alignment ───────────────────────
         // With a sensitive mic and no headphones the mic captures the remote
         // audio bleeding out of the speakers. That bleed is a delayed,
-        // heavily-attenuated copy of the system track, so we cancel it in the
-        // AUDIO domain — before transcription AND diarization — using the system
-        // track as the reference. This is far more robust than the downstream
-        // text-level dedup, which fails because acoustically-degraded bleed
-        // transcribes to *different* words than the clean system track and so
-        // never matches. Self-disables when the two tracks aren't correlated
-        // (headphones / clean setup). Gated by the same "drop my mic's echoes"
-        // setting that controls the text dedup.
+        // attenuated copy of the system track, so we cancel it in the AUDIO
+        // domain — before transcription AND diarization — by estimating the
+        // actual coupling (lag + gain) and silencing only mic frames the
+        // predicted bleed explains. The lag estimate doubles as cross-track
+        // start alignment: the two recorders begin writing at different wall
+        // times (observed ~5 s apart), which otherwise scrambles the merged
+        // word order and defeats the text dedup. Self-disables when the
+        // tracks don't correlate (headphones / clean setup). Gated by the
+        // same "drop my mic's echoes" setting that controls the text dedup.
         if dedupeMicEchoes, !micSamples.isEmpty, !systemSamples.isEmpty {
             let gate = Self.gateMicBleed(mic: micSamples, system: systemSamples, sampleRate: 16_000)
-            NSLog("[Dictator] Mic-bleed gate: medianRatio=\(String(format: "%.2f", gate.medianRatio)) fraction=\(String(format: "%.2f", gate.fraction)) dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — mic as loud as the call / no bleed"))")
+            NSLog("[Dictator] Mic-bleed gate: corr=\(String(format: "%.2f", gate.correlation)) offset=\(String(format: "%+.2fs", gate.offsetSeconds)) gain=\(String(format: "%.3f", gate.gain)) dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — tracks uncorrelated / no bleed"))")
             micSamples = gate.gated
+            micDuration = Double(micSamples.count) / 16_000
         }
 
         // ── Transcription pass on each track ─────────────────────────────
@@ -214,6 +216,19 @@ final class MeetingProcessor {
             // step still emits something. The text comes through intact;
             // we just lose word-precision search for this clip.
             micWords = [SpeakerAttributedWord(start: 0, end: micDuration, text: micFallbackText, speakerId: "me")]
+        }
+
+        // Attribution-level bleed backstop: words that landed on a mic
+        // cluster identified as bleed (see `unifySpeakerSpace`) are garbled
+        // duplicates of remote speech the system track already carries
+        // cleanly. This catches bleed the audio gate couldn't see — buried
+        // in noise-floor hiss, or surviving under double-talk.
+        if !micWords.isEmpty {
+            let beforeBleedFilter = micWords.count
+            micWords.removeAll { $0.speakerId == Self.bleedSpeakerID }
+            if micWords.count != beforeBleedFilter {
+                NSLog("[Dictator] Bleed-cluster backstop: dropped \(beforeBleedFilter - micWords.count) of \(beforeBleedFilter) mic words")
+            }
         }
 
         // System words.
@@ -323,96 +338,215 @@ final class MeetingProcessor {
 
     // MARK: - Mic-bleed gate
 
-    /// Outcome of `gateMicBleed`. `gated` is the mic with bleed frames silenced;
-    /// the rest are diagnostics for the log.
+    /// Outcome of `gateMicBleed`. `gated` is the mic with bleed frames silenced
+    /// and the track start-aligned to the system track; the rest are
+    /// diagnostics for the log.
     nonisolated struct BleedGateResult: Sendable {
         let gated: [Float]
         let droppedFraction: Double
-        /// Median of (mic / windowed-system) across mic-active frames — the
-        /// "how quiet does the mic run vs the call?" signal the gate keys off.
-        let medianRatio: Double
-        /// The bleed threshold actually used (0 when the gate didn't engage).
-        let fraction: Double
-        /// False when the mic, whenever it's active, is about as loud as the
-        /// call — i.e. you're speaking or on headphones, no bleed to remove.
+        /// Measured mic-vs-system start offset (seconds) removed from `gated`.
+        /// The recorders begin writing at different wall times (observed up to
+        /// ~5 s apart), so this also re-anchors mic word timestamps onto the
+        /// system track's timeline for the downstream merge + text dedup.
+        let offsetSeconds: Double
+        /// Best lag-aligned log-envelope correlation — the engage signal.
+        let correlation: Double
+        /// Median per-block coupling gain (bleed level ÷ system level).
+        let gain: Double
+        /// False when the tracks don't correlate at any plausible offset —
+        /// headphones / clean setup / silent mic. The mic passes through
+        /// untouched (no gating, no alignment).
         let applied: Bool
     }
 
-    /// Gate tuning. A mic frame is bleed when it sits below `fraction`× the
-    /// loudest system frame within ±`windowRadius` (the window covers the
-    /// speaker→mic delay + room reverb without having to estimate it). The
-    /// fraction adapts to how bleed-dominated the recording is:
-    ///  - `enableMedianRatio`: if the mic, when active, is typically at least
-    ///    this fraction of the system, there's no bleed pattern (you're
-    ///    speaking / on headphones) — leave the mic untouched.
-    ///  - `aggressiveMedianRatio`: if the mic is *almost always* far quieter
-    ///    than the system (you're essentially just listening), use the
-    ///    aggressive fraction to catch louder bleed too; otherwise stay
-    ///    conservative so a quieter-than-the-call voice isn't eaten.
+    /// Gate tuning. The gate models bleed explicitly: mic[i] contains
+    /// `gain × system[i − lag]` whenever the call audio leaves the speakers.
+    /// A mic frame is silenced only when its energy is *explained by* that
+    /// prediction — the user's voice lifts the mic above it even when they're
+    /// far quieter than the (digitally hot) system track, which is what the
+    /// old "mic much quieter than system ⇒ bleed" rule got wrong: on real
+    /// calls it deleted 30–60 % of the user's own speech.
     private nonisolated static let bleedSystemFloor: Float = 0.01
     private nonisolated static let bleedMicFloor: Float = 0.002
-    private nonisolated static let bleedWindowRadius = 20            // ±200 ms
-    private nonisolated static let bleedEnableMedianRatio: Float = 0.7
-    private nonisolated static let bleedAggressiveMedianRatio: Float = 0.2
-    private nonisolated static let bleedFractionNormal: Float = 0.4
-    private nonisolated static let bleedFractionAggressive: Float = 0.65
+    /// Engage only when the lag-aligned envelopes genuinely correlate;
+    /// spurious peaks on bleed-free meetings measure ≤ ~0.1.
+    private nonisolated static let bleedEngageMinCorrelation: Float = 0.35
+    /// Coarse start-offset search range (100 ms resolution).
+    private nonisolated static let bleedCoarseRangeFrames = 600       // ±60 s
+    /// Fine lag search around a candidate (10 ms resolution). Asymmetric:
+    /// bleed can only lag the system audio, plus a little jitter slack.
+    private nonisolated static let bleedFineLo = -10                  // −100 ms
+    private nonisolated static let bleedFineHi = 50                   // +500 ms
+    /// Coupling gain = this percentile of lag-aligned mic/system ratios.
+    /// Deliberately low: pure-bleed frames cluster here while double-talk
+    /// scatters above, and under-deleting is recoverable downstream (cluster
+    /// backstop + text dedup) where deleting the user's voice is not.
+    private nonisolated static let bleedGainPercentile = 0.20
+    /// Silence a frame when mic < this × predicted bleed.
+    private nonisolated static let bleedGainMargin: Float = 1.6
+    /// Reverb window around the lag-aligned system frame (×10 ms): energy from
+    /// slightly-earlier system audio still rings at the mic.
+    private nonisolated static let bleedReverbBack = 10
+    private nonisolated static let bleedReverbFwd = 2
+    /// Per-block re-estimation (60 s): tracks clock skew between the two
+    /// capture devices and playback-volume changes mid-meeting.
+    private nonisolated static let bleedBlockFrames = 6000
+    private nonisolated static let bleedBlockLagRefine = 10
 
     /// Remove remote-speaker bleed from the mic using the system track as a
-    /// reference. Decides whether there's bleed — and how aggressively to gate —
-    /// from the LEVEL relationship between the two tracks, which (unlike a
-    /// delay/correlation estimate) needs no clean run of bleed and so works even
-    /// when the mic was on for only a couple of seconds. Silences any mic frame
-    /// far quieter than the loudest system audio in a ±200 ms window around it;
-    /// kept regions are dilated and the gain is smoothed + ramped per sample, so
-    /// there are no clicks for the transcriber to mishear.
+    /// reference, and start-align the two tracks while at it.
     ///
-    /// Honest limitation: a bleed transient that momentarily reaches the call's
-    /// own level (e.g. a loud word leaking in at ≈1× the system) is
-    /// level-indistinguishable from your own voice and survives — catching it
-    /// needs content matching, which the downstream text dedup attempts.
+    /// Three stages, all on 10 ms RMS envelopes:
+    ///  1. Find the mic-vs-system start offset: coarse ±60 s cross-correlation
+    ///     of decimated log envelopes (conditional on system activity —
+    ///     unconditional correlation latches onto conversational turn-taking),
+    ///     then a fine 10 ms-resolution pass around both zero and the coarse
+    ///     hit. No confident correlation ⇒ no bleed pattern ⇒ untouched.
+    ///  2. Estimate the coupling gain per 60 s block as a low percentile of
+    ///     lag-aligned mic/system ratios, with a small per-block lag refine.
+    ///  3. Silence mic frames whose energy the predicted bleed explains; kept
+    ///     regions are dilated and the gain is smoothed + ramped per sample,
+    ///     so there are no clicks for the transcriber to mishear.
+    ///
+    /// Honest limitation: bleed *underneath* the user's voice (double-talk)
+    /// survives by design — the user's speech dominates the mic locally, so
+    /// ASR mostly transcribes them, and the attribution backstop + text dedup
+    /// mop up residual bleed words. Bleed too quiet to shape the mic envelope
+    /// (buried in noise-floor hiss) is also invisible here; same backstops.
     nonisolated static func gateMicBleed(mic: [Float], system: [Float], sampleRate: Double) -> BleedGateResult {
         let sr = Int(sampleRate)
         let frame = max(1, sr / 100)   // 10 ms analysis frame
         guard mic.count >= frame, system.count >= frame else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: 9, fraction: 0, applied: false)
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false)
         }
         let micEnv = rmsEnvelope(mic, frame: frame)
         let sysEnv = rmsEnvelope(system, frame: frame)
         let n = min(micEnv.count, sysEnv.count)
-        let radius = bleedWindowRadius
+        guard n > 100 else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false)
+        }
+        let eps: Float = 1e-6
+        let logMic = (0..<n).map { log(micEnv[$0] + eps) }
+        let logSys = (0..<n).map { log(sysEnv[$0] + eps) }
 
-        // Loudest system frame within ±radius of `i` — covers the speaker→mic
-        // delay and reverb tail without estimating either.
-        func windowedSystem(_ i: Int) -> Float {
-            var s: Float = 0
-            let lo = max(0, i - radius), hi = min(n - 1, i + radius)
-            var j = lo
-            while j <= hi { s = max(s, sysEnv[j]); j += 1 }
-            return s
+        // Pearson correlation of the log envelopes at `lag` over frames where
+        // the (shifted) system is active, optionally on 100 ms-decimated
+        // envelopes. Conditioning on system activity matters: in a
+        // conversation the unconditional envelopes ANTI-correlate at the true
+        // lag (people alternate) and spuriously align at large shifts.
+        func corrAt(lag: Int, stride: Int) -> Float {
+            var sx: Float = 0, sy: Float = 0, sxx: Float = 0, syy: Float = 0, sxy: Float = 0
+            var count = 0
+            var i = max(0, lag)
+            let m = n / stride
+            while i < min(m, m + lag) {
+                let j = i - lag
+                if j >= 0, j < m, sysEnv[j * stride] > bleedSystemFloor {
+                    let x = logMic[i * stride], y = logSys[j * stride]
+                    sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y
+                    count += 1
+                }
+                i += 1
+            }
+            guard count > 30 else { return 0 }
+            let c = Float(count)
+            let num = sxy - sx * sy / c
+            let den = ((sxx - sx * sx / c) * (syy - sy * sy / c)).squareRoot()
+            return den > 0 ? num / den : 0
         }
 
-        // How quiet does the mic run vs the call when it's active? The median
-        // ratio decides engage / how-aggressive.
-        var ratios: [Float] = []
-        for i in 0..<n where micEnv[i] > bleedMicFloor {
-            let s = windowedSystem(i)
-            if s > bleedSystemFloor { ratios.append(micEnv[i] / s) }
+        // Stage 1a — coarse start-offset (100 ms resolution, ±60 s).
+        var coarseLag = 0
+        var coarseCorr: Float = -1
+        for lag in -bleedCoarseRangeFrames...bleedCoarseRangeFrames {
+            let r = corrAt(lag: lag, stride: 10)
+            if r > coarseCorr { coarseCorr = r; coarseLag = lag }
         }
-        guard ratios.count >= 10 else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: 9, fraction: 0, applied: false)
+        // Stage 1b — fine lag around zero and (when confident) the coarse hit.
+        var centers = [0]
+        if coarseCorr >= 0.25, abs(coarseLag) > 5 { centers.append(coarseLag * 10) }
+        var bestLag = 0
+        var bestCorr: Float = -1
+        for center in centers {
+            for lag in (center + bleedFineLo)...(center + bleedFineHi) {
+                let r = corrAt(lag: lag, stride: 1)
+                if r > bestCorr { bestCorr = r; bestLag = lag }
+            }
         }
-        ratios.sort()
-        let median = ratios[ratios.count / 2]
-        guard median < bleedEnableMedianRatio else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: Double(median), fraction: 0, applied: false)
+        guard bestCorr >= bleedEngageMinCorrelation else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: Double(bestLag) / 100,
+                                   correlation: Double(bestCorr), gain: 0, applied: false)
         }
-        let fraction: Float = median < bleedAggressiveMedianRatio ? bleedFractionAggressive : bleedFractionNormal
 
+        // Stage 2 — per-block lag refine + coupling gain.
+        let blockCount = (n + bleedBlockFrames - 1) / bleedBlockFrames
+        var blockLag = [Int](repeating: bestLag, count: blockCount)
+        var blockGain = [Float](repeating: 0, count: blockCount)
+        var gains: [Float] = []
+        var lastGain: Float = 0
+        for b in 0..<blockCount {
+            let lo = b * bleedBlockFrames, hi = min(n, lo + bleedBlockFrames)
+            // Refine the lag inside this block when it has enough signal.
+            var lag = bestLag
+            var lagCorr: Float = -1
+            for cand in (bestLag - bleedBlockLagRefine)...(bestLag + bleedBlockLagRefine) {
+                var sx: Float = 0, sy: Float = 0, sxx: Float = 0, syy: Float = 0, sxy: Float = 0
+                var count = 0
+                for i in lo..<hi {
+                    let j = i - cand
+                    if j >= 0, j < n, sysEnv[j] > bleedSystemFloor {
+                        let x = logMic[i], y = logSys[j]
+                        sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y
+                        count += 1
+                    }
+                }
+                if count > 300 {
+                    let c = Float(count)
+                    let num = sxy - sx * sy / c
+                    let den = ((sxx - sx * sx / c) * (syy - sy * sy / c)).squareRoot()
+                    let r = den > 0 ? num / den : 0
+                    if r > lagCorr { lagCorr = r; lag = cand }
+                }
+            }
+            blockLag[b] = lag
+            var ratios: [Float] = []
+            for i in lo..<hi {
+                let j = i - lag
+                if j >= 0, j < n, sysEnv[j] > bleedSystemFloor, micEnv[i] > bleedMicFloor {
+                    ratios.append(micEnv[i] / sysEnv[j])
+                }
+            }
+            if ratios.count >= 100 {
+                ratios.sort()
+                lastGain = ratios[Int(Double(ratios.count - 1) * bleedGainPercentile)]
+                gains.append(lastGain)
+            }
+            blockGain[b] = lastGain
+        }
+        if let firstIdx = blockGain.firstIndex(where: { $0 > 0 }) {
+            for b in 0..<firstIdx { blockGain[b] = blockGain[firstIdx] }
+        }
+        gains.sort()
+        let medianGain = gains.isEmpty ? 0 : gains[gains.count / 2]
+        guard medianGain > 0 else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: Double(bestLag) / 100,
+                                   correlation: Double(bestCorr), gain: 0, applied: false)
+        }
+
+        // Stage 3 — silence frames the predicted bleed explains. System-silent
+        // frames are untouchable: the gate can never delete speech the call
+        // wasn't making sound over.
         var keep = [Float](repeating: 1, count: n)
         var dropped = 0
         for i in 0..<n {
-            let s = windowedSystem(i)
-            if s > bleedSystemFloor && micEnv[i] < fraction * s {
+            let b = i / bleedBlockFrames
+            let lag = blockLag[b]
+            let g = blockGain[b]
+            var s: Float = 0
+            let lo = max(0, i - lag - bleedReverbBack), hi = min(n - 1, i - lag + bleedReverbFwd)
+            if lo <= hi { for j in lo...hi { s = max(s, sysEnv[j]) } }
+            guard s > bleedSystemFloor else { continue }
+            if micEnv[i] < bleedGainMargin * g * s {
                 keep[i] = 0
                 dropped += 1
             }
@@ -437,11 +571,22 @@ final class MeetingProcessor {
                 }
             }
         }
+        // Start-align the mic onto the system track's timeline so word
+        // timestamps from the two ASR passes agree (the merge sorts by time
+        // and the text dedup matches within ±300 ms — a multi-second start
+        // offset breaks both, interleaving duplicate words mid-sentence).
+        if bestLag > 0 {
+            gated.removeFirst(min(gated.count, bestLag * frame))
+        } else if bestLag < 0 {
+            gated.insert(contentsOf: [Float](repeating: 0, count: -bestLag * frame), at: 0)
+        }
+
         return BleedGateResult(
             gated: gated,
             droppedFraction: Double(dropped) / Double(n),
-            medianRatio: Double(median),
-            fraction: Double(fraction),
+            offsetSeconds: Double(bestLag) / 100,
+            correlation: Double(bestCorr),
+            gain: Double(medianGain),
             applied: true
         )
     }
@@ -591,65 +736,154 @@ final class MeetingProcessor {
         let discoveredOrder: [String]
     }
 
+    /// Sentinel speaker ID for mic clusters identified as bleed (the remote
+    /// speakers leaking out of the speakers into the mic). Words attributed
+    /// here are DISCARDED after attribution — the system track carries the
+    /// clean copy of that speech.
+    nonisolated static let bleedSpeakerID = "__bleed__"
+
     /// Unify the two per-track diarizer outputs into a single speaker space.
     ///
-    /// The dominant mic cluster (most total speech) becomes "me". Other mic
-    /// clusters and system clusters are assigned to `speaker_N` slots in
-    /// encounter order. Whenever a cross-track cluster's centroid is close
-    /// (cosine similarity ≥ matchThreshold) to a cluster already in the
-    /// unified space, we reuse that slot — that's how the same physical
-    /// person bleeding across mic and system tracks gets recognised.
+    /// Physics first: the system track carries ONLY remote voices, and the
+    /// mic track carries ONLY local ones (the user, anyone in the room) —
+    /// plus, without headphones, bleed: a degraded copy of the remote
+    /// voices. So a mic cluster whose centroid matches a system cluster is
+    /// not "the same person on two channels" to be merged — it IS the bleed,
+    /// and its words are garbled duplicates of speech the system track
+    /// already has cleanly. Those clusters map to `bleedSpeakerID` and their
+    /// words are dropped. (The old behaviour — binding the matching clusters
+    /// to one slot — fused remote speakers into "me" and interleaved the two
+    /// transcriptions word-by-word.)
+    ///
+    /// The dominant surviving mic cluster (most total speech) becomes "me".
+    /// Other mic clusters and system clusters get `speaker_N` slots in
+    /// encounter order; centroid matching for slot reuse only ever applies
+    /// within the same track (over-split repair), never across tracks.
     nonisolated static func unifySpeakerSpace(
         micDiar: DiarizationOutput?,
         systemDiar: DiarizationOutput?
     ) -> UnifiedSpeakerSpace {
-        // Cosine-similarity threshold for declaring two clusters (from
-        // different tracks) to be the same physical speaker. Same-track
-        // clustering uses the FluidAudio `clustering.threshold` of 0.5 in
-        // VBx distance space; cross-track is a different problem — the
-        // speaker sounds slightly different through their own mic vs the
-        // speaker output, so we need to be looser. 0.78 cosine similarity
-        // is the ballpark empirically used in pyannote-derived pipelines
-        // for "probably the same person, different channel" matching.
+        // Cosine-similarity threshold for declaring two clusters to be the
+        // same physical voice. Same-track clustering uses the FluidAudio
+        // `clustering.threshold` of 0.5 in VBx distance space; this is a
+        // different problem — the same voice sounds different through the
+        // speaker output vs its own channel, so we need to be looser. 0.78
+        // cosine similarity is the ballpark empirically used in
+        // pyannote-derived pipelines for "probably the same person,
+        // different channel" matching.
         let matchThreshold: Float = 0.78
+        // A mic cluster is bleed only when, additionally, its speech lies
+        // (almost) entirely inside system-speech time — a remote voice cannot
+        // sound from the speakers while the system track is silent. This is
+        // the direction test that keeps a real local voice (which has plenty
+        // of system-silent speech) from ever being dropped.
+        let bleedOverlapMin = 0.8
+        // …and a copy cannot outsize its source: a mic cluster with much more
+        // total speech than the system cluster it matched isn't a copy of it.
+        // Guards the far-end-echo case (your own voice coming back through
+        // the call) and coincidental voice-alike matches.
+        let bleedMaxDurationRatio = 1.5
+        // Minimum substance to crown "me" when bleed is plausible (a system
+        // track exists): a few seconds of garbled bleed sliver that dodged
+        // the centroid match must not seed a phantom Me chip.
+        let meMinimumSeconds = 8.0
 
         var micMapping: [String: String] = [:]
         var systemMapping: [String: String] = [:]
         var orderedIDs: [String] = []
-        // Centroids of unified slots, keyed by unified ID — used to match
-        // a fresh cross-track cluster against everyone we've seen so far.
+        // Centroids of unified slots, keyed by unified ID — used for
+        // same-track slot reuse below.
         var unifiedCentroids: [String: [Float]] = [:]
+        var micSlots = Set<String>()
+        var systemSlots = Set<String>()
 
-        // Step 1: pick the dominant mic cluster (longest total speech time)
-        // as "me". Heuristic — right >95% of the time for live recordings
+        func speechTotals(_ diar: DiarizationOutput?) -> [String: Double] {
+            guard let diar else { return [:] }
+            return Dictionary(grouping: diar.segments, by: { $0.speakerLabel })
+                .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
+        }
+        let micTotals = speechTotals(micDiar)
+        let sysTotals = speechTotals(systemDiar)
+
+        // System speech timeline (merged, ±0.5 s pad) for the direction test.
+        var sysIntervals: [(Double, Double)] = []
+        if let systemDiar {
+            for seg in systemDiar.segments.sorted(by: { $0.start < $1.start }) {
+                let s = seg.start - 0.5, e = seg.end + 0.5
+                if let last = sysIntervals.last, s <= last.1 {
+                    sysIntervals[sysIntervals.count - 1].1 = max(last.1, e)
+                } else {
+                    sysIntervals.append((s, e))
+                }
+            }
+        }
+        func systemOverlapFraction(of label: String, in diar: DiarizationOutput) -> Double {
+            var total = 0.0, overlap = 0.0
+            for seg in diar.segments where seg.speakerLabel == label {
+                total += seg.end - seg.start
+                for iv in sysIntervals {
+                    let lo = max(seg.start, iv.0), hi = min(seg.end, iv.1)
+                    if hi > lo { overlap += hi - lo }
+                }
+            }
+            return total > 0 ? overlap / total : 0
+        }
+
+        // Step 1: mark mic clusters that are bleed.
+        var bleedClusters = Set<String>()
+        if let micDiar, let systemDiar, !sysIntervals.isEmpty {
+            for (label, centroid) in micDiar.clusterCentroids {
+                var bestSim: Float = 0
+                var bestSys: String?
+                for (sysLabel, sysCentroid) in systemDiar.clusterCentroids {
+                    let sim = cosineSimilarity(centroid, sysCentroid)
+                    if sim > bestSim { bestSim = sim; bestSys = sysLabel }
+                }
+                guard bestSim >= matchThreshold, let bestSys else { continue }
+                let micDur = micTotals[label] ?? 0
+                let sysDur = sysTotals[bestSys] ?? 0
+                guard micDur <= sysDur * bleedMaxDurationRatio else { continue }
+                let overlap = systemOverlapFraction(of: label, in: micDiar)
+                guard overlap >= bleedOverlapMin else { continue }
+                bleedClusters.insert(label)
+                micMapping[label] = bleedSpeakerID
+                NSLog("[Dictator] Bleed cluster: mic \(label) matches system \(bestSys) (sim=\(String(format: "%.2f", bestSim)) overlap=\(String(format: "%.0f%%", overlap * 100)) dur=\(String(format: "%.0fs", micDur))) — words dropped")
+            }
+        }
+
+        // Step 2: pick the dominant surviving mic cluster (longest total
+        // speech) as "me". Right >95% of the time for live recordings
         // because the user is the loudest and longest-speaking voice on
         // their own mic. Wrong only for shared-machine or in-room cases
-        // where someone else dominates the mic; users can rename "me" to
-        // the actual speaker in the chip UI.
+        // where someone else dominates the mic; users can rename "me" in
+        // the chip UI. When a system track exists, "me" additionally needs
+        // a few seconds of substance so residual bleed can't seed it.
         var meCluster: String?
-        if let micDiar, !micDiar.segments.isEmpty {
-            let totals = Dictionary(grouping: micDiar.segments, by: { $0.speakerLabel })
-                .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
-            meCluster = totals.max(by: { $0.value < $1.value })?.key
+        let meBar = sysIntervals.isEmpty ? 0.0 : meMinimumSeconds
+        if let top = micTotals
+            .filter({ !bleedClusters.contains($0.key) })
+            .max(by: { $0.value < $1.value }),
+            top.value >= meBar {
+            meCluster = top.key
         }
 
         if let meCluster {
             micMapping[meCluster] = "me"
             orderedIDs.append("me")
+            micSlots.insert("me")
             if let centroid = micDiar?.clusterCentroids[meCluster] {
                 unifiedCentroids["me"] = centroid
             }
         }
 
         // Helper that registers a cluster — either against an existing
-        // unified slot whose centroid matches, or as a fresh speaker_N.
-        // Returns the unified ID it ended up bound to.
-        func register(label: String, centroid: [Float]?) -> String {
-            // Try to match against any existing unified slot.
+        // same-track slot whose centroid matches (over-split repair), or as
+        // a fresh speaker_N. Returns the unified ID it ended up bound to.
+        func register(label: String, centroid: [Float]?, allowedSlots: Set<String>) -> String {
             if let centroid {
                 var bestID: String?
                 var bestSim: Float = matchThreshold
-                for (uid, uc) in unifiedCentroids {
+                for (uid, uc) in unifiedCentroids where allowedSlots.contains(uid) {
                     let sim = cosineSimilarity(centroid, uc)
                     if sim >= bestSim {
                         bestSim = sim
@@ -659,7 +893,7 @@ final class MeetingProcessor {
                 if let bestID {
                     // Don't overwrite the centroid — keep the first one we
                     // bound to this slot as the canonical reference. Averaging
-                    // sounds tempting but mic-vs-system embeddings differ
+                    // sounds tempting but embeddings across contexts differ
                     // enough that the average can drift toward neither.
                     return bestID
                 }
@@ -672,34 +906,31 @@ final class MeetingProcessor {
             return newID
         }
 
-        // Step 2: remaining mic clusters, ordered by total speech time so
+        // Step 3: remaining mic clusters, ordered by total speech time so
         // the more-active people get the lower speaker_N numbers.
         if let micDiar {
-            let micTotals = Dictionary(grouping: micDiar.segments, by: { $0.speakerLabel })
-                .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
             let sortedClusters = micTotals.keys.sorted {
                 (micTotals[$0] ?? 0) > (micTotals[$1] ?? 0)
             }
-            for label in sortedClusters where label != meCluster {
+            for label in sortedClusters where label != meCluster && !bleedClusters.contains(label) {
                 let centroid = micDiar.clusterCentroids[label]
-                let uid = register(label: label, centroid: centroid)
+                let uid = register(label: label, centroid: centroid, allowedSlots: micSlots)
+                micSlots.insert(uid)
                 micMapping[label] = uid
             }
         }
 
-        // Step 3: system clusters in order of total speech time. Each one
-        // either matches an existing unified slot via centroid similarity
-        // (so the system track recognises a person already attributed to
-        // the mic) or becomes a fresh speaker_N.
+        // Step 4: system clusters in order of total speech time. Matching is
+        // restricted to system-originated slots — a remote voice physically
+        // cannot be a local one, so cross-track slot reuse is never right.
         if let systemDiar {
-            let sysTotals = Dictionary(grouping: systemDiar.segments, by: { $0.speakerLabel })
-                .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
             let sortedClusters = sysTotals.keys.sorted {
                 (sysTotals[$0] ?? 0) > (sysTotals[$1] ?? 0)
             }
             for label in sortedClusters {
                 let centroid = systemDiar.clusterCentroids[label]
-                let uid = register(label: label, centroid: centroid)
+                let uid = register(label: label, centroid: centroid, allowedSlots: systemSlots)
+                systemSlots.insert(uid)
                 systemMapping[label] = uid
             }
         }
