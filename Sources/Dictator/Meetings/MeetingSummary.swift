@@ -45,6 +45,16 @@ enum MeetingSummaryService {
     /// caps and leaves room for the system prompt + reply.
     private static let singlePassInputBudgetTokens = 6_000
 
+    /// Below either of these a meeting is "very short" and takes the compact
+    /// notes path — a 1–3 sentence summary plus action items only if present,
+    /// no empty Discussion/Decisions scaffolding (see
+    /// `builtinCompactMeetingSummaryPrompt`). Two independent triggers because
+    /// each catches a case the other misses: a 40-second rapid-fire exchange
+    /// can clear the word floor, and a 90-second mostly-silent recording can
+    /// stay under it. Either being small is enough to call it short.
+    private nonisolated static let compactMaxDurationSeconds: Double = 60
+    private nonisolated static let compactMaxSpokenWords = 75
+
     /// Produce the finished markdown meeting notes using the currently-
     /// configured LLM engine. Stamps `modelID` with whichever engine ran and
     /// `generatedAt` with now, and marks the result `isFinal` — this is the
@@ -78,10 +88,19 @@ enum MeetingSummaryService {
         if resolvedType == .auto, !meta.speakers.contains(where: { $0.isMe }) {
             resolvedType = .conversation
         }
-        let prompt = settings.effectiveMeetingSummaryPrompt(for: resolvedType)
         let modelID = engineModelID(settings: settings)
         let segments = transcript.segments
         guard !segments.isEmpty else { throw SummaryError.empty }
+
+        // Very short recordings take the compact path: lighter system prompt
+        // (Summary + optional Action items, no empty Discussion/Decisions
+        // scaffolding) and a matching single-pass instruction. A short meeting
+        // is always well under the single-pass budget, so map-reduce never
+        // applies here. Long/normal meetings keep the full section contract.
+        let isShort = isShortMeeting(durationSeconds: meta.durationSeconds, segments: segments)
+        let prompt = isShort
+            ? settings.effectiveCompactMeetingSummaryPrompt(for: resolvedType)
+            : settings.effectiveMeetingSummaryPrompt(for: resolvedType)
 
         let rendered = renderSegments(segments, speakers: meta.speakers)
         let approxTokens = rendered.count / 4
@@ -97,7 +116,8 @@ enum MeetingSummaryService {
                 engine: engine,
                 systemPrompt: prompt,
                 renderedTranscript: rendered,
-                rawOutline: rawOutline
+                rawOutline: rawOutline,
+                compact: isShort
             )
         } else {
             raw = try await runMapReduce(
@@ -120,17 +140,26 @@ enum MeetingSummaryService {
 
     // MARK: - Engine calls
 
+    /// `compact` selects the short-meeting instruction wording to match the
+    /// compact system prompt — a brief note (Summary + action items only if
+    /// present) rather than the full section contract. The system prompt is
+    /// already swapped by the caller; this only keeps the instruction in step.
     private static func runSinglePass(
         engine: any LLMEngine,
         systemPrompt: String,
         renderedTranscript: String,
-        rawOutline: String?
+        rawOutline: String?,
+        compact: Bool
     ) async throws -> String {
         var selection = renderedTranscript
-        var instruction = "Write the meeting notes for the transcript above as Markdown, following the sections and rules in the system prompt. Output ONLY the Markdown."
+        var instruction = compact
+            ? "Write a short note for the transcript above as Markdown, following the sections and rules in the system prompt. This is a very brief recording — keep it light and do not scaffold empty sections. Output ONLY the Markdown."
+            : "Write the meeting notes for the transcript above as Markdown, following the sections and rules in the system prompt. Output ONLY the Markdown."
         if let rawOutline, !rawOutline.isEmpty {
             selection += "\n\n--- ROUGH LIVE OUTLINE (captured during the meeting; may be incomplete) ---\n\(rawOutline)"
-            instruction = "Write the meeting notes for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. A rough live outline follows the transcript — use it as a completeness checklist so you don't miss anything it captured (where the transcript supports it), and make your notes at least as complete. Output ONLY the Markdown."
+            instruction = compact
+                ? "Write a short note for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. This is a very brief recording — keep it light and do not scaffold empty sections. A rough live outline follows the transcript — use it only to catch anything the transcript supports. Output ONLY the Markdown."
+                : "Write the meeting notes for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. A rough live outline follows the transcript — use it as a completeness checklist so you don't miss anything it captured (where the transcript supports it), and make your notes at least as complete. Output ONLY the Markdown."
         }
         let result = try await engine.assist(
             selection: selection,
@@ -196,6 +225,26 @@ enum MeetingSummaryService {
             cancellation: { Task.isCancelled }
         )
         return finalResult.text
+    }
+
+    // MARK: - Short-meeting detection
+
+    /// Deterministic "is this a tiny recording?" test driving the compact
+    /// notes path. True when the recording is under `compactMaxDurationSeconds`
+    /// OR fewer than `compactMaxSpokenWords` words were spoken across all
+    /// segments. `durationSeconds` can be 0 on a freshly-imported/partly-
+    /// written meta, so we never rely on duration alone — the word count is the
+    /// backstop. Whitespace-split word count matches how the budgets elsewhere
+    /// reason about transcript size; it doesn't need to be exact, only stable.
+    nonisolated static func isShortMeeting(
+        durationSeconds: Double,
+        segments: [MeetingTranscriptSegment]
+    ) -> Bool {
+        if durationSeconds > 0, durationSeconds < compactMaxDurationSeconds { return true }
+        let words = segments.reduce(0) { acc, seg in
+            acc + seg.text.split(whereSeparator: { $0.isWhitespace }).count
+        }
+        return words < compactMaxSpokenWords
     }
 
     // MARK: - Chunking

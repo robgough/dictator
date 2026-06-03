@@ -85,7 +85,7 @@ final class MeetingAssistantController {
 
     /// Tear down the recorder when the dialog closes.
     func dialogClosed() {
-        recorder?.stop()
+        _ = recorder?.stop()
         recorder = nil
         isListening = false
     }

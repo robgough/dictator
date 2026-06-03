@@ -518,6 +518,25 @@ struct DictatorSettings: Codable, Equatable {
         return stitched
     }
 
+    /// Compact variant of `effectiveMeetingSummaryPrompt(for:)` used for very
+    /// short meetings (see `builtinCompactMeetingSummaryPrompt`). Stacks the
+    /// same way — override wins outright; otherwise `compact builtin + type
+    /// addendum + user addendum` — so a user's "always British spelling" steer
+    /// and per-type bias keep applying on the short path too.
+    func effectiveCompactMeetingSummaryPrompt(for type: MeetingType) -> String {
+        if let override = meetingSummaryPromptOverride { return override }
+        var stitched = Self.builtinCompactMeetingSummaryPrompt
+        let typeAddendum = type.promptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typeAddendum.isEmpty {
+            stitched += "\n\nMEETING TYPE: \(type.displayName)\n" + typeAddendum
+        }
+        let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !userAddendum.isEmpty {
+            stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
+        }
+        return stitched
+    }
+
     var effectiveAssistantPrompt: String {
         // Assistant Mode drafts emails, replies, messages — it's the one pass
         // where the LLM actually needs to know who's writing. We do TWO things:
@@ -830,6 +849,33 @@ struct DictatorSettings: Codable, Equatable {
     4. Never put more than one name in the owner. If two people are jointly responsible, pick the lead and mention the second in the task text ("with Bob"); if there's no lead, leave it unowned and describe the shared ownership in the task text.
 
     Output the Markdown notes ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
+    """
+
+    /// Compact override for very short meetings (a quick note, a 30-second
+    /// aside). The full four-section contract scaffolds empty `## Discussion`
+    /// / `## Decisions` headers onto a recording that has nothing to put under
+    /// them — overkill that reads as broken. For these we drop the rigid
+    /// section list entirely and ask for a 1–3 sentence `## Summary` plus an
+    /// `## Action items` section ONLY when tasks were actually mentioned.
+    /// Selected by `MeetingSummaryService.generateNotes` on the short path and
+    /// fed through `effectiveCompactMeetingSummaryPrompt` so the user's
+    /// override/addendum still apply, mirroring the normal path.
+    static let builtinCompactMeetingSummaryPrompt = """
+    You write a SHORT, copy-pasteable note in Markdown from a brief recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
+
+    This recording is very short, so keep the note light — do NOT scaffold empty sections onto it.
+
+    Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
+
+    ## Summary
+    A factual prose recap of what was said — 1–3 sentences. No bullet points, no editorialising.
+
+    ## Action items
+    Include this section ONLY if a task was actually mentioned. Each item in the shape `- [ ] **Owner** — the task`, owner being the EXACT display name from the `[Speaker · mm:ss]` prefix (use "Me" for the recorder's own first-person commitments). When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix. If no task was mentioned, OMIT this section entirely — heading and all.
+
+    Do NOT add `## Discussion` or `## Decisions` sections — a note this short doesn't warrant them. Be faithful to the transcript: do not invent tasks, owners, decisions, or names that aren't supported by what was said. Never refuse and never emit placeholder text like "N/A".
+
+    Output the Markdown ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
     """
 
     static let builtinAssistantPrompt = """

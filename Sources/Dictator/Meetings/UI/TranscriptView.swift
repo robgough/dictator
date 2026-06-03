@@ -429,19 +429,12 @@ private struct SpeakerCountChip: View {
     var suspicious: Bool = false
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: suspicious ? "person.2.wave.2" : "person.2.wave.2")
-                .font(.caption2)
-            Text(label)
-                .font(.caption.weight(.semibold))
-            if suspicious {
-                Image(systemName: "exclamationmark.triangle.fill").font(.caption2)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Capsule().fill((suspicious ? Color.orange : Color.secondary).opacity(suspicious ? 0.16 : 0.08)))
-        .foregroundStyle(suspicious ? Color.orange : Color.secondary)
+        MeetingChip(
+            label,
+            tone: suspicious ? .warning : .neutral,
+            systemImage: "person.2.wave.2",
+            trailingSystemImage: suspicious ? "exclamationmark.triangle.fill" : nil
+        )
         .help(suspicious
             ? "This speaker count looks off for the audio captured. If it's wrong, use Re-process to run diarization again."
             : "Number of distinct speakers detected. Click any speaker chip to rename or recolour.")
@@ -467,20 +460,18 @@ private struct EditableSpeakerChip: View {
             draftName = speaker.displayName
             isEditing = true
         } label: {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color(hex: speaker.colorHex) ?? .accentColor)
-                    .frame(width: 8, height: 8)
+            HStack(spacing: MeetingMetrics.chipInnerSpacing) {
+                SpeakerBadge(speaker: speaker)
                 Text(speaker.displayName)
-                    .font(.caption.weight(.semibold))
+                    .font(MeetingFonts.speakerLabel)
                 if speaker.nameInferred {
                     Image(systemName: "sparkles")
-                        .font(.caption2)
+                        .font(MeetingFonts.chipLabel)
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.horizontal, MeetingMetrics.chipHPadding)
+            .padding(.vertical, MeetingMetrics.chipVPadding)
             .background(Capsule().fill(Color.secondary.opacity(0.12)))
             .foregroundStyle(.primary)
         }
@@ -776,13 +767,7 @@ private struct NotesPanel: View {
 /// finished, full-transcript notes.
 private struct DraftChip: View {
     var body: some View {
-        Text("Draft")
-            .font(.caption2.weight(.semibold))
-            .textCase(.uppercase)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(Color.orange.opacity(0.18)))
-            .foregroundStyle(.orange)
+        MeetingChip("Draft", tone: .draft, uppercased: true)
             .help("These are the rough notes built while recording. Re-run to write the full notes from the complete transcript.")
     }
 }
@@ -873,14 +858,18 @@ private struct OwnerChip: View {
         // belonging to the same colour family as the speaker chip up in
         // the transcript header, without shouting for attention.
         HStack(spacing: 4) {
-            Circle()
-                .fill(tint ?? Color.secondary)
-                .frame(width: 6, height: 6)
+            if let matched {
+                SpeakerBadge(speaker: matched)
+            } else {
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 6, height: 6)
+            }
             Text(owner)
-                .font(.caption.weight(.semibold))
+                .font(MeetingFonts.speakerLabel)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, MeetingMetrics.chipHPadding)
+        .padding(.vertical, MeetingMetrics.chipVPadding)
         .background(
             Capsule()
                 .fill((tint ?? Color.secondary).opacity(matched == nil ? 0.15 : 0.18))

@@ -159,7 +159,7 @@ struct MeetingDetailView: View {
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 32))
+                    .font(.system(.largeTitle))
                     .foregroundStyle(.orange)
                 Text(message)
                     .multilineTextAlignment(.center)
@@ -221,10 +221,14 @@ private struct ProcessingPill: View {
     let color: Color
 
     var body: some View {
+        // Bespoke chip: its `color` varies across the full processing palette
+        // (orange / red / blue / purple / gray), which the kit's fixed tone set
+        // can't express — so it keeps its own fill but borrows the kit's
+        // scalable font and capsule padding for consistency.
         Text(text)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .font(MeetingFonts.chipLabel)
+            .padding(.horizontal, MeetingMetrics.chipHPadding)
+            .padding(.vertical, MeetingMetrics.chipVPadding)
             .background(Capsule().fill(color.opacity(0.15)))
             .foregroundStyle(color)
     }
@@ -281,14 +285,7 @@ struct LiveRecordingView: View {
                 .multilineTextAlignment(.center)
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                )
+                .notesSurface()
         }
     }
 
@@ -420,7 +417,7 @@ struct LiveRecordingView: View {
 
     private var timerView: some View {
         Text(timerText)
-            .font(.system(size: 30, weight: .semibold, design: .rounded))
+            .font(.system(.largeTitle, design: .rounded).weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.primary)
     }
@@ -895,7 +892,7 @@ private struct LiveTranscriptPane: View {
                         // gives us the auto-scroll-to-bottom behaviour
                         // without any manual scroll-offset math.
                         Text(transcriber.interimText)
-                            .font(.system(size: 13))
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)

@@ -69,7 +69,7 @@ private struct MeetingSidebarRow: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(meta.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 HStack(spacing: 5) {
@@ -81,7 +81,7 @@ private struct MeetingSidebarRow: View {
                         Image(systemName: "doc.text").help("Audio removed — transcript kept")
                     }
                 }
-                .font(.system(size: 11))
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }

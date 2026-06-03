@@ -136,7 +136,7 @@ struct MarkdownNotesView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: MeetingMetrics.cardCornerRadius, style: .continuous)
                         .fill(Color.secondary.opacity(0.10))
                 )
         case .rule:
@@ -249,15 +249,19 @@ struct NotesOwnerChip: View {
     var body: some View {
         let matched = speakers.first { $0.displayName.compare(owner, options: .caseInsensitive) == .orderedSame }
         let tint = matched.flatMap { speakerColor($0.colorHex) }
-        HStack(spacing: 4) {
-            Circle()
-                .fill(tint ?? Color.secondary)
-                .frame(width: 6, height: 6)
+        HStack(spacing: MeetingMetrics.chipInnerSpacing) {
+            if let matched {
+                SpeakerBadge(speaker: matched)
+            } else {
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: MeetingMetrics.inlineBadgeSize, height: MeetingMetrics.inlineBadgeSize)
+            }
             Text(owner)
-                .font(.caption.weight(.semibold))
+                .font(MeetingFonts.speakerLabel)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, MeetingMetrics.chipHPadding)
+        .padding(.vertical, MeetingMetrics.chipVPadding)
         .background(Capsule().fill((tint ?? Color.secondary).opacity(matched == nil ? 0.15 : 0.18)))
         .foregroundStyle(tint ?? .secondary)
     }
@@ -324,11 +328,11 @@ extension View {
     /// pane and the finished notes panel so the two read the same.
     func notesSurface() -> some View {
         background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: MeetingMetrics.cardCornerRadius, style: .continuous)
                 .fill(Color(nsColor: .textBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: MeetingMetrics.cardCornerRadius, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
         )
     }
