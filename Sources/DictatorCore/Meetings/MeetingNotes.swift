@@ -26,11 +26,30 @@ struct MeetingNotes: Codable, Equatable, Sendable {
     /// False while this is the live first-pass built during recording; true
     /// once the end-of-meeting pass has produced the finished notes.
     var isFinal: Bool
+    /// The concrete conversational shape these notes were actually written for
+    /// — the type the user configured, or the one auto-detected when the
+    /// meeting was left on Auto. nil for notes written before this field
+    /// existed, or when auto-detection couldn't decide (the generic prompt ran).
+    /// Optional so old `meta.json` blobs decode unchanged.
+    var meetingType: MeetingType?
+    /// True when `meetingType` came from auto-detection rather than a type the
+    /// user (or their install-wide default) had configured. Lets the UI say
+    /// "detected" vs just showing the configured shape. nil/false on old notes.
+    var meetingTypeWasDetected: Bool?
 
-    init(markdown: String, modelID: String, generatedAt: Date, isFinal: Bool) {
+    init(
+        markdown: String,
+        modelID: String,
+        generatedAt: Date,
+        isFinal: Bool,
+        meetingType: MeetingType? = nil,
+        meetingTypeWasDetected: Bool? = nil
+    ) {
         self.markdown = markdown
         self.modelID = modelID
         self.generatedAt = generatedAt
         self.isFinal = isFinal
+        self.meetingType = meetingType
+        self.meetingTypeWasDetected = meetingTypeWasDetected
     }
 }

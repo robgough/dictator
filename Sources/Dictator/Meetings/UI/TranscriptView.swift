@@ -594,6 +594,9 @@ private struct NotesPanel: View {
                 if let notes = meta.notes, !notes.isFinal {
                     DraftChip()
                 }
+                if let notes = meta.notes, let type = notes.meetingType {
+                    meetingTypeChip(type: type, detected: notes.meetingTypeWasDetected ?? false)
+                }
                 Spacer()
                 if canUseAssistant {
                     Button { assistant.present() } label: {
@@ -637,6 +640,23 @@ private struct NotesPanel: View {
         .sheet(isPresented: $assistant.isPresented) {
             NotesAssistantSheet(assistant: assistant)
         }
+    }
+
+    /// The conversational shape these notes were written for — either the type
+    /// the user configured, or the one auto-detected when the meeting was left
+    /// on Auto (flagged with a sparkle, the same cue used for guessed speaker
+    /// names). Tapping nothing here; it's informational. Sits beside the Notes
+    /// header so it's the first thing read after "Notes".
+    @ViewBuilder
+    private func meetingTypeChip(type: MeetingType, detected: Bool) -> some View {
+        MeetingChip(
+            type.displayName,
+            tone: detected ? .accent : .neutral,
+            systemImage: detected ? "sparkles" : nil
+        )
+        .help(detected
+            ? "Auto-detected from the conversation. Pick a style with Re-run ▾ to override."
+            : "Notes style for this meeting. Change it with Re-run ▾.")
     }
 
     /// "Written by <model> · 2:14 PM" — turns the notes from an anonymous blob

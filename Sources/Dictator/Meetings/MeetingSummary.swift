@@ -77,20 +77,35 @@ enum MeetingSummaryService {
         }
         try await engine.ensureReady()
 
+        let segments = transcript.segments
+        guard !segments.isEmpty else { throw SummaryError.empty }
+
+        // Resolve the conversational shape these notes are written for, and
+        // record whether we had to auto-detect it (vs the user or their
+        // install-wide default configuring it) so the UI can label the result.
         var resolvedType: MeetingType = {
             if let explicit = meetingType { return explicit }
             if meta.meetingType != .auto { return meta.meetingType }
             return settings.defaultMeetingType
         }()
-        // Listen-only recording (no "Me" speaker — you weren't a participant)
-        // left on auto-detect → treat it as a conversation/podcast, since none
-        // of the participant-shaped types fit and the model often guesses wrong.
-        if resolvedType == .auto, !meta.speakers.contains(where: { $0.isMe }) {
-            resolvedType = .conversation
+        var typeWasDetected = false
+        if resolvedType == .auto {
+            // Listen-only recording (no "Me" speaker — you weren't a
+            // participant) → it's a conversation/podcast you're observing. A
+            // reliable heuristic; no LLM call needed.
+            if !meta.speakers.contains(where: { $0.isMe }) {
+                resolvedType = .conversation
+                typeWasDetected = true
+            } else if let detected = await detectMeetingType(transcript: transcript, meta: meta, settings: settings) {
+                // Participant meeting left on auto → classify it, so the notes
+                // use the right structure AND we can show what was detected.
+                resolvedType = detected
+                typeWasDetected = true
+            }
+            // If detection failed, resolvedType stays .auto: the generic auto
+            // addendum runs (today's behaviour) and no type is stamped.
         }
         let modelID = engineModelID(settings: settings)
-        let segments = transcript.segments
-        guard !segments.isEmpty else { throw SummaryError.empty }
 
         // Very short recordings take the compact path: lighter system prompt
         // (Summary + optional Action items, no empty Discussion/Decisions
@@ -134,7 +149,11 @@ enum MeetingSummaryService {
             markdown: markdown,
             modelID: modelID,
             generatedAt: Date(),
-            isFinal: true
+            isFinal: true,
+            // Don't stamp `.auto` — that means "detection couldn't decide and
+            // the generic prompt ran", which the UI shows as no badge.
+            meetingType: resolvedType == .auto ? nil : resolvedType,
+            meetingTypeWasDetected: typeWasDetected
         )
     }
 
@@ -329,6 +348,99 @@ enum MeetingSummaryService {
         }
         return text
     }
+
+    // MARK: - Meeting-type detection
+
+    /// Concrete types the auto-detector may choose, paired with the keyword the
+    /// classification prompt asks the model to emit. Excludes `.auto` (the thing
+    /// we're resolving) and `.other` (a deliberate "don't bias" choice the model
+    /// shouldn't reach for).
+    private nonisolated static let detectionOptions: [(keyword: String, type: MeetingType)] = [
+        ("one-on-one", .oneOnOne),
+        ("standup", .standup),
+        ("team-meeting", .teamMeeting),
+        ("planning", .planning),
+        ("retrospective", .retrospective),
+        ("interview", .interview),
+        ("client-call", .clientCall),
+        ("brainstorm", .brainstorm),
+        ("lecture", .lecture),
+        ("conversation", .conversation),
+    ]
+
+    /// Classify the transcript into one concrete `MeetingType` via a short LLM
+    /// call over the transcript lead (same shape as `suggestTitle`). Returns nil
+    /// when there's no engine, the transcript is empty, or the reply doesn't map
+    /// to a known type — the caller then keeps the generic auto behaviour.
+    static func detectMeetingType(
+        transcript: MeetingTranscript,
+        meta: MeetingMeta,
+        settings: DictatorSettings
+    ) async -> MeetingType? {
+        guard let engine = settings.activeLLMEngine() else { return nil }
+        let segments = transcript.segments
+        guard !segments.isEmpty else { return nil }
+
+        // The lead carries the framing (greetings, agenda, who's present); cap
+        // it so we don't pay for the whole meeting just to label it.
+        let lead = String(renderSegments(segments, speakers: meta.speakers).prefix(4_000))
+
+        let result: AssistantResult
+        do {
+            try await engine.ensureReady()
+            result = try await engine.assist(
+                selection: lead,
+                instruction: "Classify this meeting. Output ONLY the single best-matching keyword from the list in the system prompt — nothing else.",
+                systemPrompt: typeDetectionPrompt,
+                priorTurns: [],
+                summary: nil,
+                cancellation: { Task.isCancelled }
+            )
+        } catch {
+            return nil
+        }
+        return parseDetectedType(result.text)
+    }
+
+    /// Map the model's reply to a `MeetingType`. Lenient: lowercases, keeps
+    /// letters only, and matches against each option's keyword or the type's
+    /// rawValue, so "interview", "Interview", and "This is an interview." all
+    /// land on `.interview`.
+    nonisolated static func parseDetectedType(_ raw: String) -> MeetingType? {
+        let norm = LLMTextUtilities.clean(raw).lowercased().filter { $0.isLetter }
+        guard !norm.isEmpty else { return nil }
+        let lettersOnly: (String) -> String = { $0.lowercased().filter { $0.isLetter } }
+        // Exact match first — a clean one-word reply (the prompted shape) should
+        // never lose to a substring hit elsewhere in the list.
+        for (keyword, type) in detectionOptions where norm == lettersOnly(keyword) || norm == lettersOnly(type.rawValue) {
+            return type
+        }
+        // Lenient fallback for a verbose reply ("This is an interview").
+        for (keyword, type) in detectionOptions where norm.contains(lettersOnly(keyword)) || norm.contains(lettersOnly(type.rawValue)) {
+            return type
+        }
+        return nil
+    }
+
+    /// Standalone system prompt for the classification call. Not a user-facing
+    /// setting — the surface is already crowded and the mapping is narrow.
+    private static let typeDetectionPrompt = """
+    You label a meeting transcript with the single category that best fits it.
+
+    Choose exactly one keyword from this list (output the keyword on the left, lowercase, nothing else):
+    - one-on-one — a 1:1 between two people
+    - standup — a quick status round: what each person did, is doing, and any blockers
+    - team-meeting — a general team or group meeting
+    - planning — scoping work: deliverables, dates, owners
+    - retrospective — what went well, what didn't, what to change
+    - interview — a job interview (interviewer and candidate)
+    - client-call — a call with a customer or client
+    - brainstorm — open idea generation around a problem
+    - lecture — a talk or lecture by a single presenter
+    - conversation — a discussion you're only listening to (podcast, panel, recorded chat)
+
+    Output ONLY the one keyword. No punctuation, no explanation. If it's genuinely unclear, output: team-meeting
+    """
 
     // MARK: - Title suggestion
 
