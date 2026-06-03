@@ -73,7 +73,10 @@ final class MeetingProcessor {
         onProgress: @escaping @MainActor (Stage, Double) -> Void
     ) async throws {
         onProgress(.loadingASR, 0)
-        let parakeet = ParakeetServiceHolder.shared
+        // Meeting-dedicated ASR (shares the dictation weights when warm) so the
+        // whole-track transcription below runs on its own serial actor and can't
+        // block a dictation the user fires while this post-pass is running.
+        let parakeet = MeetingParakeetServiceHolder.shared
         try await parakeet.ensureLoaded(modelID: parakeetModelID)
         onProgress(.loadingASR, 1)
 
@@ -170,6 +173,14 @@ final class MeetingProcessor {
                 onProgress(.diarizing, 1)
             }
         }
+
+        // Transcription and diarization are done — they were the only consumers
+        // of the decoded tracks. Release them now (each is ~230 MB/hour) so the
+        // ~1 GB of a 2-hour meeting's audio isn't still resident through the
+        // attribution + LLM tail, where back-to-back long meetings would
+        // otherwise crowd memory and push the machine toward swap.
+        micSamples = []
+        systemSamples = []
 
         // ── Speaker-space unification ────────────────────────────────────
         // Build one global speaker space from the (possibly two) per-track
@@ -304,9 +315,9 @@ final class MeetingProcessor {
     /// caller can still emit a single coarse segment.
     private func transcribeSamples(_ samples: [Float], modelID: String) async throws -> ([TimedWord], String) {
         guard !samples.isEmpty else { return ([], "") }
-        let words = try await ParakeetServiceHolder.shared.transcribeWithTimestamps(samples: samples, modelID: modelID)
+        let words = try await MeetingParakeetServiceHolder.shared.transcribeWithTimestamps(samples: samples, modelID: modelID)
         if !words.isEmpty { return (words, "") }
-        let text = try await ParakeetServiceHolder.shared.transcribe(samples: samples, modelID: modelID)
+        let text = try await MeetingParakeetServiceHolder.shared.transcribe(samples: samples, modelID: modelID)
         return ([], text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 

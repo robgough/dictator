@@ -293,6 +293,9 @@ struct LiveRecordingView: View {
         if state.settings.activeLLMEngine() == nil {
             return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
         }
+        if !state.settings.meetingLiveTranscriptEnabled {
+            return "Live transcript is off. Turn on “Show a live transcript while recording” in Meetings settings to watch notes build here."
+        }
         return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
     }
 

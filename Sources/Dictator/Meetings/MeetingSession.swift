@@ -191,13 +191,16 @@ final class MeetingSession: Identifiable {
             AppState.shared.meetingRecordingStartedAt = Date()
             self.startTimerLoop()
         }
-        // System level updates land immediately so the HUD's right meter
-        // tracks live audio output without waiting for the 250ms tick.
+        // Stash the latest level; the timer loop publishes it into `state` at a
+        // fixed meter cadence. We deliberately do NOT push `state` per buffer:
+        // the CATap IOProc fires this ~100×/s for the whole meeting, and each
+        // push re-rendered the live view subtree (which carries the growing
+        // transcript) — a steady main-actor tax that compounded over a long
+        // call. `lastSystemLevel` is private, so writing it observes nothing.
         recorder.onLevel = { [weak self] _, sys in
             guard let self else { return }
             self.lastSystemLevel = sys
             if sys > 0.02 { self.systemHeard = true }
-            self.pushLevels()
         }
         recorder.onUnexpectedStop = { [weak self] reason in
             guard let self else { return }
@@ -217,39 +220,45 @@ final class MeetingSession: Identifiable {
             guard let self else { return }
             self.lastMicLevel = mic
             if mic > 0.02 { self.micHeard = true }
-            self.pushLevels()
         }
         micRecorder.onCaptureWarning = { [weak self] message in
             self?.upsertCaptureWarning(source: .mic, message: message)
         }
 
-        // Live transcript scaffolding. Constructed once we know recording
-        // is going to be attempted (post permission probe), wired to both
-        // recorders so future "live both tracks" work doesn't need another
-        // hook, and torn down on stop / unexpected stop. The transcriber
-        // is given the parakeet model id once at construction; settings
-        // changes mid-meeting don't apply until the next recording.
-        let liveModelID = AppState.shared.settings.parakeetModelID
-        let live = MeetingLiveTranscriber(parakeetModelID: liveModelID)
-        liveTranscriber = live
-        recorder.onSystemSamples = { [weak live] mono, sampleRate in
-            live?.feedSystemSamples(mono, sampleRate: sampleRate)
-        }
-        micRecorder.onBuffer = { [weak live] mono, sampleRate in
-            live?.feedMicSamples(mono, sampleRate: sampleRate)
-        }
+        // Live transcript scaffolding. Opt-out via the "live transcript"
+        // setting: when it's off we never build the transcriber and never wire
+        // the recorders' sample sinks, so the whole live ASR path (per-buffer
+        // resample + chunk + draft render) is skipped — the cheapest way to
+        // lighten a long recording. Constructed once we know recording is going
+        // to be attempted (post permission probe), wired to both recorders, and
+        // torn down on stop / unexpected stop. The transcriber is given the
+        // parakeet model id once at construction; settings changes mid-meeting
+        // don't apply until the next recording.
+        if AppState.shared.settings.meetingLiveTranscriptEnabled {
+            let liveModelID = AppState.shared.settings.parakeetModelID
+            let live = MeetingLiveTranscriber(parakeetModelID: liveModelID)
+            liveTranscriber = live
+            recorder.onSystemSamples = { [weak live] mono, sampleRate in
+                live?.feedSystemSamples(mono, sampleRate: sampleRate)
+            }
+            micRecorder.onBuffer = { [weak live] mono, sampleRate in
+                live?.feedMicSamples(mono, sampleRate: sampleRate)
+            }
 
-        // Live first-pass notes. Opt-in (it runs the LLM during the call) and
-        // only when an LLM is configured. Pulls from the same transcriber the
-        // UI shows, so the notes track what the user is watching take shape.
-        if AppState.shared.settings.meetingLiveNotesEnabled,
-           AppState.shared.settings.activeLLMEngine() != nil {
-            let accumulator = MeetingNotesAccumulator(
-                transcriber: live,
-                settings: AppState.shared.settings
-            )
-            notesAccumulator = accumulator
-            accumulator.start()
+            // Live first-pass notes. Built from the live transcript, so they
+            // only run when it's on. Opt-in (it runs the LLM during the call)
+            // and only when an LLM is configured. Pulls from the same
+            // transcriber the UI shows, so the notes track what the user is
+            // watching take shape.
+            if AppState.shared.settings.meetingLiveNotesEnabled,
+               AppState.shared.settings.activeLLMEngine() != nil {
+                let accumulator = MeetingNotesAccumulator(
+                    transcriber: live,
+                    settings: AppState.shared.settings
+                )
+                notesAccumulator = accumulator
+                accumulator.start()
+            }
         }
 
         do {
@@ -284,17 +293,6 @@ final class MeetingSession: Identifiable {
     /// unaffected — this just hides the message until the next recording.
     func dismissCaptureWarning(source: CaptureWarning.Source) {
         captureWarnings.removeAll { $0.source == source }
-    }
-
-    /// Push the current levels into `.recording` without waiting for the
-    /// next timer tick. Cheap — just rebuilds the enum payload.
-    private func pushLevels() {
-        guard case .recording(let elapsed, _, _) = state else { return }
-        state = .recording(
-            elapsed: elapsed,
-            micLevel: lastMicLevel,
-            sysLevel: lastSystemLevel
-        )
     }
 
     /// Stop recording. Writes the meta.json with the final duration,
@@ -382,6 +380,11 @@ final class MeetingSession: Identifiable {
     /// recording and from the "Process now" button on a meeting that
     /// crashed mid-process.
     func runProcessor(parakeetModelID: String) async {
+        // Whatever happens below, hand the meeting-only models back when the
+        // post-pass finishes so two back-to-back long calls don't keep several
+        // model sets resident and tip the machine into swap (the felt "after
+        // two meetings everything's slow"). Runs on success and failure.
+        defer { reclaimAfterProcessing() }
         do {
             state = .loadingASR(progress: 0)
             // Pull the dedup toggle off settings just before we run, so the
@@ -439,6 +442,20 @@ final class MeetingSession: Identifiable {
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Release the meeting-only models once a post-pass is done. The
+    /// meeting-dedicated Parakeet manager and the diarizer are used *only*
+    /// during processing, so unloading them costs just a few seconds' reload
+    /// next meeting while reclaiming hundreds of MB that would otherwise stay
+    /// resident across calls. We deliberately do NOT unload the LLM container —
+    /// it's shared with dictation's format/grammar passes and the next thing
+    /// the user does might be a dictation — but we do hand its GPU buffer pool
+    /// back, which is the part that actually grows.
+    private func reclaimAfterProcessing() {
+        MeetingParakeetServiceHolder.shared.unload()
+        DiarizerServiceHolder.shared.unload(modelID: ModelCatalog.defaultDiarization.id)
+        MLXLLMServiceHolder.shared.releaseGPUCache()
     }
 
     /// Run the title-suggestion LLM call and, if the suggestion passes
@@ -563,7 +580,12 @@ final class MeetingSession: Identifiable {
         let startedAt = Date()
         timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
+                // 100 ms ≈ 10 fps — this is now the *sole* driver of the live
+                // meters and elapsed time. It replaces the per-audio-buffer
+                // `state` pushes (which ran ~100×/s and re-rendered the
+                // transcript-bearing live view); 10 fps reads as live for a
+                // level meter at a fraction of the main-actor churn.
+                try? await Task.sleep(for: .milliseconds(100))
                 guard let self else { break }
                 guard case .recording = self.state else { break }
                 let elapsed = Date().timeIntervalSince(startedAt)

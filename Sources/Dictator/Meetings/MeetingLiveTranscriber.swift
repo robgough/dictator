@@ -28,13 +28,16 @@ import Observation
 /// than mislabelled as "Me" — the system track already carries that speech.
 ///
 /// **Chunking:** non-overlapping 8-second windows per source. Each window runs
-/// through the same `ParakeetServiceHolder.shared.transcribe(samples:modelID:)`
-/// call the dictation flow uses — no new public API on `ParakeetService`, no
-/// separate model load. The shared service is the same one the post-capture
-/// processor will reach for moments later, so the model stays warm across the
-/// boundary instead of being thrashed. Non-overlapping windows mean a word
-/// that straddles the boundary may get cut — we accept that for the draft
-/// view; the post-pass transcript is the authoritative one.
+/// through `MeetingParakeetServiceHolder.shared` — a meeting-dedicated ASR
+/// pipeline that *shares the dictation service's loaded weights* (FluidAudio's
+/// `AsrModels` is a value of model references, so a second `AsrManager` over it
+/// is cheap) but runs on its own serial actor. That isolation is deliberate: a
+/// long post-pass (or this live stream) can no longer block a dictation that
+/// the user fires mid- or post-meeting. The post-capture processor reaches for
+/// the same meeting holder moments later, so the model stays warm across the
+/// boundary instead of being thrashed. Non-overlapping windows mean a word that
+/// straddles the boundary may get cut — we accept that for the draft view; the
+/// post-pass transcript is the authoritative one.
 @MainActor
 @Observable
 final class MeetingLiveTranscriber {
@@ -79,6 +82,14 @@ final class MeetingLiveTranscriber {
     /// committed lines reach the transcript and the notes.
     @ObservationIgnored private var pendingMic: [[Float]] = []
     @ObservationIgnored private var pendingSystem: [[Float]] = []
+
+    /// Cached resamplers — one per source, each confined to the thread that
+    /// feeds it (system on the main actor, mic on the capture queue) so they
+    /// never touch the same converter concurrently. Reusing them means the
+    /// live path doesn't allocate a fresh AVAudioConverter for every ~10 ms
+    /// buffer across an hours-long meeting.
+    private let systemResampler = MonoResampler(targetRate: 16_000)
+    nonisolated(unsafe) private let micResampler = MonoResampler(targetRate: 16_000)
 
     /// True while `finishPending()` is draining the held-back utterances on
     /// stop — suppresses the normal scheduler so it doesn't fight the drain.
@@ -135,6 +146,26 @@ final class MeetingLiveTranscriber {
     /// How many following utterances to fold in as context when settling one.
     private static let lookahead = 1
 
+    /// Hard cap on buffered-but-unsettled utterances per source. If ASR can't
+    /// keep up with the conversation (busy ANE, thermal throttle, the live
+    /// notes LLM contending), the backlog would otherwise grow without bound
+    /// for the whole meeting — holding raw utterance audio and deepening the
+    /// settle queue, which is a core driver of the in-call slowdown. When we
+    /// exceed this we drop the oldest pending utterance: the live draft loses a
+    /// little speech under sustained overload rather than ballooning. The draft
+    /// is explicitly non-authoritative — the post-pass transcript is canonical.
+    private static let maxPending = 8
+
+    /// Cap on the rendered live transcript. The pane lays out the whole
+    /// `interimText` string as one `Text` on each committed utterance, so an
+    /// unbounded string makes layout cost climb with meeting length. We keep
+    /// only a trailing window for display; the authoritative full transcript is
+    /// rebuilt from disk by the post-pass regardless. Trimming runs per
+    /// committed utterance (a low frequency), so its O(n) cost is irrelevant
+    /// next to the per-update layout it saves.
+    private static let maxInterimChars = 12_000
+    private static let interimKeepChars = 8_000
+
     /// Don't bother running ASR on anything shorter than this; FluidAudio's
     /// AsrManager hard-rejects sub-0.3 s inputs as `.invalidAudioData`. We
     /// pad the floor up to 0.4 s to stay clear of that edge.
@@ -172,7 +203,7 @@ final class MeetingLiveTranscriber {
     /// single actor for this class.
     nonisolated func feedMicSamples(_ mono: [Float], sampleRate: Double) {
         guard sampleRate > 0, !mono.isEmpty else { return }
-        guard let samples = AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000) else { return }
+        guard let samples = micResampler.resample(mono, from: sampleRate) else { return }
         Task { @MainActor [weak self] in
             self?.append(samples: samples, to: .mic)
         }
@@ -185,13 +216,13 @@ final class MeetingLiveTranscriber {
     /// append to the system buffer.
     func feedSystemSamples(_ mono: [Float], sampleRate: Double) {
         guard sampleRate > 0, !mono.isEmpty else { return }
-        guard let samples = AudioResampler.mono(samples: mono, from: sampleRate, to: 16_000) else { return }
+        guard let samples = systemResampler.resample(mono, from: sampleRate) else { return }
         append(samples: samples, to: .system)
     }
 
     /// Cleanly stop the live transcriber. Cancels the in-flight chunk task and
     /// drops the pending buffers. The Parakeet weights live in
-    /// `ParakeetServiceHolder.shared` and are shared with `MeetingProcessor`,
+    /// `MeetingParakeetServiceHolder.shared` and are shared with `MeetingProcessor`,
     /// which starts its post-capture pass on this same warm model microseconds
     /// after this returns — so we deliberately *don't* unload the holder here.
     func stop() {
@@ -235,12 +266,18 @@ final class MeetingLiveTranscriber {
                 // them as "Me" — the system track already carries that speech.
                 if Self.isLikelyBleed(mic: chunk, systemBuffer: systemBuffer) { continue }
                 pendingMic.append(chunk)
+                if pendingMic.count > Self.maxPending {
+                    pendingMic.removeFirst(pendingMic.count - Self.maxPending)
+                }
                 continue
             }
             if let (chunk, consume) = Self.voiceChunk(systemBuffer) {
                 systemBuffer.removeFirst(consume)
                 if chunk.isEmpty { continue }
                 pendingSystem.append(chunk)
+                if pendingSystem.count > Self.maxPending {
+                    pendingSystem.removeFirst(pendingSystem.count - Self.maxPending)
+                }
                 continue
             }
             break
@@ -322,16 +359,16 @@ final class MeetingLiveTranscriber {
     /// and punctuated with both the previous and the following speech in view.
     private func transcribeSettling(oldest: [Float], following: [Float], prevContext: [Float]) async throws -> String {
         if prevContext.isEmpty, following.isEmpty {
-            return try await ParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
+            return try await MeetingParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
         }
         let combined = prevContext + oldest + following
         let prevDur = Double(prevContext.count) / 16_000
         let oldestDur = Double(oldest.count) / 16_000
-        let words = try await ParakeetServiceHolder.shared.transcribeWithTimestamps(
+        let words = try await MeetingParakeetServiceHolder.shared.transcribeWithTimestamps(
             samples: combined, modelID: parakeetModelID
         )
         guard !words.isEmpty else {
-            return try await ParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
+            return try await MeetingParakeetServiceHolder.shared.transcribe(samples: oldest, modelID: parakeetModelID)
         }
         let lo = prevDur - 0.05
         let hi = prevDur + oldestDur + 0.05
@@ -424,6 +461,22 @@ final class MeetingLiveTranscriber {
             interimText.append("\n\(speaker): \(line)")
         }
         lastSpeaker = speaker
+        trimInterimIfNeeded()
+    }
+
+    /// Keep `interimText` to a trailing window so the live pane never lays out
+    /// an ever-growing string. Cuts on a line boundary and marks the elision so
+    /// the reader can tell earlier lines scrolled off (they're still in the
+    /// authoritative post-pass transcript).
+    private func trimInterimIfNeeded() {
+        guard interimText.count > Self.maxInterimChars else { return }
+        let dropCount = interimText.count - Self.interimKeepChars
+        let cut = interimText.index(interimText.startIndex, offsetBy: dropCount)
+        if let newline = interimText[cut...].firstIndex(of: "\n") {
+            interimText = "…" + String(interimText[newline...])
+        } else {
+            interimText = "…\n" + String(interimText[cut...])
+        }
     }
 
 

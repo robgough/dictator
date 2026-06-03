@@ -45,16 +45,22 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingSummaryEnabled },
                     set: { s.settings.meetingSummaryEnabled = $0; state.save() }
                 ))
+                Toggle("Show a live transcript while recording", isOn: Binding(
+                    get: { s.settings.meetingLiveTranscriptEnabled },
+                    set: { s.settings.meetingLiveTranscriptEnabled = $0; state.save() }
+                ))
                 Toggle("Build a first pass while recording", isOn: Binding(
                     get: { s.settings.meetingLiveNotesEnabled },
                     set: { s.settings.meetingLiveNotesEnabled = $0; state.save() }
                 ))
+                .disabled(!s.settings.meetingLiveTranscriptEnabled)
+                .padding(.leading, 18)
                 Toggle("Correct live notes as the conversation moves on", isOn: Binding(
                     get: { s.settings.meetingLiveNotesSelfCorrectEnabled },
                     set: { s.settings.meetingLiveNotesSelfCorrectEnabled = $0; state.save() }
                 ))
-                .disabled(!s.settings.meetingLiveNotesEnabled)
-                .padding(.leading, 18)
+                .disabled(!s.settings.meetingLiveTranscriptEnabled || !s.settings.meetingLiveNotesEnabled)
+                .padding(.leading, 36)
                 Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }
@@ -72,7 +78,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting and writes markdown notes — a summary, the key discussion points, decisions, and action items. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery); the full notes are rewritten when the meeting ends.")
+                Text("Runs the LLM you've picked in Settings → Models over the transcript after each meeting and writes markdown notes — a summary, the key discussion points, decisions, and action items. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on; the full notes are rewritten when the meeting ends.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

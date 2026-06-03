@@ -250,7 +250,23 @@ struct MeetingsRootView: View {
         guard let meta = store.meta(id: id) else { return nil }
         let s = MeetingSession(from: meta)
         sessionCache.byID[id] = s
+        pruneSessionCache(keeping: id)
         return s
+    }
+
+    /// Keep the session cache bounded. Each cached `MeetingSession` is an
+    /// @Observable that retains its recorder objects; left unbounded the cache
+    /// accreted one per meeting ever opened for the window's lifetime. We keep
+    /// only what's actually in use — the live/processing session and the one
+    /// just requested (which the detail pane is about to render) — and drop the
+    /// rest. Evicted sessions are recreated from disk on demand (their state is
+    /// fully persisted), so nothing is lost. Runs only on a cache miss (an
+    /// insert), so it doesn't churn on every redraw.
+    private func pruneSessionCache(keeping id: UUID) {
+        let liveID = liveSession?.id
+        sessionCache.byID = sessionCache.byID.filter { key, session in
+            key == id || key == liveID || session.state.isLive || session.state.isProcessing
+        }
     }
 
     /// Toolbar menu showing the currently-active mic and letting the user

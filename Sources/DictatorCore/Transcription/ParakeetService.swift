@@ -36,6 +36,17 @@ final class ParakeetService: ASREngine {
     @ObservationIgnored private(set) var models: AsrModels?
     @ObservationIgnored private var manager: AsrManager?
 
+    /// The already-loaded weights for `modelID`, or nil if nothing (or a
+    /// different model) is loaded. Non-forcing — unlike `loadedModels(forID:)`
+    /// this never triggers a load. The meeting ASR service borrows these so a
+    /// second `AsrManager` can share the dictation weights instead of loading a
+    /// second copy. `AsrModels` is a value of CoreML model references, so the
+    /// borrow is cheap and the two managers run concurrently on the ANE safely.
+    func loadedModelsIfReady(modelID: String) -> AsrModels? {
+        guard currentModelID == modelID else { return nil }
+        return models
+    }
+
     /// Ensure the models are downloaded and loaded; return them so a sibling
     /// component (e.g. the streaming service) can share the weight load.
     func loadedModels(forID modelID: String) async throws -> AsrModels {

@@ -173,6 +173,13 @@ struct DictatorSettings: Codable, Equatable {
     /// works manually for re-runs and for installs where the user has
     /// disabled this toggle.
     var meetingSummaryEnabled: Bool = true
+    /// Show a running draft transcript while a meeting records (the "watch it
+    /// take shape" pane). Default ON. Turning it off skips the entire live ASR
+    /// path — no per-buffer resampling, chunking, or draft rendering during the
+    /// call — which meaningfully lightens the in-call load on a long meeting.
+    /// Live notes are built from this transcript, so they only run when it's on.
+    /// Personal preference, synced across Macs.
+    var meetingLiveTranscriptEnabled: Bool = true
     /// Build a rough first-pass of the notes *while the meeting records* —
     /// the LLM runs periodically over the live transcript and appends bullet
     /// points, superseded by the full pass once the meeting stops. Default
@@ -378,6 +385,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
         self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
+        self.meetingLiveTranscriptEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveTranscriptEnabled) ?? d.meetingLiveTranscriptEnabled
         self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
@@ -1126,6 +1134,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
         case meetingSummaryEnabled
+        case meetingLiveTranscriptEnabled
         case meetingLiveNotesEnabled
         case meetingLiveNotesSelfCorrectEnabled
         case hotkeyTapToToggleEnabled
@@ -1158,6 +1167,7 @@ struct DictatorSettings: Codable, Equatable {
         "assistantPromptAddendum",
         "assistantPromptOverride",
         "meetingSummaryEnabled",
+        "meetingLiveTranscriptEnabled",
         "meetingLiveNotesEnabled",
         "meetingLiveNotesSelfCorrectEnabled",
         "hotkeyTapToToggleEnabled",

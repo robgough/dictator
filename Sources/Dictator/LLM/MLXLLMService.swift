@@ -1,5 +1,6 @@
 import Foundation
 import Hub
+import MLX
 import MLXLLM
 import MLXLMCommon
 
@@ -110,6 +111,15 @@ final class MLXLLMService: LLMEngine {
     func unload() {
         container = nil
         currentModelID = nil
+    }
+
+    /// Hand MLX's GPU buffer pool back to the system *without* evicting the
+    /// loaded model. The pool is capped (`AppState.bootstrap` sets a 512 MB
+    /// `cacheLimit`) but a meeting's many live-notes + summary passes fill it;
+    /// clearing it after the post-pass reclaims that memory while keeping the
+    /// container warm, so a dictation or another meeting right after stays fast.
+    func releaseGPUCache() {
+        MLX.GPU.clearCache()
     }
 
     /// Optional grammar tidying pass. Allowed to make small grammar fixes; the caller

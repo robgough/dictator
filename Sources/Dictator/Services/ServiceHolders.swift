@@ -29,6 +29,16 @@ enum ParakeetServiceHolder {
     static let shared = ParakeetService()
 }
 
+/// Meeting-dedicated Parakeet pipeline. Separate instance from
+/// `ParakeetServiceHolder` (dictation) so meeting ASR runs on its own serial
+/// `AsrManager` actor and a long post-pass can't block a dictation; it borrows
+/// the dictation service's loaded weights when they're warm rather than loading
+/// a second copy. See `MeetingParakeetService`.
+@MainActor
+enum MeetingParakeetServiceHolder {
+    static let shared = MeetingParakeetService()
+}
+
 /// FluidAudio offline speaker-diarization pipeline. Loaded on demand by the
 /// Meetings post-capture flow; the Models pane Verify button also reaches in
 /// here so settings + pipeline share one warm model.
