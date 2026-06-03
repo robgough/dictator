@@ -1,20 +1,26 @@
 import Foundation
 
-/// Conservative speaker-name inference. After diarization the non-"Me"
-/// speakers are generic ("Speaker 1", "Speaker 2"); this runs one short LLM
-/// pass that tries to recover their real names from what's actually said —
-/// self-introductions ("I'm Rory", "Pat here") and direct address ("thanks,
-/// Rory", "over to you, Sam").
+/// Speaker-name inference. After diarization the non-"Me" speakers are generic
+/// ("Speaker 1", "Speaker 2"); this recovers their real names from what's
+/// actually said — self-introductions ("I'm Rory", "Pat here") and direct
+/// address ("thanks, Rory", "over to you, Sam").
 ///
-/// It is deliberately timid. After the model answers, a deterministic
-/// post-check:
-///   - requires the guessed name to ACTUALLY occur as a spoken word in the
-///     transcript (the strongest guard against an invented name),
-///   - rejects filler / pronoun / role words that aren't names,
-///   - refuses to give two speakers the same name,
-///   - only ever touches speakers whose label is still the diarizer default
-///     ("Speaker N" / "Other") or was set by a previous inference run — a name
-///     the user typed by hand is never overwritten.
+/// Split of labour, learned the hard way: the LLM is asked ONLY to list the
+/// first names of the participants — a task it's reliably good at. It is NOT
+/// asked which speaker is which, because small local models almost always
+/// attach a spoken name to the speaker who *said* it, which is backwards for
+/// direct address ("thanks, Amy" is said TO Amy, not BY her). Re-prompting
+/// around that failed repeatedly. So the label→name DIRECTION is resolved
+/// deterministically in `assignNamesToSpeakers`: a name spoken by a speaker
+/// names a DIFFERENT speaker (the one addressed/referred to) unless it's a
+/// self-introduction; in the common two-party call that's simply the other
+/// speaker. Votes are tallied across every occurrence.
+///
+/// Guards (unchanged): the name must ACTUALLY be spoken in the transcript;
+/// filler / pronoun / role words are rejected; two speakers never share a name;
+/// and only speakers whose label is still the diarizer default ("Speaker N" /
+/// "Other") or a previous inference are touched — a hand-typed name is never
+/// overwritten.
 ///
 /// On any failure (no LLM, parse error, nothing confidently named) it returns
 /// the speakers unchanged.
@@ -30,13 +36,9 @@ enum MeetingSpeakerNamer {
         guard let engine = settings.activeLLMEngine() else { return speakers }
 
         // Eligible = non-me speakers whose name is still inference-owned. If
-        // nothing is eligible (e.g. the user already named everyone), skip the
-        // call entirely. We also feed the exact labels to the model so it names
-        // a closed set rather than inventing labels.
-        let eligibleLabels = speakers
-            .filter { !$0.isMe && (isDefaultName($0.displayName) || $0.nameInferred) }
-            .map { $0.displayName }
-        guard !eligibleLabels.isEmpty else { return speakers }
+        // nothing is eligible (e.g. the user already named everyone), skip.
+        let hasEligible = speakers.contains { !$0.isMe && (isDefaultName($0.displayName) || $0.nameInferred) }
+        guard hasEligible else { return speakers }
 
         let segments = transcript.segments
         guard !segments.isEmpty else { return speakers }
@@ -48,13 +50,16 @@ enum MeetingSpeakerNamer {
             MeetingSummaryService.renderSegments(segments, speakers: speakers).prefix(16_000)
         )
 
+        // The LLM's ONLY job is to list the participants' first names — NOT to
+        // decide which speaker is which (see the type doc: it gets direction
+        // backwards). Direction is resolved deterministically below.
         let raw: String
         do {
             try await engine.ensureReady()
             let result = try await engine.assist(
                 selection: rendered,
-                instruction: "Work out the real names of these speakers: \(eligibleLabels.joined(separator: ", ")). Remember the direction rule from the system prompt — a name a speaker says almost always belongs to a DIFFERENT speaker (the one being addressed or referred to), except in a self-introduction. Output ONLY the JSON object mapping each of those labels to a name, omitting any label whose name you can't determine.",
-                systemPrompt: systemPrompt,
+                instruction: "List the first names of the people TAKING PART in this conversation (the people who speak). Include a name only if it is actually spoken in the transcript. Exclude anyone only talked about but not speaking, and exclude character names, place names, and brands. Output ONLY a JSON array of first names, e.g. [\"Sam\", \"Priya\"]. Output [] if no participant names are clear.",
+                systemPrompt: nameExtractionPrompt,
                 priorTurns: [],
                 summary: nil,
                 cancellation: { Task.isCancelled }
@@ -65,38 +70,168 @@ enum MeetingSpeakerNamer {
             return speakers
         }
 
-        let mapping = parseMapping(raw)
-        guard !mapping.isEmpty else { return speakers }
-
+        // Candidate names: sanitised, actually-spoken, de-duplicated.
         let spokenTokens = spokenWordSet(segments)
+        var candidateNames: [String] = []
+        var seenLower = Set<String>()
+        for rawName in parseCandidateNames(raw) {
+            guard let name = sanitiseName(rawName) else { continue }
+            let lower = name.lowercased()
+            let primary = lower.split(separator: " ").first.map(String.init) ?? lower
+            guard spokenTokens.contains(primary) else { continue }
+            guard !seenLower.contains(lower) else { continue }
+            seenLower.insert(lower)
+            candidateNames.append(name)
+        }
+        guard !candidateNames.isEmpty else { return speakers }
+
+        // Deterministic direction: assign each name to the speaker being
+        // addressed/introduced, not the one talking.
+        let assignment = assignNamesToSpeakers(
+            candidateNames: candidateNames,
+            segments: segments,
+            speakers: speakers
+        )
+        guard !assignment.isEmpty else { return speakers }
+
         var result = speakers
         // Names already in play (manual or carried over) so we never collide.
         var takenNames = Set(speakers.map { $0.displayName.lowercased() })
-
-        for (label, rawName) in mapping {
-            guard let name = sanitiseName(rawName) else { continue }
-            let lowerName = name.lowercased()
-            // The first token of the name must actually be spoken somewhere in
-            // the transcript — kills hallucinated names that never appear.
-            let primaryToken = lowerName.split(separator: " ").first.map(String.init) ?? lowerName
-            guard spokenTokens.contains(primaryToken) else { continue }
-            // Don't reuse a name another speaker already holds.
-            guard !takenNames.contains(lowerName) else { continue }
-            // Match the model's label back to an eligible speaker by its
-            // current display name (which is what it saw in the brackets).
-            guard let idx = result.firstIndex(where: {
-                !$0.isMe
-                    && (isDefaultName($0.displayName) || $0.nameInferred)
-                    && $0.displayName.caseInsensitiveCompare(label) == .orderedSame
-            }) else { continue }
-            // Skip a no-op rename.
+        for (speakerID, name) in assignment {
+            guard let idx = result.firstIndex(where: { $0.id == speakerID }) else { continue }
+            // Only ever touch an eligible (default/inferred, non-me) speaker.
+            guard !result[idx].isMe,
+                  isDefaultName(result[idx].displayName) || result[idx].nameInferred else { continue }
+            let lower = name.lowercased()
+            guard !takenNames.contains(lower) else { continue }
             guard result[idx].displayName.caseInsensitiveCompare(name) != .orderedSame else { continue }
             takenNames.remove(result[idx].displayName.lowercased())
-            takenNames.insert(lowerName)
+            takenNames.insert(lower)
             result[idx].displayName = name
             result[idx].nameInferred = true
         }
         return result
+    }
+
+    // MARK: - Deterministic direction
+
+    /// Map each candidate name to the speaker it most likely belongs to, using
+    /// address direction rather than who's talking. For every occurrence of a
+    /// name we cast a vote: a self-introduction ("I'm Sam") votes for the
+    /// speaker who said it (weight 3 — the strongest signal); any other mention
+    /// is direct address or reference and votes for the speaker being addressed
+    /// (weight 1) — in a two-party call that's simply the other speaker, else
+    /// the nearest adjacent different speaker. Each name then goes to its
+    /// best-supported eligible speaker, and a name/speaker pairs at most once.
+    /// Returns `[speakerID: name]`.
+    static func assignNamesToSpeakers(
+        candidateNames: [String],
+        segments: [MeetingTranscriptSegment],
+        speakers: [MeetingMeta.Speaker]
+    ) -> [String: String] {
+        let meIDs = Set(speakers.filter { $0.isMe }.map { $0.id })
+        let eligibleIDs = Set(
+            speakers.filter { !$0.isMe && (isDefaultName($0.displayName) || $0.nameInferred) }.map { $0.id }
+        )
+        guard !eligibleIDs.isEmpty else { return [:] }
+        // Non-"me" speakers that actually take a turn, in first-appearance
+        // order — drives the clean two-party "the other speaker" resolution.
+        let nonMeTurnIDs = orderedUnique(segments.map { $0.speakerId }.filter { !meIDs.contains($0) })
+
+        let tokenized = segments.map { tokenize($0.text) }
+
+        // name -> speakerID -> score
+        var votes: [String: [String: Int]] = [:]
+        for name in candidateNames {
+            let target = name.lowercased().split(separator: " ").first.map(String.init) ?? name.lowercased()
+            for (i, toks) in tokenized.enumerated() {
+                let sayer = segments[i].speakerId
+                for pos in toks.indices where toks[pos] == target {
+                    if Self.isSelfIntro(tokens: toks, at: pos) {
+                        votes[name, default: [:]][sayer, default: 0] += 3
+                    } else if let addressed = Self.addressedSpeaker(
+                        sayer: sayer, segIndex: i, segments: segments,
+                        nonMeTurnIDs: nonMeTurnIDs, meIDs: meIDs
+                    ) {
+                        votes[name, default: [:]][addressed, default: 0] += 1
+                    }
+                }
+            }
+        }
+
+        // Greedy assignment by descending score, unique name ⇄ unique speaker,
+        // restricted to eligible target speakers.
+        var ranked: [(name: String, speaker: String, score: Int)] = []
+        for (name, perSpeaker) in votes {
+            for (sp, score) in perSpeaker where eligibleIDs.contains(sp) && score > 0 {
+                ranked.append((name, sp, score))
+            }
+        }
+        ranked.sort { $0.score > $1.score }
+
+        var assignment: [String: String] = [:]
+        var usedNames = Set<String>()
+        for entry in ranked {
+            guard assignment[entry.speaker] == nil else { continue }
+            let lower = entry.name.lowercased()
+            guard !usedNames.contains(lower) else { continue }
+            assignment[entry.speaker] = entry.name
+            usedNames.insert(lower)
+        }
+        return assignment
+    }
+
+    /// The speaker being addressed when `sayer` speaks a name in `segIndex`.
+    /// Two-party fast path: exactly two non-"me" speakers take turns and the
+    /// sayer is one of them → it's the other. Otherwise the nearest adjacent
+    /// turn by a different, non-"me" speaker (preferring the previous turn — you
+    /// usually name the person you're responding to).
+    nonisolated static func addressedSpeaker(
+        sayer: String,
+        segIndex: Int,
+        segments: [MeetingTranscriptSegment],
+        nonMeTurnIDs: [String],
+        meIDs: Set<String>
+    ) -> String? {
+        if nonMeTurnIDs.count == 2, nonMeTurnIDs.contains(sayer) {
+            return nonMeTurnIDs.first { $0 != sayer }
+        }
+        var offset = 1
+        while offset <= 8 {
+            for j in [segIndex - offset, segIndex + offset] where j >= 0 && j < segments.count {
+                let cand = segments[j].speakerId
+                if cand != sayer, !meIDs.contains(cand) { return cand }
+            }
+            offset += 1
+        }
+        return nil
+    }
+
+    /// True when the name at `pos` is the speaker naming themselves — "I'm Sam",
+    /// "I am Sam", "this is Sam", "(my) name is Sam", or "Sam here".
+    nonisolated static func isSelfIntro(tokens: [String], at pos: Int) -> Bool {
+        if pos + 1 < tokens.count, tokens[pos + 1] == "here" { return true }
+        let p1 = pos >= 1 ? tokens[pos - 1] : ""
+        let p2 = pos >= 2 ? tokens[pos - 2] : ""
+        let p3 = pos >= 3 ? tokens[pos - 3] : ""
+        if p1 == "i'm" || p1 == "im" { return true }
+        if p1 == "am", p2 == "i" { return true }
+        if p1 == "is", p2 == "this" { return true }
+        if p1 == "is", p2 == "name" || p3 == "name" { return true }
+        return false
+    }
+
+    /// Lowercase word tokens (letters + apostrophes), so "I'm" survives as one
+    /// token for the self-intro check.
+    nonisolated static func tokenize(_ s: String) -> [String] {
+        s.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" }).map(String.init)
+    }
+
+    private nonisolated static func orderedUnique(_ xs: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for x in xs where !seen.contains(x) { seen.insert(x); out.append(x) }
+        return out
     }
 
     // MARK: - Default-name detection
@@ -114,46 +249,78 @@ enum MeetingSpeakerNamer {
 
     // MARK: - Prompt
 
-    private static let systemPrompt = """
-    You identify the real names of the people speaking in a meeting transcript. Each line is prefixed with a speaker label and timestamp, e.g. "[Speaker 1 · 0:12] …".
+    private static let nameExtractionPrompt = """
+    You are given a conversation transcript. Each line is prefixed with a speaker label and timestamp, e.g. "[Speaker 1 · 0:12] …".
 
-    WHICH SPEAKER A SPOKEN NAME BELONGS TO — get this direction right:
-    A person almost never says their own name. So a name a speaker says belongs to a DIFFERENT speaker — the one they are addressing or referring to — NOT to the speaker who said it.
-    - Direct address — "Thanks, Rory" / "What do you think, Rory?" / "Over to you, Rory" said by Speaker 1 → the OTHER speaker (the one Speaker 1 is talking to) is Rory, not Speaker 1. In a two-person call, that's the other speaker.
-    - Reference — "As Rory said" / "Rory's point" → Rory is whoever said that earlier, not the speaker saying this line.
-    - Self-introduction is the ONE exception — "I'm Rory", "this is Rory", "Rory here" → that speaker is Rory.
+    Your only job: list the FIRST NAMES of the people actually TAKING PART in the conversation — the people who speak.
 
-    Rules:
-    - Use the person's FIRST name (a full name only if clearly stated as theirs).
-    - NEVER guess from a role, company, or topic. NEVER use a name that isn't actually spoken somewhere in the transcript.
-    - Never give two speakers the same name.
-    - Omit a label whose name isn't clear. Naming only some of the speakers is fine.
+    A name counts when it is spoken in the transcript: a greeting, a self-introduction ("I'm Sam"), or one participant addressing or thanking another by name ("thanks, Sam", "what do you think, Sam?").
 
-    Output ONLY a JSON object mapping each speaker label (exactly as written in the brackets, e.g. "Speaker 1") to a first name — nothing before or after it, no reasoning, no code fences. If you genuinely can't name anyone, output exactly: {}
+    - First names only.
+    - Include a name only if it is actually spoken somewhere in the transcript.
+    - Do NOT include people who are only talked ABOUT but never speak. Do NOT include character names, place names, brands, or companies.
+    - Do NOT try to say which speaker label is which — only list the names.
+
+    Output ONLY a JSON array of first names, for example: ["Sam", "Priya"]
+    If you can't identify any participant names, output exactly: []
     """
 
     // MARK: - Parsing & validation
 
-    /// Pull the first `{ … }` object out of the model's reply and decode it as
-    /// a string→string map. Lenient: ignores anything that isn't a string value
-    /// and tolerates surrounding prose / fences.
-    private static func parseMapping(_ raw: String) -> [String: String] {
+    /// Names from the model's reply. Primary shape is a JSON array of strings;
+    /// as a hedge against a model that ignores the format and returns the old
+    /// {label: name} object instead, we also harvest any object's string values.
+    /// Surrounding prose / code fences are tolerated.
+    private static func parseCandidateNames(_ raw: String) -> [String] {
         let cleaned = LLMTextUtilities.clean(raw)
-        // Extract every balanced top-level {…} object independently and merge
-        // them (later keys win). This is robust to a model that emits prose
-        // reasoning around the JSON, or echoes an example object before its real
-        // answer — the old "first { … last }" span would glue two objects into
-        // invalid JSON and parse nothing. Any bogus name that slips through here
-        // is still caught downstream by the spoken-token check.
-        var out: [String: String] = [:]
+        var names: [String] = []
+        if let arr = firstJSONArray(in: cleaned) { names.append(contentsOf: arr) }
         for objStr in balancedJSONObjects(in: cleaned) {
             guard let data = objStr.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            for (k, v) in obj where v is String {
-                out[k] = v as? String
-            }
+            for v in obj.values { if let s = v as? String { names.append(s) } }
         }
-        return out
+        return names
+    }
+
+    /// First balanced `[ … ]` in `s` decoded as an array of strings (non-string
+    /// entries dropped). Respects quoted strings so a bracket inside a value
+    /// can't desync the scan. nil when there's no parseable array.
+    private static func firstJSONArray(in s: String) -> [String]? {
+        let chars = Array(s)
+        var i = 0
+        while i < chars.count {
+            guard chars[i] == "[" else { i += 1; continue }
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var j = i
+            while j < chars.count {
+                let c = chars[j]
+                if inString {
+                    if escaped { escaped = false }
+                    else if c == "\\" { escaped = true }
+                    else if c == "\"" { inString = false }
+                } else if c == "\"" {
+                    inString = true
+                } else if c == "[" {
+                    depth += 1
+                } else if c == "]" {
+                    depth -= 1
+                    if depth == 0 {
+                        let sub = String(chars[i...j])
+                        if let data = sub.data(using: .utf8),
+                           let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+                            return arr.compactMap { $0 as? String }
+                        }
+                        break
+                    }
+                }
+                j += 1
+            }
+            i = j > i ? j + 1 : i + 1
+        }
+        return nil
     }
 
     /// Pull out each top-level balanced `{…}` substring, respecting quoted
