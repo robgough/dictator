@@ -1,4 +1,5 @@
 import Foundation
+import Accelerate
 @preconcurrency import AVFoundation
 
 /// Post-capture (or post-import) pipeline. Reads `mic.caf` / `system.caf` off
@@ -82,48 +83,63 @@ final class MeetingProcessor {
         var systemFallbackText: String = ""
         var micDuration: Double = 0
         var systemDuration: Double = 0
-        var micURLForDiar: URL?
-        var systemURLForDiar: URL?
 
-        // ── Transcription pass on each track ─────────────────────────────
-        // Both tracks now get the same shape of ASR + diarization; the only
-        // asymmetry left is that the mic-dominant speaker becomes "me".
-
-        // Mic track. Old meetings captured before the v0.1 fix sometimes
-        // wrote meta claiming a mic file that was never created, so check
-        // the filesystem too.
-        if let micURL = session.micFileURL,
-           FileManager.default.fileExists(atPath: micURL.path) {
-            onProgress(.transcribingMic, 0)
-            let (words, fallbackText, duration) = try await transcribeTrack(url: micURL, modelID: parakeetModelID)
-            onProgress(.transcribingMic, 1)
-            micDuration = duration
-            micTimedWords = words
-            micFallbackText = fallbackText
-            micURLForDiar = micURL
-        }
-
-        // System track.
+        // ── Load both tracks as 16 kHz mono ──────────────────────────────
+        // System first — it's the reference the mic-bleed gate aligns against.
+        var micSamples: [Float] = []
+        var systemSamples: [Float] = []
         if let systemURL = session.systemFileURL,
            FileManager.default.fileExists(atPath: systemURL.path) {
+            systemSamples = (try? Self.loadMono16k(from: systemURL)) ?? []
+            systemDuration = Double(systemSamples.count) / 16_000
+        }
+        // Mic track. Old meetings captured before the v0.1 fix sometimes wrote
+        // meta claiming a mic file that was never created, so check the FS too.
+        if let micURL = session.micFileURL,
+           FileManager.default.fileExists(atPath: micURL.path) {
+            micSamples = (try? Self.loadMono16k(from: micURL)) ?? []
+            micDuration = Double(micSamples.count) / 16_000
+        }
+
+        // ── Mic-bleed gate ───────────────────────────────────────────────
+        // With a sensitive mic and no headphones the mic captures the remote
+        // audio bleeding out of the speakers. That bleed is a delayed,
+        // heavily-attenuated copy of the system track, so we cancel it in the
+        // AUDIO domain — before transcription AND diarization — using the system
+        // track as the reference. This is far more robust than the downstream
+        // text-level dedup, which fails because acoustically-degraded bleed
+        // transcribes to *different* words than the clean system track and so
+        // never matches. Self-disables when the two tracks aren't correlated
+        // (headphones / clean setup). Gated by the same "drop my mic's echoes"
+        // setting that controls the text dedup.
+        if dedupeMicEchoes, !micSamples.isEmpty, !systemSamples.isEmpty {
+            let gate = Self.gateMicBleed(mic: micSamples, system: systemSamples, sampleRate: 16_000)
+            NSLog("[Dictator] Mic-bleed gate: corr=\(String(format: "%.2f", gate.correlation)) lag=\(gate.lagMs)ms dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — tracks uncorrelated"))")
+            micSamples = gate.gated
+        }
+
+        // ── Transcription pass on each track ─────────────────────────────
+        if !micSamples.isEmpty {
+            onProgress(.transcribingMic, 0)
+            (micTimedWords, micFallbackText) = try await transcribeSamples(micSamples, modelID: parakeetModelID)
+            onProgress(.transcribingMic, 1)
+        }
+        if !systemSamples.isEmpty {
             onProgress(.transcribingSystem, 0)
-            let (words, fallbackText, duration) = try await transcribeTrack(url: systemURL, modelID: parakeetModelID)
+            (systemTimedWords, systemFallbackText) = try await transcribeSamples(systemSamples, modelID: parakeetModelID)
             onProgress(.transcribingSystem, 1)
-            systemDuration = duration
-            systemTimedWords = words
-            systemFallbackText = fallbackText
-            systemURLForDiar = systemURL
         }
 
         // ── Diarization pass on each track ───────────────────────────────
-        // We load the diarizer once and reuse it for both calls — load time
-        // is real (several seconds) and the model is the same.
+        // Diarize from the same (gated, for the mic) samples we transcribed, so
+        // the "me" cluster is built from de-bled audio. Loaded diarizer is
+        // reused for both calls — load time is real (several seconds).
         var micDiar: DiarizationOutput?
         var systemDiar: DiarizationOutput?
         var diarFailureReason: String?
 
-        let needsDiar = (!micTimedWords.isEmpty && micURLForDiar != nil)
-            || (!systemTimedWords.isEmpty && systemURLForDiar != nil)
+        let needsDiar = (!micTimedWords.isEmpty && !micSamples.isEmpty)
+            || (!systemTimedWords.isEmpty && !systemSamples.isEmpty)
         if needsDiar {
             do {
                 onProgress(.loadingDiarizer, 0)
@@ -131,18 +147,18 @@ final class MeetingProcessor {
                 onProgress(.loadingDiarizer, 1)
 
                 onProgress(.diarizing, 0)
-                if !micTimedWords.isEmpty, let url = micURLForDiar {
+                if !micTimedWords.isEmpty, !micSamples.isEmpty {
                     micDiar = try await DiarizerServiceHolder.shared.diarize(
-                        audioFileAt: url,
+                        samples: micSamples,
                         modelID: diarizationModelID,
                         trackLabel: "mic"
                     )
                 }
                 // Half-way bump so the progress UI moves between the two tracks.
                 onProgress(.diarizing, 0.5)
-                if !systemTimedWords.isEmpty, let url = systemURLForDiar {
+                if !systemTimedWords.isEmpty, !systemSamples.isEmpty {
                     systemDiar = try await DiarizerServiceHolder.shared.diarize(
-                        audioFileAt: url,
+                        samples: systemSamples,
                         modelID: diarizationModelID,
                         trackLabel: "system"
                     )
@@ -283,17 +299,193 @@ final class MeetingProcessor {
 
     // MARK: - Track transcription
 
-    /// Returns (words, fallbackText, durationSeconds). If the model produces
-    /// no token timings, `words` is empty and `fallbackText` carries the raw
-    /// transcript so the caller can still emit a single coarse segment.
-    private func transcribeTrack(url: URL, modelID: String) async throws -> ([TimedWord], String, Double) {
-        let samples = try Self.loadMono16k(from: url)
-        let duration = Double(samples.count) / 16_000
-        guard !samples.isEmpty else { return ([], "", duration) }
+    /// Returns (words, fallbackText). If the model produces no token timings,
+    /// `words` is empty and `fallbackText` carries the raw transcript so the
+    /// caller can still emit a single coarse segment.
+    private func transcribeSamples(_ samples: [Float], modelID: String) async throws -> ([TimedWord], String) {
+        guard !samples.isEmpty else { return ([], "") }
         let words = try await ParakeetServiceHolder.shared.transcribeWithTimestamps(samples: samples, modelID: modelID)
-        if !words.isEmpty { return (words, "", duration) }
+        if !words.isEmpty { return (words, "") }
         let text = try await ParakeetServiceHolder.shared.transcribe(samples: samples, modelID: modelID)
-        return ([], text.trimmingCharacters(in: .whitespacesAndNewlines), duration)
+        return ([], text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    // MARK: - Mic-bleed gate
+
+    /// Outcome of `gateMicBleed`. `gated` is the mic with bleed frames silenced;
+    /// the rest are diagnostics for the log.
+    nonisolated struct BleedGateResult: Sendable {
+        let gated: [Float]
+        let droppedFraction: Double
+        let lagMs: Int
+        let correlation: Double
+        /// False when the gate decided there wasn't enough mic↔system
+        /// correlation to be confident there's bleed, and returned the mic
+        /// untouched (headphones / clean capture).
+        let applied: Bool
+    }
+
+    /// Gate tuning. `bleedFraction`: a mic frame is bleed when it's below this
+    /// fraction of the delay-aligned system level (bleed measured at ~0.11×;
+    /// near-field speech sits at ~1×, so 0.4 cleanly separates them).
+    /// `systemFloor`: only gate while the system is actually playing.
+    /// `minCorrelation`: below this the tracks aren't related enough to risk
+    /// gating — leave the mic alone.
+    private nonisolated static let bleedFraction: Float = 0.4
+    private nonisolated static let bleedSystemFloor: Float = 0.01
+    private nonisolated static let bleedMinCorrelation: Double = 0.30
+
+    /// Remove remote-speaker bleed from the mic using the system track as a
+    /// reference. Estimates the bleed delay by envelope cross-correlation
+    /// (restricted to mic-active frames so muted stretches don't dilute it),
+    /// then silences any mic frame that is both coincident with loud system
+    /// audio and much quieter than it — plainly the speakers leaking in, not
+    /// near-field speech. Kept regions are dilated by a frame and the gain is
+    /// smoothed + ramped per sample, so there are no clicks for the transcriber
+    /// to mishear. Returns the mic untouched when the correlation is too low to
+    /// be sure there's bleed.
+    nonisolated static func gateMicBleed(mic: [Float], system: [Float], sampleRate: Double) -> BleedGateResult {
+        let sr = Int(sampleRate)
+        let frame = max(1, sr / 100)   // 10 ms analysis frame
+        guard mic.count >= frame, system.count >= frame else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, lagMs: 0, correlation: 0, applied: false)
+        }
+        let micEnv = rmsEnvelope(mic, frame: frame)
+        let sysEnv = rmsEnvelope(system, frame: frame)
+
+        // Delay search ±400 ms (frames are 10 ms). The sign isn't assumed — the
+        // system process-tap can buffer enough that the on-disk system track
+        // lags the mic, flipping the apparent delay.
+        let (lag, corr) = estimateBleedLag(micEnv: micEnv, sysEnv: sysEnv, lagLo: -40, lagHi: 40)
+        guard corr >= bleedMinCorrelation else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, lagMs: lag * 10, correlation: corr, applied: false)
+        }
+
+        let n = min(micEnv.count, sysEnv.count)
+        // Per-frame keep gain: 0 = bleed (silence), 1 = keep. We compare the mic
+        // against the loudest system frame in a small window around the aligned
+        // position (±`reverbRadius` frames) rather than the single aligned frame
+        // — room reverb smears the bleed across a few tens of ms and the delay
+        // jitters slightly, so a neighbourhood max catches the bleed tails a
+        // point comparison misses (measured: ~75% → ~85% of bleed silenced).
+        let reverbRadius = 2   // ±20 ms
+        var keep = [Float](repeating: 1, count: n)
+        var dropped = 0
+        for i in 0..<n {
+            var sys: Float = 0
+            for w in -reverbRadius...reverbRadius {
+                let j = i - lag + w
+                if j >= 0 && j < n { sys = max(sys, sysEnv[j]) }
+            }
+            if sys > bleedSystemFloor && micEnv[i] < bleedFraction * sys {
+                keep[i] = 0
+                dropped += 1
+            }
+        }
+        // Dilate the KEEP regions by one frame so a speech onset adjacent to
+        // bleed isn't clipped, then 3-tap smooth so transitions fade.
+        keep = dilateKeep(keep)
+        keep = smooth3(keep)
+
+        // Apply the smoothed gain to the samples, linearly interpolating between
+        // adjacent frame gains so each 10 ms boundary fades rather than steps.
+        var gated = mic
+        gated.withUnsafeMutableBufferPointer { out in
+            for i in 0..<n {
+                let g0 = keep[i]
+                let g1 = (i + 1 < n) ? keep[i + 1] : g0
+                if g0 >= 0.999 && g1 >= 0.999 { continue }   // fully kept — skip
+                let start = i * frame
+                for k in 0..<frame {
+                    let t = Float(k) / Float(frame)
+                    out[start + k] *= g0 + (g1 - g0) * t
+                }
+            }
+        }
+        return BleedGateResult(
+            gated: gated,
+            droppedFraction: Double(dropped) / Double(n),
+            lagMs: lag * 10,
+            correlation: corr,
+            applied: true
+        )
+    }
+
+    /// Per-frame RMS envelope.
+    private nonisolated static func rmsEnvelope(_ x: [Float], frame: Int) -> [Float] {
+        let n = x.count / frame
+        guard n > 0 else { return [] }
+        var env = [Float](repeating: 0, count: n)
+        x.withUnsafeBufferPointer { p in
+            for i in 0..<n {
+                var ms: Float = 0
+                vDSP_measqv(p.baseAddress! + i * frame, 1, &ms, vDSP_Length(frame))
+                env[i] = ms.squareRoot()
+            }
+        }
+        return env
+    }
+
+    /// Lag (in frames) maximising correlation between the mic and the
+    /// lag-shifted system envelope, in the LOG domain and over frames where the
+    /// system was actually playing.
+    ///
+    /// Two robustness choices, both load-bearing (verified on real recordings):
+    ///  - Log envelopes: bleed is multiplicative (mic ≈ k·system), which is
+    ///    *linear* in log — so the bleed correlates near-perfectly, and a loud
+    ///    burst of genuine speech (a multiplicative outlier) is compressed
+    ///    instead of blowing up the variance and collapsing a linear Pearson.
+    ///  - System-active frames only: the system track is the stable reference;
+    ///    selecting on it ignores solo-mic speech and muted-mic stretches that
+    ///    would otherwise skew the estimate.
+    private nonisolated static func estimateBleedLag(
+        micEnv: [Float], sysEnv: [Float], lagLo: Int, lagHi: Int
+    ) -> (lag: Int, corr: Double) {
+        let n = min(micEnv.count, sysEnv.count)
+        guard n > 0 else { return (0, 0) }
+        let eps: Float = 1e-4
+        var best = (lag: 0, corr: 0.0)
+        for lag in lagLo...lagHi {
+            var sx = 0.0, sy = 0.0, sxy = 0.0, sxx = 0.0, syy = 0.0, cnt = 0.0
+            for i in 0..<n {
+                let j = i - lag
+                if j < 0 || j >= n { continue }
+                if sysEnv[j] <= bleedSystemFloor { continue }   // system silent here — no bleed to align
+                let x = Double(log(micEnv[i] + eps)), y = Double(log(sysEnv[j] + eps))
+                sx += x; sy += y; sxy += x * y; sxx += x * x; syy += y * y; cnt += 1
+            }
+            guard cnt >= 25 else { continue }
+            let cov = sxy - sx * sy / cnt
+            let vx = sxx - sx * sx / cnt
+            let vy = syy - sy * sy / cnt
+            let denom = (vx * vy).squareRoot()
+            let r = denom > 0 ? cov / denom : 0
+            if r > best.corr { best = (lag, r) }
+        }
+        return best
+    }
+
+    /// Max-filter (radius 1) over a 0/1 keep mask — grows the kept regions by a
+    /// frame on each side so speech onsets next to bleed aren't clipped.
+    private nonisolated static func dilateKeep(_ g: [Float]) -> [Float] {
+        guard g.count > 2 else { return g }
+        var out = g
+        for i in g.indices {
+            let lo = i > 0 ? g[i - 1] : g[i]
+            let hi = i < g.count - 1 ? g[i + 1] : g[i]
+            out[i] = max(g[i], max(lo, hi))
+        }
+        return out
+    }
+
+    /// 3-tap moving average — turns the 0/1 mask into gentle fades.
+    private nonisolated static func smooth3(_ g: [Float]) -> [Float] {
+        guard g.count > 2 else { return g }
+        var out = g
+        for i in 1..<(g.count - 1) {
+            out[i] = (g[i - 1] + g[i] + g[i + 1]) / 3
+        }
+        return out
     }
 
     // MARK: - Diarization alignment

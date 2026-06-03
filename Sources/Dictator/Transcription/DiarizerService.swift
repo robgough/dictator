@@ -146,7 +146,24 @@ final class DiarizerService {
             throw NSError(domain: "Dictator", code: 21,
                           userInfo: [NSLocalizedDescriptionKey: "Diarizer not loaded"])
         }
-        let result = try await manager.process(url)
+        return Self.makeOutput(try await manager.process(url), trackLabel: trackLabel)
+    }
+
+    /// Diarize already-decoded 16 kHz mono samples. Used by `MeetingProcessor`
+    /// so the *gated* mic (after bleed removal) is what gets diarized, not the
+    /// raw file — and so a track loaded once for ASR isn't decoded again here.
+    func diarize(samples: [Float], modelID: String, trackLabel: String) async throws -> DiarizationOutput {
+        try await ensureLoaded(modelID: modelID)
+        guard let manager else {
+            throw NSError(domain: "Dictator", code: 21,
+                          userInfo: [NSLocalizedDescriptionKey: "Diarizer not loaded"])
+        }
+        return Self.makeOutput(try await manager.process(audio: samples), trackLabel: trackLabel)
+    }
+
+    /// Map FluidAudio's result into our flat segment/centroid shape and log the
+    /// per-cluster breakdown. Shared by the URL and samples diarize paths.
+    private static func makeOutput(_ result: DiarizationResult, trackLabel: String) -> DiarizationOutput {
         let segments = result.segments.map {
             DiarizationSegment(
                 start: TimeInterval($0.startTimeSeconds),
@@ -163,7 +180,7 @@ final class DiarizerService {
         // users report "I had three people on the call but it's all one
         // speaker", this is the first line to check — if `unique=1` then
         // clustering collapsed the embeddings (probably codec/SNR), and
-        // we know to bring the threshold down rather than look elsewhere.
+        // we know to bring the threshold up rather than look elsewhere.
         let labelTotals = Dictionary(grouping: segments, by: { $0.speakerLabel })
             .mapValues { $0.reduce(0.0) { $0 + ($1.end - $1.start) } }
             .map { (label: $0.key, seconds: $0.value) }
