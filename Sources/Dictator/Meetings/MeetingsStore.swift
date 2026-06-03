@@ -28,6 +28,11 @@ final class MeetingsStore {
         metas = loaded.sorted { $0.createdAt > $1.createdAt }
         applyAutoDeleteIfConfigured()
         applyAudioRetentionIfConfigured()
+        // Re-encode any finished meeting still holding bulky PCM audio
+        // (recorded before compaction shipped, or whose compaction was
+        // interrupted). Internally once-per-launch and fully async — this
+        // call is free on every subsequent refresh.
+        MeetingAudioCompactor.shared.sweepOnce()
     }
 
     /// Look up by UUID for the detail pane.

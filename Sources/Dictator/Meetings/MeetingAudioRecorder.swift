@@ -9,7 +9,7 @@ import os
 
 /// Captures **system audio** for one meeting via the CoreAudio Process Tap
 /// API (`AudioHardwareCreateProcessTap`, introduced in macOS 14.4). Writes a
-/// single `system.caf` file (Float32 mono) into the meeting's folder.
+/// single `system.caf` file (Int16 mono) into the meeting's folder.
 ///
 /// Why CATap instead of ScreenCaptureKit? SCK enforces Apple's
 /// "screen-recording-shaped" allow list: FaceTime, Apple Music, and a
@@ -433,15 +433,19 @@ final class MeetingAudioRecorder {
     /// crash-safe: the `data` chunk uses a sentinel `-1` length so a
     /// truncated file is still fully decodable. AAC in MP4/M4A is the
     /// opposite — the `moov` atom only lands on close, so a mid-recording
-    /// crash leaves an unreadable container. Trade-off is size (Float32
-    /// mono ~700 MB/hour) for 100% recoverability.
+    /// crash leaves an unreadable container. Trade-off is size (Int16 mono
+    /// ~350 MB/hour at 48 kHz) for 100% recoverability; once the post-pass
+    /// is done with the track `MeetingAudioCompactor` re-encodes it to AAC
+    /// in place. Int16 rather than Float32 on disk: 16 bits already
+    /// out-resolves a meeting capture and halves the write rate — the
+    /// buffers stay Float32 in memory, AVAudioFile converts on write.
     private static func openFile(at url: URL, source: AVAudioFormat) throws -> AVAudioFile {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: source.sampleRate,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
             AVLinearPCMIsNonInterleaved: false,
         ]

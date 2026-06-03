@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Meeting recordings take a fraction of the disk space they used to. Audio is captured at half the previous size, then automatically re-encoded to AAC once transcription finishes — a one-hour meeting now ends up around 80 MB on disk instead of 1.4 GB, with no audible difference for speech. Meetings you've already recorded are shrunk the same way in the background.
 - Long meetings stay responsive: the live transcript and level meters no longer get heavier as a call goes on, so an hours-long recording — and the rest of the app — keeps moving smoothly instead of gradually slowing down.
 - Recording one or two long meetings no longer leaves the app sluggish or a later dictation stuck on "Transcribing…": meeting transcription now runs separately from dictation so the two can't block each other, and the speech and speaker models a meeting loads are released once it has finished processing.
 - New "Show a live transcript while recording" setting (Meetings, on by default). Turning it off skips drafting the transcript live as you record — useful on very long calls or to save power — while the full transcript is still produced after the meeting ends. Live notes build on the live transcript, so they need it switched on.

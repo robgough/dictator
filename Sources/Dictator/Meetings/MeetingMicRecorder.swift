@@ -41,10 +41,11 @@ private final class SampleBufferForwarder: NSObject, AVCaptureAudioDataOutputSam
 /// `MeetingProcessor.dedupeMicEchoes`, gated by the "Drop echoes captured by
 /// my microphone" setting.
 ///
-/// Writes LinearPCM Float32 mono to a `.caf` file at the device's native
+/// Writes LinearPCM Int16 mono to a `.caf` file at the device's native
 /// sample rate. CAF is crash-safe (its data chunk uses a "-1 = read to end"
 /// length sentinel); a truncated file from a Dictator crash is still fully
-/// decodable up to the last buffer that hit disk.
+/// decodable up to the last buffer that hit disk. Once the post-pass has the
+/// transcript, `MeetingAudioCompactor` re-encodes the track to AAC in place.
 @MainActor
 final class MeetingMicRecorder {
     /// The live capture session, set once `adopt` accepts a started session
@@ -375,13 +376,17 @@ final class MeetingMicRecorder {
         onLevel?(level)
     }
 
+    /// Int16 PCM on disk (buffers stay Float32 in memory; AVAudioFile
+    /// converts on write). 16-bit is already beyond what a meeting mic
+    /// resolves and halves the bytes vs Float32; `MeetingAudioCompactor`
+    /// re-encodes the track to AAC once the post-pass is done with it.
     private static func openFile(at url: URL, sampleRate: Double) throws -> AVAudioFile {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: sampleRate,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
             AVLinearPCMIsNonInterleaved: false,
         ]

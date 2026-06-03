@@ -384,7 +384,13 @@ final class MeetingSession: Identifiable {
         // post-pass finishes so two back-to-back long calls don't keep several
         // model sets resident and tip the machine into swap (the felt "after
         // two meetings everything's slow"). Runs on success and failure.
-        defer { reclaimAfterProcessing() }
+        // The compactor mark keeps the launch sweep's hands off this
+        // meeting's audio while the processor is reading it.
+        MeetingAudioCompactor.shared.markProcessing(id: id)
+        defer {
+            reclaimAfterProcessing()
+            MeetingAudioCompactor.shared.unmarkProcessing(id: id)
+        }
         do {
             state = .loadingASR(progress: 0)
             // Pull the dedup toggle off settings just before we run, so the
@@ -439,6 +445,12 @@ final class MeetingSession: Identifiable {
             if meta.source == .live, !NSApp.isActive {
                 MeetingNotifier.notifyNotesReady(meetingTitle: meta.title)
             }
+
+            // The transcript is on disk, so the crash-safe-PCM rationale for
+            // the audio has expired — re-encode the tracks to AAC in place
+            // (~10× smaller). Last on purpose: it shares no models with the
+            // LLM passes above and nothing waits on it.
+            await MeetingAudioCompactor.shared.compact(meetingID: id)
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
         }

@@ -3,8 +3,9 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Copies an imported audio file into a fresh meeting folder, re-encodes
-/// it as `system.m4a`, and produces a session pinned to it. The processor
-/// path is identical to a live recording with the mic track missing.
+/// it as mono AAC inside `system.caf`, and produces a session pinned to it.
+/// The processor path is identical to a live recording with the mic track
+/// missing.
 @MainActor
 enum MeetingImporter {
     /// Audio file types accepted by both the Import… NSOpenPanel and the
@@ -46,7 +47,7 @@ enum MeetingImporter {
     }
     /// Create a session for the import, write its meta, and return.
     /// Heavy work (the chunked re-encode of the source audio into
-    /// `system.m4a`) does NOT happen here — call `reencodeAudio` from a
+    /// `system.caf`) does NOT happen here — call `reencodeAudio` from a
     /// background context afterwards. This split exists because the old
     /// single-shot `makeSession(from:)` blocked the main thread for the
     /// length of the whole re-encode, beach-balling the UI on long
@@ -82,28 +83,51 @@ enum MeetingImporter {
         return MeetingSession(forImport: meta)
     }
 
-    /// Re-encode the source audio into a deterministic `system.m4a`
-    /// inside the session's folder. Runs off the main actor so the UI
-    /// stays responsive while a long voice-memo (hours of audio) is
-    /// being decoded + AAC-re-encoded. `progress` is invoked on the
+    /// Re-encode the source audio to mono AAC at `outputURL` (the container
+    /// comes from the extension — imports write it into `system.caf`, which
+    /// AVFoundation reads/plays just like PCM CAF). Runs off the main actor
+    /// so the UI stays responsive while a long voice-memo (hours of audio)
+    /// is being decoded + AAC-re-encoded. `progress` is invoked on the
     /// main actor as the import advances (0…1). Caller is expected to
     /// drive `MeetingSession.state = .importing(progress:)` from each
-    /// progress tick.
+    /// progress tick. `MeetingAudioCompactor` reuses this loop (at
+    /// `.utility` priority) to shrink finished recordings in the background.
     nonisolated static func reencodeAudio(
         from source: URL,
         to outputURL: URL,
+        priority: TaskPriority = .userInitiated,
         progress: @escaping @Sendable @MainActor (Double) -> Void
     ) async throws {
-        try await Task.detached(priority: .userInitiated) {
+        try await Task.detached(priority: priority) {
             try? FileManager.default.removeItem(at: outputURL)
             let input = try AVAudioFile(forReading: source)
             let processingFormat = input.processingFormat
 
+            // AAC tops out at 96 kHz and this is speech — when the source is
+            // above 48 kHz (a 192 kHz interface clocking the meeting
+            // aggregate, or a hi-res import) downsample on the way into the
+            // encoder. At or below 48 kHz the source rate is kept as-is.
+            let sourceRate = processingFormat.sampleRate
+            let targetRate = min(sourceRate, 48_000)
+            guard let monoFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: sourceRate, channels: 1, interleaved: false
+            ), let encodeFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: targetRate, channels: 1, interleaved: false
+            ) else {
+                throw NSError(domain: "Dictator.Meetings", code: -4,
+                              userInfo: [NSLocalizedDescriptionKey: "Couldn't describe the re-encode formats."])
+            }
+            // The converter carries resampler filter state across chunks, so
+            // chunk boundaries don't click. nil when no rate change is needed.
+            let converter = targetRate == sourceRate ? nil : AVAudioConverter(from: monoFormat, to: encodeFormat)
+
             let outputSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: processingFormat.sampleRate,
+                AVSampleRateKey: targetRate,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 96_000,
+                // 96 kbps mono is transparent for speech; very low-rate
+                // sources can't legally carry that much and get 48.
+                AVEncoderBitRateKey: targetRate <= 24_000 ? 48_000 : 96_000,
                 AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
             ]
             let output = try AVAudioFile(
@@ -129,10 +153,13 @@ enum MeetingImporter {
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: toRead) else { break }
                 try input.read(into: buffer, frameCount: toRead)
                 if buffer.frameLength == 0 { break }
-                if processingFormat.channelCount > 1 {
-                    try output.write(from: Self.downmixToMono(buffer, sourceFormat: processingFormat))
+                let mono = processingFormat.channelCount > 1
+                    ? try Self.downmixToMono(buffer, sourceFormat: processingFormat)
+                    : buffer
+                if let converter {
+                    try Self.resample(mono, through: converter, into: output, drain: false)
                 } else {
-                    try output.write(from: buffer)
+                    try output.write(from: mono)
                 }
                 let consumed = buffer.frameLength
                 remaining = remaining > consumed ? remaining - consumed : 0
@@ -143,8 +170,49 @@ enum MeetingImporter {
                     await progress(fraction)
                 }
             }
+            // Flush the resampler's tail (a filter-length of frames) so the
+            // output doesn't come up a hair short of the source duration.
+            if let converter {
+                try Self.resample(nil, through: converter, into: output, drain: true)
+            }
             await progress(1)
         }.value
+    }
+
+    /// Push one chunk (or, with `drain`, end-of-stream) through the sample-
+    /// rate converter and write whatever it emits. The input block hands the
+    /// converter exactly one buffer per call — `.noDataNow` afterwards tells
+    /// it to return what it has and wait for the next chunk rather than
+    /// treating the stream as finished.
+    nonisolated private static func resample(
+        _ chunk: AVAudioPCMBuffer?,
+        through converter: AVAudioConverter,
+        into output: AVAudioFile,
+        drain: Bool
+    ) throws {
+        let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+        let inFrames = Double(chunk?.frameLength ?? 4096)
+        var fed = false
+        while true {
+            let capacity = AVAudioFrameCount((inFrames * ratio).rounded(.up)) + 64
+            guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) else { return }
+            var convErr: NSError?
+            let status = converter.convert(to: outBuf, error: &convErr) { _, inputStatus in
+                if let chunk, !fed {
+                    fed = true
+                    inputStatus.pointee = .haveData
+                    return chunk
+                }
+                inputStatus.pointee = drain ? .endOfStream : .noDataNow
+                return nil
+            }
+            if let convErr { throw convErr }
+            if outBuf.frameLength > 0 { try output.write(from: outBuf) }
+            // .haveData = the output buffer filled before the feed was
+            // consumed — go around again. Anything else means this chunk is
+            // fully converted (.inputRanDry) or the stream is flushed.
+            guard status == .haveData else { return }
+        }
     }
 
     nonisolated private static func downmixToMono(_ buffer: AVAudioPCMBuffer, sourceFormat: AVAudioFormat) throws -> AVAudioPCMBuffer {

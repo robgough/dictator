@@ -8,16 +8,25 @@ import Foundation
 ///     folder as settings / vocabulary / history (`SyncedStorage`) and a
 ///     meeting recorded on one Mac can be read on another.
 ///   - **Local** (`audioRoot()` → `~/Library/Application Support/Dictator/
-///     Meetings/<uuid>/`): `mic.caf` + `system.caf`. Audio is large (~700 MB/
-///     hour/track), so it stays per-Mac and never syncs. A Mac that didn't do
-///     the recording just shows the notes + transcript without playback —
+///     Meetings/<uuid>/`): `mic.caf` + `system.caf`. Audio is large, so it
+///     stays per-Mac and never syncs. A Mac that didn't do the recording
+///     just shows the notes + transcript without playback —
 ///     `MeetingSession.init(from:)` already copes with absent audio.
 ///
-/// We use CAF (LinearPCM) rather than compressed M4A for the audio tracks
-/// because CAF is crash-safe by design: its data chunk uses a "-1 = read to
-/// end" length sentinel, so a truncated CAF (from a Dictator crash or power
-/// loss mid-recording) is fully decodable. M4A would lose the moov atom on
-/// crash and the whole file becomes unreadable.
+/// We use CAF rather than M4A for the audio tracks because CAF is crash-safe
+/// by design: its data chunk uses a "-1 = read to end" length sentinel, so a
+/// truncated CAF (from a Dictator crash or power loss mid-recording) is fully
+/// decodable. M4A would lose the moov atom on crash and the whole file
+/// becomes unreadable.
+///
+/// The *payload* inside the `.caf` varies over a meeting's life: live
+/// recordings are captured as LinearPCM Int16 mono (~350 MB/hour/track at
+/// 48 kHz — dumb, fast, decodable when truncated), then once the post-pass
+/// has the transcript `MeetingAudioCompactor` re-encodes each track in place
+/// to mono AAC (~40 MB/hour) under the same filename. Imports are written as
+/// AAC from the start. Consumers never need to care which they're holding —
+/// `AVAudioFile` / `AVAudioPlayer` read both transparently — so
+/// `meta.audioFiles` works as a plain presence flag throughout.
 enum MeetingStorage {
     static let micFilename = "mic.caf"
     static let systemFilename = "system.caf"
