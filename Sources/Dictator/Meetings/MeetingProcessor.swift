@@ -114,7 +114,7 @@ final class MeetingProcessor {
         // setting that controls the text dedup.
         if dedupeMicEchoes, !micSamples.isEmpty, !systemSamples.isEmpty {
             let gate = Self.gateMicBleed(mic: micSamples, system: systemSamples, sampleRate: 16_000)
-            NSLog("[Dictator] Mic-bleed gate: corr=\(String(format: "%.2f", gate.correlation)) lag=\(gate.lagMs)ms dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — tracks uncorrelated"))")
+            NSLog("[Dictator] Mic-bleed gate: medianRatio=\(String(format: "%.2f", gate.medianRatio)) fraction=\(String(format: "%.2f", gate.fraction)) dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — mic as loud as the call / no bleed"))")
             micSamples = gate.gated
         }
 
@@ -317,67 +317,91 @@ final class MeetingProcessor {
     nonisolated struct BleedGateResult: Sendable {
         let gated: [Float]
         let droppedFraction: Double
-        let lagMs: Int
-        let correlation: Double
-        /// False when the gate decided there wasn't enough mic↔system
-        /// correlation to be confident there's bleed, and returned the mic
-        /// untouched (headphones / clean capture).
+        /// Median of (mic / windowed-system) across mic-active frames — the
+        /// "how quiet does the mic run vs the call?" signal the gate keys off.
+        let medianRatio: Double
+        /// The bleed threshold actually used (0 when the gate didn't engage).
+        let fraction: Double
+        /// False when the mic, whenever it's active, is about as loud as the
+        /// call — i.e. you're speaking or on headphones, no bleed to remove.
         let applied: Bool
     }
 
-    /// Gate tuning. `bleedFraction`: a mic frame is bleed when it's below this
-    /// fraction of the delay-aligned system level (bleed measured at ~0.11×;
-    /// near-field speech sits at ~1×, so 0.4 cleanly separates them).
-    /// `systemFloor`: only gate while the system is actually playing.
-    /// `minCorrelation`: below this the tracks aren't related enough to risk
-    /// gating — leave the mic alone.
-    private nonisolated static let bleedFraction: Float = 0.4
+    /// Gate tuning. A mic frame is bleed when it sits below `fraction`× the
+    /// loudest system frame within ±`windowRadius` (the window covers the
+    /// speaker→mic delay + room reverb without having to estimate it). The
+    /// fraction adapts to how bleed-dominated the recording is:
+    ///  - `enableMedianRatio`: if the mic, when active, is typically at least
+    ///    this fraction of the system, there's no bleed pattern (you're
+    ///    speaking / on headphones) — leave the mic untouched.
+    ///  - `aggressiveMedianRatio`: if the mic is *almost always* far quieter
+    ///    than the system (you're essentially just listening), use the
+    ///    aggressive fraction to catch louder bleed too; otherwise stay
+    ///    conservative so a quieter-than-the-call voice isn't eaten.
     private nonisolated static let bleedSystemFloor: Float = 0.01
-    private nonisolated static let bleedMinCorrelation: Double = 0.30
+    private nonisolated static let bleedMicFloor: Float = 0.002
+    private nonisolated static let bleedWindowRadius = 20            // ±200 ms
+    private nonisolated static let bleedEnableMedianRatio: Float = 0.7
+    private nonisolated static let bleedAggressiveMedianRatio: Float = 0.2
+    private nonisolated static let bleedFractionNormal: Float = 0.4
+    private nonisolated static let bleedFractionAggressive: Float = 0.65
 
     /// Remove remote-speaker bleed from the mic using the system track as a
-    /// reference. Estimates the bleed delay by envelope cross-correlation
-    /// (restricted to mic-active frames so muted stretches don't dilute it),
-    /// then silences any mic frame that is both coincident with loud system
-    /// audio and much quieter than it — plainly the speakers leaking in, not
-    /// near-field speech. Kept regions are dilated by a frame and the gain is
-    /// smoothed + ramped per sample, so there are no clicks for the transcriber
-    /// to mishear. Returns the mic untouched when the correlation is too low to
-    /// be sure there's bleed.
+    /// reference. Decides whether there's bleed — and how aggressively to gate —
+    /// from the LEVEL relationship between the two tracks, which (unlike a
+    /// delay/correlation estimate) needs no clean run of bleed and so works even
+    /// when the mic was on for only a couple of seconds. Silences any mic frame
+    /// far quieter than the loudest system audio in a ±200 ms window around it;
+    /// kept regions are dilated and the gain is smoothed + ramped per sample, so
+    /// there are no clicks for the transcriber to mishear.
+    ///
+    /// Honest limitation: a bleed transient that momentarily reaches the call's
+    /// own level (e.g. a loud word leaking in at ≈1× the system) is
+    /// level-indistinguishable from your own voice and survives — catching it
+    /// needs content matching, which the downstream text dedup attempts.
     nonisolated static func gateMicBleed(mic: [Float], system: [Float], sampleRate: Double) -> BleedGateResult {
         let sr = Int(sampleRate)
         let frame = max(1, sr / 100)   // 10 ms analysis frame
         guard mic.count >= frame, system.count >= frame else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, lagMs: 0, correlation: 0, applied: false)
+            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: 9, fraction: 0, applied: false)
         }
         let micEnv = rmsEnvelope(mic, frame: frame)
         let sysEnv = rmsEnvelope(system, frame: frame)
+        let n = min(micEnv.count, sysEnv.count)
+        let radius = bleedWindowRadius
 
-        // Delay search ±400 ms (frames are 10 ms). The sign isn't assumed — the
-        // system process-tap can buffer enough that the on-disk system track
-        // lags the mic, flipping the apparent delay.
-        let (lag, corr) = estimateBleedLag(micEnv: micEnv, sysEnv: sysEnv, lagLo: -40, lagHi: 40)
-        guard corr >= bleedMinCorrelation else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, lagMs: lag * 10, correlation: corr, applied: false)
+        // Loudest system frame within ±radius of `i` — covers the speaker→mic
+        // delay and reverb tail without estimating either.
+        func windowedSystem(_ i: Int) -> Float {
+            var s: Float = 0
+            let lo = max(0, i - radius), hi = min(n - 1, i + radius)
+            var j = lo
+            while j <= hi { s = max(s, sysEnv[j]); j += 1 }
+            return s
         }
 
-        let n = min(micEnv.count, sysEnv.count)
-        // Per-frame keep gain: 0 = bleed (silence), 1 = keep. We compare the mic
-        // against the loudest system frame in a small window around the aligned
-        // position (±`reverbRadius` frames) rather than the single aligned frame
-        // — room reverb smears the bleed across a few tens of ms and the delay
-        // jitters slightly, so a neighbourhood max catches the bleed tails a
-        // point comparison misses (measured: ~75% → ~85% of bleed silenced).
-        let reverbRadius = 2   // ±20 ms
+        // How quiet does the mic run vs the call when it's active? The median
+        // ratio decides engage / how-aggressive.
+        var ratios: [Float] = []
+        for i in 0..<n where micEnv[i] > bleedMicFloor {
+            let s = windowedSystem(i)
+            if s > bleedSystemFloor { ratios.append(micEnv[i] / s) }
+        }
+        guard ratios.count >= 10 else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: 9, fraction: 0, applied: false)
+        }
+        ratios.sort()
+        let median = ratios[ratios.count / 2]
+        guard median < bleedEnableMedianRatio else {
+            return BleedGateResult(gated: mic, droppedFraction: 0, medianRatio: Double(median), fraction: 0, applied: false)
+        }
+        let fraction: Float = median < bleedAggressiveMedianRatio ? bleedFractionAggressive : bleedFractionNormal
+
         var keep = [Float](repeating: 1, count: n)
         var dropped = 0
         for i in 0..<n {
-            var sys: Float = 0
-            for w in -reverbRadius...reverbRadius {
-                let j = i - lag + w
-                if j >= 0 && j < n { sys = max(sys, sysEnv[j]) }
-            }
-            if sys > bleedSystemFloor && micEnv[i] < bleedFraction * sys {
+            let s = windowedSystem(i)
+            if s > bleedSystemFloor && micEnv[i] < fraction * s {
                 keep[i] = 0
                 dropped += 1
             }
@@ -387,8 +411,8 @@ final class MeetingProcessor {
         keep = dilateKeep(keep)
         keep = smooth3(keep)
 
-        // Apply the smoothed gain to the samples, linearly interpolating between
-        // adjacent frame gains so each 10 ms boundary fades rather than steps.
+        // Apply the smoothed gain, linearly interpolating between adjacent frame
+        // gains so each 10 ms boundary fades rather than steps.
         var gated = mic
         gated.withUnsafeMutableBufferPointer { out in
             for i in 0..<n {
@@ -405,8 +429,8 @@ final class MeetingProcessor {
         return BleedGateResult(
             gated: gated,
             droppedFraction: Double(dropped) / Double(n),
-            lagMs: lag * 10,
-            correlation: corr,
+            medianRatio: Double(median),
+            fraction: Double(fraction),
             applied: true
         )
     }
@@ -424,45 +448,6 @@ final class MeetingProcessor {
             }
         }
         return env
-    }
-
-    /// Lag (in frames) maximising correlation between the mic and the
-    /// lag-shifted system envelope, in the LOG domain and over frames where the
-    /// system was actually playing.
-    ///
-    /// Two robustness choices, both load-bearing (verified on real recordings):
-    ///  - Log envelopes: bleed is multiplicative (mic ≈ k·system), which is
-    ///    *linear* in log — so the bleed correlates near-perfectly, and a loud
-    ///    burst of genuine speech (a multiplicative outlier) is compressed
-    ///    instead of blowing up the variance and collapsing a linear Pearson.
-    ///  - System-active frames only: the system track is the stable reference;
-    ///    selecting on it ignores solo-mic speech and muted-mic stretches that
-    ///    would otherwise skew the estimate.
-    private nonisolated static func estimateBleedLag(
-        micEnv: [Float], sysEnv: [Float], lagLo: Int, lagHi: Int
-    ) -> (lag: Int, corr: Double) {
-        let n = min(micEnv.count, sysEnv.count)
-        guard n > 0 else { return (0, 0) }
-        let eps: Float = 1e-4
-        var best = (lag: 0, corr: 0.0)
-        for lag in lagLo...lagHi {
-            var sx = 0.0, sy = 0.0, sxy = 0.0, sxx = 0.0, syy = 0.0, cnt = 0.0
-            for i in 0..<n {
-                let j = i - lag
-                if j < 0 || j >= n { continue }
-                if sysEnv[j] <= bleedSystemFloor { continue }   // system silent here — no bleed to align
-                let x = Double(log(micEnv[i] + eps)), y = Double(log(sysEnv[j] + eps))
-                sx += x; sy += y; sxy += x * y; sxx += x * x; syy += y * y; cnt += 1
-            }
-            guard cnt >= 25 else { continue }
-            let cov = sxy - sx * sy / cnt
-            let vx = sxx - sx * sx / cnt
-            let vy = syy - sy * sy / cnt
-            let denom = (vx * vy).squareRoot()
-            let r = denom > 0 ? cov / denom : 0
-            if r > best.corr { best = (lag, r) }
-        }
-        return best
     }
 
     /// Max-filter (radius 1) over a 0/1 keep mask — grows the kept regions by a
