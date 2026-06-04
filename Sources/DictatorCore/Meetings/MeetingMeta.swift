@@ -81,6 +81,10 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// lets the model decide from the transcript; older meta.json blobs
     /// that pre-date this field decode as `.auto`.
     var meetingType: MeetingType
+    /// When the user last edited the speaker roster by hand (rename / merge).
+    /// The notes panel compares this against `notes.generatedAt` to prompt a
+    /// re-run — notes written before the edit still carry the old names.
+    var speakersEditedAt: Date?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -98,6 +102,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         rawNotes: MeetingNotes? = nil,
         summary: MeetingSummaryResult? = nil,
         meetingType: MeetingType = .auto,
+        speakersEditedAt: Date? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -112,6 +117,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.rawNotes = rawNotes
         self.summary = summary
         self.meetingType = meetingType
+        self.speakersEditedAt = speakersEditedAt
         self.schemaVersion = schemaVersion
     }
 
@@ -134,12 +140,13 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.rawNotes = try c.decodeIfPresent(MeetingNotes.self, forKey: .rawNotes)
         self.summary = try c.decodeIfPresent(MeetingSummaryResult.self, forKey: .summary)
         self.meetingType = try c.decodeIfPresent(MeetingType.self, forKey: .meetingType) ?? .auto
+        self.speakersEditedAt = try c.decodeIfPresent(Date.self, forKey: .speakersEditedAt)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
-        case audioFiles, speakers, notes, rawNotes, summary, meetingType, schemaVersion
+        case audioFiles, speakers, notes, rawNotes, summary, meetingType, speakersEditedAt, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

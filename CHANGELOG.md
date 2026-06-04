@@ -24,7 +24,10 @@ entries as plain bullet lines.
 - The playback controls now float at the bottom of the meeting page, visible on every tab and at any scroll position, so you can pause or scrub while reading. The line under the playhead is highlighted as it plays, and a locate button jumps the transcript to what you're hearing.
 - Playing back a meeting recorded without headphones no longer doubles the remote side into an echo: the mic track is automatically turned down while the call audio is talking, and brought back for your own speech.
 - Meeting playback now balances the two sides to roughly the same loudness — your mic recording is usually several times quieter than the call audio, so the louder track is brought down to match.
-- The transcript reads like a messaging conversation: your turns sit on the right, everyone else on the left, in speech bubbles tinted with each speaker's colour — and when two people talk at once, their bubbles visibly overlap.
+- The transcript reads like a messaging conversation: your turns sit on the right, everyone else on the left, in speech bubbles tinted with each speaker's colour, drawn close together when people talk at once. A speaker who keeps talking gets one bubble with paragraphs rather than a stack of fragments, and an utterance interrupted by the other side is marked with ellipses where it breaks and resumes.
+- Echo duplicates are no longer shown in the transcript at all — they're already there as the other side's words.
+- Editing speakers (rename or merge) after notes were written now shows a notice on the Final notes tab prompting a Re-run, since the notes still carry the old names.
+- Fixed a phantom button floating in the middle of the meeting page (an invisible keyboard-shortcut control that wasn't so invisible).
 - The "audio silenced" markers no longer flood the transcript: only a removal longer than 15 seconds shows a (now subtle) marker; the full list remains in the copied tracks text.
 - Right-click a speaker chip to merge it into another speaker — the manual fix for one person being split into two (the merged words also give the speaker more context everywhere).
 - Transcripts are no longer shredded into runs of single-word lines: speech is grouped into proper turns, and two people talking at once no longer splinter each other's sentences word by word.

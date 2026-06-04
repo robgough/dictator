@@ -587,6 +587,7 @@ final class MeetingSession: Identifiable {
         // A hand-typed name is authoritative — drop the "auto-detected" flag so
         // it loses the sparkle and a re-process never overwrites it.
         meta.speakers[idx].nameInferred = false
+        meta.speakersEditedAt = Date()
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
     }
@@ -651,6 +652,7 @@ final class MeetingSession: Identifiable {
         }
 
         meta.speakers.removeAll { $0.id == sourceID }
+        meta.speakersEditedAt = Date()
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
         transcriptRevision += 1

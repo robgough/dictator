@@ -14,7 +14,7 @@ struct TranscriptView: View {
     @State private var hasAudio: Bool = false
     @State private var tab: Tab = .notes
     @State private var inspection: MeetingTrackInspection?
-    @State private var trackRows: [TrackRowBuilder.Row] = []
+    @State private var trackRows: [TrackRowBuilder.DisplayRow] = []
     /// Invalidates in-flight detached loads when the meeting changes under us.
     @State private var loadToken = UUID()
 
@@ -68,9 +68,17 @@ struct TranscriptView: View {
             reloadInspection()
         }
         .background {
-            // Keyboard shortcuts for the tab switch (hidden, zero-size).
-            Button("") { tab = .notes }.keyboardShortcut("1", modifiers: .command)
-            Button("") { tab = .transcript }.keyboardShortcut("2", modifiers: .command)
+            // Keyboard shortcuts for the tab switch. These MUST be fully
+            // transparent: a styled empty Button renders as a small rounded
+            // square on macOS, which floated mid-page like a phantom "stop"
+            // button once this view started owning the scroll.
+            Group {
+                Button("") { tab = .notes }.keyboardShortcut("1", modifiers: .command)
+                Button("") { tab = .transcript }.keyboardShortcut("2", modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 
@@ -105,14 +113,8 @@ struct TranscriptView: View {
         if tab != .transcript { tab = .transcript }
         let t = player.currentTime
         if !trackRows.isEmpty {
-            // Speech rows only — short gate-silence rows are filtered from
-            // display, so scrolling to one would target a missing anchor.
-            func isSpeech(_ row: TrackRowBuilder.Row) -> Bool {
-                if case .speech = row.kind { return true }
-                return false
-            }
-            let target = trackRows.last(where: { $0.start <= t && isSpeech($0) })
-                ?? trackRows.first(where: isSpeech)
+            let target = trackRows.last(where: { $0.start <= t && !$0.isSilence })
+                ?? trackRows.first(where: { !$0.isSilence })
             if let target {
                 withAnimation { proxy.scrollTo("trackrow-\(target.id)", anchor: .center) }
             }
@@ -293,7 +295,7 @@ struct TranscriptView: View {
         loadToken = token
         Task.detached(priority: .userInitiated) {
             let insp = MeetingStorage.readTrackInspection(for: id)
-            let rows = insp.map { TrackRowBuilder.rows(inspection: $0) } ?? []
+            let rows = insp.map { TrackRowBuilder.displayRows(from: TrackRowBuilder.rows(inspection: $0)) } ?? []
             let micSpeech = insp.map { Self.speechIntervals($0.mic) } ?? []
             let systemSpeech = insp.map { Self.speechIntervals($0.system) } ?? []
             await MainActor.run {
@@ -763,6 +765,13 @@ private struct NotesPanel: View {
         meta.notes != nil && state.settings.activeLLMEngine() != nil
     }
 
+    /// The notes were written before the user's last speaker rename/merge —
+    /// the names baked into the text no longer match the chips.
+    private var notesAreStale: Bool {
+        guard let notes = meta.notes, let edited = meta.speakersEditedAt else { return false }
+        return edited > notes.generatedAt
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -792,6 +801,13 @@ private struct NotesPanel: View {
                 Label("\(state.settings.hotkeyTapToToggleEnabled ? "Tap" : "Hold") \(state.assistantHotkeyDisplay) to ask the assistant — by voice, hands-free.", systemImage: "mic")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+            if notesAreStale {
+                Label("Speakers were edited after these notes were written — use Re-run to update who said what.", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.vertical, 2)
+                    .help("The notes still use the old speaker names. Re-run rewrites them from the corrected transcript.")
             }
             content
             if let err = session.notesError {
@@ -1255,6 +1271,90 @@ private enum TrackRowBuilder {
         return rows
     }
 
+    /// One rendered bubble (or silence marker) of the conversation view:
+    /// consecutive same-speaker runs merged into paragraphs, interruption
+    /// flags driving ellipses, echo duplicates and short silence markers
+    /// filtered out entirely.
+    struct DisplayRow: Identifiable {
+        let id: Int                 // first constituent row's id — scroll anchor
+        let start: Double
+        var end: Double
+        /// nil ⇒ gate-silence marker, not a speech bubble.
+        var speakerId: String?
+        var paragraphs: [String] = []
+        var dropped: MeetingTrackInspection.DropReason?
+        /// The other side started talking before this utterance finished —
+        /// rendered with a trailing ellipsis.
+        var cutOff = false
+        /// Resumes an utterance the other side interrupted — leading ellipsis.
+        var continued = false
+        var topPadding: CGFloat = 12
+        var isSilence: Bool { speakerId == nil }
+    }
+
+    /// Collapse raw rows into the conversation's display model.
+    static func displayRows(from rows: [Row]) -> [DisplayRow] {
+        // Gate-silence markers shorter than this stay hidden — the gate
+        // routinely removes 100+ short bleed slivers per call and a marker
+        // each drowned the conversation. The copy text keeps the full list.
+        let minVisibleSilence = 15.0
+        // Don't let merged bubbles grow into walls of text.
+        let bubbleMaxSeconds = 150.0
+        // A same-speaker row this close behind their previous bubble (with
+        // someone else's bubble in between) is one interrupted utterance.
+        let continuationMaxGap = 2.0
+
+        var out: [DisplayRow] = []
+        var lastIndexBySpeaker: [String: Int] = [:]
+
+        for row in rows {
+            switch row.kind {
+            case .gateSilence:
+                guard row.end - row.start >= minVisibleSilence else { continue }
+                out.append(DisplayRow(id: row.id, start: row.start, end: row.end, speakerId: nil))
+            case .speech(let speakerId, let text, let dropped):
+                // Echo duplicates are by definition already on the other
+                // side of the conversation — pure noise here.
+                if dropped == .echoDedup { continue }
+                // Same voice kept talking with nobody in between — extend
+                // the previous bubble as a new paragraph.
+                if let lastIdx = out.indices.last,
+                   out[lastIdx].speakerId == speakerId,
+                   out[lastIdx].dropped == dropped,
+                   row.end - out[lastIdx].start <= bubbleMaxSeconds {
+                    out[lastIdx].paragraphs.append(text)
+                    out[lastIdx].end = max(out[lastIdx].end, row.end)
+                    continue
+                }
+                var display = DisplayRow(id: row.id, start: row.start, end: row.end, speakerId: speakerId)
+                display.paragraphs = [text]
+                display.dropped = dropped
+                // Quick same-speaker resumption across an interjection:
+                // mark both halves so they read "cut off … resumed".
+                if let prevIdx = lastIndexBySpeaker[speakerId],
+                   out.indices.contains(prevIdx),
+                   out[prevIdx].speakerId == speakerId,
+                   row.start - out[prevIdx].end <= continuationMaxGap {
+                    out[prevIdx].cutOff = true
+                    display.continued = true
+                }
+                out.append(display)
+                lastIndexBySpeaker[speakerId] = out.count - 1
+            }
+        }
+
+        // Spacing: bubbles overlapping the previous one in time sit tight so
+        // simultaneous speech reads as talking-over; everything else breathes.
+        for i in out.indices {
+            if i == 0 {
+                out[i].topPadding = 0
+            } else {
+                out[i].topPadding = out[i].start < out[i - 1].end - 0.05 ? 4 : 12
+            }
+        }
+        return out
+    }
+
     /// Resolve a display name; bleed-dropped clusters aren't in the meta
     /// palette (they never surface as chips) so they get a fixed label.
     static func displayName(for speakerId: String, meta: MeetingMeta) -> String {
@@ -1306,68 +1406,20 @@ private enum TrackRowBuilder {
 /// where the audio gate silenced mic audio before transcription saw it.
 private struct TracksPanel: View {
     let inspection: MeetingTrackInspection
-    /// Precomputed off-main by the owner — building the row model inline
+    /// Display model precomputed off-main by the owner — building it inline
     /// here would redo a 15k-word pass on every body evaluation.
-    let rows: [TrackRowBuilder.Row]
+    let rows: [TrackRowBuilder.DisplayRow]
     let meta: MeetingMeta
     let player: MeetingPlayer?
-
-    /// Hide gate-silence markers below this length. The gate routinely
-    /// silences a hundred-plus short bleed slivers per call — a marker for
-    /// each drowned the conversation; only a long contiguous removal is
-    /// worth a line in the flow. The full list stays in the copy text.
-    private static let minVisibleSilence: Double = 15
-
-    /// One visible row plus its layout relationship to the previous one —
-    /// time-overlapping turns draw tighter (and literally overlapping when
-    /// the bubbles sit on opposite sides) so simultaneous speech reads as
-    /// people talking over each other.
-    private struct DisplayRow: Identifiable {
-        let row: TrackRowBuilder.Row
-        let topPadding: CGFloat
-        var id: Int { row.id }
-    }
-
-    private var displayRows: [DisplayRow] {
-        let visible = rows.filter { row in
-            if case .gateSilence = row.kind { return row.end - row.start >= Self.minVisibleSilence }
-            return true
-        }
-        var out: [DisplayRow] = []
-        out.reserveCapacity(visible.count)
-        var previous: TrackRowBuilder.Row?
-        for row in visible {
-            var padding: CGFloat = 12
-            if let previous {
-                let overlaps = row.start < previous.end - 0.05
-                if overlaps {
-                    let opposite = Self.isMeSide(previous.kind) != Self.isMeSide(row.kind)
-                    padding = opposite ? -6 : 2
-                }
-            } else {
-                padding = 0
-            }
-            out.append(DisplayRow(row: row, topPadding: padding))
-            previous = row
-        }
-        return out
-    }
-
-    /// Which side a row's bubble sits on (true = trailing/"me"); nil for
-    /// the centered silence markers.
-    private static func isMeSide(_ kind: TrackRowBuilder.Kind) -> Bool? {
-        if case .speech(let speakerId, _, _) = kind { return speakerId == "me" }
-        return nil
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             summary
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(displayRows) { display in
-                    TrackRowView(row: display.row, meta: meta, player: player)
-                        .padding(.top, display.topPadding)
-                        .id("trackrow-\(display.row.id)")
+                ForEach(rows) { row in
+                    TrackRowView(row: row, meta: meta, player: player)
+                        .padding(.top, row.topPadding)
+                        .id("trackrow-\(row.id)")
                 }
             }
         }
@@ -1407,10 +1459,10 @@ private struct TracksPanel: View {
 
 /// One chat bubble (or silence marker) in the conversation-styled
 /// transcript. "Me" sits trailing (messaging convention), every other
-/// voice leads; dropped words render as dimmed struck-through bubbles so
+/// voice leads; dropped bleed renders as a dimmed struck-through bubble so
 /// the cleanup stays visible without dominating.
 private struct TrackRowView: View {
-    let row: TrackRowBuilder.Row
+    let row: TrackRowBuilder.DisplayRow
     let meta: MeetingMeta
     let player: MeetingPlayer?
 
@@ -1423,11 +1475,10 @@ private struct TrackRowView: View {
     }
 
     var body: some View {
-        switch row.kind {
-        case .gateSilence:
+        if let speakerId = row.speakerId {
+            bubble(speakerId: speakerId)
+        } else {
             silenceMarker
-        case .speech(let speakerId, let text, let dropped):
-            bubble(speakerId: speakerId, text: text, dropped: dropped)
         }
     }
 
@@ -1447,9 +1498,21 @@ private struct TrackRowView: View {
         .padding(.vertical, 2)
     }
 
+    /// Paragraph texts with the interruption ellipses applied: a trailing
+    /// "…" when the other side cut this utterance off, a leading "…" when
+    /// it resumes one.
+    private var paragraphs: [String] {
+        var texts = row.paragraphs
+        guard !texts.isEmpty else { return texts }
+        if row.continued { texts[0] = "… " + texts[0] }
+        if row.cutOff { texts[texts.count - 1] += " …" }
+        return texts
+    }
+
     @ViewBuilder
-    private func bubble(speakerId: String, text: String, dropped: MeetingTrackInspection.DropReason?) -> some View {
+    private func bubble(speakerId: String) -> some View {
         let isMe = speakerId == "me"
+        let dropped = row.dropped
         let color = speakerColorFor(speakerId)
         HStack(spacing: 0) {
             if isMe { Spacer(minLength: 80) }
@@ -1461,8 +1524,8 @@ private struct TrackRowView: View {
                             .foregroundStyle(color)
                     }
                     timestamp
-                    if let dropped {
-                        Text(dropped == .bleedCluster ? "bleed" : "echo")
+                    if dropped != nil {
+                        Text("bleed")
                             .font(.caption2)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
@@ -1470,12 +1533,14 @@ private struct TrackRowView: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                Text(text)
-                    .font(.callout)
-                    .strikethrough(dropped != nil)
-                    .foregroundStyle(dropped != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                    Text(paragraph)
+                        .font(.callout)
+                        .strikethrough(dropped != nil)
+                        .foregroundStyle(dropped != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
