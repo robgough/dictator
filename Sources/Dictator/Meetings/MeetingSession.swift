@@ -413,14 +413,25 @@ final class MeetingSession: Identifiable {
                 }
             }
             MeetingsStore.shared.upsert(meta)
-            state = .ready
+
+            // When a notes rewrite is coming, go STRAIGHT into the notes
+            // phase. Dropping to .ready here flashed the previous run's
+            // notes for the several seconds the speaker-name + title passes
+            // take, then yanked them away when the rewrite started —
+            // "ready… no wait, loading again". One continuous flow instead;
+            // the transcript stays readable throughout (.summarising keeps
+            // TranscriptView on screen).
+            let settings = AppState.shared.settings
+            let llmAvailable = settings.activeLLMEngine() != nil
+            let willWriteNotes = settings.meetingSummaryEnabled && llmAvailable
+            state = willWriteNotes ? .summarising : .ready
 
             // Guess real speaker names from the conversation before titling or
             // writing notes, so both pick up "Rory" / "Pat" instead of
             // "Speaker 1". Conservative and non-destructive — only touches
             // default/previously-guessed labels, never a manual rename.
-            if AppState.shared.settings.activeLLMEngine() != nil {
-                await inferSpeakerNames(settings: AppState.shared.settings)
+            if llmAvailable {
+                await inferSpeakerNames(settings: settings)
             }
 
             // Auto title suggestion. Always runs when an LLM is
@@ -430,17 +441,16 @@ final class MeetingSession: Identifiable {
             // the sidebar a week later. Quality-gated and only applied
             // when the current title still looks like the default —
             // we never overwrite a manual rename.
-            if AppState.shared.settings.activeLLMEngine() != nil {
-                await maybeAutoRename(settings: AppState.shared.settings)
+            if llmAvailable {
+                await maybeAutoRename(settings: settings)
             }
 
             // Optional auto-notes. The toggle is opt-in because the notes
             // pass is expensive on a long meeting and not every user wants
             // one; when it's off the user can still hit the "Generate" button
             // on the meeting detail view.
-            if AppState.shared.settings.meetingSummaryEnabled,
-               AppState.shared.settings.activeLLMEngine() != nil {
-                await generateNotes(settings: AppState.shared.settings)
+            if willWriteNotes {
+                await generateNotes(settings: settings)
             }
 
             // Tell the user their notes are ready if they recorded and walked
@@ -518,6 +528,9 @@ final class MeetingSession: Identifiable {
     func generateNotes(settings: DictatorSettings) async {
         guard let transcript = MeetingStorage.readTranscript(for: id) else {
             NSLog("[Dictator] Skipping notes: no transcript on disk for \(id)")
+            // runProcessor may have parked us in .summarising in anticipation
+            // of this pass — don't strand the meeting there.
+            if case .summarising = state { state = .ready }
             return
         }
         notesError = nil
