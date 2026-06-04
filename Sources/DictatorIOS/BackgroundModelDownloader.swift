@@ -341,6 +341,16 @@ final class BackgroundModelDownloader: NSObject {
                 try? Self.clearManifest()
                 try? Self.clearAllResumeData()
             } else {
+                // The manifest itself is what's wrong here — every file it
+                // listed is on disk, yet the layout check fails, so the
+                // listing missed something FluidAudio needs. Drop it so
+                // Try again rebuilds a fresh listing instead of replaying
+                // the same incomplete file set forever. Files already on
+                // disk are rediscovered by buildManifest and skipped, so
+                // no progress is lost.
+                try? Self.clearManifest()
+                try? Self.clearAllResumeData()
+                manifest = nil
                 state = .failed("Downloaded all listed files but the model layout looks incomplete. Tap Try again to refetch.")
             }
             return
@@ -521,6 +531,20 @@ final class BackgroundModelDownloader: NSObject {
                 return true
             }
             return false
+        }
+
+        // Every required model dir must have matched at least one listed
+        // file — a miss means the repo was reorganized (or our descriptor
+        // is stale) and the download would inevitably fail the layout
+        // check at the very end. Fail fast with the missing name instead
+        // of after a 460 MB transfer.
+        for dir in descriptor.requiredModelDirs {
+            let prefix = "\(dir)/"
+            if !filtered.contains(where: { $0.path.hasPrefix(prefix) }) {
+                throw DownloaderError.listingFailed(
+                    "Model repository is missing \(dir) — the repo layout may have changed. Please report this."
+                )
+            }
         }
 
         let repoDir = ParakeetService.storageURL(forID: modelID)
@@ -715,14 +739,18 @@ private struct ParakeetRepoDescriptor {
         switch id {
         case "parakeet-tdt-0.6b-v3":
             // v3 layout: preprocessor + int8 encoder + decoder + v3 joint
-            // (top-K) + vocab. Encoder precision defaults to int8 in
-            // ParakeetService.swift; we match that here.
+            // (top-K) + vocab. The int8 encoder is the *unsuffixed*
+            // `Encoder.mlmodelc` in the repo — only the int4 variant
+            // carries a suffix (`EncoderInt4.mlmodelc`). Must match
+            // FluidAudio's `ParakeetEncoderPrecision.int8.encoderFileName`,
+            // which is what `AsrModels.modelsExist` checks at the end of
+            // the download.
             return ParakeetRepoDescriptor(
                 remotePath: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
                 folderName: "parakeet-tdt-0.6b-v3",
                 requiredModelDirs: [
                     "Preprocessor.mlmodelc",
-                    "EncoderInt8.mlmodelc",
+                    "Encoder.mlmodelc",
                     "Decoder.mlmodelc",
                     "JointDecisionv3.mlmodelc",
                 ]
