@@ -122,8 +122,21 @@ enum MeetingSummaryService {
 
         // The rough live outline (captured during the meeting) is fed in as a
         // completeness checklist — small models compress hard on the rewrite,
-        // and the live pass is often the more complete record.
-        let rawOutline = meta.rawNotes?.markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        // and the live pass is often the more complete record. EXCEPT when
+        // this meeting's processing found mic bleed: the live outline comes
+        // from raw live ASR with none of the offline cleanup (no gate, no
+        // bleed-cluster drop, no echo dedup), so on a no-headphones call it
+        // carries the very garbage the pipeline just scrubbed — feeding it
+        // back would reintroduce remote speech as the user's points.
+        let inspection = MeetingStorage.readTrackInspection(for: meta.id)
+        let bleedWasRemoved = (inspection?.gate?.applied == true && (inspection?.gate?.droppedFraction ?? 0) > 0.05)
+            || (inspection?.mic.contains { $0.dropped == .bleedCluster } ?? false)
+        let rawOutline = bleedWasRemoved
+            ? nil
+            : meta.rawNotes?.markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        if bleedWasRemoved {
+            NSLog("[Dictator] Notes: skipping live-outline checklist — bleed was removed from this meeting and the live outline predates the cleanup")
+        }
 
         let raw: String
         if approxTokens <= singlePassInputBudgetTokens {
