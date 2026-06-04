@@ -14,26 +14,45 @@ struct TranscriptView: View {
     @State private var hasAudio: Bool = false
     @State private var tab: Tab = .notes
     @State private var inspection: MeetingTrackInspection?
+    @State private var trackRows: [TrackRowBuilder.Row] = []
+    /// Invalidates in-flight detached loads when the meeting changes under us.
+    @State private var loadToken = UUID()
 
-    /// Notes are the primary surface; the rough live "raw" notes (when kept),
-    /// the transcript, and the two-track inspection live behind other tabs.
-    enum Tab: Hashable { case notes, raw, transcript, tracks }
+    /// Notes are the primary surface; the rough live "raw" notes (when kept)
+    /// and the transcript (two-lane mic/system view) live behind other tabs.
+    enum Tab: Hashable { case notes, raw, transcript }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // The view owns its scrolling (the detail view used to) so the tab
+        // picker stays fixed above and the playback dock can float at the
+        // bottom of the viewport — pause/seek stay reachable however deep
+        // into a transcript you've scrolled.
+        VStack(alignment: .leading, spacing: 12) {
             header
-            switch tab {
-            case .notes:
-                NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
-            case .raw:
-                rawTab
-            case .transcript:
-                transcriptTab
-            case .tracks:
-                tracksTab
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Group {
+                        switch tab {
+                        case .notes:
+                            NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
+                        case .raw:
+                            rawTab
+                        case .transcript:
+                            transcriptTab
+                        }
+                    }
+                    .padding(.top, 2)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if hasAudio {
+                        playbackDock(proxy: proxy)
+                    }
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { loadAudio() }
         .onDisappear { player.unload() }
         .onChange(of: meta.id) { _, _ in
@@ -42,13 +61,57 @@ struct TranscriptView: View {
         }
         .onChange(of: session.state.isProcessing) { _, processing in
             // Re-process finished — pick up the freshly written track data.
-            if !processing { inspection = MeetingStorage.readTrackInspection(for: meta.id) }
+            if !processing { loadAudio() }
+        }
+        .onChange(of: session.transcriptRevision) { _, _ in
+            // Speaker merge rewrote the files in place.
+            reloadInspection()
         }
         .background {
             // Keyboard shortcuts for the tab switch (hidden, zero-size).
             Button("") { tab = .notes }.keyboardShortcut("1", modifiers: .command)
             Button("") { tab = .transcript }.keyboardShortcut("2", modifiers: .command)
-            Button("") { tab = .tracks }.keyboardShortcut("3", modifiers: .command)
+        }
+    }
+
+    /// Floating playback controls pinned to the bottom of the scroll
+    /// viewport. The locate button scrolls the transcript to the line under
+    /// the playhead.
+    private func playbackDock(proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 10) {
+            PlaybackBar(player: player)
+            Button {
+                jumpToPlayhead(proxy)
+            } label: {
+                Image(systemName: "text.line.magnify")
+            }
+            .buttonStyle(.plain)
+            .help("Show the transcript line at the playhead.")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+        )
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    /// Scroll the transcript to the row containing (or nearest before) the
+    /// playhead. Switches to the transcript tab first if needed.
+    private func jumpToPlayhead(_ proxy: ScrollViewProxy) {
+        if tab != .transcript { tab = .transcript }
+        let t = player.currentTime
+        if !trackRows.isEmpty {
+            let target = trackRows.last(where: { $0.start <= t }) ?? trackRows.first
+            if let target {
+                withAnimation { proxy.scrollTo("trackrow-\(target.id)", anchor: .center) }
+            }
+        } else if let transcript, !transcript.segments.isEmpty {
+            let idx = transcript.segments.lastIndex(where: { $0.start <= t }) ?? 0
+            withAnimation { proxy.scrollTo("segment-\(idx)", anchor: .center) }
         }
     }
 
@@ -59,7 +122,6 @@ struct TranscriptView: View {
         HStack(spacing: 8) {
             Picker("View", selection: $tab) {
                 Text("Transcript").tag(Tab.transcript)
-                Text("Tracks").tag(Tab.tracks)
                 if hasRawNotes {
                     Text("Quick notes").tag(Tab.raw)
                 }
@@ -71,8 +133,11 @@ struct TranscriptView: View {
 
             Spacer()
 
-            if let md = currentTabCopyText {
-                CopyButton(text: md, label: copyLabel)
+            if hasCopyableContent {
+                // The export text itself is built lazily on click
+                // (CopyButton's autoclosure) — rendering it eagerly here made
+                // every body evaluation pay for a full-document export.
+                CopyButton(text: currentTabCopyText ?? "", label: copyLabel)
                     .help("Copy the current view as Markdown.")
             }
             if let transcript {
@@ -141,32 +206,50 @@ struct TranscriptView: View {
         if !player.isPlaying { player.togglePlayPause() }
     }
 
+    /// The transcript tab is the two-lane mic/system view when track data
+    /// exists (it shows everything the cleanup passes did), falling back to
+    /// the legacy merged-segment list for meetings processed before
+    /// tracks.json existed.
     @ViewBuilder
     private var transcriptTab: some View {
-        if let transcript, !transcript.segments.isEmpty {
+        let hasTracks = inspection != nil && !trackRows.isEmpty
+        if hasTracks || (transcript.map { !$0.segments.isEmpty } ?? false) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     SpeakerCountChip(count: meta.speakers.count, suspicious: speakerCountLooksOff)
                     ForEach(meta.speakers, id: \.id) { speaker in
-                        EditableSpeakerChip(speaker: speaker, session: session)
+                        EditableSpeakerChip(speaker: speaker, session: session, allSpeakers: meta.speakers)
                     }
                     Spacer()
                 }
 
-                if hasAudio {
-                    PlaybackBar(player: player)
-                } else {
+                if !hasAudio {
                     AudioMissingNote(
                         audioOnAnotherMac: meta.audioFiles.mic != nil || meta.audioFiles.system != nil
                     )
                 }
 
-                ForEach(Array(transcript.segments.enumerated()), id: \.offset) { _, segment in
-                    SegmentRow(
-                        segment: segment,
+                if let inspection, hasTracks {
+                    TracksPanel(
+                        inspection: inspection,
+                        rows: trackRows,
                         meta: meta,
                         player: hasAudio ? player : nil
                     )
+                } else if let transcript {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(transcript.segments.enumerated()), id: \.offset) { idx, segment in
+                            SegmentRow(
+                                segment: segment,
+                                meta: meta,
+                                player: hasAudio ? player : nil
+                            )
+                            .id("segment-\(idx)")
+                        }
+                    }
+                    Text("Re-process this meeting to get the per-track view (mic and call audio side by side).")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
         } else {
@@ -188,33 +271,49 @@ struct TranscriptView: View {
         let micURL: URL? = meta.audioFiles.mic.map { _ in MeetingStorage.micURL(for: meta.id) }
         let sysURL: URL? = meta.audioFiles.system.map { _ in MeetingStorage.systemURL(for: meta.id) }
         hasAudio = player.load(micURL: micURL, systemURL: sysURL)
-        inspection = MeetingStorage.readTrackInspection(for: meta.id)
+        reloadInspection()
     }
 
-    /// Two-track inspection: mic vs system transcriptions on one time axis,
-    /// with everything the cleanup passes removed still visible. The data is
-    /// produced at process time, so older meetings need a Re-process first.
-    @ViewBuilder
-    private var tracksTab: some View {
-        if let inspection {
-            TracksPanel(
-                inspection: inspection,
-                meta: meta,
-                player: hasAudio ? player : nil
-            )
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "waveform.badge.magnifyingglass")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.secondary)
-                Text("No track data for this meeting yet")
-                    .foregroundStyle(.secondary)
-                Text("Re-process the meeting to generate the per-track view.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+    /// Decode tracks.json and build the row model off the main thread — a
+    /// long meeting's track data runs to megabytes / tens of thousands of
+    /// words, and doing this synchronously froze the page switch. The token
+    /// guards against a stale load landing after the user changed meeting.
+    private func reloadInspection() {
+        inspection = nil
+        trackRows = []
+        let id = meta.id
+        let token = UUID()
+        loadToken = token
+        Task.detached(priority: .userInitiated) {
+            let insp = MeetingStorage.readTrackInspection(for: id)
+            let rows = insp.map { TrackRowBuilder.rows(inspection: $0) } ?? []
+            let micSpeech = insp.map { Self.speechIntervals($0.mic) } ?? []
+            let systemSpeech = insp.map { Self.speechIntervals($0.system) } ?? []
+            await MainActor.run {
+                guard loadToken == token else { return }
+                inspection = insp
+                trackRows = rows
+                player.setSpeechIntervals(mic: micSpeech, system: systemSpeech)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Kept words → padded, merged speech intervals for playback ducking.
+    private nonisolated static func speechIntervals(
+        _ words: [MeetingTrackInspection.Word]
+    ) -> [(start: Double, end: Double)] {
+        let pad = 0.25
+        let mergeGap = 0.6
+        var intervals: [(start: Double, end: Double)] = []
+        for word in words where word.dropped == nil {
+            let s = word.start - pad, e = word.end + pad
+            if let last = intervals.last, s - last.end <= mergeGap {
+                intervals[intervals.count - 1].end = max(last.end, e)
+            } else {
+                intervals.append((s, e))
+            }
+        }
+        return intervals
     }
 
     /// True when at least one audio track is still present on disk. Drives
@@ -245,7 +344,19 @@ struct TranscriptView: View {
         case .notes: return "Copy notes"
         case .raw: return "Copy quick notes"
         case .transcript: return "Copy transcript"
-        case .tracks: return "Copy tracks"
+        }
+    }
+
+    /// Cheap presence check so the header can show/hide the copy button
+    /// without rendering the (expensive) export text.
+    private var hasCopyableContent: Bool {
+        switch tab {
+        case .notes:
+            return meta.notes != nil || transcript != nil
+        case .raw:
+            return meta.rawNotes != nil
+        case .transcript:
+            return (transcript.map { !$0.segments.isEmpty } ?? false) || inspection != nil
         }
     }
 
@@ -261,11 +372,13 @@ struct TranscriptView: View {
             if let raw = meta.rawNotes { return "# \(meta.title)\n\n\(raw.markdown)" }
             return nil
         case .transcript:
-            guard let transcript, !transcript.segments.isEmpty else { return nil }
+            // The merged transcript is the shareable artifact; the two-lane
+            // diagnostic text has its own copy button in the lanes summary.
+            guard let transcript, !transcript.segments.isEmpty else {
+                guard let inspection else { return nil }
+                return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
+            }
             return MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
-        case .tracks:
-            guard let inspection else { return nil }
-            return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
         }
     }
 
@@ -492,6 +605,8 @@ private struct SpeakerCountChip: View {
 private struct EditableSpeakerChip: View {
     let speaker: MeetingMeta.Speaker
     @Bindable var session: MeetingSession
+    /// Full speaker list, for the merge menu's targets.
+    var allSpeakers: [MeetingMeta.Speaker] = []
     @State private var isEditing = false
     @State private var draftName: String = ""
 
@@ -518,7 +633,23 @@ private struct EditableSpeakerChip: View {
         .buttonStyle(.plain)
         .help(speaker.nameInferred
             ? "“\(speaker.displayName)” was auto-detected from the conversation — click to correct it."
-            : "Click to rename or recolour this speaker.")
+            : "Click to rename or recolour this speaker. Right-click to merge with another speaker.")
+        .contextMenu {
+            // Manual fix for an over-split diarization: fold this chip's
+            // words into another speaker. Re-processing re-runs diarization
+            // and may split them again.
+            let targets = allSpeakers.filter { $0.id != speaker.id }
+            if !targets.isEmpty {
+                Menu("Merge into") {
+                    ForEach(targets, id: \.id) { target in
+                        Button("\(target.displayName)") {
+                            session.mergeSpeaker(id: speaker.id, into: target.id)
+                        }
+                    }
+                }
+                .help("This speaker's words are re-attributed to the one you pick, and this chip disappears. Use when the same person was split into two speakers.")
+            }
+        }
         .popover(isPresented: $isEditing, arrowEdge: .top) {
             SpeakerEditor(
                 speaker: speaker,
@@ -1071,8 +1202,9 @@ private enum TrackRowBuilder {
     }
 
     /// Words further apart than this break a run (matches the merged
-    /// transcript's segment gap).
-    private static let groupGap = 0.7
+    /// transcript's turn gap — sub-second gaps are normal ASR timing and
+    /// splitting on them shredded speech into single-word rows).
+    private static let groupGap = 2.5
     /// Cap runs so a long monologue doesn't become one giant cell that
     /// defeats the side-by-side reading.
     private static let groupMaxWords = 60
@@ -1166,16 +1298,11 @@ private enum TrackRowBuilder {
 /// where the audio gate silenced mic audio before transcription saw it.
 private struct TracksPanel: View {
     let inspection: MeetingTrackInspection
+    /// Precomputed off-main by the owner — building the row model inline
+    /// here would redo a 15k-word pass on every body evaluation.
+    let rows: [TrackRowBuilder.Row]
     let meta: MeetingMeta
     let player: MeetingPlayer?
-    private let rows: [TrackRowBuilder.Row]
-
-    init(inspection: MeetingTrackInspection, meta: MeetingMeta, player: MeetingPlayer?) {
-        self.inspection = inspection
-        self.meta = meta
-        self.player = player
-        self.rows = TrackRowBuilder.rows(inspection: inspection)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1197,6 +1324,7 @@ private struct TracksPanel: View {
             LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(rows) { row in
                     TrackRowView(row: row, meta: meta, player: player)
+                        .id("trackrow-\(row.id)")
                 }
             }
         }
@@ -1214,9 +1342,13 @@ private struct TracksPanel: View {
         micLine += " · System: \(inspection.system.count) words"
 
         return VStack(alignment: .leading, spacing: 2) {
-            Text(micLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(micLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                CopyButton(text: TrackRowBuilder.plainText(inspection: inspection, meta: meta))
+                    .help("Copy the two-lane comparison as text — handy for sharing a diagnosis.")
+            }
             if let gate = inspection.gate {
                 Text(gate.applied
                     ? String(format: "Bleed gate: applied — correlation %.2f, start offset %+.2f s, coupling %.3f, %.0f%% of mic audio silenced",
@@ -1235,6 +1367,14 @@ private struct TrackRowView: View {
     let meta: MeetingMeta
     let player: MeetingPlayer?
 
+    /// True while the playhead sits inside this row. Only instantiated
+    /// (visible) rows observe `currentTime`, so the ~20 Hz tick re-renders
+    /// a screenful of rows, not the whole transcript.
+    private var isAtPlayhead: Bool {
+        guard let player, player.isPlaying else { return false }
+        return player.currentTime >= row.start - 0.1 && player.currentTime <= row.end + 0.1
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             timestamp
@@ -1247,6 +1387,12 @@ private struct TrackRowView: View {
                 cell.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isAtPlayhead ? Color.accentColor.opacity(0.10) : .clear)
+        )
     }
 
     @ViewBuilder

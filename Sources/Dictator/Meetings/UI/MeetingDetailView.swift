@@ -25,6 +25,14 @@ struct MeetingDetailView: View {
                 content
                     .padding(20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else if showsTranscript {
+                // TranscriptView owns its own ScrollView so its tab picker
+                // stays fixed and the playback dock floats over the content —
+                // wrapping it in another ScrollView would break both.
+                content
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 ScrollView {
                     content
@@ -49,6 +57,20 @@ struct MeetingDetailView: View {
             titleDraft = session.meta.title
             transcriptCache = nil
             reloadTranscriptIfNeeded()
+        }
+        // A speaker merge rewrites transcript.json in place without a state
+        // transition — refresh the cache so the new attribution shows.
+        .onChange(of: session.transcriptRevision) { _, _ in
+            transcriptCache = MeetingStorage.readTranscript(for: session.id)
+        }
+    }
+
+    /// States whose content is the transcript page (which manages its own
+    /// scrolling); the rest use the plain outer ScrollView.
+    private var showsTranscript: Bool {
+        switch session.state {
+        case .summarising, .idle, .ready: return true
+        default: return false
         }
     }
 

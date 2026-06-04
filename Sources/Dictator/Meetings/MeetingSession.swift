@@ -54,6 +54,10 @@ final class MeetingSession: Identifiable {
     let id: UUID
     var meta: MeetingMeta
     private(set) var state: State
+    /// Bumped whenever transcript.json / tracks.json are rewritten outside a
+    /// full re-process (currently: speaker merge), so views holding cached
+    /// copies know to reload.
+    private(set) var transcriptRevision = 0
 
     private let recorder = MeetingAudioRecorder()
     private let micRecorder = MeetingMicRecorder()
@@ -583,6 +587,61 @@ final class MeetingSession: Identifiable {
         meta.speakers[idx].colorHex = hex
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
+    }
+
+    /// Merge one speaker into another — the manual fix for an over-split
+    /// diarization (two chips that are really the same person). Every word
+    /// attributed to `sourceID` in the transcript and the track-inspection
+    /// data is re-attributed to `targetID`, the transcript's turns are
+    /// rebuilt so the merged speech reads as continuous turns rather than
+    /// alternating fragments, and `sourceID`'s chip disappears. Survives
+    /// relaunch (files are rewritten) but not a Re-process, which re-runs
+    /// diarization from scratch.
+    func mergeSpeaker(id sourceID: String, into targetID: String) {
+        guard sourceID != targetID,
+              meta.speakers.contains(where: { $0.id == sourceID }),
+              meta.speakers.contains(where: { $0.id == targetID }) else { return }
+
+        // Transcript: re-attribute, then rebuild turns from the word level so
+        // previously-alternating fragments coalesce. Old transcripts without
+        // word timings fall back to a plain id swap.
+        if let transcript = MeetingStorage.readTranscript(for: id) {
+            let remapped = transcript.segments.map { seg -> MeetingTranscriptSegment in
+                var s = seg
+                if s.speakerId == sourceID { s.speakerId = targetID }
+                return s
+            }
+            let rebuilt: [MeetingTranscriptSegment]
+            if remapped.allSatisfy({ !($0.words ?? []).isEmpty }) {
+                let words = remapped.flatMap { seg in
+                    (seg.words ?? []).map {
+                        SpeakerAttributedWord(start: $0.start, end: $0.end, text: $0.text, speakerId: seg.speakerId)
+                    }
+                }.sorted { $0.start < $1.start }
+                rebuilt = MeetingProcessor.buildSegments(from: words)
+            } else {
+                rebuilt = remapped
+            }
+            try? MeetingStorage.writeTranscript(MeetingTranscript(segments: rebuilt), for: id)
+        }
+
+        // Track-inspection data: same re-attribution so the Tracks view
+        // agrees with the transcript.
+        if var inspection = MeetingStorage.readTrackInspection(for: id) {
+            for i in inspection.mic.indices where inspection.mic[i].speakerId == sourceID {
+                inspection.mic[i].speakerId = targetID
+            }
+            for i in inspection.system.indices where inspection.system[i].speakerId == sourceID {
+                inspection.system[i].speakerId = targetID
+            }
+            try? MeetingStorage.writeTrackInspection(inspection, for: id)
+        }
+
+        meta.speakers.removeAll { $0.id == sourceID }
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+        transcriptRevision += 1
+        NSLog("[Dictator] Merged speaker \(sourceID) into \(targetID) for meeting \(id)")
     }
 
     // MARK: - Timer loop

@@ -296,14 +296,23 @@ func inlineMarkdownText(_ s: String) -> Text {
 /// confirmation pattern the menu-bar recent rows use. `label` nil renders an
 /// icon-only button.
 struct CopyButton: View {
-    let text: String
+    /// Evaluated on click, not at construction. Call sites hand in whole
+    /// document renderings (notes markdown, full transcript exports) — built
+    /// eagerly on every body evaluation they made tab switching crawl on
+    /// hour-long meetings. `@autoclosure` keeps call sites reading plainly.
+    let text: () -> String
     var label: String? = nil
     @State private var copied = false
+
+    init(text: @autoclosure @escaping () -> String, label: String? = nil) {
+        self.text = text
+        self.label = label
+    }
 
     var body: some View {
         Button {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            NSPasteboard.general.setString(text(), forType: .string)
             withAnimation { copied = true }
             Task {
                 try? await Task.sleep(for: .seconds(1.4))

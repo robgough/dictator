@@ -31,7 +31,29 @@ final class MeetingPlayer {
     @ObservationIgnored private var isScrubbing = false
     @ObservationIgnored private var wasPlayingBeforeScrub = false
 
+    /// Per-track speech intervals (sorted, merged) that drive playback
+    /// ducking. Without headphones the mic track carries the speakers'
+    /// bleed, so playing both tracks flat doubles every remote word into an
+    /// unpleasant echo. While the system track has speech and the mic has
+    /// none of its own, the mic is ducked hard; during genuine overlap it's
+    /// ducked only partially so the user's interjection stays audible.
+    @ObservationIgnored private var micSpeech: [(start: Double, end: Double)] = []
+    @ObservationIgnored private var systemSpeech: [(start: Double, end: Double)] = []
+
     init() {}
+
+    /// Wire the per-track speech timelines (from the meeting's track
+    /// inspection data) into the ducking logic. Pass empty arrays for
+    /// meetings without track data — both tracks then play flat, the old
+    /// behaviour.
+    func setSpeechIntervals(
+        mic: [(start: Double, end: Double)],
+        system: [(start: Double, end: Double)]
+    ) {
+        micSpeech = mic
+        systemSpeech = system
+        applyDucking(at: currentTime)
+    }
 
     /// Load the available tracks. `micURL` / `systemURL` may each be
     /// nil — typically only one when the meeting was imported or its
@@ -65,6 +87,8 @@ final class MeetingPlayer {
         isScrubbing = false
         currentTime = 0
         duration = 0
+        micSpeech = []
+        systemSpeech = []
     }
 
     func togglePlayPause() {
@@ -156,6 +180,36 @@ final class MeetingPlayer {
                 player.currentTime = max(0, player.duration - 0.01)
             }
         }
+        applyDucking(at: t)
+    }
+
+    // MARK: - Ducking
+
+    /// Binary search: does any interval contain `t`?
+    private nonisolated static func contains(_ intervals: [(start: Double, end: Double)], _ t: Double) -> Bool {
+        var lo = 0, hi = intervals.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            let iv = intervals[mid]
+            if t < iv.start { hi = mid - 1 }
+            else if t > iv.end { lo = mid + 1 }
+            else { return true }
+        }
+        return false
+    }
+
+    /// Set the mic player's volume for the playhead position. Hard duck
+    /// while only the remote side is talking (the mic holds nothing but
+    /// bleed there), partial duck during overlap, full volume otherwise.
+    /// No-op without speech timelines or when only one track is loaded.
+    private func applyDucking(at t: TimeInterval) {
+        guard let micPlayer, systemPlayer != nil, !systemSpeech.isEmpty else { return }
+        let sysActive = Self.contains(systemSpeech, t)
+        let micActive = Self.contains(micSpeech, t)
+        let target: Float = sysActive ? (micActive ? 0.35 : 0.05) : 1.0
+        if abs(micPlayer.volume - target) > 0.01 {
+            micPlayer.setVolume(target, fadeDuration: 0.08)
+        }
     }
 
     private func startTimer() {
@@ -174,6 +228,7 @@ final class MeetingPlayer {
                     return
                 }
                 self.currentTime = playing.map { $0.currentTime }.max() ?? self.currentTime
+                self.applyDucking(at: self.currentTime)
             }
         }
     }

@@ -89,18 +89,25 @@ final class MeetingProcessor {
 
         // ── Load both tracks as 16 kHz mono ──────────────────────────────
         // System first — it's the reference the mic-bleed gate aligns against.
+        // Decoding an hour of audio takes real seconds, so it runs detached:
+        // run() is main-actor and anything synchronous here stutters the UI
+        // and the dictation HUD.
         var micSamples: [Float] = []
         var systemSamples: [Float] = []
         if let systemURL = session.systemFileURL,
            FileManager.default.fileExists(atPath: systemURL.path) {
-            systemSamples = (try? Self.loadMono16k(from: systemURL)) ?? []
+            systemSamples = await Task.detached(priority: .userInitiated) {
+                (try? Self.loadMono16k(from: systemURL)) ?? []
+            }.value
             systemDuration = Double(systemSamples.count) / 16_000
         }
         // Mic track. Old meetings captured before the v0.1 fix sometimes wrote
         // meta claiming a mic file that was never created, so check the FS too.
         if let micURL = session.micFileURL,
            FileManager.default.fileExists(atPath: micURL.path) {
-            micSamples = (try? Self.loadMono16k(from: micURL)) ?? []
+            micSamples = await Task.detached(priority: .userInitiated) {
+                (try? Self.loadMono16k(from: micURL)) ?? []
+            }.value
             micDuration = Double(micSamples.count) / 16_000
         }
 
@@ -118,7 +125,13 @@ final class MeetingProcessor {
         // same "drop my mic's echoes" setting that controls the text dedup.
         var gateInspection: MeetingTrackInspection.GateInfo?
         if dedupeMicEchoes, !micSamples.isEmpty, !systemSamples.isEmpty {
-            let gate = Self.gateMicBleed(mic: micSamples, system: systemSamples, sampleRate: 16_000)
+            // The gate's lag search + per-block estimation is ~100M float ops
+            // on a long meeting — also off-main.
+            let micIn = micSamples
+            let systemIn = systemSamples
+            let gate = await Task.detached(priority: .userInitiated) {
+                Self.gateMicBleed(mic: micIn, system: systemIn, sampleRate: 16_000)
+            }.value
             NSLog("[Dictator] Mic-bleed gate: corr=\(String(format: "%.2f", gate.correlation)) offset=\(String(format: "%+.2fs", gate.offsetSeconds)) gain=\(String(format: "%.3f", gate.gain)) dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — tracks uncorrelated / no bleed"))")
             micSamples = gate.gated
             micDuration = Double(micSamples.count) / 16_000
@@ -193,6 +206,80 @@ final class MeetingProcessor {
         micSamples = []
         systemSamples = []
 
+        // ── Attribution, cleanup, transcript assembly (off-main) ─────────
+        // Speaker unification, word attribution, the bleed/echo cleanup
+        // passes, trivial-fold, segment building and the JSON writes chew
+        // through tens of thousands of words on a long meeting (the echo
+        // dedup alone is an O(mic × system) scan) — detached so the
+        // post-pass can't stutter the UI or a dictation HUD while it runs.
+        onProgress(.writingTranscript, 0)
+        let vocabulary = VocabularyStore.shared.entries
+        let sessionID = session.id
+        let dedupe = dedupeMicEchoes
+        let micWordsIn = micTimedWords
+        let systemWordsIn = systemTimedWords
+        let micFallbackIn = micFallbackText
+        let systemFallbackIn = systemFallbackText
+        let micDurationIn = micDuration
+        let systemDurationIn = systemDuration
+        let micDiarIn = micDiar
+        let systemDiarIn = systemDiar
+        let gateInspectionIn = gateInspection
+        let usedSpeakerIDs = try await Task.detached(priority: .userInitiated) {
+            try Self.assembleAndWriteTranscript(
+                sessionID: sessionID,
+                micTimedWords: micWordsIn,
+                systemTimedWords: systemWordsIn,
+                micFallbackText: micFallbackIn,
+                systemFallbackText: systemFallbackIn,
+                micDuration: micDurationIn,
+                systemDuration: systemDurationIn,
+                micDiar: micDiarIn,
+                systemDiar: systemDiarIn,
+                dedupeMicEchoes: dedupe,
+                gateInspection: gateInspectionIn,
+                vocabulary: vocabulary
+            )
+        }.value
+
+        // Rebuild the meta's speakers list from what actually appeared in the
+        // transcript. We keep stable colors keyed by id so an "other" meeting
+        // (diarizer failed) and a multi-speaker one don't drift visually.
+        var meta = session.meta
+        meta.durationSeconds = max(micDuration, systemDuration)
+        meta.speakers = Self.buildSpeakerPalette(speakerIDs: usedSpeakerIDs)
+        if let reason = diarFailureReason {
+            // Surface the failure in NSLog only — we don't have a per-meeting
+            // notes field yet, and a clean fallback transcript is more useful
+            // than a hard error. Worth revisiting if multiple users hit this.
+            NSLog("[Dictator] Meeting \(session.id) completed without diarization: \(reason)")
+        }
+        try MeetingStorage.writeMeta(meta)
+        session.meta = meta
+        onProgress(.writingTranscript, 1)
+    }
+
+    /// Everything between diarization and the meta update: speaker-space
+    /// unification, per-track word attribution, the bleed-cluster backstop,
+    /// echo dedup, the track-inspection artifact, trivial-speaker fold,
+    /// segment building, the vocabulary pass, and the transcript/tracks
+    /// writes. Pure value-in/value-out plus file IO, so it runs detached off
+    /// the main actor. Returns the speaker IDs that survived into the
+    /// transcript, in encounter order.
+    nonisolated private static func assembleAndWriteTranscript(
+        sessionID: UUID,
+        micTimedWords: [TimedWord],
+        systemTimedWords: [TimedWord],
+        micFallbackText: String,
+        systemFallbackText: String,
+        micDuration: Double,
+        systemDuration: Double,
+        micDiar: DiarizationOutput?,
+        systemDiar: DiarizationOutput?,
+        dedupeMicEchoes: Bool,
+        gateInspection: MeetingTrackInspection.GateInfo?,
+        vocabulary: [VocabularyEntry]
+    ) throws -> [String] {
         // ── Speaker-space unification ────────────────────────────────────
         // Build one global speaker space from the (possibly two) per-track
         // diarizer outputs. The mapping tells us which final speaker_N (or
@@ -261,8 +348,6 @@ final class MeetingProcessor {
             systemWords = [SpeakerAttributedWord(start: 0, end: systemDuration, text: systemFallbackText, speakerId: "other")]
         }
 
-        onProgress(.writingTranscript, 0)
-
         // Belt-and-braces ASR-side dedup. When the user isn't wearing
         // headphones, their mic captures the remote speakers and the same
         // words land on both tracks. AEC catches most of it; this pass
@@ -305,7 +390,7 @@ final class MeetingProcessor {
             }
             let inspection = MeetingTrackInspection(mic: inspectionMic, system: inspectionSystem, gate: gateInspection)
             do {
-                try MeetingStorage.writeTrackInspection(inspection, for: session.id)
+                try MeetingStorage.writeTrackInspection(inspection, for: sessionID)
             } catch {
                 // Diagnostic artifact only — never fail the meeting over it.
                 NSLog("[Dictator] Track inspection write failed: \(error)")
@@ -337,39 +422,22 @@ final class MeetingProcessor {
         let systemUniqueCount = systemDiar?.clusterCentroids.count ?? 0
         NSLog("[Dictator] Diarizer[merged]: micClusters=\(micUniqueCount) systemClusters=\(systemUniqueCount) finalSpeakers=\(usedSpeakerIDs.count) ids=\(usedSpeakerIDs.joined(separator: ","))")
 
-        // Split the merged timeline into per-speaker segments wherever the
-        // speaker changes or a long gap (≥700ms) opens.
+        // Split the merged timeline into per-speaker turns.
         var segments = Self.buildSegments(from: allWords)
         // Deterministic vocabulary pass — the same user dictionary dictation
         // uses (names, jargon, preferred spellings), applied whole-word to each
         // segment so the transcript AND the notes (built from it) pick up the
         // corrections. No-op when the dictionary is empty.
-        let vocab = VocabularyStore.shared.entries
-        if !vocab.isEmpty {
+        if !vocabulary.isEmpty {
             segments = segments.map { seg in
                 var s = seg
-                s.text = Vocabulary.apply(vocab, to: seg.text)
+                s.text = Vocabulary.apply(vocabulary, to: seg.text)
                 return s
             }
         }
         let transcript = MeetingTranscript(segments: segments)
-        try MeetingStorage.writeTranscript(transcript, for: session.id)
-
-        // Rebuild the meta's speakers list from what actually appeared in the
-        // transcript. We keep stable colors keyed by id so an "other" meeting
-        // (diarizer failed) and a multi-speaker one don't drift visually.
-        var meta = session.meta
-        meta.durationSeconds = max(micDuration, systemDuration)
-        meta.speakers = Self.buildSpeakerPalette(speakerIDs: usedSpeakerIDs)
-        if let reason = diarFailureReason {
-            // Surface the failure in NSLog only — we don't have a per-meeting
-            // notes field yet, and a clean fallback transcript is more useful
-            // than a hard error. Worth revisiting if multiple users hit this.
-            NSLog("[Dictator] Meeting \(session.id) completed without diarization: \(reason)")
-        }
-        try MeetingStorage.writeMeta(meta)
-        session.meta = meta
-        onProgress(.writingTranscript, 1)
+        try MeetingStorage.writeTranscript(transcript, for: sessionID)
+        return usedSpeakerIDs
     }
 
     // MARK: - Track transcription
@@ -1235,42 +1303,56 @@ final class MeetingProcessor {
     // MARK: - Segment building
 
     /// Words are already sorted by start time and tagged with speakerId.
-    /// We split into one segment per speaker turn — a new segment begins
-    /// whenever the speaker changes or a ≥700ms gap opens (long pauses
-    /// shouldn't be glued into one wall of text even from the same speaker).
+    /// One segment per speaker TURN: a turn collects a speaker's words and
+    /// stays open across OTHER speakers' interjections — the two tracks
+    /// genuinely overlap in a call, and the old "new segment on every
+    /// speaker change" rule shredded overlapping speech into alternating
+    /// single-word lines. A turn closes when its own speaker pauses ≥2.5 s
+    /// (sub-second phrase gaps are normal ASR timing), or at a natural
+    /// pause once it's grown very long. Turns are ordered by start time.
     nonisolated static func buildSegments(from words: [SpeakerAttributedWord]) -> [MeetingTranscriptSegment] {
         guard !words.isEmpty else { return [] }
-        let gapThreshold: Double = 0.7
+        let gapThreshold: Double = 2.5
+        // Soft cap so an unbroken monologue still splits at a small pause —
+        // a single hour-long segment is unreadable and unseekable.
+        let softMaxTurnSeconds: Double = 60
+        let softSplitGap: Double = 0.7
 
         var segments: [MeetingTranscriptSegment] = []
-        var bucket: [SpeakerAttributedWord] = [words[0]]
+        // One open bucket per speaker; closed when that speaker pauses.
+        var open: [String: [SpeakerAttributedWord]] = [:]
 
-        func flush() {
+        func flush(_ bucket: [SpeakerAttributedWord]) {
             guard let first = bucket.first, let last = bucket.last else { return }
             let text = bucket.map { $0.text }.joined(separator: " ")
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
             segments.append(MeetingTranscriptSegment(
                 start: first.start,
                 end: last.end,
                 speakerId: first.speakerId,
-                text: trimmed,
+                text: text,
                 words: bucket.map { TranscriptWord(start: $0.start, end: $0.end, text: $0.text) }
             ))
         }
 
-        for word in words.dropFirst() {
-            let last = bucket.last!
-            let speakerChanged = word.speakerId != last.speakerId
-            let longGap = (word.start - last.end) >= gapThreshold
-            if speakerChanged || longGap {
-                flush()
-                bucket = [word]
+        for word in words {
+            guard var bucket = open[word.speakerId] else {
+                open[word.speakerId] = [word]
+                continue
+            }
+            let gap = word.start - bucket.last!.end
+            let turnLength = bucket.last!.end - bucket.first!.start
+            if gap >= gapThreshold || (turnLength >= softMaxTurnSeconds && gap >= softSplitGap) {
+                flush(bucket)
+                open[word.speakerId] = [word]
             } else {
                 bucket.append(word)
+                open[word.speakerId] = bucket
             }
         }
-        flush()
+        for bucket in open.values { flush(bucket) }
+        segments.sort { $0.start < $1.start }
         return segments
     }
 
