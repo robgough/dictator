@@ -40,6 +40,14 @@ final class MeetingPlayer {
     @ObservationIgnored private var micSpeech: [(start: Double, end: Double)] = []
     @ObservationIgnored private var systemSpeech: [(start: Double, end: Double)] = []
 
+    /// Baseline per-track volumes from loudness normalization — the two
+    /// tracks' speech levels routinely differ several-fold (quiet mic vs
+    /// digitally-hot call audio). AVAudioPlayer can only attenuate, so the
+    /// LOUDER track is turned down toward the quieter one. Ducking
+    /// multiplies on top of the mic baseline.
+    @ObservationIgnored private var micBaseVolume: Float = 1
+    @ObservationIgnored private var systemBaseVolume: Float = 1
+
     init() {}
 
     /// Wire the per-track speech timelines (from the meeting's track
@@ -52,6 +60,24 @@ final class MeetingPlayer {
     ) {
         micSpeech = mic
         systemSpeech = system
+        applyDucking(at: currentTime)
+    }
+
+    /// Balance the tracks from their measured speech levels so both sides
+    /// of the call play back at roughly the same loudness. Clamped so a
+    /// whisper-quiet measurement can't effectively mute the other track.
+    func setTrackLevels(mic: Double?, system: Double?) {
+        micBaseVolume = 1
+        systemBaseVolume = 1
+        if let mic, let system, mic > 0, system > 0 {
+            let ratio = mic / system          // < 1 ⇒ mic is the quiet one
+            if ratio < 1 {
+                systemBaseVolume = Float(max(0.2, ratio))
+            } else {
+                micBaseVolume = Float(max(0.2, 1 / ratio))
+            }
+        }
+        systemPlayer?.volume = systemBaseVolume
         applyDucking(at: currentTime)
     }
 
@@ -89,6 +115,8 @@ final class MeetingPlayer {
         duration = 0
         micSpeech = []
         systemSpeech = []
+        micBaseVolume = 1
+        systemBaseVolume = 1
     }
 
     func togglePlayPause() {
@@ -198,15 +226,16 @@ final class MeetingPlayer {
         return false
     }
 
-    /// Set the mic player's volume for the playhead position. Hard duck
-    /// while only the remote side is talking (the mic holds nothing but
-    /// bleed there), partial duck during overlap, full volume otherwise.
-    /// No-op without speech timelines or when only one track is loaded.
+    /// Set the mic player's volume for the playhead position: the
+    /// normalization baseline, hard-ducked while only the remote side is
+    /// talking (the mic holds nothing but bleed there), partially ducked
+    /// during overlap.
     private func applyDucking(at t: TimeInterval) {
-        guard let micPlayer, systemPlayer != nil, !systemSpeech.isEmpty else { return }
-        let sysActive = Self.contains(systemSpeech, t)
-        let micActive = Self.contains(micSpeech, t)
-        let target: Float = sysActive ? (micActive ? 0.35 : 0.05) : 1.0
+        guard let micPlayer else { return }
+        var target = micBaseVolume
+        if systemPlayer != nil, !systemSpeech.isEmpty, Self.contains(systemSpeech, t) {
+            target *= Self.contains(micSpeech, t) ? 0.35 : 0.05
+        }
         if abs(micPlayer.volume - target) > 0.01 {
             micPlayer.setVolume(target, fadeDuration: 0.08)
         }

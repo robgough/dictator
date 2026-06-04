@@ -145,6 +145,13 @@ final class MeetingProcessor {
             )
         }
 
+        // Per-track speech loudness for playback normalization. Mic is
+        // measured post-gate so the stat reflects the user's voice, not
+        // bleed; the system track is typically far hotter digitally.
+        let speechLevels = await Task.detached(priority: .userInitiated) { [micSamples, systemSamples] in
+            (mic: Self.speechLevel(of: micSamples), system: Self.speechLevel(of: systemSamples))
+        }.value
+
         // ── Transcription pass on each track ─────────────────────────────
         if !micSamples.isEmpty {
             onProgress(.transcribingMic, 0)
@@ -264,6 +271,7 @@ final class MeetingProcessor {
                 systemDiar: systemDiarIn,
                 dedupeMicEchoes: dedupe,
                 gateInspection: gateInspectionIn,
+                speechLevels: speechLevels,
                 vocabulary: vocabulary
             )
         }.value
@@ -304,6 +312,7 @@ final class MeetingProcessor {
         systemDiar: DiarizationOutput?,
         dedupeMicEchoes: Bool,
         gateInspection: MeetingTrackInspection.GateInfo?,
+        speechLevels: (mic: Double?, system: Double?),
         vocabulary: [VocabularyEntry]
     ) throws -> [String] {
         // ── Speaker-space unification ────────────────────────────────────
@@ -414,7 +423,13 @@ final class MeetingProcessor {
             let inspectionSystem = systemWords.map {
                 MeetingTrackInspection.Word(start: $0.start, end: $0.end, text: $0.text, speakerId: $0.speakerId)
             }
-            let inspection = MeetingTrackInspection(mic: inspectionMic, system: inspectionSystem, gate: gateInspection)
+            let inspection = MeetingTrackInspection(
+                mic: inspectionMic,
+                system: inspectionSystem,
+                gate: gateInspection,
+                micSpeechLevel: speechLevels.mic,
+                systemSpeechLevel: speechLevels.system
+            )
             do {
                 try MeetingStorage.writeTrackInspection(inspection, for: sessionID)
             } catch {
@@ -759,6 +774,19 @@ final class MeetingProcessor {
             applied: true,
             silencedRanges: silencedRanges
         )
+    }
+
+    /// Median 10 ms RMS over active frames — "how loud does speech on this
+    /// track run?". Feeds playback normalization (the mic capture is
+    /// routinely several times quieter than the digitally-hot call audio).
+    /// nil when there's too little active audio to call it.
+    nonisolated static func speechLevel(of samples: [Float], sampleRate: Int = 16_000) -> Double? {
+        let frame = max(1, sampleRate / 100)
+        guard samples.count >= frame * 100 else { return nil }
+        var active = rmsEnvelope(samples, frame: frame).filter { $0 > bleedMicFloor }
+        guard active.count >= 100 else { return nil }
+        active.sort()
+        return Double(active[active.count / 2])
     }
 
     /// Per-frame RMS envelope.

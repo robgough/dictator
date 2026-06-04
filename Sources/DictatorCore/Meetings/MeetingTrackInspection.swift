@@ -79,14 +79,23 @@ struct MeetingTrackInspection: Codable, Equatable, Sendable {
     var mic: [Word]
     var system: [Word]
     var gate: GateInfo?
+    /// Median 10 ms speech RMS per track (mic measured post-gate, so it
+    /// reflects the user's voice, not bleed). Drives playback normalization:
+    /// the mic typically runs far quieter than the digitally-hot call audio.
+    /// nil on tracks too short/quiet to measure, and on pre-existing files.
+    var micSpeechLevel: Double?
+    var systemSpeechLevel: Double?
 
     static let currentSchemaVersion = 1
 
     init(mic: [Word], system: [Word], gate: GateInfo?,
+         micSpeechLevel: Double? = nil, systemSpeechLevel: Double? = nil,
          schemaVersion: Int = MeetingTrackInspection.currentSchemaVersion) {
         self.mic = mic
         self.system = system
         self.gate = gate
+        self.micSpeechLevel = micSpeechLevel
+        self.systemSpeechLevel = systemSpeechLevel
         self.schemaVersion = schemaVersion
     }
 }
