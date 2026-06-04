@@ -23,9 +23,10 @@ struct MenuBarContent: View {
             statusRow
 
             // Meetings entries only appear once the user opts into the
-            // preview (Settings → Meetings) — runtime-gated, not compile-
-            // time, so the toggle takes effect on the next menu open.
-            if state.settings.meetingsEnabled {
+            // preview (Settings → Meetings) AND a usable LLM exists for the
+            // notes pass — runtime-gated, not compile-time, so changes take
+            // effect on the next menu open.
+            if MeetingsFeature.isEnabled {
                 recordMeetingButton
             }
 
@@ -55,7 +56,7 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
-                if state.settings.meetingsEnabled {
+                if MeetingsFeature.isEnabled {
                     Button {
                         NSApp.setActivationPolicy(.regular)
                         NSApp.activate(ignoringOtherApps: true)

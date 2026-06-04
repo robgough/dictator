@@ -73,7 +73,7 @@ struct DictatorApp: App {
             appState.showOnboarding()
         case "meetings":
             guard MeetingsFeature.isEnabled else {
-                NSLog("[Dictator] dictator://meetings ignored — Meetings is turned off (enable it in Settings → Meetings)")
+                NSLog("[Dictator] dictator://meetings ignored — Meetings is off or missing a usable LLM (see Settings → Meetings)")
                 return
             }
             NSApp.setActivationPolicy(.regular)
@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Gate checked inside the hop — `MeetingsFeature.isEnabled`
                     // reads MainActor state now that it's a runtime setting.
                     guard MeetingsFeature.isEnabled else {
-                        NSLog("[Dictator] dictator://meetings ignored — Meetings is turned off (enable it in Settings → Meetings)")
+                        NSLog("[Dictator] dictator://meetings ignored — Meetings is off or missing a usable LLM (see Settings → Meetings)")
                         return
                     }
                     NSApp.setActivationPolicy(.regular)

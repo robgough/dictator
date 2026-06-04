@@ -2540,14 +2540,14 @@ private struct DiarizationModelsPane: View {
     @State private var diarizer = DiarizerServiceHolder.shared
 
     var body: some View {
-        let meetingsOff = !state.settings.meetingsEnabled
+        let meetingsOff = !MeetingsFeature.isEnabled
         Form {
             if meetingsOff {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "moon.zzz")
                             .foregroundStyle(.secondary)
-                        Text("Speaker identification is part of Meetings, which is currently turned off. Enable Meetings in Settings → Meetings to use it. A model you've already downloaded stays on disk and can still be removed below.")
+                        Text("Speaker identification is part of Meetings, which isn't currently enabled — see Settings → Meetings to turn it on (it also needs an on-device LLM). A model you've already downloaded stays on disk and can still be removed below.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

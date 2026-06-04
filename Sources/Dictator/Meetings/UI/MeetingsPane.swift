@@ -12,6 +12,10 @@ struct MeetingsPane: View {
 
     var body: some View {
         @Bindable var s = state
+        // Nil when a usable LLM is configured. A missing LLM disables the
+        // whole feature (toggle included) — the notes pass is the product.
+        let llmMessage = MeetingsFeature.llmRequirementMessage
+        let effectivelyEnabled = s.settings.meetingsEnabled && llmMessage == nil
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
@@ -26,6 +30,18 @@ struct MeetingsPane: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let llmMessage {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(llmMessage)
+                                .font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    }
                     Toggle(isOn: Binding(
                         get: { s.settings.meetingsEnabled },
                         set: { s.settings.meetingsEnabled = $0; state.save() }
@@ -35,10 +51,11 @@ struct MeetingsPane: View {
                     }
                     .toggleStyle(.switch)
                     .controlSize(.large)
+                    .disabled(llmMessage != nil)
                 }
                 .padding(.vertical, 4)
             } footer: {
-                if !s.settings.meetingsEnabled {
+                if !effectivelyEnabled {
                     Text("While Meetings is off, the menu bar entries stay hidden and the settings below are disabled.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -74,7 +91,7 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .disabled(!s.settings.meetingsEnabled)
+            .disabled(!effectivelyEnabled)
 
             Section {
                 Toggle("Write notes automatically", isOn: Binding(
@@ -118,7 +135,7 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .disabled(!s.settings.meetingsEnabled)
+            .disabled(!effectivelyEnabled)
 
             Section {
                 Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
@@ -127,7 +144,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Speakers")
             }
-            .disabled(!s.settings.meetingsEnabled)
+            .disabled(!effectivelyEnabled)
 
             Section {
                 Toggle("Drop echoes captured by my microphone", isOn: Binding(
@@ -141,10 +158,14 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .disabled(!s.settings.meetingsEnabled)
+            .disabled(!effectivelyEnabled)
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        // The LLM-requirement notice reads ModelManager's download states —
+        // refresh on entry so a model downloaded since the last look (or
+        // removed behind our back) is reflected immediately.
+        .onAppear { ModelManager.shared.refreshCachedStates() }
         .sheet(isPresented: $showSummaryPromptSheet) {
             SummaryPromptSheet(isPresented: $showSummaryPromptSheet)
         }
