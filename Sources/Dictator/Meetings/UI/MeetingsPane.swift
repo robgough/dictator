@@ -1,8 +1,11 @@
 import SwiftUI
 
-/// Settings → Meetings tab. Carries the per-Mac storage retention
-/// settings, the cross-Mac summary preferences, and a short note about
-/// speaker identification.
+/// Settings → Meetings tab. Hosts the preview notice and the master
+/// opt-in toggle at the top (Meetings ships as an early preview, off by
+/// default), then the per-Mac storage retention settings, the cross-Mac
+/// summary preferences, and a short note about speaker identification.
+/// Everything below the toggle is greyed out until the preview is enabled;
+/// the notice stays visible even when it's on.
 struct MeetingsPane: View {
     @Environment(AppState.self) private var state
     @State private var showSummaryPromptSheet = false
@@ -10,6 +13,38 @@ struct MeetingsPane: View {
     var body: some View {
         @Bindable var s = state
         Form {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "testtube.2")
+                            .font(.title2)
+                            .foregroundStyle(.orange)
+                        Text("Meetings is an early preview")
+                            .font(.headline)
+                    }
+                    Text("Record a call, get a transcript split by speaker, and have notes written for you — all on-device. It's early days and we're not yet sure how reliable it is, so expect rough edges. You're very welcome to play with it; feedback (good or bad) is hugely appreciated at hello@robgough.net.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle(isOn: Binding(
+                        get: { s.settings.meetingsEnabled },
+                        set: { s.settings.meetingsEnabled = $0; state.save() }
+                    )) {
+                        Text("Enable Meetings")
+                            .font(.body.weight(.semibold))
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.large)
+                }
+                .padding(.vertical, 4)
+            } footer: {
+                if !s.settings.meetingsEnabled {
+                    Text("While Meetings is off, the menu bar entries stay hidden and the settings below are disabled.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section {
                 Picker("Delete audio after", selection: Binding(
                     get: { s.settings.meetingAudioRetentionDays },
@@ -39,6 +74,7 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .disabled(!s.settings.meetingsEnabled)
 
             Section {
                 Toggle("Write notes automatically", isOn: Binding(
@@ -82,6 +118,7 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .disabled(!s.settings.meetingsEnabled)
 
             Section {
                 Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
@@ -90,6 +127,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Speakers")
             }
+            .disabled(!s.settings.meetingsEnabled)
 
             Section {
                 Toggle("Drop echoes captured by my microphone", isOn: Binding(
@@ -103,6 +141,7 @@ struct MeetingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .disabled(!s.settings.meetingsEnabled)
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)

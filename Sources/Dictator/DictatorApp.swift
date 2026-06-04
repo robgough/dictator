@@ -44,10 +44,11 @@ struct DictatorApp: App {
         }
         .handlesExternalEvents(matching: ["settings"])
 
-        // Meetings is in-progress and only available in Debug / custom
-        // `MEETINGS_ENABLED` builds. See `MeetingsFeature.swift` for
-        // the rationale + how to flip it on for a one-off Release.
-        #if DEBUG || MEETINGS_ENABLED
+        // Meetings ships as a runtime-gated early preview (see
+        // `MeetingsFeature.swift`). The WindowGroup is registered
+        // unconditionally — scene builders can't take a runtime `if` —
+        // but every entry point (menu bar buttons, the deep link below)
+        // checks `MeetingsFeature.isEnabled` before opening it.
         WindowGroup(id: "meetings") {
             MeetingsRootView()
                 .environment(appState)
@@ -55,7 +56,6 @@ struct DictatorApp: App {
         }
         .defaultSize(width: 980, height: 640)
         .handlesExternalEvents(matching: ["meetings"])
-        #endif
     }
 
     /// Routes incoming `dictator://…` URLs. Three hosts handled today:
@@ -73,7 +73,7 @@ struct DictatorApp: App {
             appState.showOnboarding()
         case "meetings":
             guard MeetingsFeature.isEnabled else {
-                NSLog("[Dictator] dictator://meetings ignored — Meetings feature is disabled in this build")
+                NSLog("[Dictator] dictator://meetings ignored — Meetings is turned off (enable it in Settings → Meetings)")
                 return
             }
             NSApp.setActivationPolicy(.regular)
@@ -127,11 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 AppState.shared.showOnboarding()
             case "meetings":
-                guard MeetingsFeature.isEnabled else {
-                    NSLog("[Dictator] dictator://meetings ignored — Meetings feature is disabled in this build")
-                    continue
-                }
                 Task { @MainActor in
+                    // Gate checked inside the hop — `MeetingsFeature.isEnabled`
+                    // reads MainActor state now that it's a runtime setting.
+                    guard MeetingsFeature.isEnabled else {
+                        NSLog("[Dictator] dictator://meetings ignored — Meetings is turned off (enable it in Settings → Meetings)")
+                        return
+                    }
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
                     AppState.shared.openMeetingsAction?()

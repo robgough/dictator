@@ -22,9 +22,12 @@ struct MenuBarContent: View {
             Divider()
             statusRow
 
-            #if DEBUG || MEETINGS_ENABLED
-            recordMeetingButton
-            #endif
+            // Meetings entries only appear once the user opts into the
+            // preview (Settings → Meetings) — runtime-gated, not compile-
+            // time, so the toggle takes effect on the next menu open.
+            if state.settings.meetingsEnabled {
+                recordMeetingButton
+            }
 
             // Default mode picker — only shown once the user has more than the
             // built-in Quick (i.e. after migration or once they add a custom
@@ -52,15 +55,15 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
-                #if DEBUG || MEETINGS_ENABLED
-                Button {
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
-                    openWindow(id: "meetings")
-                } label: {
-                    Label("Meetings…", systemImage: "person.2.wave.2")
+                if state.settings.meetingsEnabled {
+                    Button {
+                        NSApp.setActivationPolicy(.regular)
+                        NSApp.activate(ignoringOtherApps: true)
+                        openWindow(id: "meetings")
+                    } label: {
+                        Label("Meetings…", systemImage: "person.2.wave.2")
+                    }
                 }
-                #endif
                 // The wizard exists to walk you through the things that
                 // *must* be configured for dictation to work. Once mic is
                 // granted and at least one model in the active engine is
@@ -96,9 +99,9 @@ struct MenuBarContent: View {
             // Re-captured on every popover render — cheap and ensures the
             // closure stays valid across SwiftUI environment refreshes.
             state.openSettingsAction = { openSettings() }
-            #if DEBUG || MEETINGS_ENABLED
+            // Captured unconditionally — the action itself is harmless and
+            // the deep-link handler checks the meetings toggle before use.
             state.openMeetingsAction = { openWindow(id: "meetings") }
-            #endif
             NSLog("[Dictator] MenuBarContent.onAppear: captured openSettings action")
         }
     }

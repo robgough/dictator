@@ -228,6 +228,16 @@ struct DictatorSettings: Codable, Equatable {
     /// legitimate overlapping speech.
     var meetingDedupeMicEchoes: Bool = true
 
+    /// Master switch for the Meetings feature, which ships as an early
+    /// preview. Off by default: the menu bar entries, the
+    /// `dictator://meetings` deep link, and the diarization model options
+    /// only light up once the user opts in from Settings → Meetings (where
+    /// a preview notice stays visible even when enabled). Per-Mac
+    /// (local-settings.json) — opting into a preview is a per-installation
+    /// decision, like onboarding state; it shouldn't silently enable the
+    /// feature on every synced Mac.
+    var meetingsEnabled: Bool = false
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -393,6 +403,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
         self.defaultMeetingType = try c.decodeIfPresent(MeetingType.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
         self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
+        self.meetingsEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingsEnabled) ?? d.meetingsEnabled
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -1143,6 +1154,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingSummaryPromptOverride
         case defaultMeetingType
         case meetingDedupeMicEchoes
+        case meetingsEnabled
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -1199,6 +1211,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingAutoDeleteAfterDays",
         "meetingAudioRetentionDays",
         "meetingDedupeMicEchoes",
+        "meetingsEnabled",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

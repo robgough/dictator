@@ -19,10 +19,8 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "cpu") }
             ModesPane()
                 .tabItem { Label("Modes", systemImage: "rectangle.stack") }
-            #if DEBUG || MEETINGS_ENABLED
             MeetingsPane()
                 .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
-            #endif
             AssistantPromptPane()
                 .tabItem { Label("Assistant", systemImage: "wand.and.stars") }
             DictionaryPane()
@@ -2537,19 +2535,34 @@ private struct AppleFoundationStatusRow: View {
 /// is always "active" — picking between models isn't a thing yet, but the
 /// shape mirrors the other panes so we can grow it without rewriting.
 private struct DiarizationModelsPane: View {
+    @Environment(AppState.self) private var state
     @State private var manager = ModelManager.shared
     @State private var diarizer = DiarizerServiceHolder.shared
 
     var body: some View {
+        let meetingsOff = !state.settings.meetingsEnabled
         Form {
+            if meetingsOff {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "moon.zzz")
+                            .foregroundStyle(.secondary)
+                        Text("Speaker identification is part of Meetings, which is currently turned off. Enable Meetings in Settings → Meetings to use it. A model you've already downloaded stays on disk and can still be removed below.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             Section {
                 ForEach(ModelCatalog.diarizationModels) { model in
+                    let downloadState = manager.diarizationStates[model.id] ?? .unknown
                     ModelRow(
                         name: model.displayName,
                         note: model.note,
                         sizeMB: model.approxSizeMB,
                         ramMB: model.approxRAMMB,
-                        state: manager.diarizationStates[model.id] ?? .unknown,
+                        state: downloadState,
                         isActive: true,
                         isLoaded: diarizer.currentModelID == model.id,
                         isVerifying: manager.verifyingDiarization.contains(model.id),
@@ -2570,6 +2583,14 @@ private struct DiarizationModelsPane: View {
                             manager.removeDiarization(model.id, using: DiarizerServiceHolder.shared)
                         }
                     )
+                    // Greyed while Meetings is off — but an already-downloaded
+                    // model keeps its row interactive so it can still be
+                    // removed (no reason to strand a 100 MB download behind
+                    // the preview toggle). Not-yet-downloaded rows are fully
+                    // disabled: downloading a model for a feature that's off
+                    // would just be wasted disk.
+                    .disabled(meetingsOff && downloadState != .ready)
+                    .opacity(meetingsOff ? 0.6 : 1)
                 }
             } header: {
                 Text("Speaker diarization")
