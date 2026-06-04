@@ -18,11 +18,27 @@ struct InsertionContext: Equatable, Sendable {
     let textBefore: String
     /// Document text immediately after the insertion point / selection.
     let textAfter: String
+    /// Distinctive terms (accented names, camelCase compounds, acronyms,
+    /// repeated proper nouns) mined from a much wider slice of the document
+    /// than the prose above — see `DocumentTerms`. Empty for join-time
+    /// snapshots, which don't ask for mining.
+    let documentTerms: [String]
+
+    init(textBefore: String, textAfter: String, documentTerms: [String] = []) {
+        self.textBefore = textBefore
+        self.textAfter = textAfter
+        self.documentTerms = documentTerms
+    }
 
     /// False when the field was empty around the caret. An empty-but-present
     /// context still distinguishes "AX worked, nothing there" from
     /// "AX unavailable" (a nil capture) at the call sites.
     var hasText: Bool { !textBefore.isEmpty || !textAfter.isEmpty }
+
+    /// Whether there's anything worth showing the formatter — prose around
+    /// the caret, or mined terms from further out (a caret at the very top
+    /// of a long document has no before-text but plenty of terminology).
+    var hasPromptMaterial: Bool { hasText || !documentTerms.isEmpty }
 
     /// The system-prompt block the formatter pass appends when context is
     /// available. Deliberately framed as read-only data with an explicit
@@ -49,6 +65,11 @@ struct InsertionContext: Equatable, Sendable {
         """
         if !before.isEmpty { block += "\n\n[BEFORE]\(before)[/BEFORE]" }
         if !after.isEmpty { block += "\n[AFTER]\(after)[/AFTER]" }
+        if !documentTerms.isEmpty {
+            block += "\n\nTERMS USED ELSEWHERE IN THIS DOCUMENT (spelling reference only — "
+                + "use a term's spelling when the dictation says that word; never add terms the dictation doesn't say): "
+                + documentTerms.map(Self.sanitizeForPrompt).joined(separator: ", ")
+        }
         return block
     }
 
@@ -80,6 +101,14 @@ enum AXContextReader {
     static let joinBeforeCap = 256
     static let joinAfterCap = 64
 
+    /// Caps for the term-mining sweep (press-time capture only). Much wider
+    /// than the prose window: a name spelled "Siobhán" three pages up is
+    /// just as authoritative as one in the previous sentence, and a mined
+    /// term list costs a handful of prompt tokens regardless of how much
+    /// document it was distilled from. Single ranged AX reads — cheap.
+    static let mineBeforeCap = 16_000
+    static let mineAfterCap = 4_000
+
     /// Per-call ceiling on AX round-trips to a busy app. Generous for the
     /// normal case (microseconds); short enough that a beachballing app
     /// can't hold up the capture task for long.
@@ -91,7 +120,11 @@ enum AXContextReader {
     /// accessibility tree off, canvas editors like Google Docs, terminals).
     /// Callers treat nil as "no context this run" — the feature is
     /// opportunistic seasoning, never load-bearing.
-    static func capture(maxBefore: Int, maxAfter: Int) -> InsertionContext? {
+    ///
+    /// `mineTerms` additionally sweeps a much wider document slice for
+    /// distinctive terminology (see `DocumentTerms`) — wanted at press time
+    /// for the formatter, pointless for the delivery-time join snapshot.
+    static func capture(maxBefore: Int, maxAfter: Int, mineTerms: Bool = false) -> InsertionContext? {
         guard AXIsProcessTrusted() else {
             NSLog("[Dictator] Context capture: no Accessibility permission.")
             return nil
@@ -161,11 +194,21 @@ enum AXContextReader {
             NSLog("[Dictator] Context capture: element doesn't answer ranged text reads — no context.")
             return nil
         }
+
+        var documentTerms: [String] = []
+        if mineTerms {
+            let wideBeforeStart = max(0, selection.location - mineBeforeCap)
+            let wideBefore = string(of: element, location: wideBeforeStart, length: selection.location - wideBeforeStart) ?? ""
+            let wideAfterLength = max(0, min(mineAfterCap, total == Int.max ? mineAfterCap : total - afterStart))
+            let wideAfter = string(of: element, location: afterStart, length: wideAfterLength) ?? ""
+            documentTerms = DocumentTerms.distinctiveTerms(in: wideBefore + "\n" + wideAfter)
+        }
+
         // Counts only — never the captured text. The unified log is not the
         // place for the user's document content.
-        NSLog("[Dictator] Context capture: %d chars before / %d chars after caret (selection length %d).",
-              before?.count ?? 0, after?.count ?? 0, selection.length)
-        return InsertionContext(textBefore: before ?? "", textAfter: after ?? "")
+        NSLog("[Dictator] Context capture: %d chars before / %d chars after caret (selection length %d, %d document terms).",
+              before?.count ?? 0, after?.count ?? 0, selection.length, documentTerms.count)
+        return InsertionContext(textBefore: before ?? "", textAfter: after ?? "", documentTerms: documentTerms)
     }
 
     /// `kAXStringForRange` — the primitive that reads a substring without

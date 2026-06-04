@@ -389,7 +389,8 @@ final class Pipeline {
             Task.detached(priority: .userInitiated) { [weak self] in
                 let context = AXContextReader.capture(
                     maxBefore: AXContextReader.promptBeforeCap,
-                    maxAfter: AXContextReader.promptAfterCap
+                    maxAfter: AXContextReader.promptAfterCap,
+                    mineTerms: true
                 )
                 await MainActor.run { self?.inFlight.context = context }
             }
@@ -505,11 +506,11 @@ final class Pipeline {
             // stays the only <<<>>> data block.
             var formattingPrompt = currentMode.effectiveFormattingPrompt
             var contextInjected = false
-            if let context = inFlight.context, context.hasText {
+            if let context = inFlight.context, context.hasPromptMaterial {
                 formattingPrompt += "\n\n" + context.formatterPromptBlock
                 contextInjected = true
-                NSLog("[Dictator] Pass 1 running with document context (%d/%d chars).",
-                      context.textBefore.count, context.textAfter.count)
+                NSLog("[Dictator] Pass 1 running with document context (%d/%d chars, %d terms).",
+                      context.textBefore.count, context.textAfter.count, context.documentTerms.count)
             } else {
                 NSLog("[Dictator] Pass 1 running without document context (%@).",
                       inFlight.context == nil ? "no capture" : "field empty")
@@ -574,11 +575,23 @@ final class Pipeline {
         // structure) preserve words, so corrections survive intact. The list
         // itself is global; the per-mode toggle decides whether to apply it
         // (a "raw" mode opts out so words pass through untouched).
-        let corrected: String
+        var corrected = formatted
         if currentMode.vocabularyEnabled {
-            corrected = Vocabulary.apply(VocabularyStore.shared.entries, to: formatted)
-        } else {
-            corrected = formatted
+            corrected = Vocabulary.apply(VocabularyStore.shared.entries, to: corrected)
+        }
+        // Document-spelling restoration: when the focused document writes a
+        // proper noun with diacritics ("Siobhán") and the transcript carries
+        // the accent-stripped form, restore the document's spelling. In
+        // effect a per-dictation vocabulary mined from the document at
+        // press time — deterministic, so it works in every mode (including
+        // Quick and the question-skip path) without an LLM. Runs after the
+        // user dictionary so explicit user mappings keep precedence.
+        if let context = inFlight.context, !context.documentTerms.isEmpty {
+            let restored = DocumentTerms.restoreDiacritics(in: corrected, terms: context.documentTerms)
+            if restored != corrected {
+                NSLog("[Dictator] Restored document spelling from mined terms.")
+                corrected = restored
+            }
         }
         if corrected != formatted { inFlight.dictionaryCorrected = corrected }
 
@@ -972,6 +985,14 @@ final class Pipeline {
             // specifically — punctuation/numbers/etc. can be off without
             // skipping this cleanup.
             text = SpokenCues.tidyDelivery(text)
+        }
+        // Re-apply document-spelling restoration after the LLM passes, same
+        // rationale as the SpokenCues re-apply above: the grammar pass can
+        // quietly strip an accent the earlier restoration put back, and its
+        // edit-distance validator won't blink at a one-word diacritic
+        // change. Idempotent.
+        if let context = inFlight.context, !context.documentTerms.isEmpty {
+            text = DocumentTerms.restoreDiacritics(in: text, terms: context.documentTerms)
         }
         // Context-aware join: with a fresh snapshot of the caret's
         // surroundings (taken now, not at press time, so it matches the
