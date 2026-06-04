@@ -1282,7 +1282,6 @@ private enum TrackRowBuilder {
         /// nil ⇒ gate-silence marker, not a speech bubble.
         var speakerId: String?
         var paragraphs: [String] = []
-        var dropped: MeetingTrackInspection.DropReason?
         /// The other side started talking before this utterance finished —
         /// rendered with a trailing ellipsis.
         var cutOff = false
@@ -1313,14 +1312,15 @@ private enum TrackRowBuilder {
                 guard row.end - row.start >= minVisibleSilence else { continue }
                 out.append(DisplayRow(id: row.id, start: row.start, end: row.end, speakerId: nil))
             case .speech(let speakerId, let text, let dropped):
-                // Echo duplicates are by definition already on the other
-                // side of the conversation — pure noise here.
-                if dropped == .echoDedup { continue }
+                // Dropped words never render: echoes duplicate the other
+                // side's bubbles, and bleed is the other side's speech that
+                // leaked into the mic — the clean copy is already on screen.
+                // Both remain in the copy text and the summary counts.
+                if dropped != nil { continue }
                 // Same voice kept talking with nobody in between — extend
                 // the previous bubble as a new paragraph.
                 if let lastIdx = out.indices.last,
                    out[lastIdx].speakerId == speakerId,
-                   out[lastIdx].dropped == dropped,
                    row.end - out[lastIdx].start <= bubbleMaxSeconds {
                     out[lastIdx].paragraphs.append(text)
                     out[lastIdx].end = max(out[lastIdx].end, row.end)
@@ -1328,7 +1328,6 @@ private enum TrackRowBuilder {
                 }
                 var display = DisplayRow(id: row.id, start: row.start, end: row.end, speakerId: speakerId)
                 display.paragraphs = [text]
-                display.dropped = dropped
                 // Quick same-speaker resumption across an interjection:
                 // mark both halves so they read "cut off … resumed".
                 if let prevIdx = lastIndexBySpeaker[speakerId],
@@ -1512,7 +1511,6 @@ private struct TrackRowView: View {
     @ViewBuilder
     private func bubble(speakerId: String) -> some View {
         let isMe = speakerId == "me"
-        let dropped = row.dropped
         let color = speakerColorFor(speakerId)
         HStack(spacing: 0) {
             if isMe { Spacer(minLength: 80) }
@@ -1524,20 +1522,10 @@ private struct TrackRowView: View {
                             .foregroundStyle(color)
                     }
                     timestamp
-                    if dropped != nil {
-                        Text("bleed")
-                            .font(.caption2)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.orange.opacity(0.15)))
-                            .foregroundStyle(.orange)
-                    }
                 }
                 ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
                     Text(paragraph)
                         .font(.callout)
-                        .strikethrough(dropped != nil)
-                        .foregroundStyle(dropped != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1546,13 +1534,12 @@ private struct TrackRowView: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(color.opacity(dropped != nil ? 0.05 : 0.13))
+                    .fill(color.opacity(0.13))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(isAtPlayhead ? Color.accentColor.opacity(0.7) : .clear, lineWidth: 1.5)
             )
-            .opacity(dropped != nil ? 0.6 : 1)
             .frame(maxWidth: 560, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 80) }
         }
