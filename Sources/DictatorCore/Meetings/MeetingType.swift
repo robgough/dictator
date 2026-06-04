@@ -79,11 +79,11 @@ public enum MeetingType: String, Codable, CaseIterable, Sendable {
             """
         case .interview:
             return """
-            This is a job interview. In the Discussion, summarise the candidate's responses grouped by topic (background, technical depth, collaboration, motivation, questions they asked) and surface concrete fit signals (positive or negative) the interviewer raised. Decisions usually capture "advance" / "do not advance" / "another round" when the transcript makes that explicit. Action items go to the named interviewer or recruiter who owns the next step (take-home, scheduling, looping someone in).
+            This is a job interview. In the Discussion, summarise the candidate's responses grouped by topic (background, technical depth, collaboration, motivation, questions they asked) and surface concrete fit signals (positive or negative) the interviewer raised. Record the specific facts the candidate states, exactly as given — team sizes they led or worked in, org structure and who they reported to, tenure and dates, technologies and products they name, scale and performance figures, compensation expectations and notice period. Those checkable specifics are the substance the debrief needs. Decisions usually capture "advance" / "do not advance" / "another round" when the transcript makes that explicit. Action items go to the named interviewer or recruiter who owns the next step (take-home, scheduling, looping someone in).
             """
         case .clientCall:
             return """
-            This is a client call. Capture the client's stated needs, concerns and asks; what was agreed in response; commitments either side made; and any open questions the team still owes the client. Decisions list concrete agreements (scope, price, timeline, deliverables). Attribute action items to their owner — when the transcript clearly puts a follow-up on the team's side ("we'll send the proposal", "I'll get back to you"), record that owner exactly as named.
+            This is a client call. Capture the client's stated needs, concerns and asks; what was agreed in response; commitments either side made; and any open questions the team still owes the client. Record the specific facts stated, exactly as given — budgets and prices, team sizes and org structure on the client's side, named products, systems and vendors, volumes and metrics, dates and deadlines. Decisions list concrete agreements (scope, price, timeline, deliverables). Attribute action items to their owner — when the transcript clearly puts a follow-up on the team's side ("we'll send the proposal", "I'll get back to you"), record that owner exactly as named.
             """
         case .brainstorm:
             return """
@@ -95,7 +95,7 @@ public enum MeetingType: String, Codable, CaseIterable, Sendable {
             """
         case .conversation:
             return """
-            This is a conversation you're listening in on rather than taking part in — a podcast, panel, interview, or recorded discussion between other people. You're an observer, not a participant: there's usually no "Me", and no action items for you. In the Summary and Discussion, capture the substance — the main topics, the key points each speaker made (attributed by name where the transcript names them), where they agreed or disagreed, the conclusions or takeaways, and any notable facts, recommendations or stories. Omit the Decisions and Action items sections unless a speaker explicitly states a decision or a concrete next step of their own; never invent action items for the listener.
+            This is a conversation you're listening in on rather than taking part in — a podcast, panel, interview, or recorded discussion between other people. You're an observer, not a participant: there's usually no "Me", and no action items for you. In the Summary and Discussion, capture the substance — the main topics, the key points each speaker made (attributed by name where the transcript names them), where they agreed or disagreed, the conclusions or takeaways, and any notable facts, recommendations or stories — with specific figures, names and stats recorded exactly as stated, not rounded or generalised. Omit the Decisions and Action items sections unless a speaker explicitly states a decision or a concrete next step of their own; never invent action items for the listener.
             """
         case .other:
             return ""

@@ -851,6 +851,7 @@ struct DictatorSettings: Codable, Equatable {
     - You MAY end a Discussion, Decisions, or Action items bullet with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
     - Never wrap the notes, or any individual section, in ``` code fences.
     - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said.
+    - FACTS AND FIGURES: when the transcript states something specific and checkable — team or company size, org structure and reporting lines, financial figures (revenue, budgets, prices, funding), dates and deadlines, product, company or technology names, metrics and percentages — record it in the notes EXACTLY as stated. Never round ("about fifty" stays "about fifty", "47" stays "47"), never vague-ify ("a large team" for "12 engineers"), and never drop a concrete figure or name because it was mentioned only in passing. These specifics are often the most valuable content in the notes.
     - ATTRIBUTION DISCIPLINE (applies to every section, not just Action items): a point being ABOUT a person is NOT the same as that person saying it. Credit a statement, view, preference, question, or commitment to someone ONLY when the transcript shows THAT speaker saying it — i.e. it appears under their `[Name · mm:ss]` prefix. "Speaker 1 says Bob should own rollout" means Speaker 1 said it; it does NOT mean Bob said anything. When the transcript doesn't make the speaker clear, state the point without naming who said it rather than guessing. The transcript's speaker prefixes are the ONLY evidence of who said what — never infer a speaker from the content of a line.
 
     ACTION ITEM ATTRIBUTION — read carefully:
@@ -886,7 +887,7 @@ struct DictatorSettings: Codable, Equatable {
     Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
 
     ## Summary
-    A factual prose recap of what was said — 1–3 sentences. No bullet points, no editorialising.
+    A factual prose recap of what was said — 1–3 sentences. No bullet points, no editorialising. Keep any specific names, numbers, or figures exactly as stated.
 
     ## Action items
     Include this section ONLY if a task was actually mentioned. Each item in the shape `- [ ] **Owner** — the task`, owner being the EXACT display name from the `[Speaker · mm:ss]` prefix (use "Me" for the recorder's own first-person commitments). When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix. If no task was mentioned, OMIT this section entirely — heading and all.
