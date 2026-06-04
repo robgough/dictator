@@ -79,7 +79,15 @@ public enum MeetingType: String, Codable, CaseIterable, Sendable {
             """
         case .interview:
             return """
-            This is a job interview. In the Discussion, summarise the candidate's responses grouped by topic (background, technical depth, collaboration, motivation, questions they asked) and surface concrete fit signals (positive or negative) the interviewer raised. Record the specific facts the candidate states, exactly as given — team sizes they led or worked in, org structure and who they reported to, tenure and dates, technologies and products they name, scale and performance figures, compensation expectations and notice period. Those checkable specifics are the substance the debrief needs. Decisions usually capture "advance" / "do not advance" / "another round" when the transcript makes that explicit. Action items go to the named interviewer or recruiter who owns the next step (take-home, scheduling, looping someone in).
+            This is a job interview. In ADDITION to the standard sections, insert these two immediately after `## Summary`, whenever the transcript supports them:
+
+            ## Company
+            The checkable facts stated about the company, the role, and the process, as plain `-` bullets, each exactly as stated: what the product does, customers and traction, team size and org structure, funding / revenue / financial figures, tech stack, ways of working, compensation and benefits, location and remote policy, interview process and timeline.
+
+            ## Candidate
+            The checkable facts and signals about the candidate, as plain `-` bullets: background and tenure (companies, roles, dates), team sizes they led or worked in, who they reported to, technologies and products they name, scale and performance figures they cite, motivations, compensation expectations and notice period — plus concrete fit signals (positive or negative) raised in the conversation.
+
+            Keep `## Discussion` for the substance that isn't a Company or Candidate fact: how the conversation flowed, themes, the questions asked and how they were answered. If something was left unanswered or needs verifying, list it under a `## Open questions` section before Decisions (omit the section when there are none). Decisions usually capture "advance" / "do not advance" / "another round" when the transcript makes that explicit. Action items go to whoever owns the next step exactly as named — interviewer, recruiter, or candidate — and include stated process commitments ("they'll hear back by Friday").
             """
         case .clientCall:
             return """
