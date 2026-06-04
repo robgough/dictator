@@ -17,7 +17,12 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+## v2026.6.0 — 2026-06-04
+
 - Fixed the Parakeet v3 (multilingual) model download always failing at the end with "model layout looks incomplete" — the downloader was looking for the speech model under an old name and never fetched it. If you were stuck on this error, tap Try again after updating: your previous progress is kept and only the missing piece is downloaded.
+
+## v2026.5.2 — 2026-06-01
+
 - The Dictator keyboard now works as a basic typing keyboard (letters, numbers, and symbols) even when you haven't given it Full Access — instead of showing buttons that can't do anything without it. A slim banner reminds you to turn on Full Access in Settings for dictation, since the keyboard can't reach the microphone on its own. With Full Access on, the Dictate/Assist keyboard is unchanged.
 - If you've turned down microphone access, the reminder screen now has an Open Settings button that jumps straight to Dictator's settings, with clearer wording.
 - Dictation now records only while Dictator is open. If you switch to another app or lock your phone mid-recording, Dictator finishes transcribing what you've said so far and copies it to the clipboard, ready to paste, instead of the recording carrying on invisibly in the background.
