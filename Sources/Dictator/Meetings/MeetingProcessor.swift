@@ -116,11 +116,20 @@ final class MeetingProcessor {
         // word order and defeats the text dedup. Self-disables when the
         // tracks don't correlate (headphones / clean setup). Gated by the
         // same "drop my mic's echoes" setting that controls the text dedup.
+        var gateInspection: MeetingTrackInspection.GateInfo?
         if dedupeMicEchoes, !micSamples.isEmpty, !systemSamples.isEmpty {
             let gate = Self.gateMicBleed(mic: micSamples, system: systemSamples, sampleRate: 16_000)
             NSLog("[Dictator] Mic-bleed gate: corr=\(String(format: "%.2f", gate.correlation)) offset=\(String(format: "%+.2fs", gate.offsetSeconds)) gain=\(String(format: "%.3f", gate.gain)) dropped=\(String(format: "%.0f%%", gate.droppedFraction * 100)) (\(gate.applied ? "applied" : "skipped — tracks uncorrelated / no bleed"))")
             micSamples = gate.gated
             micDuration = Double(micSamples.count) / 16_000
+            gateInspection = MeetingTrackInspection.GateInfo(
+                applied: gate.applied,
+                correlation: gate.correlation,
+                offsetSeconds: gate.offsetSeconds,
+                gain: gate.gain,
+                droppedFraction: gate.droppedFraction,
+                silencedRanges: gate.silencedRanges
+            )
         }
 
         // ── Transcription pass on each track ─────────────────────────────
@@ -222,9 +231,12 @@ final class MeetingProcessor {
         // cluster identified as bleed (see `unifySpeakerSpace`) are garbled
         // duplicates of remote speech the system track already carries
         // cleanly. This catches bleed the audio gate couldn't see — buried
-        // in noise-floor hiss, or surviving under double-talk.
+        // in noise-floor hiss, or surviving under double-talk. The dropped
+        // words are kept aside for the track-inspection artifact.
+        var bleedDroppedWords: [SpeakerAttributedWord] = []
         if !micWords.isEmpty {
             let beforeBleedFilter = micWords.count
+            bleedDroppedWords = micWords.filter { $0.speakerId == Self.bleedSpeakerID }
             micWords.removeAll { $0.speakerId == Self.bleedSpeakerID }
             if micWords.count != beforeBleedFilter {
                 NSLog("[Dictator] Bleed-cluster backstop: dropped \(beforeBleedFilter - micWords.count) of \(beforeBleedFilter) mic words")
@@ -256,11 +268,48 @@ final class MeetingProcessor {
         // words land on both tracks. AEC catches most of it; this pass
         // mops up residual echoes (Bluetooth latency variance, AGC stomp).
         // The system track wins for any echo — it's the canonical copy.
+        var echoDroppedWords: [SpeakerAttributedWord] = []
         if dedupeMicEchoes, !micWords.isEmpty, !systemWords.isEmpty {
-            let originalCount = micWords.count
+            let original = micWords
             micWords = Self.dedupeMicEchoes(micWords: micWords, systemWords: systemWords)
-            let dropped = originalCount - micWords.count
-            NSLog("[Dictator] Mic-echo dedup: kept \(micWords.count) of \(originalCount) mic words (dropped \(dropped))")
+            NSLog("[Dictator] Mic-echo dedup: kept \(micWords.count) of \(original.count) mic words (dropped \(original.count - micWords.count))")
+            // dedupeMicEchoes filters in order, so a two-pointer walk
+            // recovers exactly which words it removed.
+            var keptIdx = 0
+            for word in original {
+                if keptIdx < micWords.count, micWords[keptIdx] == word {
+                    keptIdx += 1
+                } else {
+                    echoDroppedWords.append(word)
+                }
+            }
+        }
+
+        // ── Track-inspection artifact ────────────────────────────────────
+        // Both word streams as transcribed, with the words the cleanup
+        // passes removed still present (flagged with why), plus the audio
+        // gate's stats and silenced ranges. Rendered by the transcript
+        // page's "Tracks" mode so what happened to each track is visible.
+        do {
+            var inspectionMic: [MeetingTrackInspection.Word] =
+                micWords.map { MeetingTrackInspection.Word(start: $0.start, end: $0.end, text: $0.text, speakerId: $0.speakerId) }
+            inspectionMic += bleedDroppedWords.map {
+                MeetingTrackInspection.Word(start: $0.start, end: $0.end, text: $0.text, speakerId: $0.speakerId, dropped: .bleedCluster)
+            }
+            inspectionMic += echoDroppedWords.map {
+                MeetingTrackInspection.Word(start: $0.start, end: $0.end, text: $0.text, speakerId: $0.speakerId, dropped: .echoDedup)
+            }
+            inspectionMic.sort { $0.start < $1.start }
+            let inspectionSystem = systemWords.map {
+                MeetingTrackInspection.Word(start: $0.start, end: $0.end, text: $0.text, speakerId: $0.speakerId)
+            }
+            let inspection = MeetingTrackInspection(mic: inspectionMic, system: inspectionSystem, gate: gateInspection)
+            do {
+                try MeetingStorage.writeTrackInspection(inspection, for: session.id)
+            } catch {
+                // Diagnostic artifact only — never fail the meeting over it.
+                NSLog("[Dictator] Track inspection write failed: \(error)")
+            }
         }
 
         // Merge mic + system words by start time. From here on we work on the
@@ -357,6 +406,10 @@ final class MeetingProcessor {
         /// headphones / clean setup / silent mic. The mic passes through
         /// untouched (no gating, no alignment).
         let applied: Bool
+        /// Silenced time ranges on the post-alignment timeline, for the
+        /// track-inspection artifact (the audio was never transcribed, so
+        /// these are the only record of what the gate removed).
+        let silencedRanges: [MeetingTrackInspection.TimeRange]
     }
 
     /// Gate tuning. The gate models bleed explicitly: mic[i] contains
@@ -417,13 +470,13 @@ final class MeetingProcessor {
         let sr = Int(sampleRate)
         let frame = max(1, sr / 100)   // 10 ms analysis frame
         guard mic.count >= frame, system.count >= frame else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false)
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false, silencedRanges: [])
         }
         let micEnv = rmsEnvelope(mic, frame: frame)
         let sysEnv = rmsEnvelope(system, frame: frame)
         let n = min(micEnv.count, sysEnv.count)
         guard n > 100 else {
-            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false)
+            return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: 0, correlation: 0, gain: 0, applied: false, silencedRanges: [])
         }
         let eps: Float = 1e-6
         let logMic = (0..<n).map { log(micEnv[$0] + eps) }
@@ -475,7 +528,7 @@ final class MeetingProcessor {
         }
         guard bestCorr >= bleedEngageMinCorrelation else {
             return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: Double(bestLag) / 100,
-                                   correlation: Double(bestCorr), gain: 0, applied: false)
+                                   correlation: Double(bestCorr), gain: 0, applied: false, silencedRanges: [])
         }
 
         // Stage 2 — per-block lag refine + coupling gain.
@@ -530,7 +583,7 @@ final class MeetingProcessor {
         let medianGain = gains.isEmpty ? 0 : gains[gains.count / 2]
         guard medianGain > 0 else {
             return BleedGateResult(gated: mic, droppedFraction: 0, offsetSeconds: Double(bestLag) / 100,
-                                   correlation: Double(bestCorr), gain: 0, applied: false)
+                                   correlation: Double(bestCorr), gain: 0, applied: false, silencedRanges: [])
         }
 
         // Stage 3 — silence frames the predicted bleed explains. System-silent
@@ -551,6 +604,28 @@ final class MeetingProcessor {
                 dropped += 1
             }
         }
+        // Silenced ranges for the track-inspection artifact, mapped onto the
+        // post-alignment timeline ((frame − lag) / 100). Raw runs are merged
+        // across sub-300 ms gaps and sub-200 ms slivers are skipped — this is
+        // a "where did my audio go?" visual, not a sample-accurate record.
+        var silencedRanges: [MeetingTrackInspection.TimeRange] = []
+        var runStart = -1
+        for i in 0...n {
+            let silenced = i < n && keep[i] == 0
+            if silenced {
+                if runStart < 0 { runStart = i }
+            } else if runStart >= 0 {
+                let s = max(0, Double(runStart - bestLag) / 100)
+                let e = max(0, Double(i - bestLag) / 100)
+                if let last = silencedRanges.last, s - last.end <= 0.3 {
+                    silencedRanges[silencedRanges.count - 1].end = e
+                } else if e - s >= 0.2 {
+                    silencedRanges.append(MeetingTrackInspection.TimeRange(start: s, end: e))
+                }
+                runStart = -1
+            }
+        }
+
         // Dilate the KEEP regions by one frame so a speech onset adjacent to
         // bleed isn't clipped, then 3-tap smooth so transitions fade.
         keep = dilateKeep(keep)
@@ -587,7 +662,8 @@ final class MeetingProcessor {
             offsetSeconds: Double(bestLag) / 100,
             correlation: Double(bestCorr),
             gain: Double(medianGain),
-            applied: true
+            applied: true,
+            silencedRanges: silencedRanges
         )
     }
 

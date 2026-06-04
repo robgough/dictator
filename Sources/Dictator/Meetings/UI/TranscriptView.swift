@@ -13,10 +13,11 @@ struct TranscriptView: View {
     @State private var player = MeetingPlayer()
     @State private var hasAudio: Bool = false
     @State private var tab: Tab = .notes
+    @State private var inspection: MeetingTrackInspection?
 
-    /// Notes are the primary surface; the rough live "raw" notes (when kept)
-    /// and the transcript live behind the other tabs.
-    enum Tab: Hashable { case notes, raw, transcript }
+    /// Notes are the primary surface; the rough live "raw" notes (when kept),
+    /// the transcript, and the two-track inspection live behind other tabs.
+    enum Tab: Hashable { case notes, raw, transcript, tracks }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -28,6 +29,8 @@ struct TranscriptView: View {
                 rawTab
             case .transcript:
                 transcriptTab
+            case .tracks:
+                tracksTab
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -37,10 +40,15 @@ struct TranscriptView: View {
             loadAudio()
             if tab == .raw, !hasRawNotes { tab = .notes }
         }
+        .onChange(of: session.state.isProcessing) { _, processing in
+            // Re-process finished — pick up the freshly written track data.
+            if !processing { inspection = MeetingStorage.readTrackInspection(for: meta.id) }
+        }
         .background {
             // Keyboard shortcuts for the tab switch (hidden, zero-size).
             Button("") { tab = .notes }.keyboardShortcut("1", modifiers: .command)
             Button("") { tab = .transcript }.keyboardShortcut("2", modifiers: .command)
+            Button("") { tab = .tracks }.keyboardShortcut("3", modifiers: .command)
         }
     }
 
@@ -51,6 +59,7 @@ struct TranscriptView: View {
         HStack(spacing: 8) {
             Picker("View", selection: $tab) {
                 Text("Transcript").tag(Tab.transcript)
+                Text("Tracks").tag(Tab.tracks)
                 if hasRawNotes {
                     Text("Quick notes").tag(Tab.raw)
                 }
@@ -179,6 +188,33 @@ struct TranscriptView: View {
         let micURL: URL? = meta.audioFiles.mic.map { _ in MeetingStorage.micURL(for: meta.id) }
         let sysURL: URL? = meta.audioFiles.system.map { _ in MeetingStorage.systemURL(for: meta.id) }
         hasAudio = player.load(micURL: micURL, systemURL: sysURL)
+        inspection = MeetingStorage.readTrackInspection(for: meta.id)
+    }
+
+    /// Two-track inspection: mic vs system transcriptions on one time axis,
+    /// with everything the cleanup passes removed still visible. The data is
+    /// produced at process time, so older meetings need a Re-process first.
+    @ViewBuilder
+    private var tracksTab: some View {
+        if let inspection {
+            TracksPanel(
+                inspection: inspection,
+                meta: meta,
+                player: hasAudio ? player : nil
+            )
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "waveform.badge.magnifyingglass")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text("No track data for this meeting yet")
+                    .foregroundStyle(.secondary)
+                Text("Re-process the meeting to generate the per-track view.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     /// True when at least one audio track is still present on disk. Drives
@@ -209,6 +245,7 @@ struct TranscriptView: View {
         case .notes: return "Copy notes"
         case .raw: return "Copy quick notes"
         case .transcript: return "Copy transcript"
+        case .tracks: return "Copy tracks"
         }
     }
 
@@ -226,6 +263,9 @@ struct TranscriptView: View {
         case .transcript:
             guard let transcript, !transcript.segments.isEmpty else { return nil }
             return MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
+        case .tracks:
+            guard let inspection else { return nil }
+            return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
         }
     }
 
@@ -1005,5 +1045,274 @@ private struct NotesAssistantSheet: View {
         .padding(18)
         .frame(width: 580)
         .onDisappear { assistant.dialogClosed() }
+    }
+}
+
+// MARK: - Two-track inspection (Tracks tab)
+
+/// Shared row model for the Tracks tab and its copy-as-text export. Words are
+/// grouped into compact runs per track (same speaker, same drop reason, small
+/// gaps), interleaved with the gate's silenced ranges, and sorted onto one
+/// time axis.
+private enum TrackRowBuilder {
+    enum Lane { case mic, system }
+
+    enum Kind: Equatable {
+        case speech(speakerId: String, text: String, dropped: MeetingTrackInspection.DropReason?)
+        case gateSilence
+    }
+
+    struct Row: Identifiable {
+        var id: Int
+        let lane: Lane
+        let start: Double
+        let end: Double
+        let kind: Kind
+    }
+
+    /// Words further apart than this break a run (matches the merged
+    /// transcript's segment gap).
+    private static let groupGap = 0.7
+    /// Cap runs so a long monologue doesn't become one giant cell that
+    /// defeats the side-by-side reading.
+    private static let groupMaxWords = 60
+
+    static func rows(inspection: MeetingTrackInspection) -> [Row] {
+        var rows: [Row] = []
+        func addGroups(_ words: [MeetingTrackInspection.Word], lane: Lane) {
+            var i = 0
+            while i < words.count {
+                let head = words[i]
+                var j = i + 1
+                while j < words.count,
+                      j - i < groupMaxWords,
+                      words[j].speakerId == head.speakerId,
+                      words[j].dropped == head.dropped,
+                      words[j].start - words[j - 1].end <= groupGap {
+                    j += 1
+                }
+                rows.append(Row(
+                    id: 0,
+                    lane: lane,
+                    start: head.start,
+                    end: words[j - 1].end,
+                    kind: .speech(
+                        speakerId: head.speakerId,
+                        text: words[i..<j].map(\.text).joined(separator: " "),
+                        dropped: head.dropped
+                    )
+                ))
+                i = j
+            }
+        }
+        addGroups(inspection.mic, lane: .mic)
+        addGroups(inspection.system, lane: .system)
+        for range in inspection.gate?.silencedRanges ?? [] {
+            rows.append(Row(id: 0, lane: .mic, start: range.start, end: range.end, kind: .gateSilence))
+        }
+        rows.sort { $0.start < $1.start }
+        for i in rows.indices { rows[i].id = i }
+        return rows
+    }
+
+    /// Resolve a display name; bleed-dropped clusters aren't in the meta
+    /// palette (they never surface as chips) so they get a fixed label.
+    static func displayName(for speakerId: String, meta: MeetingMeta) -> String {
+        if speakerId == MeetingProcessor.bleedSpeakerID { return "Bleed" }
+        return meta.speakers.first(where: { $0.id == speakerId })?.displayName ?? speakerId
+    }
+
+    static func timestamp(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+        return String(format: "%d:%02d", m, s)
+    }
+
+    /// The whole view as paste-friendly text — handy for sharing a diagnosis.
+    static func plainText(inspection: MeetingTrackInspection, meta: MeetingMeta) -> String {
+        var lines: [String] = []
+        if let gate = inspection.gate {
+            lines.append(String(
+                format: "Bleed gate: %@  corr=%.2f offset=%+.2fs gain=%.3f silenced=%.0f%%",
+                gate.applied ? "applied" : "skipped",
+                gate.correlation, gate.offsetSeconds, gate.gain, gate.droppedFraction * 100
+            ))
+            lines.append("")
+        }
+        for row in rows(inspection: inspection) {
+            let lane = row.lane == .mic ? "MIC" : "SYS"
+            switch row.kind {
+            case .gateSilence:
+                lines.append("[\(timestamp(row.start))–\(timestamp(row.end))] \(lane)  — audio silenced by bleed gate —")
+            case .speech(let speakerId, let text, let dropped):
+                var suffix = ""
+                if let dropped {
+                    suffix = dropped == .bleedCluster ? "  [dropped: bleed]" : "  [dropped: echo]"
+                }
+                lines.append("[\(timestamp(row.start))] \(lane)  \(displayName(for: speakerId, meta: meta)): \(text)\(suffix)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// The Tracks tab: mic and system transcriptions side by side on one
+/// chronological axis, with everything the cleanup passes removed still
+/// visible — struck-through words for the bleed/echo drops, shaded bands
+/// where the audio gate silenced mic audio before transcription saw it.
+private struct TracksPanel: View {
+    let inspection: MeetingTrackInspection
+    let meta: MeetingMeta
+    let player: MeetingPlayer?
+    private let rows: [TrackRowBuilder.Row]
+
+    init(inspection: MeetingTrackInspection, meta: MeetingMeta, player: MeetingPlayer?) {
+        self.inspection = inspection
+        self.meta = meta
+        self.player = player
+        self.rows = TrackRowBuilder.rows(inspection: inspection)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            summary
+            HStack(alignment: .top, spacing: 12) {
+                Text("")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 44)
+                Label("Microphone", systemImage: "mic.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Label("System audio", systemImage: "speaker.wave.2.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(rows) { row in
+                    TrackRowView(row: row, meta: meta, player: player)
+                }
+            }
+        }
+    }
+
+    /// One-glance stats: word counts per track with drop tallies, plus what
+    /// the audio gate decided and why.
+    private var summary: some View {
+        let micKept = inspection.mic.count(where: { $0.dropped == nil })
+        let micBleed = inspection.mic.count(where: { $0.dropped == .bleedCluster })
+        let micEcho = inspection.mic.count(where: { $0.dropped == .echoDedup })
+        var micLine = "Mic: \(micKept) words kept"
+        if micBleed > 0 { micLine += ", \(micBleed) dropped as bleed" }
+        if micEcho > 0 { micLine += ", \(micEcho) dropped as echoes" }
+        micLine += " · System: \(inspection.system.count) words"
+
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(micLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let gate = inspection.gate {
+                Text(gate.applied
+                    ? String(format: "Bleed gate: applied — correlation %.2f, start offset %+.2f s, coupling %.3f, %.0f%% of mic audio silenced",
+                             gate.correlation, gate.offsetSeconds, gate.gain, gate.droppedFraction * 100)
+                    : String(format: "Bleed gate: not applied (correlation %.2f — tracks uncorrelated, no bleed pattern)",
+                             gate.correlation))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct TrackRowView: View {
+    let row: TrackRowBuilder.Row
+    let meta: MeetingMeta
+    let player: MeetingPlayer?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            timestamp
+                .frame(width: 44, alignment: .trailing)
+            if row.lane == .mic {
+                cell.frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+            } else {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                cell.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cell: some View {
+        switch row.kind {
+        case .gateSilence:
+            HStack(spacing: 6) {
+                Image(systemName: "waveform.slash")
+                Text("audio silenced by bleed gate (\(TrackRowBuilder.timestamp(row.start))–\(TrackRowBuilder.timestamp(row.end)))")
+            }
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.orange.opacity(0.08)))
+        case .speech(let speakerId, let text, let dropped):
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(TrackRowBuilder.displayName(for: speakerId, meta: meta))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(speakerColorFor(speakerId))
+                    if let dropped {
+                        Text(dropped == .bleedCluster ? "dropped: bleed" : "dropped: echo")
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.15)))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text(text)
+                    .font(.callout)
+                    .strikethrough(dropped != nil)
+                    .foregroundStyle(dropped != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func speakerColorFor(_ speakerId: String) -> Color {
+        if speakerId == MeetingProcessor.bleedSpeakerID { return .orange }
+        if let speaker = meta.speakers.first(where: { $0.id == speakerId }) {
+            return Color(hex: speaker.colorHex) ?? .accentColor
+        }
+        return .secondary
+    }
+
+    @ViewBuilder
+    private var timestamp: some View {
+        let label = TrackRowBuilder.timestamp(row.start)
+        if let player {
+            Button {
+                player.seek(to: row.start)
+                if !player.isPlaying { player.togglePlayPause() }
+            } label: {
+                Text(label)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Jump the audio playback here.")
+        } else {
+            Text(label)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
     }
 }

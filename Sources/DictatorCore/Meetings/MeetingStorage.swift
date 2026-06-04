@@ -31,6 +31,7 @@ enum MeetingStorage {
     static let micFilename = "mic.caf"
     static let systemFilename = "system.caf"
     static let transcriptFilename = "transcript.json"
+    static let tracksFilename = "tracks.json"
     static let metaFilename = "meta.json"
 
     /// Base folder the synced text files live under (a `Meetings/` subfolder is
@@ -122,6 +123,20 @@ enum MeetingStorage {
     static func readTranscript(for id: UUID) -> MeetingTranscript? {
         guard let data = try? Data(contentsOf: transcriptURL(for: id)) else { return nil }
         return try? jsonDecoder.decode(MeetingTranscript.self, from: data)
+    }
+
+    static func tracksURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(tracksFilename)
+    }
+
+    static func writeTrackInspection(_ inspection: MeetingTrackInspection, for id: UUID) throws {
+        let data = try jsonEncoder.encode(inspection)
+        try data.write(to: tracksURL(for: id), options: .atomic)
+    }
+
+    static func readTrackInspection(for id: UUID) -> MeetingTrackInspection? {
+        guard let data = try? Data(contentsOf: tracksURL(for: id)) else { return nil }
+        return try? jsonDecoder.decode(MeetingTrackInspection.self, from: data)
     }
 
     /// Enumerate every synced meeting folder and return its meta. Folders
