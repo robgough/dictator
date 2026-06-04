@@ -184,6 +184,11 @@ final class Pipeline {
         var dictionaryCorrected: String?
         var tidied: String?
         var restructured: String?
+        /// Text surrounding the insertion point in the focused app, captured
+        /// at hotkey press (when the mode opts in and AX can read it). Feeds
+        /// the formatter pass as read-only terminology/style context. NOT
+        /// written into the history record — context is ephemeral by design.
+        var context: InsertionContext?
     }
     private var inFlight = InFlight()
 
@@ -372,6 +377,23 @@ final class Pipeline {
         // churn or app-switching can't change pass behaviour underneath us.
         let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         currentMode = settings.activeMode(forFrontmostBundleID: bundleID)
+        // Snapshot the text around the insertion point while focus is still
+        // in the target app (the HUD is non-activating, but press time is the
+        // honest reading of "where the user was when they started talking").
+        // Detached because a busy app can stall AX messaging; the result
+        // lands on the main actor long before Pass 1 needs it. A nil capture
+        // (mode opted out, no Accessibility, focused element doesn't expose
+        // ranged text) just means no context this run.
+        inFlight.context = nil
+        if currentMode.contextAwarenessEnabled {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let context = AXContextReader.capture(
+                    maxBefore: AXContextReader.promptBeforeCap,
+                    maxAfter: AXContextReader.promptAfterCap
+                )
+                await MainActor.run { self?.inFlight.context = context }
+            }
+        }
         // Recorder start is non-blocking and asynchronous — the actual
         // engine setup runs off-main so Bluetooth HFP negotiation (2–5 s on
         // AirPods Max) doesn't beach-ball the main thread. Pipeline sits in
@@ -477,10 +499,20 @@ final class Pipeline {
             inFlight.formatted = nil
         } else {
             state = .formatting
+            // Surrounding-document context (captured at hotkey press) rides
+            // in on the system prompt so the formatter spells names and
+            // terminology the way the document does. The dictation itself
+            // stays the only <<<>>> data block.
+            var formattingPrompt = currentMode.effectiveFormattingPrompt
+            var contextInjected = false
+            if let context = inFlight.context, context.hasText {
+                formattingPrompt += "\n\n" + context.formatterPromptBlock
+                contextInjected = true
+            }
             do {
                 formatted = try await formatterLLM!.format(
                     text: trimmed,
-                    systemPrompt: currentMode.effectiveFormattingPrompt
+                    systemPrompt: formattingPrompt
                 )
             } catch {
                 // Fallback: ship raw transcript if LLM fails
@@ -493,17 +525,29 @@ final class Pipeline {
             if formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 formatted = trimmed
                 inFlight.formatted = nil
-            } else {
-                // Gate disabled: the anchor-word check used to revert to
-                // the raw transcript when "answered the question" drift
-                // was detected, but short transcripts trip it with even
-                // one or two legitimate edits. Log the would-be result
-                // so we can pick a sensible threshold later, then accept
-                // unconditionally. Empty-output protection above still
-                // catches actual broken returns.
-                if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
+            } else if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
+                if contextInjected {
+                    // Context-bearing runs get the gate for real: document
+                    // text in the prompt adds the failure mode of the model
+                    // transcribing the *context* instead of the dictation,
+                    // and the anchor/length check is precisely the detector
+                    // for that. Raw Whisper output is the safe landing.
+                    NSLog("[Dictator] Pass 1 anchor check failed on a context-bearing run — reverting to raw transcript.")
+                    formatted = trimmed
+                    inFlight.formatted = nil
+                } else {
+                    // Gate disabled for context-free runs: the anchor-word
+                    // check used to revert to the raw transcript when
+                    // "answered the question" drift was detected, but short
+                    // transcripts trip it with even one or two legitimate
+                    // edits. Log the would-be result so we can pick a
+                    // sensible threshold later, then accept unconditionally.
+                    // Empty-output protection above still catches actual
+                    // broken returns.
                     NSLog("[Dictator] Pass 1 anchor check below threshold — accepted anyway (gate disabled).")
+                    inFlight.formatted = formatted
                 }
+            } else {
                 inFlight.formatted = formatted
             }
         }
@@ -817,7 +861,6 @@ final class Pipeline {
             // re-running on text that's already clean is a no-op.
             text = SpokenCues.apply(to: text, options: cueOptions)
         }
-        text = Self.relaxShortMessage(text)
         if cueOptions.emojis {
             // Strip LLM-introduced separators between adjacent emojis
             // ("🔥, 🎉" → "🔥 🎉"). Apple Foundation in particular tends to
@@ -826,7 +869,28 @@ final class Pipeline {
             // skipping this cleanup.
             text = SpokenCues.tidyDelivery(text)
         }
-        text = Self.withTrailingSpace(text)
+        // Context-aware join: with a fresh snapshot of the caret's
+        // surroundings (taken now, not at press time, so it matches the
+        // exact spot the paste lands), spacing, the first word's casing, and
+        // the trailing full stop adapt to the insertion point. Falls back to
+        // the context-free heuristics when no snapshot is available (mode
+        // opted out, paste-automatically off, Accessibility missing, or the
+        // focused element doesn't expose ranged text).
+        var joinContext: InsertionContext?
+        if currentMode.contextAwarenessEnabled && settings.pasteAutomatically {
+            joinContext = await Task.detached(priority: .userInitiated) {
+                AXContextReader.capture(
+                    maxBefore: AXContextReader.joinBeforeCap,
+                    maxAfter: AXContextReader.joinAfterCap
+                )
+            }.value
+        }
+        if let joinContext, joinContext.hasText {
+            text = InsertionJoiner.adjust(text, before: joinContext.textBefore, after: joinContext.textAfter)
+        } else {
+            text = Self.relaxShortMessage(text)
+            text = Self.withTrailingSpace(text)
+        }
         lastResult = text
         var pasted = false
         var note: String? = warning

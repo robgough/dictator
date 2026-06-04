@@ -3203,6 +3203,7 @@ private struct ModeDetail: View {
                     lockedExplanation
                     Divider()
                     preProcessingSection
+                    contextSection
                     deliverySection
                 } else {
                     cycleAndDefaultSection
@@ -3210,6 +3211,7 @@ private struct ModeDetail: View {
                     Divider()
                     preProcessingSection
                     passSettingsSection
+                    contextSection
                     deliverySection
                 }
             }
@@ -3350,6 +3352,20 @@ private struct ModeDetail: View {
                 Toggle("Apply vocabulary list", isOn: $mode.vocabularyEnabled)
                     .onChange(of: mode.vocabularyEnabled) { _, _ in onChange() }
                 Text("When on, your custom vocabulary substitutions from the Dictionary tab are applied. The list itself is shared across modes — only the toggle is per-mode, so you can keep one dictionary and switch it off in a \"raw\" mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var contextSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Context awareness")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Use the text around the cursor", isOn: $mode.contextAwarenessEnabled)
+                    .onChange(of: mode.contextAwarenessEnabled) { _, _ in onChange() }
+                Text("Reads a little of the document either side of the insertion point (through the same Accessibility permission used for pasting) when a dictation starts. The formatting pass uses it to spell names and terminology the way your document does, and the pasted text joins cleanly mid-sentence — leading space, capitalisation, and the trailing full stop adapt to where the cursor sits. Everything stays on this Mac: the context only ever goes to the local model and is never stored. Password fields are never read, and apps that don't expose their text (some Electron apps, Google Docs, terminals) simply dictate without context.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -74,6 +74,15 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// email body) Return is just an unwanted blank line.
     var pressReturnAfterPaste: Bool
 
+    /// Whether dictations in this mode read the text surrounding the
+    /// insertion point (via the existing Accessibility permission) and use
+    /// it in two places: the formatter pass sees it so names and terminology
+    /// match the document, and the delivery join adapts spacing /
+    /// capitalisation / the trailing full stop to the exact caret position
+    /// (`InsertionJoiner`). All on-device; the context is never stored. Off
+    /// → both fall back to the context-free heuristics.
+    var contextAwarenessEnabled: Bool
+
     // MARK: - Stable IDs for the built-ins
 
     /// Hard-coded UUID for the built-in Quick mode. Stable across launches so
@@ -102,7 +111,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case formattingPromptAddendum, formattingPromptOverride
         case grammarPromptAddendum, grammarPromptOverride
         case structuralPromptAddendum, structuralPromptOverride
-        case pressReturnAfterPaste
+        case pressReturnAfterPaste, contextAwarenessEnabled
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
@@ -152,6 +161,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? ""
         self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride)
         self.pressReturnAfterPaste = try c.decodeIfPresent(Bool.self, forKey: .pressReturnAfterPaste) ?? false
+        self.contextAwarenessEnabled = try c.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? true
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -180,7 +190,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         grammarPromptOverride: String?,
         structuralPromptAddendum: String,
         structuralPromptOverride: String?,
-        pressReturnAfterPaste: Bool = false
+        pressReturnAfterPaste: Bool = false,
+        contextAwarenessEnabled: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -205,6 +216,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.structuralPromptAddendum = structuralPromptAddendum
         self.structuralPromptOverride = structuralPromptOverride
         self.pressReturnAfterPaste = pressReturnAfterPaste
+        self.contextAwarenessEnabled = contextAwarenessEnabled
     }
 
     // MARK: - Effective prompts

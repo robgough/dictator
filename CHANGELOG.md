@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictation is now context-aware: when a dictation starts, Dictator reads a small amount of the text around your cursor (through the same Accessibility permission it already uses for pasting) and the formatting pass uses it to spell names and terminology the way your document does. Per-mode toggle under Context awareness, on by default. Everything stays on your Mac — the context only ever goes to the local model and is never stored — and password fields are never read.
+- Dictating into the middle of a sentence now joins cleanly: the pasted text picks up a leading space when it would otherwise glue onto a word, drops the automatic capital letter and trailing full stop when the surrounding sentence carries on, and no longer adds a double space when one already follows the cursor.
 - Meeting recordings take a fraction of the disk space they used to. Audio is captured at half the previous size, then automatically re-encoded to AAC once transcription finishes — a one-hour meeting now ends up around 80 MB on disk instead of 1.4 GB, with no audible difference for speech. Meetings you've already recorded are shrunk the same way in the background.
 - Long meetings stay responsive: the live transcript and level meters no longer get heavier as a call goes on, so an hours-long recording — and the rest of the app — keeps moving smoothly instead of gradually slowing down.
 - Recording one or two long meetings no longer leaves the app sluggish or a later dictation stuck on "Transcribing…": meeting transcription now runs separately from dictation so the two can't block each other, and the speech and speaker models a meeting loads are released once it has finished processing.
