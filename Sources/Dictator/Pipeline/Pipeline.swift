@@ -508,6 +508,11 @@ final class Pipeline {
             if let context = inFlight.context, context.hasText {
                 formattingPrompt += "\n\n" + context.formatterPromptBlock
                 contextInjected = true
+                NSLog("[Dictator] Pass 1 running with document context (%d/%d chars).",
+                      context.textBefore.count, context.textAfter.count)
+            } else {
+                NSLog("[Dictator] Pass 1 running without document context (%@).",
+                      inFlight.context == nil ? "no capture" : "field empty")
             }
             do {
                 formatted = try await formatterLLM!.format(
@@ -518,6 +523,18 @@ final class Pipeline {
                 // Fallback: ship raw transcript if LLM fails
                 await finish(text: trimmed, warning: "LLM failed: \(error.localizedDescription)")
                 return
+            }
+            // Seam-echo guard: with document context in the prompt the model
+            // sometimes glues the context tail onto the front of its output
+            // ("I think we " before the caret → output begins "we should…").
+            // Deterministic strip; runs before the empty check so a pure-echo
+            // output falls through to the raw-transcript fallback below.
+            if contextInjected, let context = inFlight.context {
+                let stripped = Self.stripContextEcho(formatted, raw: trimmed, context: context)
+                if stripped != formatted {
+                    NSLog("[Dictator] Pass 1 echoed document context at the seam — stripped the echoed words.")
+                    formatted = stripped
+                }
             }
             // Pass 1 produced nothing — fall back to the raw transcript silently. Modern
             // Whisper already produces capitalised, punctuated text, so the user normally
@@ -746,6 +763,93 @@ final class Pipeline {
         return Double(hits.count) / Double(anchors.count) >= 0.6
     }
 
+    /// Removes words Pass 1 glued on from the surrounding-document context.
+    /// Small models shown the text before the caret sometimes "complete the
+    /// seam": they prepend the tail of the context to the dictation
+    /// ("I think we " + "should go" → "we should go"), or append the head of
+    /// the after-context. Deterministic detector: leading output words that
+    /// match the context tail in order — and are NOT how the raw transcript
+    /// starts — came from the context, not the speaker. Mirror logic for the
+    /// suffix. Stripping everything (output was pure echo) is fine: the
+    /// empty-output fallback upstream then reverts to the raw transcript.
+    static func stripContextEcho(_ formatted: String, raw: String, context: InsertionContext) -> String {
+        let maxEchoWords = 8
+        var result = formatted
+        let rawWords = wordSequence(raw)
+
+        let beforeTail = Array(wordSequence(context.textBefore).suffix(maxEchoWords))
+        if !beforeTail.isEmpty {
+            let outWords = wordSequence(result)
+            var j = min(beforeTail.count, outWords.count)
+            while j > 0 {
+                if Array(outWords.prefix(j)) == Array(beforeTail.suffix(j)),
+                   Array(rawWords.prefix(j)) != Array(outWords.prefix(j)) {
+                    result = dropWords(result, fromFront: j)
+                    break
+                }
+                j -= 1
+            }
+        }
+
+        let afterHead = Array(wordSequence(context.textAfter).prefix(maxEchoWords))
+        if !afterHead.isEmpty {
+            let outWords = wordSequence(result)
+            var j = min(afterHead.count, outWords.count)
+            while j > 0 {
+                if Array(outWords.suffix(j)) == Array(afterHead.prefix(j)),
+                   Array(rawWords.suffix(j)) != Array(outWords.suffix(j)) {
+                    result = dropWords(result, fromBack: j)
+                    break
+                }
+                j -= 1
+            }
+        }
+        return result
+    }
+
+    /// Drops the first `count` words (and the separators around them) from `s`.
+    /// Word boundaries match `wordSequence`'s definition (letter/number runs)
+    /// so counts line up with the echo detector above.
+    private static func dropWords(_ s: String, fromFront count: Int) -> String {
+        guard count > 0 else { return s }
+        var dropped = 0
+        var inWord = false
+        var idx = s.startIndex
+        while idx < s.endIndex {
+            let isWordChar = s[idx].isLetter || s[idx].isNumber
+            if isWordChar, !inWord {
+                inWord = true
+                if dropped == count { return String(s[idx...]) }
+            } else if !isWordChar, inWord {
+                inWord = false
+                dropped += 1
+            }
+            idx = s.index(after: idx)
+        }
+        return ""
+    }
+
+    /// Drops the last `count` words (and the separators around them) from `s`.
+    private static func dropWords(_ s: String, fromBack count: Int) -> String {
+        guard count > 0 else { return s }
+        var dropped = 0
+        var inWord = false
+        var idx = s.endIndex
+        while idx > s.startIndex {
+            let prev = s.index(before: idx)
+            let isWordChar = s[prev].isLetter || s[prev].isNumber
+            if isWordChar, !inWord {
+                inWord = true
+                if dropped == count { return String(s[..<idx]) }
+            } else if !isWordChar, inWord {
+                inWord = false
+                dropped += 1
+            }
+            idx = prev
+        }
+        return ""
+    }
+
     private static let passOneTriggerWords: Set<String> = [
         "comma", "period", "stop", "question", "mark", "exclamation", "point",
         "colon", "semicolon", "paren", "parens", "dash", "quote", "quotes",
@@ -886,8 +990,14 @@ final class Pipeline {
             }.value
         }
         if let joinContext, joinContext.hasText {
-            text = InsertionJoiner.adjust(text, before: joinContext.textBefore, after: joinContext.textAfter)
+            let joined = InsertionJoiner.adjust(text, before: joinContext.textBefore, after: joinContext.textAfter)
+            NSLog("[Dictator] Join: caret snapshot (%d/%d chars) — %@.",
+                  joinContext.textBefore.count, joinContext.textAfter.count,
+                  joined == text ? "no adjustment needed" : "adjusted")
+            text = joined
         } else {
+            NSLog("[Dictator] Join: no caret snapshot (%@) — context-free heuristics.",
+                  joinContext == nil ? "capture unavailable" : "field empty")
             text = Self.relaxShortMessage(text)
             text = Self.withTrailingSpace(text)
         }
