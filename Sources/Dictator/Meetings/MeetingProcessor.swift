@@ -158,9 +158,18 @@ final class MeetingProcessor {
         }
 
         // ── Diarization pass on each track ───────────────────────────────
-        // Diarize from the same (gated, for the mic) samples we transcribed, so
-        // the "me" cluster is built from de-bled audio. Loaded diarizer is
-        // reused for both calls — load time is real (several seconds).
+        // ASR ran on the GATED mic (so bleed is never transcribed), but the
+        // diarizer wants the RAW mic: hard-gated audio is Swiss cheese — a
+        // real call measured 47% silenced across 188 slivers — and the
+        // chopped fragments of the user's own voice embed poorly and split
+        // into a phantom second cluster ("three speakers on a two-person
+        // call"). Raw audio gives every voice continuous, clean statistics;
+        // bleed then forms its own honest cluster that centroid-matches the
+        // remote speaker and is dropped by the attribution backstop in
+        // `unifySpeakerSpace`, instead of polluting "me". The raw samples
+        // are re-decoded (not held since load) to keep peak memory flat, and
+        // shifted by the gate's measured offset so diar segments line up
+        // with the gated track's word timestamps.
         var micDiar: DiarizationOutput?
         var systemDiar: DiarizationOutput?
         var diarFailureReason: String?
@@ -175,8 +184,25 @@ final class MeetingProcessor {
 
                 onProgress(.diarizing, 0)
                 if !micTimedWords.isEmpty, !micSamples.isEmpty {
+                    var micDiarSamples = micSamples
+                    if let gateInspection, gateInspection.applied,
+                       let micURL = session.micFileURL,
+                       FileManager.default.fileExists(atPath: micURL.path) {
+                        let offsetSeconds = gateInspection.offsetSeconds
+                        let fallback = micSamples
+                        micDiarSamples = await Task.detached(priority: .userInitiated) {
+                            guard var raw = try? Self.loadMono16k(from: micURL) else { return fallback }
+                            let offsetSamples = Int(offsetSeconds * 16_000)
+                            if offsetSamples > 0 {
+                                raw.removeFirst(min(raw.count, offsetSamples))
+                            } else if offsetSamples < 0 {
+                                raw.insert(contentsOf: [Float](repeating: 0, count: -offsetSamples), at: 0)
+                            }
+                            return raw
+                        }.value
+                    }
                     micDiar = try await DiarizerServiceHolder.shared.diarize(
-                        samples: micSamples,
+                        samples: micDiarSamples,
                         modelID: diarizationModelID,
                         trackLabel: "mic"
                     )
