@@ -67,7 +67,18 @@ public enum MeetingType: String, Codable, CaseIterable, Sendable {
             """
         case .teamMeeting:
             return """
-            This is a general team meeting. In the Discussion, capture the topics covered in roughly the order they came up. Put into Decisions only what the team actually agreed (not topics merely discussed), and attribute each action item to the member who took it on. Note any unresolved questions or items explicitly deferred to a later meeting.
+            This is a general team meeting. In ADDITION to the standard sections, insert these where stated, whenever the transcript supports them:
+
+            ## Updates
+            Immediately after `## Summary`, when the meeting includes a round of status updates: one `-` bullet per person who gave an update — what they shipped or finished, what they're working on, and any blocker they raised, e.g. `- Sarah: auth migration ~80% done; blocked on flag gating`. Use the speaker's exact display name from their `[Name · mm:ss]` prefix. Omit the section when there's no status round.
+
+            ## Learnings
+            Immediately after `## Discussion`: the new information the team came away with, as plain `-` bullets — results of things tried, metrics and figures reported, customer or user feedback relayed, gotchas and warnings shared, announcements. Each bullet a concrete, standalone fact with the specifics exactly as stated. Omit the section when nothing new was shared.
+
+            ## Open questions
+            At the very end, after Action items: questions raised but not resolved, and items explicitly deferred to a later meeting. Omit the section when there are none.
+
+            In `## Discussion`, NEVER write a bullet that just names a topic — every bullet must carry the substance of what was said about it: the positions taken, the specifics given, where it landed. BAD: `- Discussed the release date.` GOOD: `- Release slipped to June 12 — the auth migration is the blocker and the staging rollback ate two days.` Don't repeat a point that already lives in Updates or Learnings — each point appears once, in whichever section fits it best. Put into Decisions only what the team actually agreed (not topics merely discussed), and attribute each action item to the member who took it on.
             """
         case .planning:
             return """
