@@ -15,6 +15,15 @@ struct TranscriptView: View {
     @State private var tab: Tab = .notes
     @State private var inspection: MeetingTrackInspection?
     @State private var trackRows: [TrackRowBuilder.DisplayRow] = []
+    /// The ungrouped per-lane runs (dropped words included) backing the raw
+    /// tracks mode — what each track's ASR heard before diarization/cleanup.
+    @State private var rawRows: [TrackRowBuilder.Row] = []
+    @State private var transcriptMode: TranscriptMode = .conversation
+
+    /// Conversation = the cleaned, diarized chat view. Raw = each track's
+    /// ASR output as transcribed, before speaker identification and before
+    /// the bleed/echo cleanup removed anything.
+    enum TranscriptMode: Hashable { case conversation, raw }
     /// Invalidates in-flight detached loads when the meeting changes under us.
     @State private var loadToken = UUID()
 
@@ -60,7 +69,6 @@ struct TranscriptView: View {
         .onDisappear { player.unload() }
         .onChange(of: meta.id) { _, _ in
             loadAudio()
-            if tab == .raw, !hasRawNotes { tab = .notes }
         }
         .onChange(of: session.state.isProcessing) { _, processing in
             // Re-process finished — pick up the freshly written track data.
@@ -115,7 +123,16 @@ struct TranscriptView: View {
     private func jumpToPlayhead(_ proxy: ScrollViewProxy) {
         if tab != .transcript { tab = .transcript }
         let t = player.currentTime
-        if !trackRows.isEmpty {
+        if transcriptMode == .raw, !rawRows.isEmpty {
+            let isSpeech: (TrackRowBuilder.Row) -> Bool = {
+                if case .speech = $0.kind { return true } else { return false }
+            }
+            let target = rawRows.last(where: { $0.start <= t && isSpeech($0) })
+                ?? rawRows.first(where: isSpeech)
+            if let target {
+                withAnimation { proxy.scrollTo("rawrow-\(target.id)", anchor: .center) }
+            }
+        } else if !trackRows.isEmpty {
             let target = trackRows.last(where: { $0.start <= t && !$0.isSilence })
                 ?? trackRows.first(where: { !$0.isSilence })
             if let target {
@@ -134,9 +151,7 @@ struct TranscriptView: View {
         HStack(spacing: 8) {
             Picker("View", selection: $tab) {
                 Text("Transcript").tag(Tab.transcript)
-                if hasRawNotes {
-                    Text("Live notes").tag(Tab.raw)
-                }
+                Text("Live notes").tag(Tab.raw)
                 Text("Pad").tag(Tab.pad)
                 Text("Final notes").tag(Tab.notes)
             }
@@ -204,10 +219,41 @@ struct TranscriptView: View {
                     .foregroundStyle(.tertiary)
             }
         } else {
-            Text("No raw notes for this meeting.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text("No live notes for this meeting")
+                    .foregroundStyle(.secondary)
+                Text(noLiveNotesReason)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
         }
+    }
+
+    /// Best-effort explanation for an empty Live notes tab. The import case
+    /// is definitive; the rest read the *current* settings — we don't record
+    /// what they were at capture time, so the wording stays diagnostic
+    /// ("live notes build on…") rather than claiming to know history.
+    private var noLiveNotesReason: String {
+        if meta.source == .fileImport {
+            return "This meeting was imported from an audio file — live notes are only built while you record."
+        }
+        if state.settings.activeLLMEngine() == nil {
+            return "No LLM is set up in Settings → Models, so there was nothing to write them with."
+        }
+        if !state.settings.meetingLiveTranscriptEnabled {
+            return "“Show a live transcript while recording” is off in Settings → Meetings — live notes build on the live transcript, so turning it on enables them for future recordings."
+        }
+        if !state.settings.meetingLiveNotesEnabled {
+            return "“Build a first pass while recording” is off in Settings → Meetings — turn it on to capture live notes for future recordings."
+        }
+        return "Live notes are switched on now, so this recording probably pre-dates them — or the settings were different when it was made."
     }
 
     /// The user's own pad — editable after the meeting too, so a thought can
@@ -251,6 +297,17 @@ struct TranscriptView: View {
                         EditableSpeakerChip(speaker: speaker, session: session, allSpeakers: meta.speakers)
                     }
                     Spacer()
+                    if hasTracks {
+                        Picker("Transcript mode", selection: $transcriptMode) {
+                            Text("Conversation").tag(TranscriptMode.conversation)
+                            Text("Raw tracks").tag(TranscriptMode.raw)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
+                        .help("Conversation is the cleaned, speaker-attributed view. Raw tracks shows exactly what each track's speech recognition heard — before working out who said what, and with everything the cleanup removed still in place.")
+                    }
                 }
 
                 if !hasAudio {
@@ -259,7 +316,14 @@ struct TranscriptView: View {
                     )
                 }
 
-                if let inspection, hasTracks {
+                if let inspection, hasTracks, transcriptMode == .raw {
+                    RawTracksPanel(
+                        inspection: inspection,
+                        rows: rawRows,
+                        meta: meta,
+                        player: hasAudio ? player : nil
+                    )
+                } else if let inspection, hasTracks {
                     TracksPanel(
                         inspection: inspection,
                         rows: trackRows,
@@ -316,13 +380,15 @@ struct TranscriptView: View {
         loadToken = token
         Task.detached(priority: .userInitiated) {
             let insp = MeetingStorage.readTrackInspection(for: id)
-            let rows = insp.map { TrackRowBuilder.displayRows(from: TrackRowBuilder.rows(inspection: $0)) } ?? []
+            let base = insp.map { TrackRowBuilder.rows(inspection: $0) } ?? []
+            let rows = TrackRowBuilder.displayRows(from: base)
             let micSpeech = insp.map { Self.speechIntervals($0.mic) } ?? []
             let systemSpeech = insp.map { Self.speechIntervals($0.system) } ?? []
             await MainActor.run {
                 guard loadToken == token else { return }
                 inspection = insp
                 trackRows = rows
+                rawRows = base
                 player.setSpeechIntervals(mic: micSpeech, system: systemSpeech)
                 player.setTrackLevels(mic: insp?.micSpeechLevel, system: insp?.systemSpeechLevel)
             }
@@ -375,7 +441,7 @@ struct TranscriptView: View {
         case .notes: return "Copy notes"
         case .raw: return "Copy live notes"
         case .pad: return "Copy pad"
-        case .transcript: return "Copy transcript"
+        case .transcript: return transcriptMode == .raw ? "Copy raw tracks" : "Copy transcript"
         }
     }
 
@@ -408,8 +474,12 @@ struct TranscriptView: View {
         case .pad:
             return session.padText.isEmpty ? nil : session.padText
         case .transcript:
-            // The merged transcript is the shareable artifact; the two-lane
-            // diagnostic text has its own copy button in the lanes summary.
+            // Raw mode copies what's on screen — the pre-cleanup two-lane
+            // text. Conversation mode copies the merged transcript (the
+            // shareable artifact).
+            if transcriptMode == .raw, let inspection, !rawRows.isEmpty {
+                return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
+            }
             guard let transcript, !transcript.segments.isEmpty else {
                 guard let inspection else { return nil }
                 return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
@@ -1554,6 +1624,114 @@ private struct TracksPanel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// The "Raw tracks" transcript mode: exactly what each track's ASR heard, in
+/// time order, labelled only by lane ("You" = mic, "Other side" = system) —
+/// before diarization worked out who said what, and with every word the
+/// bleed/echo cleanup removed still present (struck through, tagged with the
+/// drop reason). Gate silences appear as markers because that audio was
+/// silenced before transcription ever saw it.
+private struct RawTracksPanel: View {
+    let inspection: MeetingTrackInspection
+    /// Ungrouped per-lane runs precomputed off-main by the owner, dropped
+    /// words included.
+    let rows: [TrackRowBuilder.Row]
+    let meta: MeetingMeta
+    let player: MeetingPlayer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("What each track's speech recognition heard, before speaker identification and cleanup. Struck-through text was removed on the way to the conversation view.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                CopyButton(text: TrackRowBuilder.plainText(inspection: inspection, meta: meta))
+                    .help("Copy the raw two-lane transcript as text — handy for sharing a diagnosis.")
+            }
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(rows) { row in
+                    RawTrackRowView(row: row, player: player)
+                        .id("rawrow-\(row.id)")
+                }
+            }
+        }
+    }
+}
+
+/// One run of raw words (or a gate-silence marker) in the raw tracks mode.
+/// Lane chip instead of a speaker name — attribution hasn't happened yet at
+/// this stage, the lane is all we honestly know.
+private struct RawTrackRowView: View {
+    let row: TrackRowBuilder.Row
+    let player: MeetingPlayer?
+
+    var body: some View {
+        switch row.kind {
+        case .gateSilence:
+            HStack {
+                Spacer()
+                Label(
+                    "\(Int(row.end - row.start)) s of mic audio silenced by the bleed gate before transcription",
+                    systemImage: "waveform.slash"
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.vertical, 2)
+        case .speech(_, let text, let dropped):
+            let isMic = row.lane == .mic
+            let tint: Color = isMic ? .accentColor : .indigo
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                timestamp
+                    .frame(width: 46, alignment: .trailing)
+                Text(isMic ? "You" : "Other side")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(tint)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(tint.opacity(0.12)))
+                    .frame(width: 76, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(text)
+                        .font(.callout)
+                        .strikethrough(dropped != nil)
+                        .foregroundStyle(dropped != nil ? Color.secondary : Color.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let dropped {
+                        Text(dropped == .bleedCluster
+                            ? "removed as bleed — the other side's speech leaking into your mic"
+                            : "removed as an echo of the other side's track")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var timestamp: some View {
+        let label = TrackRowBuilder.timestamp(row.start)
+        if let player {
+            Button {
+                player.seek(to: row.start)
+                if !player.isPlaying { player.togglePlayPause() }
+            } label: {
+                Text(label)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Jump the audio playback here.")
+        } else {
+            Text(label)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
         }
     }
 }
