@@ -49,6 +49,18 @@ final class AudioRecorder {
     private var running = false
     private var startInFlight = false
 
+    /// Which leg of the startup pipeline the in-flight attempt is on.
+    /// Drives two things: the resolution watchdog's "are we still stuck
+    /// where I think we are" check, and the cancel/teardown logs that
+    /// tell us *where* a slow start was when the user gave up on it.
+    private enum StartPhase: String {
+        case idle, resolving, buildingSession, running
+    }
+    private var startPhase: StartPhase = .idle
+
+    /// Wall-clock origin of the in-flight start, for the phase logs.
+    private var startBegan = Date.distantPast
+
     /// Generation counter so a Bluetooth start still in HFP negotiation
     /// when the user releases the hotkey doesn't end up adopting its
     /// session after we've already returned to .idle. Bumped by `start`,
@@ -60,6 +72,24 @@ final class AudioRecorder {
     /// from the off-main setup task. Nil between `stop()` and the next
     /// successful start.
     private var session: AVCaptureSession?
+
+    /// Last successfully-resolved capture device, keyed by its CoreAudio
+    /// UID. `AVCaptureDevice(uniqueID:)` plus the Bluetooth transport
+    /// probe are synchronous coreaudiod round-trips that can block for
+    /// seconds when the HAL is busy (USB mic waking from autosuspend,
+    /// aggregate-device churn from meeting taps, recent default-device
+    /// swap) — and they used to run *before* any watchdog existed, which
+    /// is how "stuck on Connecting" happened. Re-using the device object
+    /// from the previous start skips those queries entirely in the common
+    /// same-mic-as-last-time case. Invalidated when the device
+    /// disconnects (observer in `init`) and re-validated against
+    /// `isConnected` before each use.
+    private var cachedDevice: (uid: String, device: AVCaptureDevice, isBT: Bool)?
+
+    /// Lifetime observer (separate from the per-session `observers` array,
+    /// which is torn down after every recording) that drops `cachedDevice`
+    /// when its hardware goes away.
+    private var cacheInvalidationObserver: NSObjectProtocol?
     /// Strong reference to the delegate object — AVCaptureAudioDataOutput
     /// only weakly retains it.
     private var sampleForwarder: SampleBufferForwarder?
@@ -96,13 +126,29 @@ final class AudioRecorder {
     /// was interrupted. The recorder stops itself first.
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
-    init() {}
+    init() {
+        // Drop the cached device the moment its hardware disappears so a
+        // stale AVCaptureDevice can't win the fast path after a replug.
+        // Same Sendable dance as the per-session observers below: pull the
+        // UID out of the Notification before entering assumeIsolated.
+        cacheInvalidationObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let uniqueID = (note.object as? AVCaptureDevice)?.uniqueID
+            MainActor.assumeIsolated {
+                guard let self, let uniqueID, self.cachedDevice?.uid == uniqueID else { return }
+                self.cachedDevice = nil
+            }
+        }
+    }
 
     /// Kick off session startup. Returns immediately — every CoreAudio /
     /// AVFoundation touch (device resolution, BT probe, session build,
     /// `startRunning()`) runs off-main. Keeping the main actor free is
-    /// load-bearing for the warmup watchdog: it's an async `Task @MainActor`
-    /// that needs to actually run when its sleep ends, which it can't do
+    /// load-bearing for the warmup watchdogs: they're async `Task @MainActor`s
+    /// that need to actually run when their sleep ends, which they can't do
     /// if main is mid-CoreAudio query. Caller is notified via `onReady`
     /// (success) or `onStartFailed` (failure), both on the main actor.
     func start() {
@@ -115,28 +161,102 @@ final class AudioRecorder {
         startGeneration &+= 1
         let generation = startGeneration
 
-        // Snapshot the user's preferred device on main (cheap dict read on
-        // an @Observable @MainActor object — has to happen here). Everything
-        // expensive — `AVCaptureDevice(uniqueID:)`, the UID→AudioDeviceID
-        // translation, the BT-transport query — moves to the detached task.
-        // Those CoreAudio touches can briefly block when coreaudiod is busy
-        // (USB / Thunderbolt mic just woke, recent default-input swap), and
-        // when they blocked on main, the warmup watchdog couldn't fire —
-        // that was the "Connecting microphone" hang we couldn't shake.
+        startBegan = Date()
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
-        Task.detached(priority: .userInitiated) { [weak self] in
+        NSLog("[Dictator] Mic start: gen=%d preferred=%@", generation, preferred?.name ?? "system default")
+
+        // Fast path: same explicit device as last time, still connected →
+        // reuse the resolved AVCaptureDevice and skip the coreaudiod
+        // round-trips entirely. This makes the everyday case (Yeti on the
+        // desk, dictating all day) immune to HAL sluggishness — there is
+        // nothing left in the path that can block before the session-phase
+        // watchdog is armed.
+        if let preferred, !preferred.isSystemDefault,
+           let cached = cachedDevice, cached.uid == preferred.uid,
+           cached.device.isConnected {
+            NSLog("[Dictator] Mic start: cached device '%@' (gen %d)", cached.device.localizedName, generation)
+            beginSession(device: cached.device, isBT: cached.isBT, allowDefaultFallback: true, generation: generation)
+            return
+        }
+
+        resolveAndStart(preferred: preferred, allowDefaultFallback: true, generation: generation)
+    }
+
+    /// Resolve `preferred` (nil = system default) to a live AVCaptureDevice
+    /// off-main, then hand off to `beginSession` on success. The resolution
+    /// queries are synchronous Mach round-trips into coreaudiod that can
+    /// block for seconds when the HAL is busy; two defences here:
+    ///
+    /// 1. They run on a GCD global queue, NOT the Swift cooperative pool —
+    ///    a wedged query parks a disposable GCD thread instead of eating
+    ///    one of the pool's ~core-count threads (repeated retries against a
+    ///    wedged coreaudiod used to starve the pool and stall *everything*).
+    /// 2. A dedicated watchdog covers the resolution phase. This phase had
+    ///    NO timeout before — the session-phase watchdog was only armed
+    ///    after resolution completed, so a blocked `AVCaptureDevice(uniqueID:)`
+    ///    left the user staring at "Connecting" forever. On timeout we
+    ///    orphan the stuck query (generation bump), fall back to the system
+    ///    default, and if even that doesn't resolve, fail with a real error.
+    private func resolveAndStart(preferred: AudioDevice?, allowDefaultFallback: Bool, generation: Int) {
+        startPhase = .resolving
+        let began = Date()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let device = Self.resolveCaptureDevice(preferred: preferred)
             let isBT = Self.isBluetoothDevice(device)
-            await self?.continueStartOnMain(device: device, isBT: isBT, generation: generation)
+            let ms = Int(Date().timeIntervalSince(began) * 1000)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard generation == self.startGeneration else {
+                    // The watchdog (or a cancel) moved on without us. Log the
+                    // real duration — this is the line that tells us how long
+                    // the wedged query actually took.
+                    NSLog("[Dictator] Mic start: stale resolution of '%@' discarded after %dms (gen %d)",
+                          device?.localizedName ?? "nil", ms, generation)
+                    return
+                }
+                NSLog("[Dictator] Mic start: resolved '%@' isBT=%d in %dms (gen %d)",
+                      device?.localizedName ?? "nil", isBT ? 1 : 0, ms, generation)
+                if let device, let preferred, !preferred.isSystemDefault, device.uniqueID == preferred.uid {
+                    self.cachedDevice = (preferred.uid, device, isBT)
+                }
+                self.beginSession(device: device, isBT: isBT, allowDefaultFallback: allowDefaultFallback, generation: generation)
+            }
+        }
+
+        // Resolution watchdog. Generation guard + phase check together mean
+        // this only fires while *this* attempt is still stuck resolving —
+        // once beginSession runs, the phase moves on and the session-phase
+        // watchdog owns the timeout.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.resolutionTimeoutSeconds))
+            guard let self else { return }
+            guard self.startInFlight, generation == self.startGeneration, self.startPhase == .resolving else { return }
+            if allowDefaultFallback {
+                NSLog("[Dictator] Mic start: resolution timed out after %.1fs (gen %d) — falling back to system default",
+                      Self.resolutionTimeoutSeconds, generation)
+                self.startGeneration &+= 1
+                self.resolveAndStart(preferred: nil, allowDefaultFallback: false, generation: self.startGeneration)
+            } else {
+                NSLog("[Dictator] Mic start: default-device resolution timed out after %.1fs (gen %d) — giving up",
+                      Self.resolutionTimeoutSeconds, generation)
+                self.startInFlight = false
+                self.startPhase = .idle
+                self.onStartFailed?(NSError(
+                    domain: "Dictator",
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "The audio system isn't responding. Try again in a moment, or pick a different input in Settings."]
+                ))
+            }
         }
     }
 
-    /// Main-actor continuation of `start()` after off-main device resolution.
+    /// Main-actor continuation once a device is in hand (resolved or cached).
     /// Bails if the generation has moved on (user released the hotkey, or a
     /// concurrent start raced us). Picks the timeout / retry policy from the
     /// device's BT-ness, then hands off to the existing per-attempt setup.
-    private func continueStartOnMain(device: AVCaptureDevice?, isBT: Bool, generation: Int) {
+    private func beginSession(device: AVCaptureDevice?, isBT: Bool, allowDefaultFallback: Bool, generation: Int) {
         guard generation == startGeneration else { return }
+        startPhase = .buildingSession
         // Pick a timeout (and retry policy) based on device type. Bluetooth
         // legitimately takes 3–5 s for HFP negotiation on the first open,
         // so it gets the generous budget. Wired devices (USB, built-in)
@@ -148,7 +268,7 @@ final class AudioRecorder {
         let sameDeviceRetries = isBT ? 0 : 1
         startSessionAsync(
             device: device,
-            allowDefaultFallback: true,
+            allowDefaultFallback: allowDefaultFallback,
             sameDeviceRetriesRemaining: sameDeviceRetries,
             generation: generation,
             timeoutSeconds: timeout
@@ -160,6 +280,12 @@ final class AudioRecorder {
     /// the sub-3-second window catches genuine hangs while still allowing
     /// some headroom for first-touch CoreAudio bring-up.
     private static let wiredWarmupTimeoutSeconds: Double = 2.5
+
+    /// Timeout budget for the device-resolution phase. A healthy
+    /// `AVCaptureDevice(uniqueID:)` + transport probe completes in
+    /// single-digit milliseconds; anything in whole seconds means
+    /// coreaudiod is wedged and waiting longer won't help.
+    private static let resolutionTimeoutSeconds: Double = 2.0
 
     /// True when the AVCaptureDevice's underlying CoreAudio device reports
     /// a Bluetooth transport. We bridge via the device UID since
@@ -179,8 +305,15 @@ final class AudioRecorder {
     /// completion handler discards the session instead of adopting it.
     /// Safe to call when no startup is in flight.
     func cancelStart() {
+        if startInFlight {
+            // The smoking-gun line for slow starts: how long the user sat
+            // on "Connecting" before giving up, and which phase ate it.
+            NSLog("[Dictator] Mic start: cancelled by caller after %dms in phase=%@",
+                  Int(Date().timeIntervalSince(startBegan) * 1000), startPhase.rawValue)
+        }
         startGeneration &+= 1
         startInFlight = false
+        startPhase = .idle
     }
 
     /// Mid-recording snapshot of the captured audio, resampled to 16 kHz
@@ -203,6 +336,7 @@ final class AudioRecorder {
     func stop() -> [Float] {
         startGeneration &+= 1
         startInFlight = false
+        startPhase = .idle
         if running {
             teardownSession()
             running = false
@@ -230,6 +364,7 @@ final class AudioRecorder {
     ) {
         guard let device else {
             startInFlight = false
+            startPhase = .idle
             onStartFailed?(NSError(
                 domain: "Dictator",
                 code: -1,
@@ -256,7 +391,14 @@ final class AudioRecorder {
         }
         let queue = outputQueue
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        // GCD global queue, not Task.detached: `AVCaptureDeviceInput(device:)`
+        // and `startRunning()` both block in CoreAudio/CMIO when the HAL is
+        // slow. On the Swift cooperative pool a blocked call holds one of the
+        // pool's ~core-count threads hostage; a few retries against a wedged
+        // coreaudiod could starve the pool and stall every other async task
+        // in the app. GCD spins up (and later reaps) extra threads instead.
+        let sessionBuildBegan = Date()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let session = AVCaptureSession()
             session.beginConfiguration()
 
@@ -305,19 +447,28 @@ final class AudioRecorder {
                 // catches.
                 session.startRunning()
             } catch {
-                await self?.handleStartFailure(
-                    error: error,
-                    allowDefaultFallback: allowDefaultFallback,
-                    generation: generation
-                )
+                Task { @MainActor [weak self] in
+                    self?.handleStartFailure(
+                        error: error,
+                        allowDefaultFallback: allowDefaultFallback,
+                        generation: generation
+                    )
+                }
                 return
             }
 
-            await self?.adoptSession(
-                session: session,
-                forwarder: forwarder,
-                generation: generation
-            )
+            let ms = Int(Date().timeIntervalSince(sessionBuildBegan) * 1000)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                NSLog("[Dictator] Mic start: session running on '%@' in %dms (gen %d, total %dms)",
+                      device.localizedName, ms, generation,
+                      Int(Date().timeIntervalSince(self.startBegan) * 1000))
+                self.adoptSession(
+                    session: session,
+                    forwarder: forwarder,
+                    generation: generation
+                )
+            }
         }
 
         // Warmup watchdog. CoreAudio occasionally blocks indefinitely
@@ -331,6 +482,9 @@ final class AudioRecorder {
             try? await Task.sleep(for: .seconds(timeoutSeconds))
             guard let self else { return }
             guard self.startInFlight, generation == self.startGeneration else { return }
+            NSLog("[Dictator] Mic start: session warmup timed out after %.1fs on '%@' (gen %d, retries left %d, fallback %d)",
+                  timeoutSeconds, device.localizedName, generation,
+                  sameDeviceRetriesRemaining, allowDefaultFallback ? 1 : 0)
             let err = NSError(
                 domain: "Dictator",
                 code: -1,
@@ -367,6 +521,7 @@ final class AudioRecorder {
         installObservers(for: newSession)
         running = true
         startInFlight = false
+        startPhase = .running
         startSilentCaptureWatchdog()
         onReady?()
     }
@@ -381,21 +536,20 @@ final class AudioRecorder {
         generation: Int
     ) {
         guard generation == startGeneration else { return }
+        NSLog("[Dictator] Mic start: session setup failed (gen %d, fallback %d): %@",
+              generation, allowDefaultFallback ? 1 : 0, error.localizedDescription)
         if allowDefaultFallback {
-            // Bump the generation so any still-pending detached task
-            // becomes stale on completion. Retry against the system
-            // default with a short watchdog; if that fails too, surface
-            // the error.
+            // Bump the generation so any still-pending setup task becomes
+            // stale on completion, then retry against the system default.
+            // Resolution of the default device goes through the watchdogged
+            // off-main path — `AVCaptureDevice.default(for:)` is itself a
+            // coreaudiod round-trip and used to run right here on the main
+            // actor, where a wedged HAL froze the UI on "Connecting".
             startGeneration &+= 1
-            startSessionAsync(
-                device: AVCaptureDevice.default(for: .audio),
-                allowDefaultFallback: false,
-                sameDeviceRetriesRemaining: 0,
-                generation: startGeneration,
-                timeoutSeconds: 3
-            )
+            resolveAndStart(preferred: nil, allowDefaultFallback: false, generation: startGeneration)
         } else {
             startInFlight = false
+            startPhase = .idle
             onStartFailed?(error)
         }
     }
@@ -427,16 +581,13 @@ final class AudioRecorder {
                 timeoutSeconds: timeoutSeconds
             )
         } else if allowDefaultFallback {
+            // Same off-main, watchdogged default-device path as
+            // `handleStartFailure` — never query the HAL from main.
             startGeneration &+= 1
-            startSessionAsync(
-                device: AVCaptureDevice.default(for: .audio),
-                allowDefaultFallback: false,
-                sameDeviceRetriesRemaining: 0,
-                generation: startGeneration,
-                timeoutSeconds: 3
-            )
+            resolveAndStart(preferred: nil, allowDefaultFallback: false, generation: startGeneration)
         } else {
             startInFlight = false
+            startPhase = .idle
             onStartFailed?(error)
         }
     }
@@ -509,13 +660,18 @@ final class AudioRecorder {
     /// detached task — once we've stopped tracking it on the main actor
     /// it's safe to let the task own it for the brief stop window.
     private nonisolated func stopSessionAsync(_ session: AVCaptureSession) {
-        Task.detached { session.stopRunning() }
+        // GCD rather than the cooperative pool for the same reason as the
+        // setup path: a teardown blocked on a flaky device shouldn't pin
+        // one of the pool's threads.
+        DispatchQueue.global(qos: .utility).async { session.stopRunning() }
     }
 
     private func handleUnexpectedStop(_ message: String) {
         guard running else { return }
+        NSLog("[Dictator] Mic capture lost: %@", message)
         teardownSession()
         running = false
+        startPhase = .idle
         onUnexpectedStop?(message)
     }
 
@@ -534,6 +690,7 @@ final class AudioRecorder {
             try? await Task.sleep(for: .milliseconds(1500))
             guard let self else { return }
             guard self.running, self.lastBufferTime == nil else { return }
+            NSLog("[Dictator] Mic start: silent-capture watchdog fired — session running but no buffers after 1.5s")
             self.handleUnexpectedStop("Mic isn't producing audio. Try a different input in Settings.")
         }
     }
@@ -544,6 +701,10 @@ final class AudioRecorder {
         // Drop samples that arrive after teardown — outputQueue callbacks
         // can race with stopRunning by a few milliseconds.
         guard running || startInFlight else { return }
+        if lastBufferTime == nil {
+            NSLog("[Dictator] Mic start: first buffer %dms after start (rate=%.0f)",
+                  Int(Date().timeIntervalSince(startBegan) * 1000), sampleRate)
+        }
         rawBuffer.append(contentsOf: mono)
         nativeSampleRate = sampleRate
         lastBufferTime = Date()
