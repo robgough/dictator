@@ -33,6 +33,7 @@ enum MeetingStorage {
     static let transcriptFilename = "transcript.json"
     static let tracksFilename = "tracks.json"
     static let metaFilename = "meta.json"
+    static let padFilename = "pad.md"
 
     /// Base folder the synced text files live under (a `Meetings/` subfolder is
     /// appended). Set once during `AppState.bootstrap` from
@@ -127,6 +128,30 @@ enum MeetingStorage {
 
     static func tracksURL(for id: UUID) -> URL {
         folder(for: id).appendingPathComponent(tracksFilename)
+    }
+
+    /// The user's own notes for a meeting — the "pad" they type into while
+    /// (or after) recording. Markdown-native, so it lives as a plain `pad.md`
+    /// beside meta.json in the synced folder rather than a field inside it:
+    /// human-readable in Finder, cheap to autosave on every debounce tick,
+    /// and it rides the same sync as the rest of the meeting's text.
+    static func padURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(padFilename)
+    }
+
+    /// Empty string when the meeting has no pad — callers treat "" as absent.
+    static func readPad(for id: UUID) -> String {
+        (try? String(contentsOf: padURL(for: id), encoding: .utf8)) ?? ""
+    }
+
+    /// Writes the pad, removing the file entirely when the text is blank so
+    /// an emptied pad doesn't leave a stray zero-content pad.md behind.
+    static func writePad(_ text: String, for id: UUID) throws {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try? FileManager.default.removeItem(at: padURL(for: id))
+        } else {
+            try text.write(to: padURL(for: id), atomically: true, encoding: .utf8)
+        }
     }
 
     static func writeTrackInspection(_ inspection: MeetingTrackInspection, for id: UUID) throws {

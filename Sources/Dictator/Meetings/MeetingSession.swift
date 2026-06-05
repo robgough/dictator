@@ -90,6 +90,13 @@ final class MeetingSession: Identifiable {
     /// starts or succeeds.
     private(set) var notesError: String?
 
+    /// The user's own notes for this meeting — the pad they type into during
+    /// (or after) recording. Loaded from `pad.md` on init, autosaved through
+    /// `updatePad` with a short debounce, and fed to the final notes pass as
+    /// authoritative input. Empty string = no pad.
+    private(set) var padText: String = ""
+    private var padSaveTask: Task<Void, Never>?
+
     /// Active capture warnings — currently one per source ("mic" /
     /// "system"), keyed so a re-warn from the same source overwrites
     /// instead of stacking duplicates. Surfaced by `LiveRecordingView`
@@ -129,6 +136,7 @@ final class MeetingSession: Identifiable {
             speakers: MeetingMeta.defaultLiveSpeakers
         )
         self.state = .idle
+        self.padText = MeetingStorage.readPad(for: id)
     }
 
     /// Construct a session for an in-progress file import. Lands in
@@ -139,6 +147,7 @@ final class MeetingSession: Identifiable {
         self.id = meta.id
         self.meta = meta
         self.state = .importing(progress: 0)
+        self.padText = MeetingStorage.readPad(for: meta.id)
     }
 
     /// Construct from on-disk meta. Lands in `.ready` if a transcript is
@@ -148,6 +157,7 @@ final class MeetingSession: Identifiable {
     init(from meta: MeetingMeta) {
         self.id = meta.id
         self.meta = meta
+        self.padText = MeetingStorage.readPad(for: meta.id)
         let hasTranscript = FileManager.default.fileExists(
             atPath: MeetingStorage.transcriptURL(for: meta.id).path
         )
@@ -318,9 +328,9 @@ final class MeetingSession: Identifiable {
         // in-flight chunk task. The Parakeet weights themselves live in
         // `ParakeetServiceHolder.shared` and stay warm — the processor
         // about to run will reuse them immediately.
-        // Finalise the live transcript + quick notes before tearing them down:
+        // Finalise the live transcript + live notes before tearing them down:
         // settle the held-back tail (the last couple of phrases) into the
-        // transcript, then run one last notes pass so the quick notes are
+        // transcript, then run one last notes pass so the live notes are
         // complete. Persisted below (isFinal=false) so they survive even if the
         // post-capture notes pass doesn't run (auto-notes off) or fails; the
         // full pass overwrites them with isFinal=true when it succeeds.
@@ -351,6 +361,9 @@ final class MeetingSession: Identifiable {
         }
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
+        // Settle any pad text still inside the autosave debounce window —
+        // the final notes pass that's about to run reads pad.md from disk.
+        flushPad()
         state = .captured
         await runProcessor(parakeetModelID: parakeetModelID)
     }
@@ -551,6 +564,32 @@ final class MeetingSession: Identifiable {
                 ?? "Couldn't write the notes. Tap Generate to try again."
             state = .ready
         }
+    }
+
+    // MARK: - Pad (the user's own notes)
+
+    /// Update the pad text, autosaving to `pad.md` after a short debounce so
+    /// live typing doesn't write the file on every keystroke. The pad is tiny
+    /// (text), so the write itself is cheap.
+    func updatePad(_ text: String) {
+        guard padText != text else { return }
+        padText = text
+        padSaveTask?.cancel()
+        padSaveTask = Task { [id] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            try? MeetingStorage.writePad(text, for: id)
+        }
+    }
+
+    /// Write any pending pad text immediately — called when recording stops
+    /// and when the pad's view goes away, so the debounce window can't eat
+    /// the last keystrokes.
+    func flushPad() {
+        guard padSaveTask != nil else { return }
+        padSaveTask?.cancel()
+        padSaveTask = nil
+        try? MeetingStorage.writePad(padText, for: id)
     }
 
     /// Persist the per-meeting one-off instruction (see `MeetingMeta.oneOffPrompt`).

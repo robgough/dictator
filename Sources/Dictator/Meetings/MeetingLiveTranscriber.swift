@@ -334,7 +334,7 @@ final class MeetingLiveTranscriber {
 
     /// Settle and commit every held-back utterance, so stopping a recording
     /// doesn't drop the last couple of phrases from the live transcript and
-    /// quick notes. Call (and await) this before `stop()`.
+    /// live notes. Call (and await) this before `stop()`.
     func finishPending() async {
         guard isRunning else { return }
         finishing = true

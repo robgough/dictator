@@ -166,7 +166,7 @@ final class MeetingNotesAccumulator {
     }
 
     /// Stop the loop, then run one last pass over any transcript not yet folded
-    /// into the notes — so the quick notes are complete when the recording
+    /// into the notes — so the live notes are complete when the recording
     /// stops (paired with the transcriber's `finishPending()`). Returns the
     /// finished notes. Await this before `stop()` is otherwise needed.
     func finish() async -> String {

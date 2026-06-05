@@ -148,6 +148,13 @@ enum MeetingSummaryService {
             NSLog("[Dictator] Notes: skipping live-outline checklist — bleed was removed from this meeting and the live outline predates the cleanup")
         }
 
+        // The user's own pad notes, fed in as authoritative input. Unlike the
+        // live outline this is deliberate human input — never gated on bleed
+        // cleanup (it isn't derived from audio) and never second-guessed on
+        // attribution.
+        let padText = MeetingStorage.readPad(for: meta.id).trimmingCharacters(in: .whitespacesAndNewlines)
+        let pad: String? = padText.isEmpty ? nil : padText
+
         let raw: String
         if approxTokens <= singlePassInputBudgetTokens {
             raw = try await runSinglePass(
@@ -155,6 +162,7 @@ enum MeetingSummaryService {
                 systemPrompt: prompt,
                 renderedTranscript: rendered,
                 rawOutline: rawOutline,
+                pad: pad,
                 compact: isShort
             )
         } else {
@@ -163,7 +171,8 @@ enum MeetingSummaryService {
                 systemPrompt: prompt,
                 segments: segments,
                 speakers: meta.speakers,
-                rawOutline: rawOutline
+                rawOutline: rawOutline,
+                pad: pad
             )
         }
 
@@ -191,6 +200,7 @@ enum MeetingSummaryService {
         systemPrompt: String,
         renderedTranscript: String,
         rawOutline: String?,
+        pad: String?,
         compact: Bool
     ) async throws -> String {
         var selection = renderedTranscript
@@ -202,6 +212,12 @@ enum MeetingSummaryService {
             instruction = compact
                 ? "Write a short note for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. This is a very brief recording — keep it light and do not scaffold empty sections. A rough live outline follows the transcript — use it ONLY as a checklist of topics to make sure you covered; the TRANSCRIPT is the sole authority for who said, decided, or owns each point, so ignore any attribution the outline implies. Output ONLY the Markdown."
                 : "Write the meeting notes for the TRANSCRIPT above as Markdown, following the sections and rules in the system prompt. A rough live outline follows the transcript — use it ONLY as a checklist of topics so you don't miss something the transcript supports. It was captured live with only coarse \"Me\"/\"Them\" labels and may credit points to the wrong person: the TRANSCRIPT (with its `[Name · mm:ss]` speaker prefixes) is the sole authority for who said, decided, or owns each point — ignore any attribution the outline implies. Output ONLY the Markdown."
+        }
+        // The pad is the opposite of the live outline: deliberate human input,
+        // so it's framed as authoritative rather than attribution-suspect.
+        if let pad, !pad.isEmpty {
+            selection += "\n\n--- USER'S OWN NOTES (typed by the person who recorded this meeting) ---\n\(pad)"
+            instruction += " The USER'S OWN NOTES at the end were typed live by the person who recorded the meeting: treat the facts, names, owners, decisions, and figures in them as AUTHORITATIVE — weave every point from them into the relevant sections, and when they conflict with the transcript, prefer the user's version. Do NOT create a separate section for them and do NOT quote them verbatim as a block."
         }
         let result = try await engine.assist(
             selection: selection,
@@ -222,7 +238,8 @@ enum MeetingSummaryService {
         systemPrompt: String,
         segments: [MeetingTranscriptSegment],
         speakers: [MeetingMeta.Speaker],
-        rawOutline: String?
+        rawOutline: String?,
+        pad: String?
     ) async throws -> String {
         let chunkBudgetChars = singlePassInputBudgetTokens * 4
         let chunks = chunk(segments: segments, maxCharsPerChunk: chunkBudgetChars)
@@ -256,6 +273,13 @@ enum MeetingSummaryService {
         if let rawOutline, !rawOutline.isEmpty {
             merged += "\n\n--- ROUGH LIVE OUTLINE (captured live with only coarse \"Me\"/\"Them\" labels; topic hints only — it may attribute points to the wrong person) ---\n\(rawOutline)"
             instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order, followed by a rough live outline captured during the meeting. Merge the windows into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including every type-specific section the system prompt defines for this meeting type) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows. Use the live outline ONLY as a checklist of topics so you don't drop a subject the windows covered — it was captured with coarse \"Me\"/\"Them\" labels and may credit points to the wrong person, so NEVER take an owner or attribution from it; the per-window notes (derived from the named transcript) are the sole authority for who said or owns what. Only collapse genuine duplicates; do NOT shorten for brevity. Output ONLY the merged Markdown."
+        }
+
+        // Whole-meeting context, so the pad joins at the reduce step only —
+        // never per-window. Authoritative framing, mirroring runSinglePass.
+        if let pad, !pad.isEmpty {
+            merged += "\n\n--- USER'S OWN NOTES (typed by the person who recorded this meeting) ---\n\(pad)"
+            instruction += " The USER'S OWN NOTES at the end were typed live by the person who recorded the meeting: treat the facts, names, owners, decisions, and figures in them as AUTHORITATIVE — weave every point from them into the relevant sections, and when they conflict with the per-window notes, prefer the user's version. Do NOT create a separate section for them and do NOT quote them verbatim as a block."
         }
 
         let finalResult = try await engine.assist(

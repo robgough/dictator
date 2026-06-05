@@ -18,9 +18,10 @@ struct TranscriptView: View {
     /// Invalidates in-flight detached loads when the meeting changes under us.
     @State private var loadToken = UUID()
 
-    /// Notes are the primary surface; the rough live "raw" notes (when kept)
-    /// and the transcript (two-lane mic/system view) live behind other tabs.
-    enum Tab: Hashable { case notes, raw, transcript }
+    /// Notes are the primary surface; the rough live "raw" notes (when kept),
+    /// the user's own pad, and the transcript (two-lane mic/system view) live
+    /// behind other tabs.
+    enum Tab: Hashable { case notes, raw, pad, transcript }
 
     var body: some View {
         // The view owns its scrolling (the detail view used to) so the tab
@@ -37,6 +38,8 @@ struct TranscriptView: View {
                             NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
                         case .raw:
                             rawTab
+                        case .pad:
+                            padTab
                         case .transcript:
                             transcriptTab
                         }
@@ -132,8 +135,9 @@ struct TranscriptView: View {
             Picker("View", selection: $tab) {
                 Text("Transcript").tag(Tab.transcript)
                 if hasRawNotes {
-                    Text("Quick notes").tag(Tab.raw)
+                    Text("Live notes").tag(Tab.raw)
                 }
+                Text("Pad").tag(Tab.pad)
                 Text("Final notes").tag(Tab.notes)
             }
             .pickerStyle(.segmented)
@@ -187,7 +191,7 @@ struct TranscriptView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles").foregroundStyle(.purple)
-                    Text("Quick notes").font(.headline)
+                    Text("Live notes").font(.headline)
                     Text("captured live").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -203,6 +207,23 @@ struct TranscriptView: View {
             Text("No raw notes for this meeting.")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The user's own pad — editable after the meeting too, so a thought can
+    /// be added before a notes re-run folds it in.
+    private var padTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "pencil.line").foregroundStyle(.secondary)
+                Text("Pad").font(.headline)
+                Spacer()
+            }
+            MeetingPadEditor(session: session)
+                .frame(minHeight: 340)
+            Text("Your own notes for this meeting. Anything here is treated as ground truth when the notes are written — edit and Re-run to fold changes in.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -352,7 +373,8 @@ struct TranscriptView: View {
     private var copyLabel: String {
         switch tab {
         case .notes: return "Copy notes"
-        case .raw: return "Copy quick notes"
+        case .raw: return "Copy live notes"
+        case .pad: return "Copy pad"
         case .transcript: return "Copy transcript"
         }
     }
@@ -365,6 +387,8 @@ struct TranscriptView: View {
             return meta.notes != nil || transcript != nil
         case .raw:
             return meta.rawNotes != nil
+        case .pad:
+            return !session.padText.isEmpty
         case .transcript:
             return (transcript.map { !$0.segments.isEmpty } ?? false) || inspection != nil
         }
@@ -381,6 +405,8 @@ struct TranscriptView: View {
         case .raw:
             if let raw = meta.rawNotes { return "# \(meta.title)\n\n\(raw.markdown)" }
             return nil
+        case .pad:
+            return session.padText.isEmpty ? nil : session.padText
         case .transcript:
             // The merged transcript is the shareable artifact; the two-lane
             // diagnostic text has its own copy button in the lanes summary.

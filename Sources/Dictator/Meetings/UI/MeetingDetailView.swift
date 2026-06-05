@@ -277,12 +277,53 @@ struct LiveRecordingView: View {
 
     // MARK: - Notes column (left, emphasised)
 
+    /// Pad over live notes: the user's own editable pad on top, the LLM's
+    /// streaming first pass below, split by a draggable divider so both stay
+    /// visible while typing. When live notes are off the pad takes the whole
+    /// column and a one-line caption explains why nothing streams below.
+    @ViewBuilder
     private var notesColumn: some View {
+        if session.notesAccumulator != nil {
+            VSplitView {
+                padPane
+                    .frame(minHeight: 110)
+                    .padding(.bottom, 8)
+                liveNotesPane
+                    .frame(minHeight: 130)
+                    .padding(.top, 8)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                padPane
+                Text(notesDisabledMessage)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var padPane: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "pencil.line")
+                    .foregroundStyle(.secondary)
+                Text("Pad")
+                    .font(.headline)
+                Spacer()
+                if !session.padText.isEmpty {
+                    CopyButton(text: session.padText, label: "Copy")
+                }
+            }
+            MeetingPadEditor(session: session)
+        }
+    }
+
+    private var liveNotesPane: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(.purple)
-                Text("Quick notes")
+                Text("Live notes")
                     .font(.headline)
                 Spacer()
                 if let notes = session.notesAccumulator?.liveNotes, !notes.isEmpty {
@@ -291,23 +332,8 @@ struct LiveRecordingView: View {
             }
             if let acc = session.notesAccumulator {
                 NotesStatusLine(accumulator: acc)
+                LiveNotesField(accumulator: acc)
             }
-            notesField
-        }
-    }
-
-    @ViewBuilder
-    private var notesField: some View {
-        if let accumulator = session.notesAccumulator {
-            LiveNotesField(accumulator: accumulator)
-        } else {
-            Text(notesDisabledMessage)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .notesSurface()
         }
     }
 
@@ -772,6 +798,37 @@ private struct PulsingDot: View {
             .opacity(on ? 1 : 0.3)
             .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }
+    }
+}
+
+/// The user's own pad for a meeting — an editable markdown text area backed
+/// by `session.padText` (debounced autosave to `pad.md`, flushed when the
+/// view goes away). Shared between the live-recording left column and the
+/// post-meeting Pad tab; the final notes pass folds the pad in as
+/// authoritative input.
+struct MeetingPadEditor: View {
+    @Bindable var session: MeetingSession
+
+    var body: some View {
+        TextEditor(text: Binding(
+            get: { session.padText },
+            set: { session.updatePad($0) }
+        ))
+        .font(.system(.callout, design: .monospaced))
+        .scrollContentBackground(.hidden)
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .notesSurface()
+        .overlay(alignment: .topLeading) {
+            if session.padText.isEmpty {
+                Text("Jot your own notes here — names, decisions, things to chase. They're folded into the final notes as ground truth.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .padding(14)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDisappear { session.flushPad() }
     }
 }
 
