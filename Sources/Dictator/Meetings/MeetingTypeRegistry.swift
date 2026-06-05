@@ -8,12 +8,13 @@ import Foundation
 ///
 /// Built-ins are expressed in the same ALL-CAPS template format users write
 /// custom types in — read-only in the editor but duplicable, so "start from
-/// Team meeting and tweak it" is the natural on-ramp. The prose-only
-/// templates compile to the exact prompt addenda the retired `MeetingType`
-/// enum carried; the section-bearing ones (Team meeting, Interview) state
-/// their full section list explicitly, which is what their old addenda
-/// described positionally ("immediately after ## Summary", "before
-/// Decisions").
+/// Team meeting and tweak it" is the natural on-ramp. Every concrete type
+/// states its full section list explicitly (a retro gets WHAT WENT WELL /
+/// WHAT DIDN'T GO WELL / WHAT TO CHANGE, a stand-up gets an UPDATES round,
+/// …), with the per-section guidance carried over from the prose addenda the
+/// retired `MeetingType` enum hand-tuned. Only Auto-detect (prose by nature
+/// — it's the "decide yourself" instruction) and Other (deliberately empty)
+/// have no sections.
 @MainActor
 enum MeetingTypeRegistry {
 
@@ -71,7 +72,19 @@ enum MeetingTypeRegistry {
             displayName: "1-on-1",
             detail: "A 1:1 between two people",
             template: """
-            This is a 1-on-1 between two people. In the Discussion, emphasise the concrete commitments either side made and anything raised that needs follow-up (career, blockers, feedback, personal context that affects work); note the tone if it shifted noticeably. Decisions are usually brief and personal — capture them precisely. Attribute each action item to whichever of the two committed to it. Keep the Summary a short factual recap of what the two covered, not advice.
+            This is a 1-on-1 between two people.
+
+            SUMMARY
+            A short factual recap of what the two covered, not advice.
+
+            DISCUSSION
+            Emphasise the concrete commitments either side made and anything raised that needs follow-up — career, blockers, feedback, personal context that affects work. Note the tone if it shifted noticeably.
+
+            DECISIONS
+            Usually brief and personal — capture them precisely. Omit the section if none.
+
+            ACTION ITEMS
+            Attribute each action item to whichever of the two committed to it.
             """,
             detectionKeyword: "one-on-one",
             isBuiltIn: true
@@ -81,7 +94,21 @@ enum MeetingTypeRegistry {
             displayName: "Stand-up",
             detail: "A quick status round: what each person did, is doing, and any blockers",
             template: """
-            This is a stand-up. Structure the Discussion by participant: what each named person shipped or finished since last time, what they're working on next, and any blockers they raised. Group action items by owner. Decisions are rare in stand-ups — omit the Decisions section unless the team genuinely agreed something. Keep it terse; stand-ups are short by design.
+            This is a stand-up. Keep it terse; stand-ups are short by design.
+
+            SUMMARY
+
+            UPDATES
+            One `-` bullet per named person: what they shipped or finished since last time, what they're working on next, and any blockers they raised. Use the speaker's exact display name from their `[Name · mm:ss]` prefix.
+
+            DISCUSSION
+            Anything discussed beyond the status round. Omit the section when the meeting was just the round.
+
+            DECISIONS
+            Decisions are rare in stand-ups — include the section only when the team genuinely agreed something.
+
+            ACTION ITEMS
+            Group action items by owner.
             """,
             detectionKeyword: "standup",
             isBuiltIn: true
@@ -121,7 +148,24 @@ enum MeetingTypeRegistry {
             displayName: "Planning",
             detail: "Scoping work: deliverables, dates, owners",
             template: """
-            This is a planning meeting. Emphasise the scope agreed (what's in, what's out), commitments to deliverables and dates, owners assigned to each workstream, and any dependencies or risks flagged. Decisions should list the concrete scope and date agreements. Every action item must carry an owner and a deliverable — never leave a planning action unowned if the transcript names someone.
+            This is a planning meeting.
+
+            SUMMARY
+
+            SCOPE
+            What was agreed in and what was agreed out, as plain `-` bullets. Omit the section when scope wasn't discussed.
+
+            DISCUSSION
+            The options weighed and commitments made — deliverables, dates, owners assigned to each workstream.
+
+            RISKS & DEPENDENCIES
+            Any dependencies or risks flagged. Omit the section when none were raised.
+
+            DECISIONS
+            The concrete scope and date agreements.
+
+            ACTION ITEMS
+            Every action item must carry an owner and a deliverable — never leave a planning action unowned if the transcript names someone.
             """,
             detectionKeyword: "planning",
             isBuiltIn: true
@@ -131,7 +175,21 @@ enum MeetingTypeRegistry {
             displayName: "Retrospective",
             detail: "What went well, what didn't, what to change",
             template: """
-            This is a retrospective. Organise the Discussion into what went well, what didn't, and what the team agreed to change. Decisions should list the concrete process changes the team agreed to try. Action items are the experiments or follow-ups carried into the next iteration — attribute them to the named owner where the transcript provides one.
+            This is a retrospective.
+
+            SUMMARY
+
+            WHAT WENT WELL
+            One `-` bullet per thing that worked, with the specifics as stated.
+
+            WHAT DIDN'T GO WELL
+            One `-` bullet per problem or frustration raised, with the specifics as stated.
+
+            WHAT TO CHANGE
+            The concrete process changes the team agreed to try.
+
+            ACTION ITEMS
+            The experiments or follow-ups carried into the next iteration — attribute them to the named owner where the transcript provides one.
             """,
             detectionKeyword: "retrospective",
             isBuiltIn: true
@@ -174,7 +232,24 @@ enum MeetingTypeRegistry {
             displayName: "Client call",
             detail: "A call with a customer or client",
             template: """
-            This is a client call. Capture the client's stated needs, concerns and asks; what was agreed in response; commitments either side made; and any open questions the team still owes the client. Record the specific facts stated, exactly as given — budgets and prices, team sizes and org structure on the client's side, named products, systems and vendors, volumes and metrics, dates and deadlines. Decisions list concrete agreements (scope, price, timeline, deliverables). Attribute action items to their owner — when the transcript clearly puts a follow-up on the team's side ("we'll send the proposal", "I'll get back to you"), record that owner exactly as named.
+            This is a client call. Record the specific facts stated, exactly as given — budgets and prices, team sizes and org structure on the client's side, named products, systems and vendors, volumes and metrics, dates and deadlines.
+
+            SUMMARY
+
+            CLIENT ASKS
+            The client's stated needs, concerns and asks, as plain `-` bullets, each with what was agreed in response.
+
+            DISCUSSION
+            The rest of the substance — context shared, options explored, commitments either side made.
+
+            DECISIONS
+            Concrete agreements: scope, price, timeline, deliverables.
+
+            ACTION ITEMS
+            Attribute action items to their owner — when the transcript clearly puts a follow-up on the team's side ("we'll send the proposal", "I'll get back to you"), record that owner exactly as named.
+
+            OPEN QUESTIONS
+            Anything the team still owes the client an answer on. Omit the section when there are none.
             """,
             detectionKeyword: "client-call",
             isBuiltIn: true
@@ -184,7 +259,19 @@ enum MeetingTypeRegistry {
             displayName: "Brainstorm",
             detail: "Open idea generation around a problem",
             template: """
-            This is a brainstorm. In the Summary and Discussion, describe the question or problem explored and the directions the ideas clustered around — not every idea individually. Decisions list anything the group explicitly committed to pursue or ruled out (often none — that's fine, omit the section). Action items capture concrete next steps named in the meeting (write up the top three, prototype direction X, schedule a follow-up) with their owner.
+            This is a brainstorm.
+
+            SUMMARY
+            The question or problem explored.
+
+            IDEAS
+            The directions the ideas clustered around — one `-` bullet per direction with the strongest ideas under it, not every idea individually.
+
+            DECISIONS
+            Anything the group explicitly committed to pursue or ruled out. Often none — that's fine, omit the section.
+
+            ACTION ITEMS
+            Concrete next steps named in the meeting (write up the top three, prototype direction X, schedule a follow-up) with their owner.
             """,
             detectionKeyword: "brainstorm",
             isBuiltIn: true
@@ -194,7 +281,18 @@ enum MeetingTypeRegistry {
             displayName: "Talk / lecture",
             detail: "A talk or lecture by a single presenter",
             template: """
-            This is a talk or lecture by a single presenter. In the Discussion, summarise the main thesis and the supporting points in roughly the order presented, plus any examples or anecdotes that carried the argument. Decisions and Action items are usually empty — talks teach rather than commit; omit those sections unless the speaker explicitly announces a decision or assigns work to attendees.
+            This is a talk or lecture by a single presenter.
+
+            SUMMARY
+
+            KEY POINTS
+            The main thesis and the supporting points in roughly the order presented, plus any examples or anecdotes that carried the argument.
+
+            DECISIONS
+            Usually empty — talks teach rather than commit. Include the section only when the speaker explicitly announces a decision.
+
+            ACTION ITEMS
+            Usually empty. Include the section only when the speaker explicitly assigns work to attendees.
             """,
             detectionKeyword: "lecture",
             isBuiltIn: true
@@ -204,7 +302,21 @@ enum MeetingTypeRegistry {
             displayName: "Conversation / podcast",
             detail: "A discussion you're only listening to (podcast, panel, recorded chat)",
             template: """
-            This is a conversation you're listening in on rather than taking part in — a podcast, panel, interview, or recorded discussion between other people. You're an observer, not a participant: there's usually no "Me", and no action items for you. In the Summary and Discussion, capture the substance — the main topics, the key points each speaker made (attributed by name where the transcript names them), where they agreed or disagreed, the conclusions or takeaways, and any notable facts, recommendations or stories — with specific figures, names and stats recorded exactly as stated, not rounded or generalised. Omit the Decisions and Action items sections unless a speaker explicitly states a decision or a concrete next step of their own; never invent action items for the listener.
+            This is a conversation you're listening in on rather than taking part in — a podcast, panel, interview, or recorded discussion between other people. You're an observer, not a participant: there's usually no "Me", and no action items for you. Record specific figures, names and stats exactly as stated, not rounded or generalised.
+
+            SUMMARY
+
+            DISCUSSION
+            The substance — the main topics, the key points each speaker made (attributed by name where the transcript names them), where they agreed or disagreed, and any notable facts, recommendations or stories.
+
+            TAKEAWAYS
+            The conclusions or takeaways the speakers landed on. Omit the section when the conversation didn't conclude anything.
+
+            DECISIONS
+            Omit unless a speaker explicitly states a decision of their own.
+
+            ACTION ITEMS
+            Omit unless a speaker explicitly states a concrete next step of their own — never invent action items for the listener.
             """,
             detectionKeyword: "conversation",
             isBuiltIn: true
