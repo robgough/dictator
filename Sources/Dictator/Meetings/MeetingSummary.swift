@@ -114,9 +114,18 @@ enum MeetingSummaryService {
         // applies here. Long/normal meetings keep the full section contract.
         let isShort = isShortMeeting(durationSeconds: meta.durationSeconds, segments: segments)
         let definition = MeetingTypeRegistry.definition(for: resolvedType, settings: settings)
-        let prompt = isShort
+        var prompt = isShort
             ? settings.effectiveCompactMeetingSummaryPrompt(for: definition)
             : settings.effectiveMeetingSummaryPrompt(for: definition)
+
+        // The per-meeting one-off instruction stacks LAST — on top of the
+        // base prompt, the type template, and the global user addendum — so
+        // "this run only" steering wins any conflict with the standing
+        // configuration. Applies to both the single-pass and map-reduce
+        // paths (same system prompt feeds both).
+        if let oneOff = meta.oneOffPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !oneOff.isEmpty {
+            prompt += "\n\nONE-OFF INSTRUCTIONS FOR THIS MEETING (highest priority — apply on top of everything above):\n" + oneOff
+        }
 
         let rendered = renderSegments(segments, speakers: meta.speakers)
         let approxTokens = rendered.count / 4

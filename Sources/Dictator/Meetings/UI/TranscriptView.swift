@@ -758,6 +758,7 @@ private struct NotesPanel: View {
     let meta: MeetingMeta
     var onSeek: ((Double) -> Void)?
     @State private var assistant = MeetingAssistantController()
+    @State private var showTuneSheet = false
 
     /// There's something for the assistant to act on — notes exist and an LLM
     /// is configured. Gates both the prominent button and the hotkey hint.
@@ -784,6 +785,10 @@ private struct NotesPanel: View {
                 }
                 if let notes = meta.notes, let type = notes.meetingType {
                     meetingTypeChip(type: type, detected: notes.meetingTypeWasDetected ?? false)
+                }
+                if meta.oneOffPrompt != nil {
+                    MeetingChip("Tuned", tone: .accent, systemImage: "slider.horizontal.3")
+                        .help("A one-off instruction is set for this meeting's notes. Edit or clear it under Re-run ▾ → Tune this run.")
                 }
                 Spacer()
                 if canUseAssistant {
@@ -834,6 +839,9 @@ private struct NotesPanel: View {
         }
         .sheet(isPresented: $assistant.isPresented) {
             NotesAssistantSheet(assistant: assistant)
+        }
+        .sheet(isPresented: $showTuneSheet) {
+            TuneRunSheet(session: session)
         }
     }
 
@@ -953,6 +961,16 @@ private struct NotesPanel: View {
                     }
                 }
             }
+            Divider()
+            Button {
+                showTuneSheet = true
+            } label: {
+                if meta.oneOffPrompt == nil {
+                    Label("Tune this run…", systemImage: "slider.horizontal.3")
+                } else {
+                    Label("Tune this run… (active)", systemImage: "slider.horizontal.3")
+                }
+            }
         } label: {
             Label(primaryLabel, systemImage: "wand.and.stars")
         } primaryAction: {
@@ -974,6 +992,64 @@ private struct NotesPanel: View {
         MeetingsStore.shared.setMeetingType(id: meta.id, type: type)
         session.meta.meetingType = type
         Task { await session.generateNotes(settings: state.settings) }
+    }
+}
+
+/// "Tune this run" — a one-off instruction for this meeting's notes pass,
+/// layered on top of the standing prompt stack (base + type template +
+/// global addendum). Persisted on the meeting, so re-opening the sheet
+/// pre-loads the previous instruction: tweak → run → tweak again is the
+/// intended loop. Clearing the text and running removes the instruction.
+private struct TuneRunSheet: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
+    let session: MeetingSession
+    @State private var text: String
+
+    init(session: MeetingSession) {
+        self.session = session
+        _text = State(initialValue: session.meta.oneOffPrompt ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Tune this run")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Run") {
+                    session.setOneOffPrompt(text)
+                    dismiss()
+                    Task { await session.generateNotes(settings: state.settings) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("A one-off instruction for this meeting's notes — applied on top of the style and your standing prompt settings, just for this meeting. It's remembered here so you can tweak it and re-run until the notes are right. Clear the text and run to remove it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextEditor(text: $text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+                if !text.isEmpty {
+                    HStack {
+                        Button("Clear") { text = "" }
+                            .controlSize(.small)
+                        Spacer()
+                    }
+                }
+            }
+            .padding()
+        }
+        .frame(width: 520, height: 360)
     }
 }
 

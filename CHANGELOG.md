@@ -14,6 +14,7 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Create your own meeting note styles: a new Note styles list in Settings → Meetings lets you define exactly which sections your notes should have using a simple template — ALL-CAPS lines name the sections, the text under each tells the model what belongs there. Built-in styles can be duplicated as a starting point, and custom styles show up everywhere a style can be picked, including auto-detect.
+- Tune a single meeting's notes without touching your settings: Re-run ▾ → Tune this run takes a one-off instruction ("focus on the budget discussion", "write it in French") applied on top of the style for that meeting only. The instruction is remembered per meeting, so you can keep tweaking and re-running until the notes are right.
 - Dictation no longer gets stuck on "Connecting" when the audio system is slow to respond — every step of mic startup is now time-boxed, retrying once and then falling back to the system default instead of waiting forever.
 - Starting dictation with the same mic as last time skips a round of audio-system queries, so recording starts faster and more reliably on USB mics.
 

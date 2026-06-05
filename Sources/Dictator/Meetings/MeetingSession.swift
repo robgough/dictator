@@ -553,6 +553,18 @@ final class MeetingSession: Identifiable {
         }
     }
 
+    /// Persist the per-meeting one-off instruction (see `MeetingMeta.oneOffPrompt`).
+    /// Empty/whitespace clears it. Kept around after the run so re-opening the
+    /// "Tune this run" sheet pre-loads the previous instruction to iterate on.
+    func setOneOffPrompt(_ prompt: String) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newValue: String? = trimmed.isEmpty ? nil : trimmed
+        guard meta.oneOffPrompt != newValue else { return }
+        meta.oneOffPrompt = newValue
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+    }
+
     /// Persist a user edit to the notes markdown. Keeps the model/time/`isFinal`
     /// stamps from the existing notes — only the body changes. No-op when there
     /// are no notes to edit or the text is unchanged.

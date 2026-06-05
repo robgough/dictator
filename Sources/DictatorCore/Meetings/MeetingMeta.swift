@@ -83,6 +83,12 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// Stored as a bare-string id so a since-deleted custom type still
     /// decodes — resolution happens in `MeetingTypeRegistry`.
     var meetingType: MeetingTypeID
+    /// One-off instruction for this meeting's notes pass — layered on top of
+    /// the base prompt, the type template, and the global user addendum
+    /// (highest priority, never a replacement). Persisted so re-opening the
+    /// "Tune this run" sheet pre-loads the last instruction and the user can
+    /// iterate on it. nil/empty means no extra steering.
+    var oneOffPrompt: String?
     /// When the user last edited the speaker roster by hand (rename / merge).
     /// The notes panel compares this against `notes.generatedAt` to prompt a
     /// re-run — notes written before the edit still carry the old names.
@@ -104,6 +110,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         rawNotes: MeetingNotes? = nil,
         summary: MeetingSummaryResult? = nil,
         meetingType: MeetingTypeID = .auto,
+        oneOffPrompt: String? = nil,
         speakersEditedAt: Date? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
@@ -119,6 +126,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.rawNotes = rawNotes
         self.summary = summary
         self.meetingType = meetingType
+        self.oneOffPrompt = oneOffPrompt
         self.speakersEditedAt = speakersEditedAt
         self.schemaVersion = schemaVersion
     }
@@ -142,13 +150,14 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.rawNotes = try c.decodeIfPresent(MeetingNotes.self, forKey: .rawNotes)
         self.summary = try c.decodeIfPresent(MeetingSummaryResult.self, forKey: .summary)
         self.meetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .meetingType) ?? .auto
+        self.oneOffPrompt = try c.decodeIfPresent(String.self, forKey: .oneOffPrompt)
         self.speakersEditedAt = try c.decodeIfPresent(Date.self, forKey: .speakersEditedAt)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
-        case audioFiles, speakers, notes, rawNotes, summary, meetingType, speakersEditedAt, schemaVersion
+        case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only
