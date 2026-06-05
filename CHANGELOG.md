@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Create your own meeting note styles: a new Note styles list in Settings → Meetings lets you define exactly which sections your notes should have using a simple template — ALL-CAPS lines name the sections, the text under each tells the model what belongs there. Built-in styles can be duplicated as a starting point, and custom styles show up everywhere a style can be picked, including auto-detect.
 - Dictation no longer gets stuck on "Connecting" when the audio system is slow to respond — every step of mic startup is now time-boxed, retrying once and then falling back to the system default instead of waiting forever.
 - Starting dictation with the same mic as last time skips a round of audio-system queries, so recording starts faster and more reliably on USB mics.
 

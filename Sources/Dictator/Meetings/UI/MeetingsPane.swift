@@ -9,6 +9,7 @@ import SwiftUI
 struct MeetingsPane: View {
     @Environment(AppState.self) private var state
     @State private var showSummaryPromptSheet = false
+    @State private var typeEditor: MeetingTypeEditorMode?
 
     var body: some View {
         @Bindable var s = state
@@ -138,6 +139,27 @@ struct MeetingsPane: View {
             .disabled(!effectivelyEnabled)
 
             Section {
+                ForEach(MeetingTypeRegistry.builtIns) { def in
+                    typeRow(def)
+                }
+                ForEach(s.settings.customMeetingTypes) { def in
+                    typeRow(def)
+                }
+                Button {
+                    typeEditor = .create(seed: nil)
+                } label: {
+                    Label("New style…", systemImage: "plus")
+                }
+            } header: {
+                Text("Note styles")
+            } footer: {
+                Text("Each style is a template: ALL-CAPS lines name the sections the notes should have, and the text under each header tells the model what belongs there. Built-in styles can't be edited, but Duplicate gives you an editable copy to start from. Deleting a style is safe — meetings that used it keep their notes, and re-running them just falls back to the generic style.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!effectivelyEnabled)
+
+            Section {
                 Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -169,6 +191,59 @@ struct MeetingsPane: View {
         .sheet(isPresented: $showSummaryPromptSheet) {
             SummaryPromptSheet(isPresented: $showSummaryPromptSheet)
         }
+        .sheet(item: $typeEditor) { mode in
+            MeetingTypeEditorSheet(mode: mode) { source in
+                typeEditor = .create(seed: source)
+            }
+        }
+    }
+
+    /// One row in the Note styles list — name + description, with the
+    /// actions that fit the type: built-ins are viewable and duplicable,
+    /// customs editable and deletable. Deleting a style that's still set
+    /// as the default falls the default back to Auto-detect.
+    @ViewBuilder
+    private func typeRow(_ def: MeetingTypeDefinition) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(def.displayName)
+                if !def.detail.isEmpty {
+                    Text(def.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if def.isBuiltIn {
+                Button("View") { typeEditor = .view(def) }
+                    .controlSize(.small)
+                Button {
+                    typeEditor = .create(seed: def)
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .controlSize(.small)
+                .help("Duplicate this style as an editable copy.")
+            } else {
+                Button("Edit") { typeEditor = .edit(def) }
+                    .controlSize(.small)
+                Button(role: .destructive) {
+                    deleteType(def)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .controlSize(.small)
+                .help("Delete this style. Meetings that used it keep their notes.")
+            }
+        }
+    }
+
+    private func deleteType(_ def: MeetingTypeDefinition) {
+        state.settings.customMeetingTypes.removeAll { $0.id == def.id }
+        if state.settings.defaultMeetingType == def.meetingTypeID {
+            state.settings.defaultMeetingType = .auto
+        }
+        state.save()
     }
 }
 
