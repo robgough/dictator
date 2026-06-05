@@ -70,7 +70,7 @@ enum MeetingSummaryService {
         transcript: MeetingTranscript,
         meta: MeetingMeta,
         settings: DictatorSettings,
-        meetingType: MeetingType? = nil
+        meetingType: MeetingTypeID? = nil
     ) async throws -> MeetingNotes {
         guard let engine = settings.activeLLMEngine() else {
             throw SummaryError.llmDisabled
@@ -83,7 +83,7 @@ enum MeetingSummaryService {
         // Resolve the conversational shape these notes are written for, and
         // record whether we had to auto-detect it (vs the user or their
         // install-wide default configuring it) so the UI can label the result.
-        var resolvedType: MeetingType = {
+        var resolvedType: MeetingTypeID = {
             if let explicit = meetingType { return explicit }
             if meta.meetingType != .auto { return meta.meetingType }
             return settings.defaultMeetingType
@@ -113,9 +113,10 @@ enum MeetingSummaryService {
         // is always well under the single-pass budget, so map-reduce never
         // applies here. Long/normal meetings keep the full section contract.
         let isShort = isShortMeeting(durationSeconds: meta.durationSeconds, segments: segments)
+        let definition = MeetingTypeRegistry.definition(for: resolvedType, settings: settings)
         let prompt = isShort
-            ? settings.effectiveCompactMeetingSummaryPrompt(for: resolvedType)
-            : settings.effectiveMeetingSummaryPrompt(for: resolvedType)
+            ? settings.effectiveCompactMeetingSummaryPrompt(for: definition)
+            : settings.effectiveMeetingSummaryPrompt(for: definition)
 
         let rendered = renderSegments(segments, speakers: meta.speakers)
         let approxTokens = rendered.count / 4
@@ -242,10 +243,10 @@ enum MeetingSummaryService {
             "WINDOW \(idx + 1) OF \(partials.count):\n\(body)"
         }.joined(separator: "\n\n---\n\n")
 
-        var instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order. Merge them into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including any type-specific ones such as `## Company` or `## Candidate`) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows; only collapse genuine duplicates. Do NOT shorten for brevity — a long meeting must yield thorough notes. Output ONLY the merged Markdown."
+        var instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order. Merge them into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including every type-specific section the system prompt defines for this meeting type) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows; only collapse genuine duplicates. Do NOT shorten for brevity — a long meeting must yield thorough notes. Output ONLY the merged Markdown."
         if let rawOutline, !rawOutline.isEmpty {
             merged += "\n\n--- ROUGH LIVE OUTLINE (captured live with only coarse \"Me\"/\"Them\" labels; topic hints only — it may attribute points to the wrong person) ---\n\(rawOutline)"
-            instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order, followed by a rough live outline captured during the meeting. Merge the windows into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including any type-specific ones such as `## Company` or `## Candidate`) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows. Use the live outline ONLY as a checklist of topics so you don't drop a subject the windows covered — it was captured with coarse \"Me\"/\"Them\" labels and may credit points to the wrong person, so NEVER take an owner or attribution from it; the per-window notes (derived from the named transcript) are the sole authority for who said or owns what. Only collapse genuine duplicates; do NOT shorten for brevity. Output ONLY the merged Markdown."
+            instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order, followed by a rough live outline captured during the meeting. Merge the windows into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including every type-specific section the system prompt defines for this meeting type) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows. Use the live outline ONLY as a checklist of topics so you don't drop a subject the windows covered — it was captured with coarse \"Me\"/\"Them\" labels and may credit points to the wrong person, so NEVER take an owner or attribution from it; the per-window notes (derived from the named transcript) are the sole authority for who said or owns what. Only collapse genuine duplicates; do NOT shorten for brevity. Output ONLY the merged Markdown."
         }
 
         let finalResult = try await engine.assist(
@@ -364,32 +365,18 @@ enum MeetingSummaryService {
 
     // MARK: - Meeting-type detection
 
-    /// Concrete types the auto-detector may choose, paired with the keyword the
-    /// classification prompt asks the model to emit. Excludes `.auto` (the thing
-    /// we're resolving) and `.other` (a deliberate "don't bias" choice the model
-    /// shouldn't reach for).
-    private nonisolated static let detectionOptions: [(keyword: String, type: MeetingType)] = [
-        ("one-on-one", .oneOnOne),
-        ("standup", .standup),
-        ("team-meeting", .teamMeeting),
-        ("planning", .planning),
-        ("retrospective", .retrospective),
-        ("interview", .interview),
-        ("client-call", .clientCall),
-        ("brainstorm", .brainstorm),
-        ("lecture", .lecture),
-        ("conversation", .conversation),
-    ]
-
-    /// Classify the transcript into one concrete `MeetingType` via a short LLM
-    /// call over the transcript lead (same shape as `suggestTitle`). Returns nil
-    /// when there's no engine, the transcript is empty, or the reply doesn't map
-    /// to a known type — the caller then keeps the generic auto behaviour.
+    /// Classify the transcript into one concrete meeting type via a short LLM
+    /// call over the transcript lead (same shape as `suggestTitle`). The
+    /// candidate list comes from the registry, so the user's custom types
+    /// compete alongside the built-ins — their `detail` line is what the
+    /// classifier sees. Returns nil when there's no engine, the transcript is
+    /// empty, or the reply doesn't map to a known type — the caller then
+    /// keeps the generic auto behaviour.
     static func detectMeetingType(
         transcript: MeetingTranscript,
         meta: MeetingMeta,
         settings: DictatorSettings
-    ) async -> MeetingType? {
+    ) async -> MeetingTypeID? {
         guard let engine = settings.activeLLMEngine() else { return nil }
         let segments = transcript.segments
         guard !segments.isEmpty else { return nil }
@@ -397,6 +384,7 @@ enum MeetingSummaryService {
         // The lead carries the framing (greetings, agenda, who's present); cap
         // it so we don't pay for the whole meeting just to label it.
         let lead = String(renderSegments(segments, speakers: meta.speakers).prefix(4_000))
+        let candidates = MeetingTypeRegistry.detectionCandidates(settings: settings)
 
         let result: AssistantResult
         do {
@@ -404,7 +392,7 @@ enum MeetingSummaryService {
             result = try await engine.assist(
                 selection: lead,
                 instruction: "Classify this meeting. Output ONLY the single best-matching keyword from the list in the system prompt — nothing else.",
-                systemPrompt: typeDetectionPrompt,
+                systemPrompt: typeDetectionPrompt(candidates: candidates),
                 priorTurns: [],
                 summary: nil,
                 cancellation: { Task.isCancelled }
@@ -412,48 +400,51 @@ enum MeetingSummaryService {
         } catch {
             return nil
         }
-        return parseDetectedType(result.text)
+        return parseDetectedType(result.text, candidates: candidates)
     }
 
-    /// Map the model's reply to a `MeetingType`. Lenient: lowercases, keeps
-    /// letters only, and matches against each option's keyword or the type's
-    /// rawValue, so "interview", "Interview", and "This is an interview." all
-    /// land on `.interview`.
-    nonisolated static func parseDetectedType(_ raw: String) -> MeetingType? {
+    /// Map the model's reply to a candidate's id. Lenient: lowercases, keeps
+    /// letters only, and matches against each candidate's detection keyword,
+    /// id, or display name, so "interview", "Interview", and "This is an
+    /// interview." all land on `.interview`. Built-ins come first in the
+    /// candidate list, so they win any ambiguity against a similarly-named
+    /// custom type.
+    nonisolated static func parseDetectedType(_ raw: String, candidates: [MeetingTypeDefinition]) -> MeetingTypeID? {
         let norm = LLMTextUtilities.clean(raw).lowercased().filter { $0.isLetter }
         guard !norm.isEmpty else { return nil }
         let lettersOnly: (String) -> String = { $0.lowercased().filter { $0.isLetter } }
+        let targets: (MeetingTypeDefinition) -> [String] = {
+            [$0.effectiveDetectionKeyword, $0.id, $0.displayName].map(lettersOnly).filter { !$0.isEmpty }
+        }
         // Exact match first — a clean one-word reply (the prompted shape) should
         // never lose to a substring hit elsewhere in the list.
-        for (keyword, type) in detectionOptions where norm == lettersOnly(keyword) || norm == lettersOnly(type.rawValue) {
-            return type
+        for candidate in candidates where targets(candidate).contains(norm) {
+            return candidate.meetingTypeID
         }
         // Lenient fallback for a verbose reply ("This is an interview").
-        for (keyword, type) in detectionOptions where norm.contains(lettersOnly(keyword)) || norm.contains(lettersOnly(type.rawValue)) {
-            return type
+        for candidate in candidates where targets(candidate).contains(where: { norm.contains($0) }) {
+            return candidate.meetingTypeID
         }
         return nil
     }
 
-    /// Standalone system prompt for the classification call. Not a user-facing
+    /// Standalone system prompt for the classification call, built from the
+    /// live candidate list so custom types participate. Not a user-facing
     /// setting — the surface is already crowded and the mapping is narrow.
-    private static let typeDetectionPrompt = """
-    You label a meeting transcript with the single category that best fits it.
+    nonisolated static func typeDetectionPrompt(candidates: [MeetingTypeDefinition]) -> String {
+        let options = candidates.map { candidate in
+            let description = candidate.detail.isEmpty ? candidate.displayName : candidate.detail
+            return "- \(candidate.effectiveDetectionKeyword) — \(description)"
+        }.joined(separator: "\n")
+        return """
+        You label a meeting transcript with the single category that best fits it.
 
-    Choose exactly one keyword from this list (output the keyword on the left, lowercase, nothing else):
-    - one-on-one — a 1:1 between two people
-    - standup — a quick status round: what each person did, is doing, and any blockers
-    - team-meeting — a general team or group meeting
-    - planning — scoping work: deliverables, dates, owners
-    - retrospective — what went well, what didn't, what to change
-    - interview — a job interview (interviewer and candidate)
-    - client-call — a call with a customer or client
-    - brainstorm — open idea generation around a problem
-    - lecture — a talk or lecture by a single presenter
-    - conversation — a discussion you're only listening to (podcast, panel, recorded chat)
+        Choose exactly one keyword from this list (output the keyword on the left, lowercase, nothing else):
+        \(options)
 
-    Output ONLY the one keyword. No punctuation, no explanation. If it's genuinely unclear, output: team-meeting
-    """
+        Output ONLY the one keyword. No punctuation, no explanation. If it's genuinely unclear, output: team-meeting
+        """
+    }
 
     // MARK: - Title suggestion
 

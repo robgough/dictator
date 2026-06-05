@@ -76,11 +76,13 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// kept so meetings recorded before the markdown-notes switch still render
     /// and export. Old meetings decode this; new meetings leave it nil.
     var summary: MeetingSummaryResult?
-    /// Conversational shape of the meeting (1-on-1, stand-up, retro, …).
-    /// Drives which prompt addendum the summary pass tacks on. `.auto`
-    /// lets the model decide from the transcript; older meta.json blobs
-    /// that pre-date this field decode as `.auto`.
-    var meetingType: MeetingType
+    /// Conversational shape of the meeting (1-on-1, stand-up, retro, or a
+    /// user-defined custom type). Drives which notes template the summary
+    /// pass compiles in. `.auto` lets the model decide from the transcript;
+    /// older meta.json blobs that pre-date this field decode as `.auto`.
+    /// Stored as a bare-string id so a since-deleted custom type still
+    /// decodes — resolution happens in `MeetingTypeRegistry`.
+    var meetingType: MeetingTypeID
     /// When the user last edited the speaker roster by hand (rename / merge).
     /// The notes panel compares this against `notes.generatedAt` to prompt a
     /// re-run — notes written before the edit still carry the old names.
@@ -101,7 +103,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         notes: MeetingNotes? = nil,
         rawNotes: MeetingNotes? = nil,
         summary: MeetingSummaryResult? = nil,
-        meetingType: MeetingType = .auto,
+        meetingType: MeetingTypeID = .auto,
         speakersEditedAt: Date? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
@@ -139,7 +141,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.notes = try c.decodeIfPresent(MeetingNotes.self, forKey: .notes)
         self.rawNotes = try c.decodeIfPresent(MeetingNotes.self, forKey: .rawNotes)
         self.summary = try c.decodeIfPresent(MeetingSummaryResult.self, forKey: .summary)
-        self.meetingType = try c.decodeIfPresent(MeetingType.self, forKey: .meetingType) ?? .auto
+        self.meetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .meetingType) ?? .auto
         self.speakersEditedAt = try c.decodeIfPresent(Date.self, forKey: .speakersEditedAt)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }

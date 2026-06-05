@@ -118,8 +118,8 @@ struct MeetingsPane: View {
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }
                 )) {
-                    ForEach(MeetingType.allCases, id: \.self) { type in
-                        Text(type.displayName).tag(type)
+                    ForEach(MeetingTypeRegistry.all(settings: s.settings)) { def in
+                        Text(def.displayName).tag(def.meetingTypeID)
                     }
                 }
                 .pickerStyle(.menu)

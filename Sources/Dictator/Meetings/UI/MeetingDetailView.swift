@@ -407,8 +407,8 @@ struct LiveRecordingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Picker("Notes style", selection: $session.meta.meetingType) {
-                ForEach(MeetingType.allCases, id: \.self) { type in
-                    Text(type.displayName).tag(type)
+                ForEach(MeetingTypeRegistry.all(settings: state.settings)) { def in
+                    Text(def.displayName).tag(def.meetingTypeID)
                 }
             }
             .labelsHidden()

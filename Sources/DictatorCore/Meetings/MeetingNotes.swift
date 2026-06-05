@@ -31,7 +31,7 @@ struct MeetingNotes: Codable, Equatable, Sendable {
     /// meeting was left on Auto. nil for notes written before this field
     /// existed, or when auto-detection couldn't decide (the generic prompt ran).
     /// Optional so old `meta.json` blobs decode unchanged.
-    var meetingType: MeetingType?
+    var meetingType: MeetingTypeID?
     /// True when `meetingType` came from auto-detection rather than a type the
     /// user (or their install-wide default) had configured. Lets the UI say
     /// "detected" vs just showing the configured shape. nil/false on old notes.
@@ -42,7 +42,7 @@ struct MeetingNotes: Codable, Equatable, Sendable {
         modelID: String,
         generatedAt: Date,
         isFinal: Bool,
-        meetingType: MeetingType? = nil,
+        meetingType: MeetingTypeID? = nil,
         meetingTypeWasDetected: Bool? = nil
     ) {
         self.markdown = markdown

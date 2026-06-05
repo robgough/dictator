@@ -62,7 +62,7 @@ final class MeetingsStore {
     /// in-memory meta in lockstep, then kicks off a re-summary that
     /// reads the new type. Silent no-op for unknown ids or when the
     /// type is unchanged.
-    func setMeetingType(id: UUID, type: MeetingType) {
+    func setMeetingType(id: UUID, type: MeetingTypeID) {
         guard let idx = metas.firstIndex(where: { $0.id == id }) else { return }
         guard metas[idx].meetingType != type else { return }
         metas[idx].meetingType = type

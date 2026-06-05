@@ -843,9 +843,9 @@ private struct NotesPanel: View {
     /// names). Tapping nothing here; it's informational. Sits beside the Notes
     /// header so it's the first thing read after "Notes".
     @ViewBuilder
-    private func meetingTypeChip(type: MeetingType, detected: Bool) -> some View {
+    private func meetingTypeChip(type: MeetingTypeID, detected: Bool) -> some View {
         MeetingChip(
-            type.displayName,
+            MeetingTypeRegistry.displayName(for: type, settings: state.settings),
             tone: detected ? .accent : .neutral,
             systemImage: detected ? "sparkles" : nil
         )
@@ -941,14 +941,14 @@ private struct NotesPanel: View {
 
         Menu {
             Section("Notes for") {
-                ForEach(MeetingType.allCases, id: \.self) { type in
+                ForEach(MeetingTypeRegistry.all(settings: state.settings)) { def in
                     Button {
-                        generateNotes(as: type)
+                        generateNotes(as: def.meetingTypeID)
                     } label: {
-                        if type == meta.meetingType {
-                            Label(type.displayName, systemImage: "checkmark")
+                        if def.meetingTypeID == meta.meetingType {
+                            Label(def.displayName, systemImage: "checkmark")
                         } else {
-                            Text(type.displayName)
+                            Text(def.displayName)
                         }
                     }
                 }
@@ -970,7 +970,7 @@ private struct NotesPanel: View {
     /// immediately. The store write persists meta.json; the in-session
     /// mutation makes sure the next `generateNotes` resolves the new type
     /// without round-tripping via the store.
-    private func generateNotes(as type: MeetingType) {
+    private func generateNotes(as type: MeetingTypeID) {
         MeetingsStore.shared.setMeetingType(id: meta.id, type: type)
         session.meta.meetingType = type
         Task { await session.generateNotes(settings: state.settings) }

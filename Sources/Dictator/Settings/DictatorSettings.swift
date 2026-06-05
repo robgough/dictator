@@ -215,7 +215,13 @@ struct DictatorSettings: Codable, Equatable {
     /// detail page). Synced across Macs because the right default
     /// depends on what kind of meetings the user typically records, not
     /// on which Mac is doing the recording.
-    var defaultMeetingType: MeetingType = .auto
+    var defaultMeetingType: MeetingTypeID = .auto
+
+    /// User-created meeting types, each defining the sections their notes
+    /// should have (see `MeetingTypeDefinition`). Listed after the built-ins
+    /// everywhere a type can be picked. Synced across Macs — a custom notes
+    /// style is a personal preference, not hardware-dependent.
+    var customMeetingTypes: [MeetingTypeDefinition] = []
 
     /// When true, MeetingProcessor runs a post-transcription dedup pass that
     /// drops mic-track words within ±300 ms of an identical (or near-identical)
@@ -401,7 +407,8 @@ struct DictatorSettings: Codable, Equatable {
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
-        self.defaultMeetingType = try c.decodeIfPresent(MeetingType.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
+        self.defaultMeetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
+        self.customMeetingTypes = try c.decodeIfPresent([MeetingTypeDefinition].self, forKey: .customMeetingTypes) ?? d.customMeetingTypes
         self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
         self.meetingsEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingsEnabled) ?? d.meetingsEnabled
     }
@@ -526,18 +533,20 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     /// Resolved meeting summary prompt biased toward a specific meeting
-    /// shape (stand-up, retro, 1-on-1, …). Override still wins outright —
-    /// if the user has replaced the built-in wholesale they're in full
-    /// control and the type addendum is intentionally ignored. Otherwise
-    /// the prompt stacks as `builtin + type addendum + user addendum`,
-    /// so a user "always use British spelling" addendum continues to
-    /// apply on top of the per-type steer.
-    func effectiveMeetingSummaryPrompt(for type: MeetingType) -> String {
+    /// shape (stand-up, retro, a custom type, …). Override still wins
+    /// outright — if the user has replaced the built-in wholesale they're in
+    /// full control and the type's compiled template is intentionally
+    /// ignored. Otherwise the prompt stacks as `builtin + compiled type
+    /// template + user addendum`, so a user "always use British spelling"
+    /// addendum continues to apply on top of the per-type steer. The caller
+    /// resolves the definition via `MeetingTypeRegistry` — settings stays
+    /// registry-free.
+    func effectiveMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
         if let override = meetingSummaryPromptOverride { return override }
         var stitched = Self.builtinMeetingSummaryPrompt
-        let typeAddendum = type.promptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typeAddendum = MeetingTemplateCompiler.compile(definition)
         if !typeAddendum.isEmpty {
-            stitched += "\n\nMEETING TYPE: \(type.displayName)\n" + typeAddendum
+            stitched += "\n\n" + typeAddendum
         }
         let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
         if !userAddendum.isEmpty {
@@ -548,15 +557,15 @@ struct DictatorSettings: Codable, Equatable {
 
     /// Compact variant of `effectiveMeetingSummaryPrompt(for:)` used for very
     /// short meetings (see `builtinCompactMeetingSummaryPrompt`). Stacks the
-    /// same way — override wins outright; otherwise `compact builtin + type
-    /// addendum + user addendum` — so a user's "always British spelling" steer
-    /// and per-type bias keep applying on the short path too.
-    func effectiveCompactMeetingSummaryPrompt(for type: MeetingType) -> String {
+    /// same way — override wins outright; otherwise `compact builtin +
+    /// compiled type template + user addendum` — so a user's "always British
+    /// spelling" steer and per-type bias keep applying on the short path too.
+    func effectiveCompactMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
         if let override = meetingSummaryPromptOverride { return override }
         var stitched = Self.builtinCompactMeetingSummaryPrompt
-        let typeAddendum = type.promptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typeAddendum = MeetingTemplateCompiler.compile(definition)
         if !typeAddendum.isEmpty {
-            stitched += "\n\nMEETING TYPE: \(type.displayName)\n" + typeAddendum
+            stitched += "\n\n" + typeAddendum
         }
         let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
         if !userAddendum.isEmpty {
@@ -1153,6 +1162,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
         case defaultMeetingType
+        case customMeetingTypes
         case meetingDedupeMicEchoes
         case meetingsEnabled
     }
@@ -1187,6 +1197,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",
         "defaultMeetingType",
+        "customMeetingTypes",
     ]
 
     /// Keys that belong in the per-Mac file
