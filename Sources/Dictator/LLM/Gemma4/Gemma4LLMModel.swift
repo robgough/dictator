@@ -49,7 +49,29 @@ final class Gemma4LLMModel: Module, MLXLLM.LLMModel {
     }
 
     func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
-        Gemma4WeightSanitizer.sanitize(weights: weights)
+        var sanitized = Gemma4WeightSanitizer.sanitize(weights: weights)
+
+        // KV-shared layers never compute their own K/V, so Gemma4Attention
+        // builds no k/v projections for them. The QAT conversions drop those
+        // weights from the checkpoint accordingly — but the launch-day PTQ
+        // conversions still carry them as dead weights, and leaving them in
+        // the dict trips weight-verification on parameters no module owns.
+        let firstShared = config.firstKvSharedLayerIdx
+        if firstShared < config.numHiddenLayers && firstShared > 0 {
+            let prefix = "language_model.model.layers."
+            let deadModules = ["k_proj", "v_proj", "k_norm", "v_norm"]
+            sanitized = sanitized.filter { key, _ in
+                guard key.hasPrefix(prefix) else { return true }
+                let rest = key.dropFirst(prefix.count)
+                guard let dot = rest.firstIndex(of: "."),
+                      let layerIdx = Int(rest[..<dot]),
+                      layerIdx >= firstShared else { return true }
+                let tail = rest[rest.index(after: dot)...]
+                return !deadModules.contains { tail.hasPrefix("self_attn.\($0).") }
+            }
+        }
+
+        return sanitized
     }
 
     func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int? = nil) throws -> PrepareResult {

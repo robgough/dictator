@@ -29,12 +29,12 @@ final class Gemma4Attention: Module {
     let scale: Float
 
     @ModuleInfo(key: "q_proj") var qProj: Linear
-    @ModuleInfo(key: "k_proj") var kProj: Linear
+    @ModuleInfo(key: "k_proj") var kProj: Linear?
     @ModuleInfo(key: "v_proj") var vProj: Linear?
     @ModuleInfo(key: "o_proj") var oProj: Linear
     @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
-    @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
-    @ModuleInfo(key: "v_norm") var vNorm: RMSNormNoScale
+    @ModuleInfo(key: "k_norm") var kNorm: RMSNorm?
+    @ModuleInfo(key: "v_norm") var vNorm: RMSNormNoScale?
 
     let rope: Gemma4RoPEWrapper
 
@@ -66,22 +66,33 @@ final class Gemma4Attention: Module {
 
         self.scale = 1.0
 
+        // KV sharing. Decided before module construction: shared layers reuse
+        // the source layer's cached K/V at inference and never compute their
+        // own, so they get no k/v projections. The newer (QAT) conversions
+        // drop those weights from the checkpoint outright — building the
+        // modules here would fail the load with "k_proj.weight not found".
+        let firstKvSharedLayerIdx = config.firstKvSharedLayerIdx
+        self.isKvSharedLayer = layerIdx >= firstKvSharedLayerIdx && firstKvSharedLayerIdx > 0
+
         self._qProj.wrappedValue = Linear(dim, numHeads * headDim, bias: false)
         self._oProj.wrappedValue = Linear(numHeads * headDim, dim, bias: false)
         self._qNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
 
-        self._kProj.wrappedValue = Linear(dim, numKVHeads * headDim, bias: false)
-        if !useKEqV {
-            self._vProj.wrappedValue = Linear(dim, numKVHeads * headDim, bias: false)
-        } else {
+        if isKvSharedLayer {
+            self._kProj.wrappedValue = nil
             self._vProj.wrappedValue = nil
+            self._kNorm.wrappedValue = nil
+            self._vNorm.wrappedValue = nil
+        } else {
+            self._kProj.wrappedValue = Linear(dim, numKVHeads * headDim, bias: false)
+            if !useKEqV {
+                self._vProj.wrappedValue = Linear(dim, numKVHeads * headDim, bias: false)
+            } else {
+                self._vProj.wrappedValue = nil
+            }
+            self._kNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
+            self._vNorm.wrappedValue = RMSNormNoScale(eps: config.rmsNormEps)
         }
-        self._kNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
-        self._vNorm.wrappedValue = RMSNormNoScale(eps: config.rmsNormEps)
-
-        // KV sharing.
-        let firstKvSharedLayerIdx = config.firstKvSharedLayerIdx
-        self.isKvSharedLayer = layerIdx >= firstKvSharedLayerIdx && firstKvSharedLayerIdx > 0
 
         // RoPE variant for this attention type.
         let ropeTheta = config.ropeTheta(forLayerType: layerType)
@@ -153,32 +164,24 @@ final class Gemma4Attention: Module {
             effectiveOffset = cache.offset - L
             queries = rope(queries, offset: effectiveOffset)
 
-            // Read the decompressed K/V straight out of the cache.
+            // Read the decompressed K/V straight out of the cache. The cache
+            // is always populated by the source concrete layer earlier in
+            // this same forward; shared layers carry no k/v projections of
+            // their own (see init), so there is no compute-our-own fallback.
             let state = cache.state
-            if state.count >= 2 {
-                let output = MLXFast.scaledDotProductAttention(
-                    queries: queries,
-                    keys: state[0],
-                    values: state[1],
-                    scale: scale,
-                    mask: mask
-                )
-                .transposed(0, 2, 1, 3)
-                .reshaped(B, L, -1)
-                return (oProj(output), (state[0], state[1]), effectiveOffset)
+            guard state.count >= 2 else {
+                fatalError("KV-shared layer \(layerIdx) ran before its source layer populated the cache")
             }
-            // Fallback: compute our own KV (shouldn't happen in practice).
-            let kv = computeKV(x: x, B: B, L: L)
-            keys = kv.keys; values = kv.values
-            keys = rope(keys, offset: effectiveOffset)
-
-            let output = attentionWithCacheUpdate(
-                queries: queries, keys: keys, values: values,
-                cache: cache, scale: scale, mask: mask
+            let output = MLXFast.scaledDotProductAttention(
+                queries: queries,
+                keys: state[0],
+                values: state[1],
+                scale: scale,
+                mask: mask
             )
             .transposed(0, 2, 1, 3)
             .reshaped(B, L, -1)
-            return (oProj(output), (keys, values), effectiveOffset)
+            return (oProj(output), (state[0], state[1]), effectiveOffset)
         }
 
         // Non-shared: compute our own K/V.
@@ -210,6 +213,9 @@ final class Gemma4Attention: Module {
     private func computeKV(
         x: MLXArray, B: Int, L: Int
     ) -> (keys: MLXArray, values: MLXArray) {
+        guard let kProj, let kNorm, let vNorm else {
+            fatalError("computeKV called on KV-shared layer \(layerIdx) — it has no k/v projections")
+        }
         var keys = kProj(x).reshaped(B, L, numKVHeads, headDim)
 
         // K=V: values are the raw k_proj output (pre-k_norm).
