@@ -103,7 +103,7 @@ enum ModelCatalog {
         // affine 4-bit QAT. If MXFP4 misbehaves, gemma-4-E4B-it-qat-4bit is
         // the like-for-like affine fallback.
         .init(id: "mlx-community/gemma-4-E2B-it-qat-4bit", displayName: "Gemma 4 E2B QAT (4-bit)", approxSizeMB: 4400, approxRAMMB: 4000, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072),
-        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; fastest quant format", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; required for Meetings", contextWindowTokens: 131_072),
     ]
 
     /// Fallback context size when the active model id isn't in the catalog

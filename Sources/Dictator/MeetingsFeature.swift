@@ -15,29 +15,31 @@ import Foundation
 @MainActor
 enum MeetingsFeature {
     /// Whether Meetings is actually available: the user has opted into the
-    /// preview on this Mac AND a usable LLM exists to write the notes.
-    /// Meetings without an LLM is just an audio recorder with a transcript —
-    /// the notes/summary pass is the product — so a missing LLM disables
-    /// the feature outright rather than silently degrading it.
+    /// preview on this Mac AND the one LLM that writes acceptable meeting
+    /// notes is selected and downloaded. Meetings without that LLM is just
+    /// an audio recorder with a transcript — the notes/summary pass is the
+    /// product — so an unmet requirement disables the feature outright
+    /// rather than silently degrading it.
     static var isEnabled: Bool {
         AppState.shared.settings.meetingsEnabled && llmRequirementMessage == nil
     }
 
-    /// Nil when a usable LLM is configured; otherwise a user-facing
-    /// explanation of what's missing, surfaced on the Settings → Meetings
-    /// pane next to the (disabled) master toggle.
+    /// Nil when the required meetings LLM is selected and on disk;
+    /// otherwise a user-facing explanation of what's missing, surfaced on
+    /// the Settings → Meetings pane next to the (disabled) master toggle.
+    /// Meetings requires one specific model
+    /// (`ModelCatalog.meetingsRequiredLLMID`) — see the catalog constant
+    /// for the rationale — so any other engine/model combination, however
+    /// healthy, reads as "not configured for meetings".
     static var llmRequirementMessage: String? {
         let settings = AppState.shared.settings
-        switch settings.llmEngine {
-        case .none:
-            return "Meetings needs an on-device LLM to write its notes and summaries, and the LLM is currently set to None. Pick one under Settings → Models → Formatting."
-        case .apple:
-            if AppleFoundationAvailability.isUsable { return nil }
-            let reason = AppleFoundationAvailability.unavailableMessage ?? "Apple's foundation model is unavailable on this Mac."
-            return "Meetings needs a working LLM to write its notes and summaries. \(reason)"
-        case .mlx:
-            if ModelManager.shared.llmStates[settings.llmModelID] == .ready { return nil }
-            return "Meetings needs an on-device LLM to write its notes and summaries, and the selected model isn't downloaded on this Mac. Download it under Settings → Models → Formatting."
+        let required = ModelCatalog.meetingsRequiredLLMName
+        guard settings.meetingsLLMSatisfied else {
+            return "Meetings needs \(required) to write its notes — it's the only model that handles a full meeting transcript reliably. Select it under Settings → Models → Formatting."
         }
+        guard ModelManager.shared.llmStates[settings.llmModelID] == .ready else {
+            return "Meetings needs \(required), which isn't downloaded on this Mac yet. Download it under Settings → Models → Formatting."
+        }
+        return nil
     }
 }
