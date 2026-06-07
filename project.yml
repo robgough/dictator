@@ -37,15 +37,21 @@ schemes:
       config: Release
 
 packages:
+  # WhisperKit graduated to the Argmax OSS SDK at v1.0 (May 2026). Same
+  # `WhisperKit` library product, new repo. Crucially, v1.0 vendors Hub +
+  # Tokenizers into ArgmaxCore instead of depending on swift-transformers,
+  # so it no longer constrains the MLX side's resolution.
   WhisperKit:
-    url: https://github.com/argmaxinc/WhisperKit
-    minVersion: 0.18.0
-    maxVersion: 0.19.0
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    minVersion: 1.0.0
+    maxVersion: 2.0.0
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 2.2.0
-  # Pinned to the last commit that uses swift-transformers 1.1.x, so it
-  # resolves alongside WhisperKit 0.18 (which caps swift-transformers at <1.2).
+  # Pinned to the commit we last validated against. WhisperKit 1.0 dropped its
+  # swift-transformers <1.2 cap (the original reason for this pin), so this is
+  # now free to move — bumping it (or migrating to the successor repo
+  # mlx-swift-lm) is a deliberate follow-up, not forced by resolution anymore.
   MLXSwiftExamples:
     url: https://github.com/ml-explore/mlx-swift-examples
     revision: eb76c5b7f0cc335103bbabb0c3e1c37f8ff5d482
