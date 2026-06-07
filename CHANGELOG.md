@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The orange microphone indicator no longer stays lit claiming Dictator is listening between dictations — the sound-effects engine now releases the audio device about ten seconds after the last chime.
+- Dictation can no longer hang forever on "Connecting microphone": if the mic hasn't started after 12 seconds the attempt fails with a clear message, the recorder is reset, and the next press starts clean.
 - Two new on-device LLM options in Settings → Models: Gemma 4 E2B and E4B, Google's latest open models, in their QAT (quantization-aware trained) releases. E2B is a strong middle ground between the 3B-class options and Qwen 7B; E4B is the highest-quality option in the catalog and uses the new MXFP4 format for faster generation.
 - Dictating just an emoji name ("fire emoji") no longer sometimes pastes the model's commentary along with the emoji — emoji-only dictations now skip the LLM cleanup passes entirely.
 - Create your own meeting note styles: a new Note styles list in Settings → Meetings lets you define exactly which sections your notes should have using a simple template — ALL-CAPS lines name the sections, the text under each tells the model what belongs there. Built-in styles can be duplicated as a starting point, and custom styles show up everywhere a style can be picked, including auto-detect.

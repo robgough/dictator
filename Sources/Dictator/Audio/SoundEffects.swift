@@ -17,6 +17,21 @@ import Foundation
 /// `@unchecked Sendable` + serialising on `queue` guarantees the
 /// hotkey path returns to main in microseconds; if the engine is slow
 /// to come up the user just doesn't hear that one cue.
+///
+/// Why the idle-stop? A running AVAudioEngine holds a live IO context on
+/// the output device inside coreaudiod. On a duplex interface (Scarlett,
+/// most USB audio boxes) that context carries the device's *input*
+/// streams too, and macOS hosts the system mic-mode DSP (Voice Isolation
+/// et al.) inside it — at which point coreaudiod attributes *recording*
+/// to Dictator and the orange mic indicator stays lit indefinitely while
+/// the app sits idle (observed live: context pinned from one dictation's
+/// done-chime until app quit, hours later). The always-running engine is
+/// also standing churn inside coreaudiod on exactly the device family the
+/// dictation mic shares a USB clock with. So: cues keep the engine warm
+/// for `idleStopDelay` after the last play, then it's stopped and the
+/// context released. The next cue restarts it on `queue` — worst case
+/// that one cue arrives a beat late, same trade the config-change path
+/// has always made.
 final class SoundEffects: @unchecked Sendable {
     static let shared = SoundEffects()
 
@@ -36,6 +51,23 @@ final class SoundEffects: @unchecked Sendable {
     /// engine/player call. Anything that touches the audio graph hops
     /// onto this queue first.
     private let queue = DispatchQueue(label: "Dictator.SoundEffects", qos: .userInitiated)
+
+    /// How long the engine stays up after the last cue (or prewarm)
+    /// before we release its device IO context. Long enough that every
+    /// cue within one dictation (arm → start → stop → done) reuses the
+    /// running engine; short enough that the mic indicator clears
+    /// promptly once the user goes quiet.
+    private static let idleStopDelay: TimeInterval = 10
+
+    /// When the engine last had a reason to be running. Read by the
+    /// configuration-change handler to decide whether an eager restart
+    /// is warranted. All access on `queue`.
+    private var lastActivityAt = Date.distantPast
+
+    /// Invalidation token for pending idle-stop checks: each new cue
+    /// bumps it, so only the check scheduled by the *latest* activity
+    /// can actually stop the engine. All access on `queue`.
+    private var idleGeneration = 0
 
     private init() {
         // Mono player straight into mainMixerNode. mainMixer has a built-in
@@ -97,7 +129,9 @@ final class SoundEffects: @unchecked Sendable {
     /// silently skip cues until the next configuration change retries.
     func prewarm() {
         queue.async { [weak self] in
-            self?.startEngineLocked()
+            guard let self else { return }
+            self.startEngineLocked()
+            self.noteActivityLocked()
         }
     }
 
@@ -113,10 +147,32 @@ final class SoundEffects: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.startEngineLocked()
+            self.noteActivityLocked()
             guard self.started else { return }
             self.player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
             if !self.player.isPlaying { self.player.play() }
         }
+    }
+
+    /// Record that the engine is in active use and (re)arm the idle-stop
+    /// check. Must run on `queue`.
+    private func noteActivityLocked() {
+        lastActivityAt = Date()
+        idleGeneration &+= 1
+        let generation = idleGeneration
+        queue.asyncAfter(deadline: .now() + Self.idleStopDelay) { [weak self] in
+            self?.stopIfIdleLocked(generation: generation)
+        }
+    }
+
+    /// Stop the engine if no newer activity superseded the check that
+    /// scheduled us. Cues are ≤0.4 s and the delay is 10 s, so nothing
+    /// can still be audibly playing here. Must run on `queue`.
+    private func stopIfIdleLocked(generation: Int) {
+        guard generation == idleGeneration, started else { return }
+        player.stop()
+        engine.stop()
+        started = false
     }
 
     /// Bring the engine up if it isn't already. Must run on `queue`.
@@ -155,13 +211,20 @@ final class SoundEffects: @unchecked Sendable {
     /// change notification. Drop `started` so the next play() restarts
     /// the engine, and rebuild the connection because the mixer's
     /// downstream format may have changed (its SRC will sort the rest).
-    /// Also eagerly restart so we don't lose the *next* cue to first-
-    /// touch start latency on the new device. Must run on `queue`.
+    /// Eagerly restart *only* while cues are plausibly imminent (within
+    /// the idle window) so we don't lose the next cue to first-touch
+    /// start latency — an unconditional restart here is what used to
+    /// resurrect an idle engine on every device-graph wobble and pin the
+    /// output device's IO context (= phantom mic indicator, see class
+    /// doc). Must run on `queue`.
     private func handleConfigurationChangeLocked() {
         started = false
         if player.isPlaying { player.stop() }
         connectGraphLocked()
-        startEngineLocked()
+        if Date().timeIntervalSince(lastActivityAt) < Self.idleStopDelay {
+            startEngineLocked()
+            noteActivityLocked()
+        }
     }
 
     // MARK: - Synthesis

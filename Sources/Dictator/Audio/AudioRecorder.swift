@@ -152,7 +152,23 @@ final class AudioRecorder {
     /// if main is mid-CoreAudio query. Caller is notified via `onReady`
     /// (success) or `onStartFailed` (failure), both on the main actor.
     func start() {
-        guard !running, !startInFlight else { return }
+        // Neither early-out may stay silent: a silent return here leaves the
+        // pipeline waiting forever for an onReady that will never fire —
+        // i.e. "stuck on Connecting" with zero log evidence, which is
+        // exactly the hole that made the Jun 2026 stalls undiagnosable.
+        if startInFlight {
+            MicLog.log("Mic start: ignored — start already in flight (phase=\(startPhase.rawValue), gen=\(startGeneration), began \(Int(Date().timeIntervalSince(startBegan) * 1000))ms ago)")
+            return
+        }
+        if running {
+            // Desync: the caller believes it's starting fresh but we still
+            // hold a live session, so some previous stop never happened.
+            // Recover by dropping the zombie and starting clean — the
+            // alternative (silently no-oping) wedges every dictation until
+            // the app is relaunched.
+            MicLog.log("Mic start: recorder still running from a previous session (gen=\(startGeneration)) — stopping zombie and starting fresh")
+            _ = stop()
+        }
         rawBuffer.removeAll(keepingCapacity: true)
         nativeSampleRate = 0
         lastBufferTime = nil
@@ -163,7 +179,7 @@ final class AudioRecorder {
 
         startBegan = Date()
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
-        NSLog("[Dictator] Mic start: gen=%d preferred=%@", generation, preferred?.name ?? "system default")
+        MicLog.log("Mic start: gen=\(generation) preferred=\(preferred?.name ?? "system default")")
 
         // Fast path: same explicit device as last time, still connected →
         // reuse the resolved AVCaptureDevice and skip the coreaudiod
@@ -174,7 +190,7 @@ final class AudioRecorder {
         if let preferred, !preferred.isSystemDefault,
            let cached = cachedDevice, cached.uid == preferred.uid,
            cached.device.isConnected {
-            NSLog("[Dictator] Mic start: cached device '%@' (gen %d)", cached.device.localizedName, generation)
+            MicLog.log("Mic start: cached device '\(cached.device.localizedName)' (gen \(generation))")
             beginSession(device: cached.device, isBT: cached.isBT, allowDefaultFallback: true, generation: generation)
             return
         }
@@ -210,12 +226,10 @@ final class AudioRecorder {
                     // The watchdog (or a cancel) moved on without us. Log the
                     // real duration — this is the line that tells us how long
                     // the wedged query actually took.
-                    NSLog("[Dictator] Mic start: stale resolution of '%@' discarded after %dms (gen %d)",
-                          device?.localizedName ?? "nil", ms, generation)
+                    MicLog.log("Mic start: stale resolution of '\(device?.localizedName ?? "nil")' discarded after \(ms)ms (gen \(generation))")
                     return
                 }
-                NSLog("[Dictator] Mic start: resolved '%@' isBT=%d in %dms (gen %d)",
-                      device?.localizedName ?? "nil", isBT ? 1 : 0, ms, generation)
+                MicLog.log("Mic start: resolved '\(device?.localizedName ?? "nil")' isBT=\(isBT ? 1 : 0) in \(ms)ms (gen \(generation))")
                 if let device, let preferred, !preferred.isSystemDefault, device.uniqueID == preferred.uid {
                     self.cachedDevice = (preferred.uid, device, isBT)
                 }
@@ -232,13 +246,11 @@ final class AudioRecorder {
             guard let self else { return }
             guard self.startInFlight, generation == self.startGeneration, self.startPhase == .resolving else { return }
             if allowDefaultFallback {
-                NSLog("[Dictator] Mic start: resolution timed out after %.1fs (gen %d) — falling back to system default",
-                      Self.resolutionTimeoutSeconds, generation)
+                MicLog.log("Mic start: resolution timed out after \(Self.resolutionTimeoutSeconds)s (gen \(generation)) — falling back to system default")
                 self.startGeneration &+= 1
                 self.resolveAndStart(preferred: nil, allowDefaultFallback: false, generation: self.startGeneration)
             } else {
-                NSLog("[Dictator] Mic start: default-device resolution timed out after %.1fs (gen %d) — giving up",
-                      Self.resolutionTimeoutSeconds, generation)
+                MicLog.log("Mic start: default-device resolution timed out after \(Self.resolutionTimeoutSeconds)s (gen \(generation)) — giving up")
                 self.startInFlight = false
                 self.startPhase = .idle
                 self.onStartFailed?(NSError(
@@ -300,6 +312,13 @@ final class AudioRecorder {
         return AudioDeviceEnumerator.isBluetooth(deviceID: coreAudioID)
     }
 
+    /// One-line state snapshot for the pipeline-level warmup watchdog —
+    /// when `.warmingUp` hangs, this names which of our invariants broke.
+    var debugState: String {
+        let lastBuffer = lastBufferTime.map { "\(Int(Date().timeIntervalSince($0) * 1000))ms ago" } ?? "never"
+        return "running=\(running) startInFlight=\(startInFlight) phase=\(startPhase.rawValue) gen=\(startGeneration) session=\(session == nil ? "nil" : "live") lastBuffer=\(lastBuffer)"
+    }
+
     /// Abort an in-flight startup. The async setup task still runs to
     /// completion (we can't preempt CoreAudio negotiation), but its
     /// completion handler discards the session instead of adopting it.
@@ -308,8 +327,7 @@ final class AudioRecorder {
         if startInFlight {
             // The smoking-gun line for slow starts: how long the user sat
             // on "Connecting" before giving up, and which phase ate it.
-            NSLog("[Dictator] Mic start: cancelled by caller after %dms in phase=%@",
-                  Int(Date().timeIntervalSince(startBegan) * 1000), startPhase.rawValue)
+            MicLog.log("Mic start: cancelled by caller after \(Int(Date().timeIntervalSince(startBegan) * 1000))ms in phase=\(startPhase.rawValue)")
         }
         startGeneration &+= 1
         startInFlight = false
@@ -460,9 +478,7 @@ final class AudioRecorder {
             let ms = Int(Date().timeIntervalSince(sessionBuildBegan) * 1000)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                NSLog("[Dictator] Mic start: session running on '%@' in %dms (gen %d, total %dms)",
-                      device.localizedName, ms, generation,
-                      Int(Date().timeIntervalSince(self.startBegan) * 1000))
+                MicLog.log("Mic start: session running on '\(device.localizedName)' in \(ms)ms (gen \(generation), total \(Int(Date().timeIntervalSince(self.startBegan) * 1000))ms)")
                 self.adoptSession(
                     session: session,
                     forwarder: forwarder,
@@ -482,9 +498,7 @@ final class AudioRecorder {
             try? await Task.sleep(for: .seconds(timeoutSeconds))
             guard let self else { return }
             guard self.startInFlight, generation == self.startGeneration else { return }
-            NSLog("[Dictator] Mic start: session warmup timed out after %.1fs on '%@' (gen %d, retries left %d, fallback %d)",
-                  timeoutSeconds, device.localizedName, generation,
-                  sameDeviceRetriesRemaining, allowDefaultFallback ? 1 : 0)
+            MicLog.log("Mic start: session warmup timed out after \(timeoutSeconds)s on '\(device.localizedName)' (gen \(generation), retries left \(sameDeviceRetriesRemaining), fallback \(allowDefaultFallback ? 1 : 0))")
             let err = NSError(
                 domain: "Dictator",
                 code: -1,
@@ -536,8 +550,7 @@ final class AudioRecorder {
         generation: Int
     ) {
         guard generation == startGeneration else { return }
-        NSLog("[Dictator] Mic start: session setup failed (gen %d, fallback %d): %@",
-              generation, allowDefaultFallback ? 1 : 0, error.localizedDescription)
+        MicLog.log("Mic start: session setup failed (gen \(generation), fallback \(allowDefaultFallback ? 1 : 0)): \(error.localizedDescription)")
         if allowDefaultFallback {
             // Bump the generation so any still-pending setup task becomes
             // stale on completion, then retry against the system default.
@@ -668,7 +681,7 @@ final class AudioRecorder {
 
     private func handleUnexpectedStop(_ message: String) {
         guard running else { return }
-        NSLog("[Dictator] Mic capture lost: %@", message)
+        MicLog.log("Mic capture lost: \(message)")
         teardownSession()
         running = false
         startPhase = .idle
@@ -690,7 +703,7 @@ final class AudioRecorder {
             try? await Task.sleep(for: .milliseconds(1500))
             guard let self else { return }
             guard self.running, self.lastBufferTime == nil else { return }
-            NSLog("[Dictator] Mic start: silent-capture watchdog fired — session running but no buffers after 1.5s")
+            MicLog.log("Mic start: silent-capture watchdog fired — session running but no buffers after 1.5s")
             self.handleUnexpectedStop("Mic isn't producing audio. Try a different input in Settings.")
         }
     }
@@ -702,8 +715,7 @@ final class AudioRecorder {
         // can race with stopRunning by a few milliseconds.
         guard running || startInFlight else { return }
         if lastBufferTime == nil {
-            NSLog("[Dictator] Mic start: first buffer %dms after start (rate=%.0f)",
-                  Int(Date().timeIntervalSince(startBegan) * 1000), sampleRate)
+            MicLog.log("Mic start: first buffer \(Int(Date().timeIntervalSince(startBegan) * 1000))ms after start (rate=\(Int(sampleRate)))")
         }
         rawBuffer.append(contentsOf: mono)
         nativeSampleRate = sampleRate

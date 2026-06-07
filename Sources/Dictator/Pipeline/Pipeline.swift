@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AppKit
+import os
 
 enum PipelineState: Equatable {
     case idle
@@ -173,6 +174,71 @@ final class Pipeline {
     /// inside its didGenerate callback and stops at the next token, then the
     /// awaiting code bails before delivery.
     private var inFlightTask: Task<Void, Never>?
+
+    /// Monotonic id for warmup attempts, so a watchdog armed for one press
+    /// can't shoot down a later (healthy) `.warmingUp` that happens to be
+    /// in flight when its timer fires.
+    private var warmupAttempt = 0
+
+    /// Highest warmup attempt whose main-actor watchdog has actually *run*
+    /// (regardless of what its guards decided). Written by the watchdog
+    /// task on main, read by the off-main starvation sentinel — see
+    /// `armWarmupWatchdog`. Lock-protected because the sentinel reads it
+    /// from a GCD utility queue.
+    @ObservationIgnored private let watchdogHeartbeat = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Hard ceiling over the recorder's own per-phase watchdogs: their
+    /// worst legitimate chain (resolution timeout → default fallback →
+    /// Bluetooth warmup budget) sums to ~10 s, so anything past this means
+    /// both `onReady` and `onStartFailed` were swallowed — the recorder
+    /// silently no-oped, a callback was lost, or an invariant broke. The
+    /// recorder-level watchdogs can't cover that class of failure; without
+    /// this one the HUD shows "Connecting microphone" forever.
+    private static let warmupWatchdogSeconds: Double = 12
+
+    /// Arm after entering `.warmingUp`. Two layers:
+    ///
+    /// 1. A main-actor watchdog: if we're *still* in `.warmingUp` for the
+    ///    same attempt when the timer fires, dump the recorder's state to
+    ///    the mic diagnostics log, reset the recorder, and fail the
+    ///    dictation cleanly so the user gets an actionable message instead
+    ///    of a hung HUD.
+    /// 2. An off-main starvation sentinel: every safety net above —
+    ///    including layer 1 — is a main-actor task, so none of them can
+    ///    fire when the *main thread itself* is wedged. That's a real
+    ///    failure mode, not hypothetical: on 2026-06-07 a WindowServer
+    ///    sensor-indicator bug blocked this app's render commits for 118 s
+    ///    and froze the HUD at "Connecting microphone" while the mic
+    ///    recorded fine and every watchdog sat unrun in the main queue.
+    ///    The sentinel runs on a GCD queue, checks whether layer 1 managed
+    ///    to run at all, and writes the verdict to the diagnostics log so
+    ///    a frozen-UI stall is distinguishable from an audio failure.
+    private func armWarmupWatchdog() {
+        warmupAttempt &+= 1
+        let attempt = warmupAttempt
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.warmupWatchdogSeconds))
+            // Prove to the sentinel that main is alive — before any guard.
+            self?.watchdogHeartbeat.withLock { $0 = max($0, attempt) }
+            guard let self, attempt == self.warmupAttempt else { return }
+            guard case .warmingUp = self.state else { return }
+            MicLog.log("Pipeline: still .warmingUp after \(Int(Self.warmupWatchdogSeconds))s — recorder { \(self.recorder.debugState) }. Failing the attempt.")
+            // stop() both orphans an in-flight start (generation bump) and
+            // tears down a zombie session if one is improbably live.
+            _ = self.recorder.stop()
+            self.inFlightAssistant = nil
+            self.fail("Mic didn't start. Try again — if it keeps happening, pick a different input in Settings.")
+        }
+        // Give the main-actor watchdog 2 s of grace past its deadline
+        // before declaring starvation.
+        let heartbeat = watchdogHeartbeat
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + Self.warmupWatchdogSeconds + 2
+        ) {
+            guard heartbeat.withLock({ $0 }) < attempt else { return }
+            MicLog.log("Main thread starved: warmup watchdog for attempt \(attempt) hasn't run \(Int(Self.warmupWatchdogSeconds) + 2)s after arming — UI is frozen (mic + watchdogs are fine, their main-actor tasks can't get scheduled). Suspect render/WindowServer health, not audio.")
+        }
+    }
 
     private var pendingNote: String?
 
@@ -404,6 +470,7 @@ final class Pipeline {
         state = .warmingUp(isAssistant: false)
         if settings.playSounds { SoundEffects.shared.playArm() }
         recorder.start()
+        armWarmupWatchdog()
     }
 
     func finishRecording() {
@@ -1142,6 +1209,7 @@ final class Pipeline {
                 state = .warmingUp(isAssistant: true)
                 if settings.playSounds { SoundEffects.shared.playArm() }
                 recorder.start()
+                armWarmupWatchdog()
             } catch SelectionGrabber.GrabError.noAccessibility {
                 // If the user released during the failed grab, drop the
                 // error — they've already given up on this press, surfacing
