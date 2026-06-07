@@ -56,6 +56,10 @@ final class MLXLLMService: LLMEngine {
         isLoading = true
         defer { isLoading = false }
 
+        // Vendored architectures (Gemma 4) must be in the type registry before
+        // the factory reads the checkpoint's model_type. Idempotent.
+        await Gemma4Registration.registerIfNeeded()
+
         let configuration = ModelConfiguration(id: modelID)
 
         let loaded = try await LLMModelFactory.shared.loadContainer(

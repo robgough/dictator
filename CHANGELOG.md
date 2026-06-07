@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Two new on-device LLM options in Settings → Models: Gemma 4 E2B and E4B (4-bit), Google's latest open models. E2B is a strong middle ground between the 3B-class options and Qwen 7B; E4B is the highest-quality option in the catalog.
 - Dictating just an emoji name ("fire emoji") no longer sometimes pastes the model's commentary along with the emoji — emoji-only dictations now skip the LLM cleanup passes entirely.
 - Create your own meeting note styles: a new Note styles list in Settings → Meetings lets you define exactly which sections your notes should have using a simple template — ALL-CAPS lines name the sections, the text under each tells the model what belongs there. Built-in styles can be duplicated as a starting point, and custom styles show up everywhere a style can be picked, including auto-detect.
 - Tune a single meeting's notes without touching your settings: Re-run ▾ → Tune this run takes a one-off instruction ("focus on the budget discussion", "write it in French") applied on top of the style for that meeting only. The instruction is remembered per meeting, so you can keep tweaking and re-running until the notes are right.

@@ -91,6 +91,12 @@ enum ModelCatalog {
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, approxRAMMB: 2500, note: "Recommended", contextWindowTokens: 131_072),
         .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen 2.5 3B (4-bit)", approxSizeMB: 1800, approxRAMMB: 2500, note: "Alt 3B option", contextWindowTokens: 32_768),
         .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, approxRAMMB: 5500, note: "Higher quality, slower", contextWindowTokens: 131_072),
+        // Gemma 4 runs on the vendored architecture in LLM/Gemma4/ (no native
+        // mlx-swift-lm support yet). The checkpoints are multimodal — download
+        // size includes vision/audio towers that are dropped at load, so
+        // resident RAM runs a little below what the file size suggests.
+        .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B (4-bit)", approxSizeMB: 3650, approxRAMMB: 3800, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/gemma-4-e4b-it-4bit", displayName: "Gemma 4 E4B (4-bit)", approxSizeMB: 5250, approxRAMMB: 5500, note: "Best quality; 8B-class RAM", contextWindowTokens: 131_072),
     ]
 
     /// Fallback context size when the active model id isn't in the catalog
