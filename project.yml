@@ -56,6 +56,17 @@ packages:
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     from: 3.31.3
+  # Direct dependency for the vendored Gemma 4 architecture (LLM/Gemma4/),
+  # which imports MLX / MLXNN / MLXFast straight from mlx-swift rather than
+  # through mlx-swift-lm's products. Local implicit-module builds resolve
+  # those transitively, but CI's Xcode builds with explicit modules and
+  # refuses imports the target doesn't declare ("unable to resolve module
+  # dependency: 'MLXFast'", first hit on the v2026.6.0 release run). The
+  # `from:` matches what mlx-swift-lm 3.x already resolves, so this adds no
+  # new constraint pressure.
+  MLXSwift:
+    url: https://github.com/ml-explore/mlx-swift
+    from: 0.31.4
   # Direct dependency for the Hub bridges (was transitive via mlx-swift-examples
   # before the 3.x decoupling). Still provides the legacy HubApi(downloadBase:)
   # download layout: <base>/models/<org>/<name>/ — ModelManager depends on it.
@@ -251,6 +262,12 @@ targets:
         product: MLXLLM
       - package: MLXSwiftLM
         product: MLXLMCommon
+      - package: MLXSwift
+        product: MLX
+      - package: MLXSwift
+        product: MLXNN
+      - package: MLXSwift
+        product: MLXFast
       - package: SwiftTransformers
         product: Hub
       - package: SwiftTransformers
