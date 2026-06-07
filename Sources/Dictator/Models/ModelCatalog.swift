@@ -95,8 +95,15 @@ enum ModelCatalog {
         // mlx-swift-lm support yet). The checkpoints are multimodal — download
         // size includes vision/audio towers that are dropped at load, so
         // resident RAM runs a little below what the file size suggests.
-        .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B (4-bit)", approxSizeMB: 3650, approxRAMMB: 3800, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072),
-        .init(id: "mlx-community/gemma-4-e4b-it-4bit", displayName: "Gemma 4 E4B (4-bit)", approxSizeMB: 5250, approxRAMMB: 5500, note: "Best quality; 8B-class RAM", contextWindowTokens: 131_072),
+        //
+        // These are the QAT (quantization-aware trained) releases — noticeably
+        // better than the launch-day post-training quants at the same bit
+        // width. E4B uses the MXFP4 conversion (faster kernels, group size 32);
+        // E2B's MXFP4 repo was empty at the time of adding, so it ships the
+        // affine 4-bit QAT. If MXFP4 misbehaves, gemma-4-E4B-it-qat-4bit is
+        // the like-for-like affine fallback.
+        .init(id: "mlx-community/gemma-4-E2B-it-qat-4bit", displayName: "Gemma 4 E2B QAT (4-bit)", approxSizeMB: 4400, approxRAMMB: 4000, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; fastest quant format", contextWindowTokens: 131_072),
     ]
 
     /// Fallback context size when the active model id isn't in the catalog

@@ -12,18 +12,70 @@ import MLXLMCommon
 import MLXNN
 
 /// Linear with a baked-in scale factor (for per_layer_model_projection).
-final class Gemma4ScaledLinear: Module {
+///
+/// Conforms to `Quantizable` (a Dictator addition over the upstream port):
+/// the QAT checkpoints quantize this projection (weight + scales [+ biases]),
+/// so the factory's quantization pass needs a conversion hook — without it,
+/// loading fails on the packed weight. The original PTQ conversions leave it
+/// as a raw bf16 weight, in which case the pass never touches this module.
+class Gemma4ScaledLinear: Module, Quantizable {
     @ModuleInfo var weight: MLXArray
     let scalar: Float
 
-    init(inFeatures: Int, outFeatures: Int, scalar: Float) {
-        self._weight.wrappedValue = MLXArray.zeros([outFeatures, inFeatures])
+    init(weight: MLXArray, scalar: Float) {
+        self._weight.wrappedValue = weight
         self.scalar = scalar
         super.init()
     }
 
+    convenience init(inFeatures: Int, outFeatures: Int, scalar: Float) {
+        self.init(weight: MLXArray.zeros([outFeatures, inFeatures]), scalar: scalar)
+    }
+
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         (matmul(x, weight.T)) * MLXArray(scalar, dtype: x.dtype)
+    }
+
+    func toQuantized(groupSize: Int, bits: Int, mode: QuantizationMode) -> Module {
+        Gemma4QuantizedScaledLinear(
+            weight: weight, scalar: scalar,
+            groupSize: groupSize, bits: bits, mode: mode
+        )
+    }
+}
+
+/// Quantized counterpart of `Gemma4ScaledLinear` — subclasses it so the
+/// quantization pass can swap it into the `Gemma4ScaledLinear?`-typed
+/// property (same reason MLXNN's `QuantizedLinear` subclasses `Linear`).
+/// The init quantizes the placeholder weight purely to get the packed
+/// shapes/keys right; the real values arrive via `update(parameters:)` from
+/// the checkpoint. `biases` is optional because the mx/nv float formats
+/// carry scales only.
+final class Gemma4QuantizedScaledLinear: Gemma4ScaledLinear, Quantized {
+    let groupSize: Int
+    let bits: Int
+    let mode: QuantizationMode
+
+    @ModuleInfo var scales: MLXArray
+    @ModuleInfo var biases: MLXArray?
+
+    init(weight: MLXArray, scalar: Float, groupSize: Int, bits: Int, mode: QuantizationMode) {
+        self.groupSize = groupSize
+        self.bits = bits
+        self.mode = mode
+
+        let (wq, s, b) = MLX.quantized(weight, groupSize: groupSize, bits: bits, mode: mode)
+        self._scales.wrappedValue = s
+        self._biases.wrappedValue = b
+
+        super.init(weight: wq, scalar: scalar)
+    }
+
+    override func callAsFunction(_ x: MLXArray) -> MLXArray {
+        quantizedMatmul(
+            x, weight, scales: scales, biases: biases,
+            transpose: true, groupSize: groupSize, bits: bits, mode: mode
+        ) * MLXArray(scalar, dtype: x.dtype)
     }
 }
 
