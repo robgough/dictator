@@ -505,7 +505,7 @@ private struct AboutCredits: View {
             author: "Argmax, Inc.",
             role: "On-device Whisper speech-to-text",
             license: "MIT",
-            url: "https://github.com/argmaxinc/WhisperKit"
+            url: "https://github.com/argmaxinc/argmax-oss-swift"
         ),
         Credit(
             name: "FluidAudio",
@@ -515,11 +515,11 @@ private struct AboutCredits: View {
             url: "https://github.com/FluidInference/FluidAudio"
         ),
         Credit(
-            name: "MLX Swift Examples",
+            name: "MLX Swift LM",
             author: "Apple / mlx-explore",
             role: "MLX LLM runtime for the formatting, grammar, and structural passes",
             license: "MIT",
-            url: "https://github.com/ml-explore/mlx-swift-examples"
+            url: "https://github.com/ml-explore/mlx-swift-lm"
         ),
         Credit(
             name: "MLX Swift",

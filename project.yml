@@ -48,13 +48,20 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 2.2.0
-  # Pinned to the commit we last validated against. WhisperKit 1.0 dropped its
-  # swift-transformers <1.2 cap (the original reason for this pin), so this is
-  # now free to move — bumping it (or migrating to the successor repo
-  # mlx-swift-lm) is a deliberate follow-up, not forced by resolution anymore.
-  MLXSwiftExamples:
-    url: https://github.com/ml-explore/mlx-swift-examples
-    revision: eb76c5b7f0cc335103bbabb0c3e1c37f8ff5d482
+  # mlx-swift-lm is the successor to mlx-swift-examples (which we previously
+  # pinned to eb76c5b7 to dodge a swift-transformers conflict with WhisperKit
+  # 0.18 — both constraints are gone now). 3.x decoupled from swift-transformers;
+  # we bridge our own Downloader/TokenizerLoader in LLM/HubBridge.swift so model
+  # weights keep living in the same on-disk layout under ModelStorage.llmRoot().
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: 3.31.3
+  # Direct dependency for the Hub bridges (was transitive via mlx-swift-examples
+  # before the 3.x decoupling). Still provides the legacy HubApi(downloadBase:)
+  # download layout: <base>/models/<org>/<name>/ — ModelManager depends on it.
+  SwiftTransformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: 1.3.3
   # FluidAudio backs the Parakeet TDT v3 transcription engine — CoreML models
   # that run on the Apple Neural Engine. Zero dep overlap with WhisperKit /
   # MLX, so no version-pinning conflicts.
@@ -240,10 +247,14 @@ targets:
         product: WhisperKit
       - package: KeyboardShortcuts
         product: KeyboardShortcuts
-      - package: MLXSwiftExamples
+      - package: MLXSwiftLM
         product: MLXLLM
-      - package: MLXSwiftExamples
+      - package: MLXSwiftLM
         product: MLXLMCommon
+      - package: SwiftTransformers
+        product: Hub
+      - package: SwiftTransformers
+        product: Tokenizers
       - package: FluidAudio
         product: FluidAudio
       - package: Sparkle

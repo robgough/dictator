@@ -1,5 +1,4 @@
 import Foundation
-import Hub
 import MLX
 import MLXLLM
 import MLXLMCommon
@@ -57,11 +56,11 @@ final class MLXLLMService: LLMEngine {
         isLoading = true
         defer { isLoading = false }
 
-        let hub = HubApi(downloadBase: ModelStorage.llmRoot())
         let configuration = ModelConfiguration(id: modelID)
 
         let loaded = try await LLMModelFactory.shared.loadContainer(
-            hub: hub,
+            from: HubDownloader(downloadBase: ModelStorage.llmRoot()),
+            using: HubTokenizerLoader(),
             configuration: configuration
         ) { p in
             let fraction = p.fractionCompleted
@@ -79,20 +78,23 @@ final class MLXLLMService: LLMEngine {
         try await ensureLoaded(modelID: id)
     }
 
-    /// Bridge to `MLXLMCommon.downloadModel`. Nonisolated so the actual file
-    /// download runs on the cooperative pool, not the main actor — the `await`
-    /// at the call site suspends the caller cleanly. Mirrors the same shape as
-    /// `TranscriptionService.runWhisperKitDownload` / `ParakeetService.runDownload`.
+    /// Download-only bridge (mlx-swift-lm 3.x dropped `MLXLMCommon.downloadModel`;
+    /// calling our `Downloader` directly is the equivalent). Nonisolated so the
+    /// actual file download runs on the cooperative pool, not the main actor —
+    /// the `await` at the call site suspends the caller cleanly. Mirrors the
+    /// same shape as `TranscriptionService.runWhisperKitDownload` /
+    /// `ParakeetService.runDownload`.
     private nonisolated static func runHubDownload(
         modelID: String,
         downloadBase: URL,
         onFraction: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let hub = HubApi(downloadBase: downloadBase)
-        let configuration = ModelConfiguration(id: modelID)
-        _ = try await MLXLMCommon.downloadModel(
-            hub: hub,
-            configuration: configuration
+        let downloader = HubDownloader(downloadBase: downloadBase)
+        _ = try await downloader.download(
+            id: modelID,
+            revision: nil,
+            matching: HubDownloader.modelFilePatterns,
+            useLatest: false
         ) { p in
             onFraction(p.fractionCompleted)
         }

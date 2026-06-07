@@ -122,9 +122,13 @@ These are non-obvious and load-bearing — don't "clean up" without understandin
 - **`@ObservationIgnored` on heavy storage**: WhisperKit's `pipe`, MLX's `ModelContainer`, FluidAudio's `AsrModels` / `AsrManager`. These are not meaningfully observable values and tracking them adds churn.
 - **`@preconcurrency import WhisperKit` / `@preconcurrency import AVFoundation` / `@preconcurrency import FluidAudio`**: their public APIs aren't Sendable-annotated yet. Don't remove without re-verifying nothing trips strict-concurrency diagnostics.
 
-## Dependency pinning
+## Dependencies (June 2026)
 
-`mlx-swift-examples` is pinned to commit `eb76c5b7f0cc335103bbabb0c3e1c37f8ff5d482` because later commits require `swift-transformers ≥1.3` and WhisperKit 0.18 caps it at `<1.2`. Bumping either is a multi-package coordination job.
+The historical swift-transformers diamond (WhisperKit 0.18 capped it `<1.2`, newer MLX needed `≥1.3`, so `mlx-swift-examples` was pinned to a 2025 commit) is resolved — all three sides moved:
+
+- **WhisperKit** comes from `argmaxinc/argmax-oss-swift` (the v1.0 rebrand; same `WhisperKit` product). It vendors Hub/Tokenizers into ArgmaxCore and no longer constrains swift-transformers.
+- **`mlx-swift-lm` 3.x** replaced `mlx-swift-examples`. 3.x is decoupled from swift-transformers: model loading takes `Downloader`/`TokenizerLoader` protocols. We deliberately *don't* use its `MLXHuggingFace` macro glue — `LLM/HubBridge.swift` hand-implements both protocols against the legacy `HubApi(downloadBase:)` so LLM weights keep the on-disk layout `<llmRoot>/models/<org>/<name>/` that ModelManager's download/resume/delete logic (and every existing install) depends on. The macro path would switch to HubClient's `models--org--name/snapshots/` cache layout — don't "simplify" to it without a disk-migration story.
+- **swift-transformers** is now a direct dependency (Hub + Tokenizers products) feeding those bridges.
 
 FluidAudio (`from: 0.14.5`) shares no transitive deps with the MLX/WhisperKit side, so it's free to move.
 
