@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.6.0 — 2026-06-07
+
 - Meetings now needs the Gemma 4 E4B model — in our testing it's the only one that writes meeting notes you can actually rely on. Until it's your selected model the feature stays off: the Settings → Meetings page tells you exactly what to pick, and the model is tagged "required for Meetings" in Settings → Models.
 - The orange microphone indicator no longer stays lit when Dictator isn't listening — it now switches off a few seconds after each dictation, so you can trust it again.
 - Dictation no longer gets stuck on "Connecting microphone" — every step of mic startup now has a strict time limit, with a retry and a fall-back to the system microphone. If it still can't start, Dictator gives up with a clear message and your next attempt starts fresh.
