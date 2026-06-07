@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictating just an emoji name ("fire emoji") no longer sometimes pastes the model's commentary along with the emoji — emoji-only dictations now skip the LLM cleanup passes entirely.
 - Create your own meeting note styles: a new Note styles list in Settings → Meetings lets you define exactly which sections your notes should have using a simple template — ALL-CAPS lines name the sections, the text under each tells the model what belongs there. Built-in styles can be duplicated as a starting point, and custom styles show up everywhere a style can be picked, including auto-detect.
 - Tune a single meeting's notes without touching your settings: Re-run ▾ → Tune this run takes a one-off instruction ("focus on the budget discussion", "write it in French") applied on top of the style for that meeting only. The instruction is remembered per meeting, so you can keep tweaking and re-running until the notes are right.
 - New meeting pad: type your own notes while you record — the left column now splits into your editable pad on top and the machine's live notes below. Anything you jot is treated as ground truth when the final notes are written: your names, owners, decisions and figures win over the transcript. The pad stays editable after the meeting from its own tab, so you can add a thought and re-run.

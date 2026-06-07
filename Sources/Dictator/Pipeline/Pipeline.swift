@@ -498,6 +498,15 @@ final class Pipeline {
             // passes still run; their word-sequence validators catch any drift.
             formatted = trimmed
             inFlight.formatted = nil
+        } else if Self.wordSequence(trimmed).isEmpty {
+            // No letters or numbers left after the cue substitutions — the
+            // dictation was pure emoji/punctuation ("fire emoji" → "🔥.").
+            // There's nothing for the formatter to do, and a words-free input
+            // is exactly where small models narrate instead of echoing ("The
+            // text provided appears to be a simple exclamation. Here is the
+            // formatted version: …"). Ship it as-is.
+            formatted = trimmed
+            inFlight.formatted = nil
         } else {
             state = .formatting
             // Surrounding-document context (captured at hotkey press) rides
@@ -615,6 +624,10 @@ final class Pipeline {
     private func maybeFixGrammar(formatted: String) async -> String {
         guard currentMode.grammarPassMode != .off else { return formatted }
         guard let llm = currentLLM() else { return formatted }
+        // Words-free input (pure emoji/punctuation, e.g. "fire emoji" → "🔥.")
+        // has no grammar to fix, and with the drift gate disabled a narrating
+        // model would ship its commentary. Same skip as Pass 1's.
+        guard !Self.wordSequence(formatted).isEmpty else { return formatted }
         state = .fixingGrammar
         do {
             let tidied = try await llm.tidyGrammar(
