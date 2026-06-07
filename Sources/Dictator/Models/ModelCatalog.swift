@@ -115,6 +115,22 @@ enum ModelCatalog {
     static let defaultWhisper      = whisperModels[2]       // small.en
     static let defaultParakeet     = parakeetModels[0]      // v3 (multilingual)
     static let defaultLLM          = llmModels[1]           // Llama 3.2 3B
+
+    /// The one LLM meetings are allowed to run with. Long-transcript note
+    /// writing is the hardest LLM job in the app — every smaller catalog
+    /// entry drifts off the transcript, invents structure, or mangles
+    /// attribution somewhere across an hour of audio. Rather than let the
+    /// feature quietly produce notes that aren't worth keeping, recording,
+    /// importing, and (re)generating notes are gated on this exact model
+    /// being the selected MLX LLM (`DictatorSettings.meetingsLLMSatisfied`).
+    static let meetingsRequiredLLMID = "mlx-community/gemma-4-E4B-it-qat-mxfp4"
+
+    /// Display name for the meetings requirement, for user-facing copy.
+    /// Falls back to the raw id defensively — the entry is in the catalog
+    /// above, but a future catalog edit shouldn't crash the alert text.
+    static var meetingsRequiredLLMName: String {
+        llm(id: meetingsRequiredLLMID)?.displayName ?? meetingsRequiredLLMID
+    }
     static let defaultDiarization  = diarizationModels[0]   // only option in v0.2
 
     static func whisper(id: String) -> WhisperModel? { whisperModels.first { $0.id == id } }

@@ -247,6 +247,9 @@ struct TranscriptView: View {
         if state.settings.activeLLMEngine() == nil {
             return "No LLM is set up in Settings → Models, so there was nothing to write them with."
         }
+        if !state.settings.meetingsLLMSatisfied {
+            return "Meetings need \(ModelCatalog.meetingsRequiredLLMName) selected in Settings → Models — it's the only model that writes reliable notes."
+        }
         if !state.settings.meetingLiveTranscriptEnabled {
             return "“Show a live transcript while recording” is off in Settings → Meetings — live notes build on the live transcript, so turning it on enables them for future recordings."
         }
@@ -1033,14 +1036,16 @@ private struct NotesPanel: View {
     /// the install-wide default when it's still on Auto-detect), and each
     /// menu row both pins a new type to the meeting AND kicks off a
     /// re-summary with it. Disabled while a summary is in flight or when
-    /// no LLM is configured.
+    /// the required meetings LLM isn't selected — note quality from the
+    /// smaller models isn't worth keeping, so re-runs are held to the same
+    /// bar as new recordings (`ModelCatalog.meetingsRequiredLLMID`).
     @ViewBuilder
     private var actionButton: some View {
         let isSummarising: Bool = {
             if case .summarising = session.state { return true }
             return false
         }()
-        let isEnabled = state.settings.activeLLMEngine() != nil && !isSummarising
+        let isEnabled = state.settings.meetingsLLMSatisfied && !isSummarising
         let primaryLabel = (meta.notes == nil && meta.summary == nil) ? "Generate" : "Re-run"
 
         Menu {
@@ -1077,6 +1082,9 @@ private struct NotesPanel: View {
         .menuIndicator(.visible)
         .fixedSize()
         .disabled(!isEnabled)
+        .help(state.settings.meetingsLLMSatisfied
+              ? ""
+              : "Meeting notes need \(ModelCatalog.meetingsRequiredLLMName) — select it in Settings → Models.")
     }
 
     /// Pin `type` to this meeting (store + session in lockstep) and kick

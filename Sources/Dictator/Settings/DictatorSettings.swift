@@ -1483,4 +1483,11 @@ struct DictatorSettings: Codable, Equatable {
             return mlx
         }
     }
+
+    /// Whether the meetings feature's LLM requirement is met: the MLX
+    /// engine with `ModelCatalog.meetingsRequiredLLMID` selected. Meetings
+    /// are gated on this — see the catalog constant for the rationale.
+    var meetingsLLMSatisfied: Bool {
+        llmEngine == .mlx && llmModelID == ModelCatalog.meetingsRequiredLLMID
+    }
 }

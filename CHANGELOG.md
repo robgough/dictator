@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Meetings now require Gemma 4 E4B QAT (MXFP4) as the selected model in Settings → Models — it's the only one that writes meeting notes reliably. Recording, importing, and re-running notes explain what to select when a different model is active; existing meetings stay viewable either way.
 - The orange microphone indicator no longer stays lit claiming Dictator is listening between dictations — the sound-effects engine now releases the audio device about ten seconds after the last chime.
 - Dictation can no longer hang forever on "Connecting microphone": if the mic hasn't started after 12 seconds the attempt fails with a clear message, the recorder is reset, and the next press starts clean.
 - Two new on-device LLM options in Settings → Models: Gemma 4 E2B and E4B, Google's latest open models, in their QAT (quantization-aware trained) releases. E2B is a strong middle ground between the 3B-class options and Qwen 7B; E4B is the highest-quality option in the catalog and uses the new MXFP4 format for faster generation.

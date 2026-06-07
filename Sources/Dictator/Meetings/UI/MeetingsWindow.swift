@@ -48,6 +48,13 @@ struct MeetingsRootView: View {
     /// off a multi-hundred-MB download in the middle of a live recording.
     @State private var showingParakeetGate = false
 
+    /// Raised when the user tries to record/import without the one LLM that
+    /// writes acceptable meeting notes selected (see
+    /// `ModelCatalog.meetingsRequiredLLMID`). Blocking up front beats
+    /// recording an hour of audio and handing the transcript to a model
+    /// whose notes the user will just throw away.
+    @State private var showingMeetingLLMGate = false
+
     /// Whether the Parakeet model meetings depend on is downloaded and ready.
     private var parakeetReady: Bool {
         ParakeetService.modelsExist(id: state.settings.parakeetModelID)
@@ -124,6 +131,25 @@ struct MeetingsRootView: View {
         } message: {
             Text("Meetings transcribe on-device with Parakeet, which isn’t downloaded yet. Download it (about a minute on a fast connection) and you can watch progress in Settings → Models, then start your meeting.")
         }
+        .alert("Meetings need \(ModelCatalog.meetingsRequiredLLMName)", isPresented: $showingMeetingLLMGate) {
+            Button("Open Settings") {
+                state.openSettingsAction?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Writing useful notes from a long transcript is the hardest job in the app, and \(ModelCatalog.meetingsRequiredLLMName) is the only model that does it reliably — smaller models drift off the transcript. Select it under Settings → Models, then start your meeting.")
+        }
+    }
+
+    /// Block a record/import attempt unless the one LLM that writes decent
+    /// meeting notes is the selected model. Returns true when it's safe to
+    /// proceed.
+    private func ensureMeetingLLMReady() -> Bool {
+        guard state.settings.meetingsLLMSatisfied else {
+            showingMeetingLLMGate = true
+            return false
+        }
+        return true
     }
 
     /// Block a record/import attempt when Parakeet isn't ready, raising the
@@ -315,6 +341,7 @@ struct MeetingsRootView: View {
         // permissions or the recorder so the user gets the download prompt
         // rather than a stalled live-notes pane mid-recording.
         guard ensureParakeetReady() else { return }
+        guard ensureMeetingLLMReady() else { return }
         // Probe permission first so the user gets the deep-link banner
         // before we try to bring up the CATap recorder.
         switch await AudioRecordingPermission.probe() {
@@ -334,6 +361,7 @@ struct MeetingsRootView: View {
 
     private func importFile() async {
         guard ensureParakeetReady() else { return }
+        guard ensureMeetingLLMReady() else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -350,6 +378,7 @@ struct MeetingsRootView: View {
     /// leaves the last-imported session selected when the batch is done.
     private func importFiles(_ urls: [URL]) async {
         guard ensureParakeetReady() else { return }
+        guard ensureMeetingLLMReady() else { return }
         for url in urls {
             // Build the shell synchronously (fast — just reads file
             // metadata). The session lands in `.importing(0)` so the
