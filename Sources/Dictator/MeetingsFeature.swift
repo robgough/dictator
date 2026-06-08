@@ -9,7 +9,7 @@ import Foundation
 /// menu bar entries plus the `dictator://meetings` deep link check it
 /// before exposing anything. The Settings → Meetings tab is the one place
 /// that's always reachable — it hosts the preview notice and the opt-in
-/// toggle. The Meetings WindowGroup stays registered unconditionally
+/// toggle. The Meetings window stays registered unconditionally
 /// (SwiftUI scene builders can't take a runtime `if`); registration alone
 /// exposes nothing without an entry point.
 @MainActor

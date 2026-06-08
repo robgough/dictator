@@ -45,11 +45,17 @@ struct DictatorApp: App {
         .handlesExternalEvents(matching: ["settings"])
 
         // Meetings ships as a runtime-gated early preview (see
-        // `MeetingsFeature.swift`). The WindowGroup is registered
-        // unconditionally — scene builders can't take a runtime `if` —
-        // but every entry point (menu bar buttons, the deep link below)
-        // checks `MeetingsFeature.isEnabled` before opening it.
-        WindowGroup(id: "meetings") {
+        // `MeetingsFeature.swift`). The scene is registered unconditionally —
+        // scene builders can't take a runtime `if` — but every entry point
+        // (menu bar buttons, the deep link below) checks
+        // `MeetingsFeature.isEnabled` before opening it.
+        //
+        // A single `Window`, NOT a `WindowGroup`: Meetings is one-per-app, so
+        // `openWindow(id: "meetings")` re-fronts the existing window instead of
+        // spawning a duplicate, and there's no ⌘N "new window" command. The
+        // live recording / detail-pane state lives in this window's `@State`,
+        // which only makes sense as a single instance anyway.
+        Window("Meetings", id: "meetings") {
             MeetingsRootView()
                 .environment(appState)
                 .frame(minWidth: 760, minHeight: 480)
