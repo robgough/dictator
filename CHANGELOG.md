@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.6.1 — 2026-06-08
+
 - New Scratchpad: press a shortcut (default Option-X) to slide a floating note in from the right, jot a quick plain-text note, then press it again or Esc to tuck it away. It's saved as scratchpad.md in your synced folder, so if that's in iCloud Drive the note follows you to your other Macs. Turn it on, pick the shortcut, and choose its width (Small, Medium, or Large) in Settings → General.
 
 ## v2026.6.0 — 2026-06-07

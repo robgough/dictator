@@ -314,6 +314,22 @@
                 type="application/octet-stream"
                 sparkle:edSignature="xfWXhENlnXVwxdwcqVDCMRxG6gEiQT1zaQ7I+FTH1bH2AdjWv9jfQ6n9A9OlML5DS//bZUD0gHnwafGrKLdqAQ==" />
         </item>
+        <item>
+            <title>Version 2026.6.1</title>
+            <pubDate>Mon, 08 Jun 2026 03:18:25 +0000</pubDate>
+            <sparkle:version>19</sparkle:version>
+            <sparkle:shortVersionString>2026.6.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>New Scratchpad: press a shortcut (default Option-X) to slide a floating note in from the right, jot a quick plain-text note, then press it again or Esc to tuck it away. It&#x27;s saved as scratchpad.md in your synced folder, so if that&#x27;s in iCloud Drive the note follows you to your other Macs. Turn it on, pick the shortcut, and choose its width (Small, Medium, or Large) in Settings → General.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.1/Dictator.dmg"
+                length="30050588"
+                type="application/octet-stream"
+                sparkle:edSignature="knCeIFGAlJCq/W/NFCHpOIs5tMvvpoymEmc9HDbqVmB7uVi6sYTxtQOp64C8fFHEPb92me19/0Pjo7VFuB2wAA==" />
+        </item>
+    
     
     
     
