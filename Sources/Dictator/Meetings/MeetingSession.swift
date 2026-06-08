@@ -53,7 +53,40 @@ final class MeetingSession: Identifiable {
 
     let id: UUID
     var meta: MeetingMeta
-    private(set) var state: State
+    private(set) var state: State {
+        didSet {
+            // Keep the coarse `isLive` / `isProcessing` mirrors in step with the
+            // full state. Guarded so they mutate only on a real flip:
+            // @Observable invalidates on every assignment, even a same-value one,
+            // and the whole point of these mirrors is to NOT invalidate on the
+            // 10×/sec `.recording` meter ticks.
+            let live = state.isLive
+            if live != isLive { isLive = live }
+            let processing = state.isProcessing
+            if processing != isProcessing { isProcessing = processing }
+        }
+    }
+
+    /// Coarse, transition-only mirrors of `state.isLive` / `state.isProcessing`.
+    ///
+    /// The Meetings window chrome — `MeetingsRootView`'s `.toolbar`, the sidebar
+    /// "return to recording" banner condition, the detail-pane routing — keys off
+    /// these instead of reading `state` directly. `state` is reassigned 10×/sec
+    /// during a live recording (the meter/elapsed tick in `startTimerLoop`), and
+    /// because observation is property-level, any read of `state` inside
+    /// `MeetingsRootView.body` re-evaluates the whole split view — including the
+    /// toolbar — on every tick. Re-vending the toolbar that aggressively during
+    /// the window's display-commit cycle intermittently trips an AppKit autolayout
+    /// exception in `-[NSWindow _postWindowNeedsUpdateConstraints]` and crashes the
+    /// app (the 2026-06-07 report). These booleans flip only at real transitions,
+    /// so the chrome reconciles a handful of times per meeting. The live meters
+    /// that genuinely need 10fps live in `MeetingDetailView`, which keeps reading
+    /// `state` directly via its own `@Bindable session`.
+    ///
+    /// `didSet` doesn't fire during `init`, so any initializer that lands in a
+    /// live/processing state must seed these explicitly (see `init(forImport:)`).
+    private(set) var isLive = false
+    private(set) var isProcessing = false
     /// Bumped whenever transcript.json / tracks.json are rewritten outside a
     /// full re-process (currently: speaker merge), so views holding cached
     /// copies know to reload.
@@ -147,6 +180,8 @@ final class MeetingSession: Identifiable {
         self.id = meta.id
         self.meta = meta
         self.state = .importing(progress: 0)
+        // didSet doesn't run during init, so seed the mirror to match `.importing`.
+        self.isProcessing = true
         self.padText = MeetingStorage.readPad(for: meta.id)
     }
 

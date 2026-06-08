@@ -13,7 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Fixed a rare crash that could happen during a meeting recording, more likely the longer the Meetings window had been open.
 - New Scratchpad: press a shortcut (default Option-X) to slide a floating note in from the right, jot a quick plain-text note, then press it again or Esc to tuck it away. It's saved as scratchpad.md in your synced folder, so if that's in iCloud Drive the note follows you to your other Macs. Turn it on, pick the shortcut, and choose its width (Small, Medium, or Large) in Settings → General.
+- Assistant mode now reads a little of the text around your selection (the same Accessibility access used for pasting), so it can tell what "reply to this" or "make a list here" refers to and spell names the way your document does — all on-device, and never stored.
 
 ## v2026.6.0 — 2026-06-07
 

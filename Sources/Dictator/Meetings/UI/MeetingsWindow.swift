@@ -71,7 +71,7 @@ struct MeetingsRootView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 micPicker
-                if liveSession?.state.isLive == true {
+                if liveSession?.isLive == true {
                     Button(role: .destructive) {
                         Task {
                             await liveSession?.stopRecording(parakeetModelID: state.settings.parakeetModelID)
@@ -87,7 +87,7 @@ struct MeetingsRootView: View {
                     } label: {
                         Label("Record", systemImage: "record.circle")
                     }
-                    .disabled(liveSession?.state.isProcessing == true)
+                    .disabled(liveSession?.isProcessing == true)
                     .keyboardShortcut("r", modifiers: .command)
                 }
                 Button {
@@ -95,7 +95,7 @@ struct MeetingsRootView: View {
                 } label: {
                     Label("Import…", systemImage: "square.and.arrow.down")
                 }
-                .disabled(liveSession?.state.isLive == true)
+                .disabled(liveSession?.isLive == true)
             }
         }
         .onAppear {
@@ -171,7 +171,7 @@ struct MeetingsRootView: View {
         state.pendingMeetingRecording = false
         // Don't kick off a second recording if one's already live or a
         // session is mid-processing — same guard the toolbar button uses.
-        if liveSession?.state.isLive == true || liveSession?.state.isProcessing == true {
+        if liveSession?.isLive == true || liveSession?.isProcessing == true {
             return
         }
         Task { await startRecording() }
@@ -216,7 +216,7 @@ struct MeetingsRootView: View {
         VStack(spacing: 0) {
             // Pinned "return to recording" banner while a meeting records and
             // the user has navigated away to browse another.
-            if let live = liveSession, live.state.isLive, selectedID != live.id {
+            if let live = liveSession, live.isLive, selectedID != live.id {
                 RecordingReturnBanner(session: live) { selectedID = live.id }
             }
             if store.metas.isEmpty {
@@ -258,7 +258,7 @@ struct MeetingsRootView: View {
         // banner). Otherwise the live session owns the detail pane.
         if let id = selectedID, id != liveSession?.id, let session = session(for: id) {
             MeetingDetailView(session: session)
-        } else if let live = liveSession, live.state.isLive || live.state.isProcessing {
+        } else if let live = liveSession, live.isLive || live.isProcessing {
             MeetingDetailView(session: live)
         } else if let id = selectedID, let session = session(for: id) {
             MeetingDetailView(session: session)
@@ -291,7 +291,7 @@ struct MeetingsRootView: View {
     private func pruneSessionCache(keeping id: UUID) {
         let liveID = liveSession?.id
         sessionCache.byID = sessionCache.byID.filter { key, session in
-            key == id || key == liveID || session.state.isLive || session.state.isProcessing
+            key == id || key == liveID || session.isLive || session.isProcessing
         }
     }
 
@@ -302,7 +302,7 @@ struct MeetingsRootView: View {
     /// per user, kept consistent across both flows.
     @ViewBuilder
     private var micPicker: some View {
-        let isRecording = liveSession?.state.isLive == true
+        let isRecording = liveSession?.isLive == true
         Menu {
             ForEach(deviceManager.connectedDevices) { device in
                 Button {
