@@ -367,10 +367,24 @@
                         0 4px 12px -8px color-mix(in oklab, var(--fg) 20%, transparent);
             background: var(--card);
         }
-        .demo-frame video {
+        .demo-frame video,
+        .demo-frame img {
             display: block;
             width: 100%;
             height: auto;
+        }
+        /* In-situ product screenshot — reuses .demo-frame for the bordered,
+           shadowed, rounded chrome, wrapped in a <figure> so it can carry a
+           caption. Used by the Scratchpad section. */
+        figure.shot {
+            margin: 24px 0 0;
+        }
+        figure.shot figcaption {
+            margin-top: 13px;
+            font-size: 13.5px;
+            color: var(--fg-dim);
+            line-height: 1.5;
+            text-align: center;
         }
         /* "Watch the walkthrough" link under the demo. Plain anchor with
            an inline SVG play glyph — no YouTube thumbnail or iframe, so
@@ -1023,6 +1037,12 @@
             border-radius: 4px;
             font-size: 12.5px;
         }
+        .faq details p a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .faq details p a:hover { text-decoration: underline; }
         /* Final CTA — centred card right before the footer, so a reader
            who's scrolled the whole page doesn't have to bounce back to
            the hero to download. */
@@ -1150,8 +1170,10 @@
         <li><a href="#hotkeys">Two hotkeys</a></li>
         <li><a href="#pipeline">The pipeline</a></li>
         <li><a href="#modes">Dictation modes</a></li>
+        <li><a href="#context">Context awareness</a></li>
         <li><a href="#assistant">Assistant mode</a></li>
         <li><a href="#meetings">Meetings (preview)</a></li>
+        <li><a href="#scratchpad">Scratchpad</a></li>
         <li><a href="#models">Choose your models</a></li>
         <li><a href="#tradeoff">Local-first, honestly</a></li>
         <li><a href="#why">Why I built this</a></li>
@@ -1204,9 +1226,11 @@
         <ul class="feature-chips" aria-label="At a glance">
             <li class="chip">Fully on-device</li>
             <li class="chip">Any text field, any app</li>
+            <li class="chip">Context-aware</li>
             <li class="chip">Custom modes, per app</li>
             <li class="chip">Multi-turn assistant</li>
             <li class="chip">Meeting notes (preview)</li>
+            <li class="chip">Floating scratchpad</li>
             <li class="chip">Free &amp; open source</li>
         </ul>
 
@@ -1383,6 +1407,27 @@
         <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Write, decide partway through it should've been Quick, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind Email mode to Mail.app, Slack mode to Slack, and Dictator picks the right one as you start to record.</p>
     </section>
 
+    <section id="context" class="platform-mac">
+        <h2>Context awareness</h2>
+        <p class="lede">Both hotkeys can see a little of the text around your cursor — read through the same Accessibility access used for pasting — so what Dictator writes fits what's already on the page.</p>
+        <p>When you start a dictation or trigger the assistant, Dictator takes a quick, read-only look at the text either side of the insertion point or selection, and mines the distinctive names and terms from a wider sweep of the document. None of it is transcribed or stored; it's handed to the local model purely as context for that one run, then discarded.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #007AFF;">
+                <h3>When you dictate</h3>
+                <p>Names and terminology come out spelled the way the rest of your document spells them — an accented name like Siobhán is restored even when speech recognition drops the accent. And dictating into the middle of a sentence joins cleanly: the leading space, capitalisation, and trailing full stop adapt to exactly where the caret sits, instead of a stray capital or a doubled space.</p>
+            </div>
+            <div class="mode" style="--mode-color: #5e5ce6;">
+                <h3>When you ask the assistant</h3>
+                <p>The assistant sees what surrounds your selection too, so "reply to this" knows which message you mean and "make a list here" knows what the document is about — and it spells names and terms to match. Always on whenever Accessibility can read the app.</p>
+            </div>
+        </div>
+
+        <div class="callout" style="margin-top: 18px;">
+            <strong>Stays on your Mac.</strong> The surrounding text only ever goes to the local model and is never written to disk. Password fields are never read, and apps that don't expose their text to Accessibility (some Electron apps, Google Docs, terminals) simply work without it — nothing breaks, you just lose the extra polish. For dictation it's a per-mode toggle, on by default; the assistant uses it whenever it can.
+        </div>
+    </section>
+
     <section id="assistant" class="assistant platform-mac">
         <h2>Assistant mode</h2>
         <p class="lede">A second hotkey for editing text by speaking to it.</p>
@@ -1427,6 +1472,23 @@
         <p>What it needs: the Parakeet speech model, the speaker-identification model (~110 MB), and — the big one — <a href="#models">Gemma 4 E4B</a>. In our testing it's the only local model that writes notes you can rely on across an hour of audio, so the feature is gated on it, and realistically that means a 32 GB Mac. Capturing the call audio uses macOS's System Audio Recording permission, and a recorded hour ends up around 80 MB on disk.</p>
     </section>
 
+    <section id="scratchpad" class="platform-mac">
+        <h2>Scratchpad</h2>
+        <p class="lede">A blank note, one keystroke away. Press a shortcut (⌥X by default) and a plain-text pad slides in from the edge of the screen; press it again, hit Esc, or click away and it slides back out.</p>
+        <p>It's for the thought you need to get down <em>now</em> — a phone number, a half-formed idea, something pasted out of a call — without hunting for a window or a file to put it in. The pad floats above everything and follows you between Spaces, and because it takes your typing without pulling focus from the app underneath, you can jot into it without losing your place in whatever you were doing. You can dictate straight into it, too.</p>
+
+        <figure class="shot">
+            <div class="demo-frame">
+                <img src="media/scratchpad-meetings.jpg"
+                     alt="Dictator on macOS: the Scratchpad note slid in from the right edge with a few lines of text, a meeting's written-up notes open behind it, and the dictation HUD listening at the bottom of the screen."
+                     width="1440" height="810" loading="lazy">
+            </div>
+            <figcaption>The Scratchpad slid in at the right — with a meeting's notes open behind it and a dictation in progress. All on the one Mac, all at once.</figcaption>
+        </figure>
+
+        <p style="margin-top: 22px;">There's just one pad, kept as <code>scratchpad.md</code> alongside your other settings. If that folder syncs through iCloud Drive it rides along to your other Macs, so the note you started on the laptop is there on the desktop. Width is up to you (Small, Medium, or Large), and the shortcut, width, and an on/off toggle live in Settings → General.</p>
+    </section>
+
     <section id="models" class="models platform-mac">
         <h2>Choose your models</h2>
         <p class="lede">Two engines for speech-to-text, six small instruction-tuned LLMs for the cleanup passes — or no LLM at all.</p>
@@ -1441,9 +1503,9 @@
                 <tbody>
                     <tr><td class="model-name">Whisper Tiny (English)</td>       <td class="size">75 MB</td>   <td class="size">~150 MB</td>  <td class="note">Fastest, lowest accuracy.</td></tr>
                     <tr><td class="model-name">Whisper Base (English)</td>       <td class="size">140 MB</td>  <td class="size">~250 MB</td>  <td class="note">Good balance for short utterances.</td></tr>
-                    <tr><td class="model-name">Whisper Small (English)</td>      <td class="size">470 MB</td>  <td class="size">~700 MB</td>  <td class="note">Solid accuracy. Default.</td></tr>
+                    <tr><td class="model-name">Whisper Small (English)</td>      <td class="size">470 MB</td>  <td class="size">~700 MB</td>  <td class="note">Solid accuracy. The default if you switch the engine to Whisper.</td></tr>
                     <tr><td class="model-name">Whisper Large v3 Turbo</td>       <td class="size">1.5 GB</td>  <td class="size">~2 GB</td>    <td class="note">Best quality, multilingual.</td></tr>
-                    <tr><td class="model-name">Parakeet TDT v3 (multilingual)</td><td class="size">475 MB</td> <td class="size">~700 MB</td>  <td class="note">Runs on the Apple Neural Engine. ~60–70× realtime. 25 European languages.</td></tr>
+                    <tr><td class="model-name">Parakeet TDT v3 (multilingual)</td><td class="size">475 MB</td> <td class="size">~700 MB</td>  <td class="note">Default. Runs on the Apple Neural Engine. ~60–70× realtime. 25 European languages.</td></tr>
                     <tr><td class="model-name">Parakeet TDT v2 (English)</td>    <td class="size">475 MB</td>  <td class="size">~700 MB</td>  <td class="note">Slightly better English accuracy than v3.</td></tr>
                 </tbody>
             </table>
@@ -1658,8 +1720,13 @@
         </details>
 
         <details>
+            <summary>Does it read what's on my screen?</summary>
+            <p>Only the text right around your cursor or selection — see <a href="#context">Context awareness</a>. When you start a dictation or trigger the assistant, Dictator uses the macOS Accessibility API to read a small window of text either side of the insertion point; it does not use screen recording or OCR, and it never captures anything visual. What it reads goes only to the on-device model for that one run and is never stored. Password fields are excluded, apps that don't expose their text are simply skipped, and for dictation you can turn it off per mode.</p>
+        </details>
+
+        <details>
             <summary>What languages does it transcribe?</summary>
-            <p>English by default. Swap engines in Settings for multilingual: Whisper Large v3 Turbo covers around 100 languages, Parakeet TDT v3 covers 25 European languages on the Apple Neural Engine. The LLM cleanup passes are English-centric, so for other languages you'll usually want Quick mode (no LLM polish) — the raw transcript ships through with your spoken cues and vocabulary still applied.</p>
+            <p>The default engine — Parakeet TDT v3 on the Apple Neural Engine — covers 25 European languages. For wider reach, switch to Whisper Large v3 Turbo in Settings (around 100 languages). The LLM cleanup passes are English-centric, so for other languages you'll usually want Quick mode (no LLM polish) — the raw transcript ships through with your spoken cues and vocabulary still applied.</p>
         </details>
 
         <details>
@@ -1679,7 +1746,12 @@
 
         <details>
             <summary>How accurate is the transcription?</summary>
-            <p>Whisper Small (the default) is solid for short utterances and conversational speech in clean audio. Step up to Whisper Large v3 Turbo for the best accuracy and multilingual support; switch to Parakeet TDT v3 or v2 if you want ANE-accelerated transcription that runs 60–70× realtime with comparable accuracy. The "Choose your models" section above has concrete sizes and RAM numbers for each option.</p>
+            <p>Parakeet TDT v3 (the default) runs on the Apple Neural Engine at 60–70× realtime — fast, cool, and accurate across everyday and conversational speech. Parakeet TDT v2 trades the multilingual coverage for slightly better English accuracy. Prefer Whisper? Whisper Small is a solid alternative, and Whisper Large v3 Turbo gives the best accuracy and the widest language coverage (around 100 languages). The "Choose your models" section above has concrete sizes and RAM numbers for each option.</p>
+        </details>
+
+        <details>
+            <summary>Why is it free?</summary>
+            <p>No catch — no account, no telemetry, no upsell, no "Pro" tier waiting to gate the features you actually want. Two honest reasons. I built it because I wanted it for myself, and it stands on tools that are themselves free and open — Parakeet and Whisper for the transcription, the small local language models, Apple Silicon — so putting a subscription in front of that didn't sit right. And it doubles as a calling card: I'm a <a href="https://robgough.net">fractional CTO and technical advisor</a>, and Dictator is a public, working example of the kind of thing I build. If it's useful to you, that's the point — and if it ever leads to a conversation about working together, all the better.</p>
         </details>
     </section>
 
