@@ -105,6 +105,12 @@ final class AppState {
     private let assistantResultWindow = AssistantResultController()
     private var onboardingController: OnboardingController?
 
+    /// The Scratchpad's panel controller. Created and injected by `AppDelegate`
+    /// (alongside the HUD) before `bootstrap()` runs, so the toggle hotkey bound
+    /// there has something to drive. Observation-ignored — it's a UI handle, not
+    /// rendered from here.
+    @ObservationIgnored var scratchpadController: ScratchpadController?
+
     private init() {
         let settings = DictatorSettings.load()
         self.settings = settings
@@ -195,6 +201,14 @@ final class AppState {
             onRelease: { [weak self] in self?.assistantRelease() },
             tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
+        // Scratchpad: a plain tap-to-toggle combo, no push-to-talk semantics, so
+        // it binds directly through KeyboardShortcuts rather than a HotkeyBinder.
+        // The handler is registered once and checks the enable flag live, so the
+        // Settings toggle takes effect without re-binding.
+        KeyboardShortcuts.onKeyDown(for: .toggleScratchpad) { [weak self] in
+            guard let self, self.settings.scratchpadEnabled else { return }
+            self.scratchpadController?.toggle()
+        }
         if settings.preloadModelsOnLaunch {
             preloadModels()
         }

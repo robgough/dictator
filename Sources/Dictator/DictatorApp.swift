@@ -87,6 +87,7 @@ struct DictatorApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hud: HUDController?
+    private var scratchpad: ScratchpadController?
     // Held by the delegate so the strong reference outlives every
     // services-menu invocation. `NSApp.servicesProvider` is `weak`.
     private let learnWordProvider = LearnWordProvider()
@@ -182,6 +183,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let state = AppState.shared
         hud = HUDController(state: state)
+        // Create the Scratchpad controller and hand it to AppState before
+        // bootstrap, so the toggle hotkey bound there has a live panel to drive.
+        let scratchpad = ScratchpadController()
+        self.scratchpad = scratchpad
+        state.scratchpadController = scratchpad
         state.bootstrap()
 
         // Hook up the Services menu provider. The matching NSServices
@@ -193,6 +199,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // requiring a logout.
         NSApp.servicesProvider = learnWordProvider
         NSUpdateDynamicServices()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Flush any Scratchpad edit still inside its autosave debounce — quitting
+        // mid-sentence shouldn't lose the last few keystrokes.
+        scratchpad?.flush()
     }
 
     /// The already-running Dictator instance, if any, excluding this process.

@@ -81,6 +81,34 @@ enum AudioInterruption: String, Codable, Sendable, Hashable, CaseIterable {
     }
 }
 
+/// How wide the Scratchpad card is. Small matches the original fixed width;
+/// the controller clamps any choice to the screen so "Large" can't run off the
+/// edge on a small display.
+enum ScratchpadWidth: String, Codable, Sendable, Hashable, CaseIterable, Identifiable {
+    case small
+    case medium
+    case large
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        }
+    }
+
+    /// Card width in points. `CGFloat` is taken at the use site.
+    var points: Double {
+        switch self {
+        case .small: return 380
+        case .medium: return 520
+        case .large: return 700
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
@@ -243,6 +271,18 @@ struct DictatorSettings: Codable, Equatable {
     /// decision, like onboarding state; it shouldn't silently enable the
     /// feature on every synced Mac.
     var meetingsEnabled: Bool = false
+
+    /// Master switch for the Scratchpad — the slide-in plain-text note bound to
+    /// a global combo (default ⌥X). On by default. Synced across Macs because
+    /// it's a personal preference, not hardware-dependent. The actual key combo
+    /// lives in the KeyboardShortcuts library's own storage (per-Mac), the same
+    /// as the dictation/assistant combos.
+    var scratchpadEnabled: Bool = true
+
+    /// How wide the Scratchpad card slides in. Synced — a personal preference,
+    /// clamped to the screen at display time so it's safe across differently
+    /// sized Macs.
+    var scratchpadWidth: ScratchpadWidth = .small
 
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
@@ -411,6 +451,8 @@ struct DictatorSettings: Codable, Equatable {
         self.customMeetingTypes = try c.decodeIfPresent([MeetingTypeDefinition].self, forKey: .customMeetingTypes) ?? d.customMeetingTypes
         self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
         self.meetingsEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingsEnabled) ?? d.meetingsEnabled
+        self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
+        self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -1165,6 +1207,8 @@ struct DictatorSettings: Codable, Equatable {
         case customMeetingTypes
         case meetingDedupeMicEchoes
         case meetingsEnabled
+        case scratchpadEnabled
+        case scratchpadWidth
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -1198,6 +1242,8 @@ struct DictatorSettings: Codable, Equatable {
         "meetingSummaryPromptOverride",
         "defaultMeetingType",
         "customMeetingTypes",
+        "scratchpadEnabled",
+        "scratchpadWidth",
     ]
 
     /// Keys that belong in the per-Mac file

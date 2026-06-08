@@ -1874,6 +1874,34 @@ private struct GeneralPane: View {
                 }
             } header: { Text("Assistant Mode hotkey") }
             Section {
+                Toggle("Enable Scratchpad", isOn: $s.settings.scratchpadEnabled)
+                    .onChange(of: s.settings.scratchpadEnabled) { _, _ in state.save() }
+                if s.settings.scratchpadEnabled {
+                    HStack {
+                        Text("Toggle Scratchpad")
+                        Spacer()
+                        KeyboardShortcuts.Recorder(for: .toggleScratchpad)
+                        Button("Reset") {
+                            KeyboardShortcuts.reset(.toggleScratchpad)
+                        }
+                        .controlSize(.small)
+                    }
+                    Picker("Width", selection: $s.settings.scratchpadWidth) {
+                        ForEach(ScratchpadWidth.allCases) { width in
+                            Text(width.label).tag(width)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: s.settings.scratchpadWidth) { _, _ in
+                        state.save()
+                        state.scratchpadController?.relayoutIfVisible()
+                    }
+                    SectionFootnote("Press the shortcut to slide a floating note in from the right — jot plain text, then press it again (or Esc) to tuck it away. Saved as **scratchpad.md** in your synced folder, so it follows you to your other Macs.")
+                } else {
+                    SectionFootnote("A floating note you pop open with a shortcut to jot something down, then dismiss. Turn it on to pick a shortcut.")
+                }
+            } header: { Text("Scratchpad") }
+            Section {
                 Toggle("Paste into focused app automatically", isOn: $s.settings.pasteAutomatically)
                     .onChange(of: s.settings.pasteAutomatically) { _, _ in state.save() }
                 Toggle("Play feedback sounds", isOn: $s.settings.playSounds)

@@ -5,6 +5,12 @@ import KeyboardShortcuts
 extension KeyboardShortcuts.Name {
     static let toggleDictation = Self("toggleDictation", default: .init(.d, modifiers: [.option, .command]))
     static let toggleAssistant = Self("toggleAssistant", default: .init(.a, modifiers: [.option, .command]))
+    /// Scratchpad is a plain tap-to-toggle combo (not push-to-talk), so it
+    /// skips the `TriggerMode` / `HotkeyBinder` machinery and binds straight
+    /// through `KeyboardShortcuts.onKeyDown`. Default ⌥X — a Carbon-registered
+    /// combo, so it's consumed system-wide and never collides with the fn-hold
+    /// dictation trigger.
+    static let toggleScratchpad = Self("toggleScratchpad", default: .init(.x, modifiers: [.option]))
 }
 
 /// One binder = one hotkey "channel" (e.g. dictation, or assistant). Each instance owns
