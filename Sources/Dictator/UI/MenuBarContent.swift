@@ -58,9 +58,7 @@ struct MenuBarContent: View {
                 }
                 if MeetingsFeature.isEnabled {
                     Button {
-                        NSApp.setActivationPolicy(.regular)
-                        NSApp.activate(ignoringOtherApps: true)
-                        openWindow(id: "meetings")
+                        showMeetings()
                     } label: {
                         Label("Meetings…", systemImage: "person.2.wave.2")
                     }
@@ -102,8 +100,26 @@ struct MenuBarContent: View {
             state.openSettingsAction = { openSettings() }
             // Captured unconditionally — the action itself is harmless and
             // the deep-link handler checks the meetings toggle before use.
-            state.openMeetingsAction = { openWindow(id: "meetings") }
+            state.openMeetingsAction = { showMeetings() }
             NSLog("[Dictator] MenuBarContent.onAppear: captured openSettings action")
+        }
+    }
+
+    /// Open — or, when it's already open, re-front and focus — the single
+    /// Meetings window. `openWindow(id:)` re-fronts a singleton `Window`, but
+    /// for an accessory (menu-bar) app an already-open window sitting behind
+    /// another app doesn't reliably become key, so we raise it explicitly on the
+    /// next runloop tick (by which point SwiftUI has surfaced/created it). The
+    /// `.regular` activation makes the dock icon appear; the AppDelegate flips
+    /// back to `.accessory` when the window closes.
+    private func showMeetings() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: "meetings")
+        DispatchQueue.main.async {
+            NSApp.windows
+                .first { $0.title == "Meetings" || ($0.identifier?.rawValue.hasPrefix("meetings") ?? false) }?
+                .makeKeyAndOrderFront(nil)
         }
     }
 
@@ -278,9 +294,7 @@ struct MenuBarContent: View {
     private var recordMeetingButton: some View {
         Button {
             state.pendingMeetingRecording = true
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: "meetings")
+            showMeetings()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "record.circle.fill")
