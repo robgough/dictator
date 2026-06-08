@@ -190,6 +190,7 @@ final class AppleFoundationLLMService: LLMEngine {
         systemPrompt: String,
         priorTurns: [ConversationTurn],
         summary: String?,
+        context: InsertionContext?,
         cancellation: @Sendable @escaping () -> Bool
     ) async throws -> AssistantResult {
         try await ensureReady()
@@ -203,7 +204,8 @@ final class AppleFoundationLLMService: LLMEngine {
             selection: selection,
             instruction: instruction,
             priorTurns: priorTurns,
-            summary: summary
+            summary: summary,
+            context: context
         )
         let options = GenerationOptions(
             temperature: 0.2,
@@ -316,7 +318,8 @@ final class AppleFoundationLLMService: LLMEngine {
         selection: String?,
         instruction: String,
         priorTurns: [ConversationTurn],
-        summary: String?
+        summary: String?,
+        context: InsertionContext?
     ) -> String {
         var pieces: [String] = []
         if let summary, !summary.isEmpty {
@@ -336,6 +339,11 @@ final class AppleFoundationLLMService: LLMEngine {
             MODE: \(turn.mode.rawValue.uppercased())
             \(turn.reply)
             """)
+        }
+        // Document context for the current turn (the surrounding text only
+        // describes where the user is now, so it isn't attached to prior turns).
+        if let context, context.hasPromptMaterial {
+            pieces.append(context.assistantPromptBlock)
         }
         pieces.append("""
         Current user turn:

@@ -48,12 +48,18 @@ protocol LLMEngine: AnyObject {
     func tidyGrammar(text: String, systemPrompt: String) async throws -> String
     func restructure(text: String, systemPrompt: String) async throws -> String
 
+    /// `context` is the document text surrounding the selection/cursor in the
+    /// focused app (read via Accessibility at hotkey-press). nil when none was
+    /// available — no permission, or the app doesn't expose ranged text. Used
+    /// only by the interactive Assistant Mode path; the Meetings callers go
+    /// through the contextless convenience overload below.
     func assist(
         selection: String?,
         instruction: String,
         systemPrompt: String,
         priorTurns: [ConversationTurn],
         summary: String?,
+        context: InsertionContext?,
         cancellation: @Sendable @escaping () -> Bool
     ) async throws -> AssistantResult
 
@@ -71,4 +77,30 @@ protocol LLMEngine: AnyObject {
     /// Apple Foundation we use a fixed conservative figure because the framework
     /// doesn't expose its context limit.
     var assistantInputTokenBudget: Int { get }
+}
+
+extension LLMEngine {
+    /// Convenience overload for callers that have no surrounding-document
+    /// context to supply — the Meetings pipeline (speaker naming, notes,
+    /// summaries) drives the assistant LLM as a plain text transform. Forwards
+    /// with `context: nil` so only the interactive Assistant Mode path has to
+    /// know about document context.
+    func assist(
+        selection: String?,
+        instruction: String,
+        systemPrompt: String,
+        priorTurns: [ConversationTurn],
+        summary: String?,
+        cancellation: @Sendable @escaping () -> Bool
+    ) async throws -> AssistantResult {
+        try await assist(
+            selection: selection,
+            instruction: instruction,
+            systemPrompt: systemPrompt,
+            priorTurns: priorTurns,
+            summary: summary,
+            context: nil,
+            cancellation: cancellation
+        )
+    }
 }

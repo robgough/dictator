@@ -267,6 +267,12 @@ final class Pipeline {
     private struct InFlightAssistant {
         var selection: String?
         var continuesConversation: Bool
+        /// Document text surrounding the selection, captured via Accessibility
+        /// at press time (always on for the assistant; nil when AX can't read
+        /// the focused app). Fed to the assistant LLM as read-only reference so
+        /// it can resolve "reply to this" / "make a list here" and match the
+        /// document's spelling. Ephemeral — never written to history.
+        var context: InsertionContext? = nil
     }
     private var inFlightAssistant: InFlightAssistant?
 
@@ -1202,6 +1208,23 @@ final class Pipeline {
                 let continues = self.shouldContinueConversation(selection: selection)
                 self.nextAssistantIsContinuation = continues
                 inFlightAssistant = InFlightAssistant(selection: selection, continuesConversation: continues)
+                // Snapshot the document around the selection while focus is
+                // still in the target app (the HUD is non-activating). Same
+                // Accessibility read dictation uses; always on for the
+                // assistant. Detached so a busy app can't stall setup — it
+                // lands well before the assist call (transcription buys time),
+                // and the >0.5 s audio gate guarantees it has finished. A nil
+                // capture (no permission, app hides its text, secure field)
+                // just means no context this turn — opportunistic, never
+                // load-bearing.
+                Task.detached(priority: .userInitiated) { [weak self] in
+                    let captured = AXContextReader.capture(
+                        maxBefore: AXContextReader.promptBeforeCap,
+                        maxAfter: AXContextReader.promptAfterCap,
+                        mineTerms: true
+                    )
+                    await MainActor.run { self?.inFlightAssistant?.context = captured }
+                }
                 // Same async-warmup story as `startRecording`: recorder
                 // start is non-blocking so BT HFP negotiation doesn't
                 // stall the assistant flow. handleRecorderReady promotes
@@ -1412,10 +1435,15 @@ final class Pipeline {
         // summariser failure we surface a hard "conversation too long" error
         // rather than silently dropping context — the user said that's the
         // right call.
+        // Read the press-time document context now — after transcription, so
+        // the detached AX capture has long since landed (read here rather than
+        // snapshotted at key-release to dodge the struct-copy race).
+        let assistantContext = inFlightAssistant?.context
         var pendingCompactionIndex: Int? = nil
         let estimate = ConversationContextBudget.estimateInputTokens(
             priorTurns: priorTurns, summary: summary,
-            selection: selection, instruction: instruction
+            selection: selection, instruction: instruction,
+            context: assistantContext
         )
         if estimate > llm.assistantInputTokenBudget {
             guard priorTurns.count > 2, let active = activeConversation else {
@@ -1457,6 +1485,7 @@ final class Pipeline {
                 systemPrompt: settings.effectiveAssistantPrompt,
                 priorTurns: priorTurns,
                 summary: summary,
+                context: assistantContext,
                 cancellation: { Task.isCancelled }
             )
         } catch {

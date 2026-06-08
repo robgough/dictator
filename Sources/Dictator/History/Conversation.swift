@@ -77,9 +77,14 @@ enum ConversationContextBudget {
         priorTurns: [ConversationTurn],
         summary: String?,
         selection: String?,
-        instruction: String
+        instruction: String,
+        context: InsertionContext? = nil
     ) -> Int {
         var chars = (selection?.count ?? 0) + instruction.count
+        if let context {
+            chars += context.textBefore.count + context.textAfter.count
+            chars += context.documentTerms.reduce(0) { $0 + $1.count + 2 }
+        }
         for turn in priorTurns {
             chars += turn.instruction.count + (turn.selection?.count ?? 0) + turn.reply.count
         }

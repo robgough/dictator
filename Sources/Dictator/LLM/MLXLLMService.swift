@@ -216,6 +216,7 @@ final class MLXLLMService: LLMEngine {
         systemPrompt: String,
         priorTurns: [ConversationTurn] = [],
         summary: String? = nil,
+        context: InsertionContext?,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> AssistantResult {
         try await ensureReady()
@@ -224,6 +225,9 @@ final class MLXLLMService: LLMEngine {
         }
 
         let currentUserText = LLMTextUtilities.renderAssistantUserMessage(selection: selection, instruction: instruction)
+        // Build the surrounding-document block (if any) outside the perform
+        // closure so only a Sendable String crosses into it.
+        let contextBlock: String? = (context?.hasPromptMaterial == true) ? context?.assistantPromptBlock : nil
 
         let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             var messages: [Chat.Message] = [.system(systemPrompt)]
@@ -245,6 +249,12 @@ final class MLXLLMService: LLMEngine {
                 messages.append(.assistant("MODE: \(turn.mode.rawValue.uppercased())\n\(turn.reply)"))
             }
 
+            // Document context for the current turn, just before the current
+            // user message it describes. (Prior turns carry no context — the
+            // surrounding text is only meaningful for where the user is now.)
+            if let contextBlock {
+                messages.append(.user(contextBlock))
+            }
             messages.append(.user(currentUserText))
 
             let userInput = UserInput(chat: messages)
