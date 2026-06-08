@@ -1816,6 +1816,16 @@ private struct GeneralPane: View {
                 SectionFootnote("Used to bias transcription toward the correct spelling of your name, and so the assistant signs drafts as you (emails, replies, messages). Leave blank if you'd rather not set one.")
             } header: { Text("Your name") }
             Section {
+                TextEditor(text: $s.settings.globalPromptAddendum)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+                    .frame(height: 72)
+                    .onChange(of: s.settings.globalPromptAddendum) { _, _ in state.save() }
+                SectionFootnote("Added to every AI pass — dictation (format, grammar, restructure), the assistant, and meeting notes — even ones you've given a custom prompt. Use it for preferences that apply everywhere, like \u{201C}Always use British English\u{201D} or how to spell a product name. Tweaks for a single pass still live in each Mode and in the Assistant and Meeting-notes prompt settings.")
+            } header: { Text("Global AI instructions") }
+            Section {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
                     ForEach(TriggerMode.allCases.filter { mode in
                         // Hide whatever the assistant trigger is currently using so

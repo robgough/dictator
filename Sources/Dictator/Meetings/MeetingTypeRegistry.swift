@@ -63,7 +63,7 @@ enum MeetingTypeRegistry {
             displayName: "Auto-detect",
             detail: "Let the model decide from the transcript",
             template: """
-            First identify the kind of recording from the transcript — a stand-up, 1-on-1, retrospective, planning, interview, client call, brainstorm, talk / lecture, a conversation you're only listening in on (podcast, panel, discussion), or a general team meeting — then write the notes in the structure that kind typically calls for, adapting the emphasis within the Summary, Discussion, Decisions and Action items sections. Keep the section format from the system prompt.
+            First identify the kind of recording from the transcript — a stand-up, 1-on-1, retrospective, planning, interview, client call, brainstorm, talk / lecture, a conversation you're only listening in on (podcast, panel, discussion), or a general team meeting — then write the notes in the structure that kind typically calls for, adapting the emphasis and choosing topic sections that fit the content. Keep the section format from the system prompt.
             """,
             isBuiltIn: true
         ),

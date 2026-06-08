@@ -221,13 +221,18 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
 
     // MARK: - Effective prompts
 
-    var effectiveFormattingPrompt: String {
+    /// `global` is `DictatorSettings.globalPromptAddendum` — the cross-cutting
+    /// "apply to every pass" instructions, threaded in by the caller (the
+    /// dictation modes live on settings but don't hold the global field
+    /// themselves). Defaults to "" so non-pipeline callers stay simple.
+    func effectiveFormattingPrompt(global: String = "") -> String {
         Self.combine(builtin: DictatorSettings.builtinFormattingPrompt,
                      override: formattingPromptOverride,
-                     addendum: formattingPromptAddendum)
+                     addendum: formattingPromptAddendum,
+                     global: global)
     }
 
-    var effectiveGrammarPrompt: String {
+    func effectiveGrammarPrompt(global: String = "") -> String {
         // Tidy vs tighten pick different built-ins; override (when set) still
         // replaces wholesale so users can pin a single custom prompt without
         // it silently swapping under them when they change the mode.
@@ -240,20 +245,28 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         }
         return Self.combine(builtin: builtin,
                             override: grammarPromptOverride,
-                            addendum: grammarPromptAddendum)
+                            addendum: grammarPromptAddendum,
+                            global: global)
     }
 
-    var effectiveStructuralPrompt: String {
+    func effectiveStructuralPrompt(global: String = "") -> String {
         Self.combine(builtin: DictatorSettings.builtinStructuralPrompt,
                      override: structuralPromptOverride,
-                     addendum: structuralPromptAddendum)
+                     addendum: structuralPromptAddendum,
+                     global: global)
     }
 
-    private static func combine(builtin: String, override: String?, addendum: String) -> String {
-        if let override { return override }
-        let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return builtin }
-        return builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
+    private static func combine(builtin: String, override: String?, addendum: String, global: String) -> String {
+        let base: String
+        if let override {
+            base = override
+        } else {
+            let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
+            base = trimmed.isEmpty
+                ? builtin
+                : builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
+        }
+        return DictatorSettings.appendingGlobal(base, global)
     }
 
     // MARK: - Seeds

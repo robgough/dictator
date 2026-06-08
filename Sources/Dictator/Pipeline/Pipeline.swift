@@ -586,7 +586,7 @@ final class Pipeline {
             // in on the system prompt so the formatter spells names and
             // terminology the way the document does. The dictation itself
             // stays the only <<<>>> data block.
-            var formattingPrompt = currentMode.effectiveFormattingPrompt
+            var formattingPrompt = currentMode.effectiveFormattingPrompt(global: settings.globalPromptAddendum)
             var contextInjected = false
             if let context = inFlight.context, context.hasPromptMaterial {
                 formattingPrompt += "\n\n" + context.formatterPromptBlock
@@ -705,7 +705,7 @@ final class Pipeline {
         do {
             let tidied = try await llm.tidyGrammar(
                 text: formatted,
-                systemPrompt: currentMode.effectiveGrammarPrompt
+                systemPrompt: currentMode.effectiveGrammarPrompt(global: settings.globalPromptAddendum)
             )
             // Empty output usually means the model echoed the wrapping and the
             // post-processor collapsed it to nothing. Treat as failure.
@@ -748,7 +748,7 @@ final class Pipeline {
         do {
             let restructured = try await llm.restructure(
                 text: formatted,
-                systemPrompt: currentMode.effectiveStructuralPrompt
+                systemPrompt: currentMode.effectiveStructuralPrompt(global: settings.globalPromptAddendum)
             )
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted

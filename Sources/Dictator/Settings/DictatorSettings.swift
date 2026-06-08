@@ -238,6 +238,16 @@ struct DictatorSettings: Codable, Equatable {
     /// use built-in + addendum.
     var meetingSummaryPromptOverride: String?
 
+    /// Cross-cutting instructions the user wants applied to EVERY LLM pass —
+    /// dictation (format / grammar / restructure), the assistant, and meeting
+    /// notes. Appended as the outermost layer of each effective prompt: after
+    /// any per-pass addendum, and even when a pass is fully overridden, so a
+    /// preference like "always use British English" or a house spelling holds
+    /// everywhere without being pasted into each pass separately. Empty = no
+    /// global steer. Synced across Macs — it's a personal preference, not
+    /// hardware-dependent.
+    var globalPromptAddendum: String = ""
+
     /// Default meeting-type bias applied when the meeting itself is set
     /// to `.auto` (i.e. the user hasn't picked a specific type on the
     /// detail page). Synced across Macs because the right default
@@ -446,6 +456,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
+        self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
         self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
         self.defaultMeetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
         self.customMeetingTypes = try c.decodeIfPresent([MeetingTypeDefinition].self, forKey: .customMeetingTypes) ?? d.customMeetingTypes
@@ -571,7 +582,8 @@ struct DictatorSettings: Codable, Equatable {
     var effectiveMeetingSummaryPrompt: String {
         Self.combine(builtin: Self.builtinMeetingSummaryPrompt,
                      override: meetingSummaryPromptOverride,
-                     addendum: meetingSummaryPromptAddendum)
+                     addendum: meetingSummaryPromptAddendum,
+                     global: globalPromptAddendum)
     }
 
     /// Resolved meeting summary prompt biased toward a specific meeting
@@ -584,17 +596,21 @@ struct DictatorSettings: Codable, Equatable {
     /// resolves the definition via `MeetingTypeRegistry` — settings stays
     /// registry-free.
     func effectiveMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
-        if let override = meetingSummaryPromptOverride { return override }
-        var stitched = Self.builtinMeetingSummaryPrompt
-        let typeAddendum = MeetingTemplateCompiler.compile(definition)
-        if !typeAddendum.isEmpty {
-            stitched += "\n\n" + typeAddendum
+        var stitched: String
+        if let override = meetingSummaryPromptOverride {
+            stitched = override
+        } else {
+            stitched = Self.builtinMeetingSummaryPrompt
+            let typeAddendum = MeetingTemplateCompiler.compile(definition)
+            if !typeAddendum.isEmpty {
+                stitched += "\n\n" + typeAddendum
+            }
+            let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !userAddendum.isEmpty {
+                stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
+            }
         }
-        let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !userAddendum.isEmpty {
-            stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
-        }
-        return stitched
+        return Self.appendingGlobal(stitched, globalPromptAddendum)
     }
 
     /// Compact variant of `effectiveMeetingSummaryPrompt(for:)` used for very
@@ -603,17 +619,21 @@ struct DictatorSettings: Codable, Equatable {
     /// compiled type template + user addendum` — so a user's "always British
     /// spelling" steer and per-type bias keep applying on the short path too.
     func effectiveCompactMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
-        if let override = meetingSummaryPromptOverride { return override }
-        var stitched = Self.builtinCompactMeetingSummaryPrompt
-        let typeAddendum = MeetingTemplateCompiler.compile(definition)
-        if !typeAddendum.isEmpty {
-            stitched += "\n\n" + typeAddendum
+        var stitched: String
+        if let override = meetingSummaryPromptOverride {
+            stitched = override
+        } else {
+            stitched = Self.builtinCompactMeetingSummaryPrompt
+            let typeAddendum = MeetingTemplateCompiler.compile(definition)
+            if !typeAddendum.isEmpty {
+                stitched += "\n\n" + typeAddendum
+            }
+            let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !userAddendum.isEmpty {
+                stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
+            }
         }
-        let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !userAddendum.isEmpty {
-            stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
-        }
-        return stitched
+        return Self.appendingGlobal(stitched, globalPromptAddendum)
     }
 
     var effectiveAssistantPrompt: String {
@@ -629,7 +649,8 @@ struct DictatorSettings: Codable, Equatable {
         //      is what stops "[Your Name]" leaking into drafts.
         let base = Self.combine(builtin: Self.builtinAssistantPrompt,
                                 override: assistantPromptOverride,
-                                addendum: assistantPromptAddendum)
+                                addendum: assistantPromptAddendum,
+                                global: globalPromptAddendum)
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let substituted: String
@@ -718,11 +739,28 @@ struct DictatorSettings: Codable, Equatable {
     /// the addendum is ignored because the user has opted out of the curated prompt.
     /// Otherwise we append the user's addendum under a labelled header so the model
     /// treats it as instructions, not as part of the schema or examples above.
-    private static func combine(builtin: String, override: String?, addendum: String) -> String {
-        if let override { return override }
-        let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return builtin }
-        return builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
+    private static func combine(builtin: String, override: String?, addendum: String, global: String) -> String {
+        let base: String
+        if let override {
+            base = override
+        } else {
+            let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
+            base = trimmed.isEmpty
+                ? builtin
+                : builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
+        }
+        return appendingGlobal(base, global)
+    }
+
+    /// Append the user's cross-cutting "global instructions" (Settings →
+    /// General) as the OUTERMOST layer of a pass's prompt — applied even on top
+    /// of a per-pass override, so a preference like "always British English"
+    /// holds everywhere. Empty global = no-op. Shared with `DictationMode`'s
+    /// prompt resolvers so the dictation passes append it the same way.
+    static func appendingGlobal(_ base: String, _ global: String) -> String {
+        let g = global.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !g.isEmpty else { return base }
+        return base + "\n\nGLOBAL INSTRUCTIONS (apply to every pass, alongside everything above):\n" + g
     }
 
     static let builtinFormattingPrompt = """
@@ -891,28 +929,48 @@ struct DictatorSettings: Codable, Equatable {
     static let builtinMeetingSummaryPrompt = """
     You write clean, copy-pasteable meeting notes in Markdown from a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
 
+    Summarise and paraphrase — don't copy long passages verbatim, and leave out greetings, small talk, and technical-difficulty chatter ("can you hear me?", "you're on mute") unless it actually matters.
+
+    The same point sometimes appears more than once — overlapping microphone and system audio can transcribe the same speech twice with slightly different errors. When two passages clearly say the same thing, record the point ONCE, keeping the clearer wording.
+
+    Fix obvious transcription errors. Product, tool, framework, company, and AI model names are the ones most often garbled — correct them to the most likely real name (e.g. a mangled spelling of a well-known tool or model). If you're not confident of a corrected name, keep your best guess and list it under `## Items to verify`. Correcting a garbled real name is the ONE thing you may change: numbers, figures, dates, and quoted wording still stay exactly as said (see FACTS AND FIGURES below).
+
     Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
 
-    Use EXACTLY these sections, in this order, each introduced by a `##` heading:
+    Structure the notes in this order. Every section except Summary is OPTIONAL: omit any heading that would have no content (heading and all) — a short meeting might be just a Summary. Never refuse and never emit placeholder text like "N/A". Always include `## Summary`.
 
     ## Summary
     A factual prose recap of what the meeting was about and where it landed — 2–3 sentences for a short meeting, up to a short paragraph for a long one. No bullet points here — it's prose. No editorialising.
 
-    ## Discussion
-    The substantive points discussed, as plain `-` bullets (use a two-space indent `  -` for detail under a point). Write each point in your own words. Do NOT start a bullet with the speaker's name, and do NOT copy the transcript's `[Speaker · mm:ss]` line prefixes into the notes. Be THOROUGH: capture every distinct point that was actually discussed, not just a headline few. A long, dense meeting must produce correspondingly thorough notes — never collapse it to a handful of bullets. Distil each point (don't transcribe verbatim), but do not drop real content for the sake of brevity. This is the body of the notes.
+    ## Attendees
+    OPTIONAL. Include only when the transcript makes the participants (and their roles, if stated) clear — one `-` bullet each, e.g. `- **Alice** — VP Engineering`. Speakers are often anonymous, so omit this section entirely rather than guess names or roles the transcript doesn't support.
+
+    Then the substance of the meeting, grouped BY TOPIC rather than in chronological order. Use `##` headings named to fit the content ("The setup", "Cost", "Testing", "How they start a project", …), or a single `## Discussion` when the meeting is simple. Within each section:
+    - `-` bullets, written in your own words (a two-space indent `  -` makes a sub-point). Do NOT start a bullet with the speaker's name, and do NOT copy the transcript's `[Speaker · mm:ss]` prefixes into the notes.
+    - A Markdown table when the content is genuinely tabular — comparing options, tools, or plans, or laying figures out across rows. Use standard pipe syntax with a header row and a `---` separator row, for example:
+    | Option | Cost | Notes |
+    | --- | --- | --- |
+    | A | £10/mo | fastest to set up |
+    Don't force prose into a table.
+    Be THOROUGH: capture every distinct point that was actually discussed, not just a headline few. A long, dense meeting must produce correspondingly thorough notes — distil each point (don't transcribe verbatim), but do not drop real content for the sake of brevity. This is the body of the notes.
 
     ## Decisions
-    Concrete AGREED OUTCOMES as `-` bullets — things the participants chose to do or not do, NOT topics merely discussed.
+    OPTIONAL. Concrete AGREED OUTCOMES as `-` bullets — things the participants chose to do or not do, NOT topics merely discussed.
 
     ## Action items
     Tasks as Markdown checkboxes, each in the shape `- [ ] **Owner** — the task`. Always use the `- [ ]` checkbox form. Use the owner-attribution rules below. When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix.
 
+    ## Notable quotes
+    OPTIONAL. A few memorable one-liners, paraphrased and kept short. Attribute one only when the speaker is clear from the transcript; otherwise leave it unattributed.
+
+    ## Items to verify
+    OPTIONAL. Names, product/tool/model names, figures, or facts you corrected or were unsure about — one short `-` bullet each, so the reader knows what to double-check.
+
     Rules:
-    - Plain Markdown: `##` headings, `-` bullets, and `- [ ]` task checkboxes (Action items only). A two-space indent makes a sub-point. Bold (`**…**`) is allowed for action-item owners. No tables, no HTML.
-    - OMIT a section entirely (heading and all) when it has no content — EXCEPT always include `## Summary`. A short or trivial meeting might be just a Summary. Never refuse and never emit placeholder text like "N/A".
-    - You MAY end a Discussion, Decisions, or Action items bullet with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
+    - Plain Markdown: `##` headings (`###` for a sub-theme), `-` bullets, `- [ ]` task checkboxes (Action items only), and pipe tables. A two-space indent makes a sub-point. Bold (`**…**`) is allowed for action-item owners and attendee names. No HTML.
+    - You MAY end a bullet in any topic, Decisions, or Action items section with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
     - Never wrap the notes, or any individual section, in ``` code fences.
-    - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said.
+    - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said. (Correcting a garbled real name to its true spelling is not inventing; making one up is.)
     - FACTS AND FIGURES: when the transcript states something specific and checkable — team or company size, org structure and reporting lines, financial figures (revenue, budgets, prices, funding), dates and deadlines, product, company or technology names, metrics and percentages — record it in the notes EXACTLY as stated. Never round ("about fifty" stays "about fifty", "47" stays "47"), never vague-ify ("a large team" for "12 engineers"), and never drop a concrete figure or name because it was mentioned only in passing. These specifics are often the most valuable content in the notes. Example — GOOD: `- Platform team is 12 engineers across 3 squads, reporting to the VP Engineering`. BAD: `- They discussed the team structure.`
     - ATTRIBUTION DISCIPLINE (applies to every section, not just Action items): a point being ABOUT a person is NOT the same as that person saying it. Credit a statement, view, preference, question, or commitment to someone ONLY when the transcript shows THAT speaker saying it — i.e. it appears under their `[Name · mm:ss]` prefix. "Speaker 1 says Bob should own rollout" means Speaker 1 said it; it does NOT mean Bob said anything. When the transcript doesn't make the speaker clear, state the point without naming who said it rather than guessing. The transcript's speaker prefixes are the ONLY evidence of who said what — never infer a speaker from the content of a line.
 
@@ -945,6 +1003,8 @@ struct DictatorSettings: Codable, Equatable {
     You write a SHORT, copy-pasteable note in Markdown from a brief recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
 
     This recording is very short, so keep the note light — do NOT scaffold empty sections onto it.
+
+    If overlapping microphone and system audio transcribed the same point twice, record it once. Correct obviously garbled product, tool, or AI model names to their likely real spelling; keep numbers, figures, and quoted wording exactly as said.
 
     Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
 
@@ -1203,6 +1263,7 @@ struct DictatorSettings: Codable, Equatable {
         case hotkeyTapToToggleEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
+        case globalPromptAddendum
         case defaultMeetingType
         case customMeetingTypes
         case meetingDedupeMicEchoes
@@ -1240,6 +1301,7 @@ struct DictatorSettings: Codable, Equatable {
         "hotkeyTapToToggleEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",
+        "globalPromptAddendum",
         "defaultMeetingType",
         "customMeetingTypes",
         "scratchpadEnabled",

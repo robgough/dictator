@@ -148,7 +148,7 @@ struct MeetingTypeEditorSheet: View {
     private var sectionPreview: some View {
         let parsed = MeetingTemplateCompiler.parse(template)
         if parsed.sections.isEmpty {
-            Text("No sections defined — the notes keep the standard Summary / Discussion / Decisions / Action items shape.")
+            Text("No sections defined — the notes keep the standard shape: a Summary, the discussion grouped into topic sections, then Decisions, Action items, and any notable quotes or items to verify.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         } else {

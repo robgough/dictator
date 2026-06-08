@@ -141,6 +141,43 @@ struct MarkdownNotesView: View {
                 )
         case .rule:
             Divider().padding(.vertical, 2)
+        case .table:
+            tableView(block.rows)
+        }
+    }
+
+    /// Render a parsed markdown table as a Grid — header row in semibold above a
+    /// rule, body rows beneath. Cells go through `inline()` for `**bold**` etc.
+    /// Short rows are padded so a ragged table still lays out in a clean grid.
+    @ViewBuilder
+    private func tableView(_ rows: [[String]]) -> some View {
+        let columns = rows.map(\.count).max() ?? 0
+        if columns > 0 {
+            Grid(alignment: .topLeading, horizontalSpacing: 16, verticalSpacing: 6) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    GridRow {
+                        ForEach(Array(0..<columns), id: \.self) { col in
+                            inline(col < row.count ? row[col] : "")
+                                .font(index == 0 ? .callout.weight(.semibold) : .callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if index == 0 {
+                        Divider().gridCellColumns(columns)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: MeetingMetrics.cardCornerRadius, style: .continuous)
+                    .fill(Color.secondary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: MeetingMetrics.cardCornerRadius, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
+            )
         }
     }
 
@@ -350,26 +387,41 @@ extension View {
 /// A parsed markdown block. Deliberately tiny — only the shapes the notes
 /// prompt emits.
 struct MarkdownBlock {
-    enum Kind { case heading, bullet, task, numbered, paragraph, code, rule }
+    enum Kind { case heading, bullet, task, numbered, paragraph, code, rule, table }
     let kind: Kind
     let text: String
     let level: Int       // heading level (1…), else 0
     let number: Int?     // ordered-list index, else nil
     let indent: Int      // bullet nesting depth (0 top-level, 1 sub, 2 sub-sub)
     let checked: Bool    // task state, for .task
+    let rows: [[String]] // table cells (header row first), for .table; else empty
 
-    init(kind: Kind, text: String, level: Int = 0, number: Int? = nil, indent: Int = 0, checked: Bool = false) {
+    init(kind: Kind, text: String, level: Int = 0, number: Int? = nil, indent: Int = 0, checked: Bool = false, rows: [[String]] = []) {
         self.kind = kind
         self.text = text
         self.level = level
         self.number = number
         self.indent = indent
         self.checked = checked
+        self.rows = rows
     }
 
     static func parse(_ markdown: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         var codeLines: [String]?
+        var tableLines: [String]?
+
+        // Flush a run of buffered `|`-delimited rows: a real table when it has a
+        // separator row, otherwise just text (so a lone `|` line isn't lost).
+        func flushTable() {
+            guard let collected = tableLines else { return }
+            tableLines = nil
+            if let table = makeTable(collected) {
+                blocks.append(table)
+            } else {
+                for l in collected { blocks.append(MarkdownBlock(kind: .paragraph, text: l)) }
+            }
+        }
 
         for rawLine in markdown.components(separatedBy: .newlines) {
             let leading = rawLine.prefix(while: { $0 == " " || $0 == "\t" }).count
@@ -381,6 +433,7 @@ struct MarkdownBlock {
             // is wrong, so if the fenced content is really markdown we parse it
             // as markdown instead.
             if line.hasPrefix("```") {
+                flushTable()
                 if let collected = codeLines {
                     if looksLikeMarkdown(collected) {
                         blocks.append(contentsOf: parse(collected.joined(separator: "\n")))
@@ -397,6 +450,16 @@ struct MarkdownBlock {
                 codeLines?.append(rawLine)
                 continue
             }
+
+            // Table rows: consecutive `|`-delimited lines, buffered so the
+            // header / separator / body are parsed together on flush. Any other
+            // line (including a blank one) ends the run.
+            if line.hasPrefix("|") {
+                if tableLines == nil { tableLines = [] }
+                tableLines?.append(line)
+                continue
+            }
+            flushTable()
 
             if line.isEmpty { continue }
 
@@ -440,6 +503,7 @@ struct MarkdownBlock {
 
             blocks.append(MarkdownBlock(kind: .paragraph, text: line))
         }
+        flushTable()  // table running to the end of the document
         if let collected = codeLines {  // unterminated fence
             if looksLikeMarkdown(collected) {
                 blocks.append(contentsOf: parse(collected.joined(separator: "\n")))
@@ -448,6 +512,32 @@ struct MarkdownBlock {
             }
         }
         return blocks
+    }
+
+    /// Parse buffered `|`-delimited lines into a table block. Requires a header
+    /// row, a separator row (`|---|---|` — cells of only `-`/`:`), and zero or
+    /// more body rows. Returns nil when there's no separator row, so the caller
+    /// falls back to rendering the lines as plain text rather than inventing a
+    /// table out of a stray `|` line.
+    static func makeTable(_ lines: [String]) -> MarkdownBlock? {
+        guard lines.count >= 2 else { return nil }
+        let cells = lines.map(splitTableRow)
+        let separator = cells[1]
+        let isSeparator = !separator.isEmpty && separator.allSatisfy { cell in
+            cell.contains("-") && cell.allSatisfy { $0 == "-" || $0 == ":" || $0 == " " }
+        }
+        guard isSeparator else { return nil }
+        var rows = [cells[0]]
+        rows.append(contentsOf: cells[2...])
+        return MarkdownBlock(kind: .table, text: "", rows: rows)
+    }
+
+    /// Split a `| a | b |` row into trimmed cells, dropping the framing pipes.
+    private static func splitTableRow(_ line: String) -> [String] {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// Heuristic: a fenced block whose non-empty lines are mostly headings or
