@@ -193,14 +193,6 @@ struct DictatorSettings: Codable, Equatable {
     /// audio, then the whole record when the older window kicks in.
     var meetingAudioRetentionDays: Int = 0
 
-
-    /// When true, MeetingProcessor runs the structured LLM summary pass
-    /// automatically after each meeting finishes transcribing. Default
-    /// is ON — users overwhelmingly expect a summary to appear without
-    /// having to push a button. The "Generate summary" button still
-    /// works manually for re-runs and for installs where the user has
-    /// disabled this toggle.
-    var meetingSummaryEnabled: Bool = true
     /// Show a running draft transcript while a meeting records (the "watch it
     /// take shape" pane). Default ON. Turning it off skips the entire live ASR
     /// path — no per-buffer resampling, chunking, or draft rendering during the
@@ -450,7 +442,6 @@ struct DictatorSettings: Codable, Equatable {
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
         self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
         self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
-        self.meetingSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingSummaryEnabled) ?? d.meetingSummaryEnabled
         self.meetingLiveTranscriptEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveTranscriptEnabled) ?? d.meetingLiveTranscriptEnabled
         self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
@@ -1256,7 +1247,6 @@ struct DictatorSettings: Codable, Equatable {
         case hasCompletedOnboarding
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
-        case meetingSummaryEnabled
         case meetingLiveTranscriptEnabled
         case meetingLiveNotesEnabled
         case meetingLiveNotesSelfCorrectEnabled
@@ -1294,7 +1284,6 @@ struct DictatorSettings: Codable, Equatable {
         "defaultModeID",
         "assistantPromptAddendum",
         "assistantPromptOverride",
-        "meetingSummaryEnabled",
         "meetingLiveTranscriptEnabled",
         "meetingLiveNotesEnabled",
         "meetingLiveNotesSelfCorrectEnabled",

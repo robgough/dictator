@@ -95,10 +95,6 @@ struct MeetingsPane: View {
             .disabled(!effectivelyEnabled)
 
             Section {
-                Toggle("Write notes automatically", isOn: Binding(
-                    get: { s.settings.meetingSummaryEnabled },
-                    set: { s.settings.meetingSummaryEnabled = $0; state.save() }
-                ))
                 Toggle("Show a live transcript while recording", isOn: Binding(
                     get: { s.settings.meetingLiveTranscriptEnabled },
                     set: { s.settings.meetingLiveTranscriptEnabled = $0; state.save() }
@@ -132,7 +128,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                Text("Runs \(ModelCatalog.meetingsRequiredLLMName) over the transcript after each meeting and writes markdown notes — a summary, the key discussion points, decisions, and action items. It's the only model that writes notes reliably, so meetings require it to be the selected model in Settings → Models before recording or importing. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on; the full notes are rewritten when the meeting ends.")
+                Text("Meetings write their notes with \(ModelCatalog.meetingsRequiredLLMName) — it's the only model that does it reliably, so it must be the selected model in Settings → Models before you record or import. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

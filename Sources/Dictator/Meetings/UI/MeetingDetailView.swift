@@ -9,6 +9,9 @@ struct MeetingDetailView: View {
     @State private var titleDraft: String = ""
     @State private var transcriptCache: MeetingTranscript?
     @State private var titleHovered = false
+    /// Whether the trailing Details inspector is showing. Remembered across
+    /// launches; only takes effect for finished meetings (see `canShowInspector`).
+    @AppStorage("meetingsInspectorVisible") private var inspectorVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +19,6 @@ struct MeetingDetailView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
                 .padding(.bottom, 12)
-            Divider()
             // The live-recording view is a fill-the-height two-column layout
             // (notes on the left, controls + transcript on the right) with its
             // own internal scrolling, so it bypasses the outer ScrollView the
@@ -63,6 +65,32 @@ struct MeetingDetailView: View {
         .onChange(of: session.transcriptRevision) { _, _ in
             transcriptCache = MeetingStorage.readTranscript(for: session.id)
         }
+        // Trailing Details inspector — metadata, speaker editing, and the
+        // on-demand notes control. Only for finished meetings, so it never
+        // squeezes the fixed-width live-recording layout.
+        .inspector(isPresented: inspectorBinding) {
+            MeetingInspector(session: session)
+                .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+        }
+    }
+
+    /// True for finished meetings, where the Details inspector and document
+    /// actions make sense. Hidden while live / processing / failed so the
+    /// inspector can't appear and squeeze the live two-column layout.
+    private var canShowInspector: Bool {
+        switch session.state {
+        case .ready, .idle, .summarising: return true
+        default: return false
+        }
+    }
+
+    /// Drives `.inspector`: the remembered preference, gated on the meeting
+    /// actually being a finished one. Writing through it persists the toggle.
+    private var inspectorBinding: Binding<Bool> {
+        Binding(
+            get: { inspectorVisible && canShowInspector },
+            set: { inspectorVisible = $0 }
+        )
     }
 
     /// States whose content is the transcript page (which manages its own
@@ -245,14 +273,10 @@ private struct ProcessingPill: View {
     var body: some View {
         // Bespoke chip: its `color` varies across the full processing palette
         // (orange / red / blue / purple / gray), which the kit's fixed tone set
-        // can't express — so it keeps its own fill but borrows the kit's
-        // scalable font and capsule padding for consistency.
+        // can't express — so it carries its own tint while sharing the kit's
+        // Liquid Glass capsule so it floats consistently with the other pills.
         Text(text)
-            .font(MeetingFonts.chipLabel)
-            .padding(.horizontal, MeetingMetrics.chipHPadding)
-            .padding(.vertical, MeetingMetrics.chipVPadding)
-            .background(Capsule().fill(color.opacity(0.15)))
-            .foregroundStyle(color)
+            .meetingGlassPill(tint: color)
     }
 }
 
@@ -373,10 +397,7 @@ struct LiveRecordingView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.secondary.opacity(0.08))
-            )
+            .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             // Capture warnings (mic and / or system) — surfaced when a
             // recorder fails to deliver buffers within its bring-up watchdog
@@ -586,11 +607,12 @@ private enum StepStatus { case done, active, pending }
 private struct ProcessingPane: View {
     @Bindable var session: MeetingSession
 
+    // Processing now finishes at the transcript — notes are a separate,
+    // user-triggered step (the Generate button), so they aren't listed here.
     private static let steps: [(title: String, symbol: String)] = [
         ("Transcribing what was said", "waveform"),
         ("Identifying who spoke", "person.2.wave.2"),
         ("Writing the transcript", "doc.text"),
-        ("Writing your notes", "sparkles"),
     ]
 
     var body: some View {
@@ -643,7 +665,6 @@ private struct ProcessingPane: View {
         case .importing, .loadingASR, .transcribingMic, .transcribingSystem: return 0
         case .loadingDiarizer, .diarizing: return 1
         case .merging: return 2
-        case .summarising: return 3
         default: return 0
         }
     }
@@ -654,7 +675,6 @@ private struct ProcessingPane: View {
              .transcribingSystem(let p), .loadingDiarizer(let p), .diarizing(let p):
             return p
         case .merging: return 0.6
-        case .summarising: return 0.5
         default: return 0
         }
     }
@@ -893,8 +913,7 @@ private struct LiveNotesField: View {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 11)
                             .padding(.vertical, 5)
-                            .background(Capsule().fill(.thinMaterial))
-                            .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.2)))
+                            .meetingGlassControl(in: Capsule(), interactive: true)
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 10)

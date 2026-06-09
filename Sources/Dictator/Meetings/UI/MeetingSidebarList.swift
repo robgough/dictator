@@ -74,8 +74,8 @@ private struct MeetingSidebarRow: View {
                     .truncationMode(.tail)
                 HStack(spacing: 5) {
                     Text(subtitle)
-                    if meta.notes != nil || meta.summary != nil {
-                        Image(systemName: "sparkles").help("Has notes")
+                    if hasFinalNotes {
+                        Image(systemName: "sparkles").help("Notes written")
                     }
                     if audioPruned {
                         Image(systemName: "doc.text").help("Audio removed — transcript kept")
@@ -87,6 +87,14 @@ private struct MeetingSidebarRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// True only when the polished, end-of-meeting notes have been generated.
+    /// Live/first-pass drafts (`isFinal == false`) deliberately don't light the
+    /// badge — notes are written on demand now, so the sparkle means "done",
+    /// not "a draft exists". The legacy structured `summary` counts as final.
+    private var hasFinalNotes: Bool {
+        meta.notes?.isFinal == true || meta.summary != nil
     }
 
     /// True when both audio tracks have been pruned (retention sweep) but the

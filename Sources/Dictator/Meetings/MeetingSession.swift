@@ -462,21 +462,18 @@ final class MeetingSession: Identifiable {
             }
             MeetingsStore.shared.upsert(meta)
 
-            // When a notes rewrite is coming, go STRAIGHT into the notes
-            // phase. Dropping to .ready here flashed the previous run's
-            // notes for the several seconds the speaker-name + title passes
-            // take, then yanked them away when the rewrite started —
-            // "ready… no wait, loading again". One continuous flow instead;
-            // the transcript stays readable throughout (.summarising keeps
-            // TranscriptView on screen).
+            // Processing always finishes at the transcript. Final notes are
+            // never written automatically any more — the user reviews the
+            // transcript and fixes speaker names first, then triggers the
+            // notes pass with the Generate button whenever they like (see
+            // `generateNotes`). So we land in `.ready` here unconditionally.
             let settings = AppState.shared.settings
             let llmAvailable = settings.activeLLMEngine() != nil
-            let willWriteNotes = settings.meetingSummaryEnabled && llmAvailable
-            state = willWriteNotes ? .summarising : .ready
+            state = .ready
 
-            // Guess real speaker names from the conversation before titling or
-            // writing notes, so both pick up "Rory" / "Pat" instead of
-            // "Speaker 1". Conservative and non-destructive — only touches
+            // Guess real speaker names from the conversation, so the roster the
+            // user reviews reads "Rory" / "Pat" instead of "Speaker 1" before
+            // they ever open it. Conservative and non-destructive — only touches
             // default/previously-guessed labels, never a manual rename.
             if llmAvailable {
                 await inferSpeakerNames(settings: settings)
@@ -493,19 +490,13 @@ final class MeetingSession: Identifiable {
                 await maybeAutoRename(settings: settings)
             }
 
-            // Optional auto-notes. The toggle is opt-in because the notes
-            // pass is expensive on a long meeting and not every user wants
-            // one; when it's off the user can still hit the "Generate" button
-            // on the meeting detail view.
-            if willWriteNotes {
-                await generateNotes(settings: settings)
-            }
-
-            // Tell the user their notes are ready if they recorded and walked
-            // away. Only for live recordings, and only when we're backgrounded
-            // (if they're looking at the window they can already see it).
+            // Tell the user the meeting is transcribed and ready to review if
+            // they recorded and walked away — they can come back, check who
+            // said what, and generate notes when convenient. Only for live
+            // recordings, and only when we're backgrounded (if they're looking
+            // at the window they can already see it).
             if meta.source == .live, !NSApp.isActive {
-                MeetingNotifier.notifyNotesReady(meetingTitle: meta.title)
+                MeetingNotifier.notifyTranscriptReady(meetingTitle: meta.title)
             }
 
             // The transcript is on disk, so the crash-safe-PCM rationale for

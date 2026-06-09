@@ -40,7 +40,6 @@ struct MeetingsRootView: View {
     @State private var sessionCache = SessionCache()
     @State private var showingPermissionBanner = false
     @State private var permissionMessage: String?
-    @State private var deviceManager = AudioDeviceManager.shared
     /// Raised when the user tries to record/import but the Parakeet speech
     /// model isn't on disk. Meetings always transcribe with Parakeet (on the
     /// ANE, so live notes don't fight the summary LLM for the GPU), so it's a
@@ -55,6 +54,17 @@ struct MeetingsRootView: View {
     /// whose notes the user will just throw away.
     @State private var showingMeetingLLMGate = false
 
+    /// True while a file is dragged over the window — drives the glass drop
+    /// overlay that replaced the always-visible dashed sidebar drop-zone.
+    @State private var isDropTargeted = false
+
+    /// Whether the Details inspector is showing. Shares the key with
+    /// `MeetingDetailView`'s `.inspector` binding, so the toolbar toggle here
+    /// and the pane there stay in lockstep. Lives in the window toolbar (with a
+    /// flexible spacer before it) so the toggle sits above the inspector while
+    /// the capture + document controls stay above the main content.
+    @AppStorage("meetingsInspectorVisible") private var inspectorVisible = true
+
     /// Whether the Parakeet model meetings depend on is downloaded and ready.
     private var parakeetReady: Bool {
         ParakeetService.modelsExist(id: state.settings.parakeetModelID)
@@ -68,34 +78,28 @@ struct MeetingsRootView: View {
             detail
         }
         .navigationTitle("Meetings")
+        // Two glass clusters on macOS 26: the mic + record/stop capture
+        // controls, then Import on its own. ToolbarSpacer splits them into
+        // separate Liquid Glass capsules. The detail view contributes a third
+        // trailing group (Share + Details) for the selected meeting.
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                micPicker
-                if liveSession?.isLive == true {
-                    Button(role: .destructive) {
-                        Task {
-                            await liveSession?.stopRecording(parakeetModelID: state.settings.parakeetModelID)
-                        }
-                    } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
-                    .tint(.red)
-                    .keyboardShortcut("r", modifiers: .command)
-                } else {
-                    Button {
-                        Task { await startRecording() }
-                    } label: {
-                        Label("Record", systemImage: "record.circle")
-                    }
-                    .disabled(liveSession?.isProcessing == true)
-                    .keyboardShortcut("r", modifiers: .command)
+                recordOrStopButton
+                importButton
+                if let session = shareableSession {
+                    shareMenu(for: session)
                 }
-                Button {
-                    Task { await importFile() }
-                } label: {
-                    Label("Import…", systemImage: "square.and.arrow.down")
+            }
+            // A small gap sets the inspector toggle apart from the action
+            // group, so it reads as the open/close-sidebar control.
+            if shareableSession != nil {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) {
+                    Button { inspectorVisible.toggle() } label: {
+                        Label("Details", systemImage: "sidebar.right")
+                    }
+                    .help("Show or hide meeting details.")
                 }
-                .disabled(liveSession?.isLive == true)
             }
         }
         .onAppear {
@@ -139,6 +143,22 @@ struct MeetingsRootView: View {
         } message: {
             Text("Writing useful notes from a long transcript is the hardest job in the app, and \(ModelCatalog.meetingsRequiredLLMName) is the only model that does it reliably — smaller models drift off the transcript. Select it under Settings → Models, then start your meeting.")
         }
+        // Whole-window drop target — drop an audio file anywhere over the
+        // Meetings window to import it. A glass card surfaces only while a drag
+        // is in flight, so the sidebar keeps the room the old dashed drop-zone
+        // used to permanently occupy.
+        .dropDestination(for: URL.self) { urls, _ in
+            handleDroppedURLs(urls)
+            return !urls.isEmpty
+        } isTargeted: { hovering in
+            isDropTargeted = hovering
+        }
+        .overlay {
+            if isDropTargeted {
+                MeetingDropOverlay()
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: isDropTargeted)
     }
 
     /// Block a record/import attempt unless the one LLM that writes decent
@@ -244,10 +264,7 @@ struct MeetingsRootView: View {
                     }
                 }
             }
-            SidebarDropZone { urls in
-                handleDroppedURLs(urls)
-            }
-            SyncExplainerFooter()
+            SyncFooterChip()
         }
     }
 
@@ -295,45 +312,130 @@ struct MeetingsRootView: View {
         }
     }
 
-    /// Toolbar menu showing the currently-active mic and letting the user
-    /// promote any connected device. Selecting one rewrites
-    /// `AudioDeviceManager.knownDevices` so both dictation and the next
-    /// meeting record pick it up — there's only ever one "preferred mic"
-    /// per user, kept consistent across both flows.
+    /// The session backing the detail pane right now, but only when it's a
+    /// finished meeting the Share menu can act on. Mirrors `detail`'s selection
+    /// logic so the toolbar's Share button tracks what's actually on screen.
+    private var shareableSession: MeetingSession? {
+        let candidate: MeetingSession?
+        if let id = selectedID, id != liveSession?.id, let s = session(for: id) {
+            candidate = s
+        } else if let live = liveSession, live.isLive || live.isProcessing {
+            candidate = live
+        } else if let id = selectedID, let s = session(for: id) {
+            candidate = s
+        } else {
+            candidate = nil
+        }
+        guard let candidate else { return nil }
+        switch candidate.state {
+        case .ready, .idle, .summarising: return candidate
+        default: return nil
+        }
+    }
+
+    /// Copy / export menu. Tab-independent, so it lives in the window toolbar
+    /// (above the content) rather than over the reading surface. "Copy notes"
+    /// gives the markdown notes; "Copy transcript" / "Export…" use the diarized
+    /// transcript read from disk on demand.
     @ViewBuilder
-    private var micPicker: some View {
-        let isRecording = liveSession?.isLive == true
+    private func shareMenu(for session: MeetingSession) -> some View {
+        let meta = session.meta
         Menu {
-            ForEach(deviceManager.connectedDevices) { device in
-                Button {
-                    deviceManager.promote(uid: device.uid)
-                } label: {
-                    if device.uid == deviceManager.preferredConnectedDevice()?.uid {
-                        Label(device.name, systemImage: "checkmark")
-                    } else {
-                        Text(device.name)
-                    }
-                }
+            Button { copyNotes(meta) } label: {
+                Label("Copy notes", systemImage: "doc.on.doc")
+            }
+            .disabled(meta.notes == nil)
+            Button { copyTranscript(session) } label: {
+                Label("Copy transcript", systemImage: "text.quote")
             }
             Divider()
-            Button {
-                deviceManager.refresh()
-            } label: {
-                Label("Refresh devices", systemImage: "arrow.clockwise")
+            Button { exportMeeting(session) } label: {
+                Label("Export…", systemImage: "square.and.arrow.up")
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "mic")
-                Text(deviceManager.activeInputDeviceName())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            Label("Share", systemImage: "square.and.arrow.up")
         }
-        .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
-        .help(isRecording
-              ? "Changing input applies to your next meeting."
-              : "Choose which microphone the next meeting records from.")
+        .help("Copy or export this meeting's notes and transcript.")
+    }
+
+    private func copyNotes(_ meta: MeetingMeta) {
+        guard let notes = meta.notes else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("# \(meta.title)\n\n\(notes.markdown)", forType: .string)
+    }
+
+    private func copyTranscript(_ session: MeetingSession) {
+        guard let t = MeetingStorage.readTranscript(for: session.id) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            MeetingExporter.transcriptMarkdown(transcript: t, meta: session.meta),
+            forType: .string
+        )
+    }
+
+    private func exportMeeting(_ session: MeetingSession) {
+        let meta = session.meta
+        let panel = NSSavePanel()
+        panel.title = "Export meeting"
+        panel.message = "Choose where to save this meeting."
+        panel.allowedContentTypes = [UTType.plainText, UTType(filenameExtension: "md") ?? UTType.plainText]
+        panel.canCreateDirectories = true
+        let safeTitle = meta.title.replacingOccurrences(of: "/", with: "-")
+        panel.nameFieldStringValue = "\(safeTitle).md"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let isMarkdown = ["md", "markdown"].contains(url.pathExtension.lowercased())
+        let body: String
+        if let t = MeetingStorage.readTranscript(for: session.id) {
+            body = isMarkdown
+                ? MeetingExporter.markdown(transcript: t, meta: meta)
+                : MeetingExporter.plainText(transcript: t, meta: meta)
+        } else if let notes = meta.notes {
+            body = "# \(meta.title)\n\n\(notes.markdown)"
+        } else {
+            return
+        }
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[Dictator] Meeting export failed: \(error)")
+        }
+    }
+
+    /// Record / Stop, swapped on the live state. Extracted so the toolbar can
+    /// group it with the mic picker in one glass capsule.
+    @ViewBuilder
+    private var recordOrStopButton: some View {
+        if liveSession?.isLive == true {
+            Button(role: .destructive) {
+                Task {
+                    await liveSession?.stopRecording(parakeetModelID: state.settings.parakeetModelID)
+                }
+            } label: {
+                Label("Stop", systemImage: "stop.fill")
+            }
+            .tint(.red)
+            .keyboardShortcut("r", modifiers: .command)
+        } else {
+            Button {
+                Task { await startRecording() }
+            } label: {
+                Label("Record", systemImage: "record.circle")
+            }
+            .disabled(liveSession?.isProcessing == true)
+            .keyboardShortcut("r", modifiers: .command)
+        }
+    }
+
+    @ViewBuilder
+    private var importButton: some View {
+        Button {
+            Task { await importFile() }
+        } label: {
+            Label("Import…", systemImage: "square.and.arrow.down")
+        }
+        .disabled(liveSession?.isLive == true)
     }
 
     private func startRecording() async {
@@ -401,24 +503,36 @@ struct MeetingsRootView: View {
     }
 }
 
-/// Persistent one-line explainer at the foot of the sidebar so the sync model
-/// isn't a surprise: the small text (notes + transcript) travels between your
-/// Macs via the synced Dictator folder; the large audio recordings stay on the
-/// Mac that recorded them. The full story is in the tooltip.
-private struct SyncExplainerFooter: View {
+/// Compact glass "Sync" chip at the foot of the sidebar. Replaces the old
+/// always-on two-line explainer strip — one tappable glass capsule, with the
+/// full sync story moved into a popover, so the meetings list keeps the room.
+private struct SyncFooterChip: View {
+    @State private var showInfo = false
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.caption2)
-            Text("Notes & transcripts sync to your Macs · audio stays local")
-                .font(.caption2)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack {
+            Button { showInfo.toggle() } label: {
+                Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption2.weight(.medium))
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .popover(isPresented: $showInfo, arrowEdge: .leading) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Notes & transcripts sync · audio stays local", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.callout.weight(.semibold))
+                    Text("Each meeting's notes and transcript are saved in your synced Dictator folder (Settings → General → Synced folder), so they appear on all your Macs. The audio recordings are large, so they stay on the Mac that recorded them — you'll see the notes and transcript everywhere, with playback on the recording Mac.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: 320)
+                .padding(14)
+            }
             Spacer(minLength: 0)
         }
-        .foregroundStyle(.tertiary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .help("Each meeting's notes and transcript are saved in your synced Dictator folder (Settings → General → Synced folder), so they appear on all your Macs. The audio recordings are large, so they stay on the Mac that recorded them — you'll see the notes and transcript everywhere, with playback on the recording Mac.")
     }
 }
 
@@ -446,13 +560,9 @@ private struct RecordingReturnBanner: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.red.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.red.opacity(0.25))
+            .glassEffect(
+                .regular.tint(.red.opacity(0.18)).interactive(),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
         }
         .buttonStyle(.plain)
@@ -486,7 +596,7 @@ struct MeetingsEmptyState: View {
                     .foregroundStyle(.tint)
                 Text("No meeting open")
                     .font(.title2.weight(.semibold))
-                Text("Start a new recording, import an audio file, or drag one onto the drop zone at the bottom of the sidebar to get a transcript.")
+                Text("Start a new recording, import an audio file, or drag one anywhere onto this window to get a transcript.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -498,12 +608,13 @@ struct MeetingsEmptyState: View {
                         .frame(minWidth: 100)
                 }
                 .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 Button(action: onImport) {
                     Label("Import…", systemImage: "square.and.arrow.down")
                         .frame(minWidth: 100)
                 }
                 .controlSize(.large)
+                .buttonStyle(.glass)
             }
 
             if let msg = permissionMessage {
@@ -529,60 +640,6 @@ struct MeetingsEmptyState: View {
     }
 }
 
-/// Drop target pinned to the bottom of the Meetings sidebar. Dashed
-/// border, downward arrow, "Drop audio to transcribe" label. Hover
-/// state tints the chrome so a dragging cursor gets visual feedback
-/// before the drop lands.
-///
-/// Uses SwiftUI's `.dropDestination(for: URL.self)` (introduced in
-/// macOS 13). The older `.onDrop(of:isTargeted:)` + `NSItemProvider`
-/// shape didn't fire reliably on macOS 26 — Voice Memos `.m4a` files
-/// dropped from Finder never produced a URL through
-/// `loadObject(ofClass: URL.self)`, so the import silently no-op'd.
-/// `dropDestination(for: URL.self)` handles file-promise,
-/// security-scoped, and async-loaded providers internally and yields
-/// `[URL]` directly. The URL-shaped Transferable conformance accepts
-/// any provider that can vend a file URL, regardless of which audio
-/// UTI it advertises — `MeetingImporter.urlLooksLikeAudio(_:)` does
-/// the final filter so we don't try to transcribe text files.
-private struct SidebarDropZone: View {
-    let onDrop: ([URL]) -> Void
-    @State private var isTargeted = false
-
-    var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "arrow.down.doc")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
-            Text("Drop audio to transcribe")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .padding(.horizontal, 10)
-        .contentShape(Rectangle())
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(
-                    isTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
-                    style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
-                )
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isTargeted ? Color.accentColor.opacity(0.08) : Color.clear)
-                )
-        )
-        .padding(.horizontal, 10)
-        .padding(.bottom, 10)
-        .dropDestination(for: URL.self) { urls, _ in
-            onDrop(urls)
-            return !urls.isEmpty
-        } isTargeted: { hovering in
-            isTargeted = hovering
-        }
-        .help("Drop an audio file here to import it as a new meeting.")
-    }
-}
+// The old always-visible dashed `SidebarDropZone` is gone — the whole window
+// is now a drop target (`.dropDestination` on the root, with `MeetingDropOverlay`
+// shown only while dragging), so the sidebar keeps the room it used to occupy.

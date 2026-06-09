@@ -321,3 +321,119 @@ enum SpeakerShape {
         return t
     }
 }
+
+// MARK: - Liquid Glass (control layer only)
+//
+// macOS 26 Liquid Glass helpers, centralised so every *floating control-layer*
+// surface in the meeting UI — the playback dock, status pills, the recording
+// banner, the drag-over drop card — shares one material and corner language.
+//
+// LAYER RULE: glass goes on the navigation/control layer ONLY. Reading and
+// editing surfaces (notes, transcript rows, the pad editor) stay solid via
+// `notesSurface()` — glass behind long-form or editable text hurts legibility.
+// Don't reach for these on a content card.
+
+extension View {
+    /// Liquid Glass background for a floating control — a dock, a pill, a
+    /// banner. `interactive` enables the touch-reactive variant for controls
+    /// the user presses/drags (e.g. the playback dock). Pass the shape that
+    /// matches the control (`Capsule()` for pills, a continuous
+    /// `RoundedRectangle` for docks).
+    func meetingGlassControl<S: Shape>(in shape: S = Capsule(), interactive: Bool = false) -> some View {
+        glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+    }
+
+    /// A status/processing pill rendered as a tinted Liquid Glass capsule. The
+    /// label keeps `tint` as its foreground; the glass carries a faint wash of
+    /// the same colour, so the full processing palette (orange/red/blue/purple)
+    /// reads consistently while still floating above the content. Borrows the
+    /// kit's scalable chip font + padding so pills line up with `MeetingChip`.
+    func meetingGlassPill(tint: Color) -> some View {
+        font(MeetingFonts.chipLabel)
+            .foregroundStyle(tint)
+            .padding(.horizontal, MeetingMetrics.chipHPadding + 2)
+            .padding(.vertical, MeetingMetrics.chipVPadding + 1)
+            .glassEffect(.regular.tint(tint.opacity(0.18)), in: Capsule())
+    }
+}
+
+/// Centred Liquid Glass card shown over the whole Meetings window while a file
+/// is dragged onto it — the window-wide drop affordance that replaced the
+/// always-visible dashed sidebar drop-zone. Sits in an `.overlay`, gated on the
+/// drop target's `isTargeted`, so it costs nothing until a drag is in flight.
+struct MeetingDropOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.06).ignoresSafeArea()
+            VStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(.tint)
+                Text("Drop to import")
+                    .font(.headline)
+                Text("Add an audio file as a new meeting")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 28)
+            .padding(.horizontal, 44)
+            .meetingGlassControl(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .transition(.opacity)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Liquid Glass segmented control
+
+/// A segmented control with a Liquid Glass selection thumb. The selected
+/// segment is marked by a frosted glass capsule that slides to the new position
+/// when the selection changes (via `matchedGeometryEffect`), sitting in a
+/// lightly recessed track. Replaces the stock `.pickerStyle(.segmented)` so the
+/// meeting view switcher reads as part of the glass redesign. Sizes to its
+/// content like a `.fixedSize()` segmented picker.
+struct MeetingSegmentedControl<Value: Hashable>: View {
+    let segments: [(value: Value, title: String)]
+    @Binding var selection: Value
+    /// Smaller type + padding for secondary switchers (e.g. the transcript's
+    /// Conversation / Raw tracks toggle).
+    var compact: Bool = false
+
+    @Namespace private var thumb
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(segments, id: \.value) { segment in
+                segmentLabel(segment.value, segment.title)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.secondary.opacity(0.10)))
+    }
+
+    @ViewBuilder
+    private func segmentLabel(_ value: Value, _ title: String) -> some View {
+        let isSelected = value == selection
+        Text(title)
+            .font(compact ? .caption : .callout)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, compact ? 11 : 14)
+            .padding(.vertical, compact ? 3 : 5)
+            .background {
+                if isSelected {
+                    Capsule()
+                        .fill(.clear)
+                        .glassEffect(.regular, in: Capsule())
+                        .matchedGeometryEffect(id: "meetingSegmentThumb", in: thumb)
+                }
+            }
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard value != selection else { return }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    selection = value
+                }
+            }
+    }
+}

@@ -27,26 +27,30 @@ struct TranscriptView: View {
     /// Invalidates in-flight detached loads when the meeting changes under us.
     @State private var loadToken = UUID()
 
-    /// Notes are the primary surface; the rough live "raw" notes (when kept),
-    /// the user's own pad, and the transcript (two-lane mic/system view) live
-    /// behind other tabs.
-    enum Tab: Hashable { case notes, raw, pad, transcript }
+    /// Notes are the primary surface; the user's own pad and the transcript
+    /// (two-lane mic/system view) live behind other tabs. The rough live
+    /// first-pass notes get their own tab too, but only when a meeting actually
+    /// has them (see `hasLiveNotes`) — so they're one click away to compare
+    /// against the final notes without cluttering meetings that have none.
+    enum Tab: Hashable { case notes, liveNotes, transcript, pad }
 
     var body: some View {
-        // The view owns its scrolling (the detail view used to) so the tab
-        // picker stays fixed above and the playback dock can float at the
-        // bottom of the viewport — pause/seek stay reachable however deep
-        // into a transcript you've scrolled.
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            ScrollViewReader { proxy in
+        // The view owns its scrolling so the tab picker — and the playback bar
+        // docked beneath it — stay pinned above the content while it scrolls,
+        // so pause/seek stay reachable however deep into a transcript you are.
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                if hasAudio {
+                    playbackDock(proxy: proxy)
+                }
                 ScrollView {
                     Group {
                         switch tab {
                         case .notes:
                             NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
-                        case .raw:
-                            rawTab
+                        case .liveNotes:
+                            liveNotesTab
                         case .pad:
                             padTab
                         case .transcript:
@@ -57,11 +61,6 @@ struct TranscriptView: View {
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if hasAudio {
-                        playbackDock(proxy: proxy)
-                    }
-                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -69,6 +68,10 @@ struct TranscriptView: View {
         .onDisappear { player.unload() }
         .onChange(of: meta.id) { _, _ in
             loadAudio()
+            // The Live notes tab is conditional — if the newly selected meeting
+            // doesn't have any, fall back to Notes so the picker isn't left with
+            // a selection that has no segment.
+            if tab == .liveNotes, !hasLiveNotes { tab = .notes }
         }
         .onChange(of: session.state.isProcessing) { _, processing in
             // Re-process finished — pick up the freshly written track data.
@@ -93,8 +96,9 @@ struct TranscriptView: View {
         }
     }
 
-    /// Floating playback controls pinned to the bottom of the scroll
-    /// viewport. The locate button scrolls the transcript to the line under
+    /// Playback controls, docked under the tab picker. PlaybackBar carries its
+    /// own subtle surface, so this is a clean integrated bar rather than a
+    /// floating pill. The locate button jumps the transcript to the line under
     /// the playhead.
     private func playbackDock(proxy: ScrollViewProxy) -> some View {
         HStack(spacing: 10) {
@@ -103,19 +107,12 @@ struct TranscriptView: View {
                 jumpToPlayhead(proxy)
             } label: {
                 Image(systemName: "text.line.magnify")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
             .help("Show the transcript line at the playhead.")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
-        )
-        .padding(.top, 6)
-        .padding(.bottom, 2)
     }
 
     /// Scroll the transcript to the row containing (or nearest before) the
@@ -144,64 +141,37 @@ struct TranscriptView: View {
         }
     }
 
-    /// Tab switcher + the document-level actions (copy / export / re-process).
-    /// These live above both tabs so the primary verb — copy the notes as
-    /// markdown — is always one click away.
+    /// Just the content switcher now. Copy / Export moved to the window
+    /// toolbar, and the notes / speaker / re-process controls moved to the
+    /// Details inspector — so the reading surface isn't buried under chrome.
+    /// Notes lead (the thing you came for); Transcript and Pad follow.
     private var header: some View {
-        HStack(spacing: 8) {
-            Picker("View", selection: $tab) {
-                Text("Transcript").tag(Tab.transcript)
-                Text("Live notes").tag(Tab.raw)
-                Text("Pad").tag(Tab.pad)
-                Text("Final notes").tag(Tab.notes)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-
-            Spacer()
-
-            if hasCopyableContent {
-                // The export text itself is built lazily on click
-                // (CopyButton's autoclosure) — rendering it eagerly here made
-                // every body evaluation pay for a full-document export.
-                CopyButton(text: currentTabCopyText ?? "", label: copyLabel)
-                    .help("Copy the current view as Markdown.")
-            }
-            if let transcript {
-                Button {
-                    exportTranscript(transcript: transcript)
-                } label: {
-                    Label("Export…", systemImage: "square.and.arrow.up")
-                }
-                .controlSize(.small)
-            }
-            if hasAnyAudioOnDisk {
-                Button {
-                    Task {
-                        await session.runProcessor(
-                            parakeetModelID: state.settings.parakeetModelID
-                        )
-                    }
-                } label: {
-                    Label("Re-process", systemImage: "arrow.clockwise")
-                }
-                .controlSize(.small)
-                .help("Re-run the transcription and diarization pipeline from the recorded audio. Useful after a fix that improved transcript quality.")
-                .disabled(session.state.isProcessing)
-            }
-        }
+        MeetingSegmentedControl(segments: tabSegments, selection: $tab)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var hasRawNotes: Bool {
-        guard let raw = meta.rawNotes else { return false }
-        return !raw.markdown.isEmpty
+    /// Tab order: Transcript → Live notes → Pad → Notes (the view opens on
+    /// Notes, the deliverable). Live notes is only offered when the meeting
+    /// actually has them.
+    private var tabSegments: [(value: Tab, title: String)] {
+        var segments: [(value: Tab, title: String)] = [(.transcript, "Transcript")]
+        if hasLiveNotes { segments.append((.liveNotes, "Live notes")) }
+        segments.append((.pad, "Pad"))
+        segments.append((.notes, "Notes"))
+        return segments
     }
 
-    /// The rough notes captured live during the meeting, kept alongside the
-    /// polished final notes. Read-only; selectable + copyable.
+    /// True when the meeting carries rough first-pass notes captured live —
+    /// gates the conditional "Live notes" tab.
+    private var hasLiveNotes: Bool {
+        meta.rawNotes.map { !$0.markdown.isEmpty } ?? false
+    }
+
+    /// The rough first-pass notes captured live during the recording, kept
+    /// alongside the polished final notes (they're often more complete, if less
+    /// tidy). Read-only and selectable; only reachable when `hasLiveNotes`.
     @ViewBuilder
-    private var rawTab: some View {
+    private var liveNotesTab: some View {
         if let raw = meta.rawNotes {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -218,45 +188,7 @@ struct TranscriptView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.secondary)
-                Text("No live notes for this meeting")
-                    .foregroundStyle(.secondary)
-                Text(noLiveNotesReason)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 40)
         }
-    }
-
-    /// Best-effort explanation for an empty Live notes tab. The import case
-    /// is definitive; the rest read the *current* settings — we don't record
-    /// what they were at capture time, so the wording stays diagnostic
-    /// ("live notes build on…") rather than claiming to know history.
-    private var noLiveNotesReason: String {
-        if meta.source == .fileImport {
-            return "This meeting was imported from an audio file — live notes are only built while you record."
-        }
-        if state.settings.activeLLMEngine() == nil {
-            return "No LLM is set up in Settings → Models, so there was nothing to write them with."
-        }
-        if !state.settings.meetingsLLMSatisfied {
-            return "Meetings need \(ModelCatalog.meetingsRequiredLLMName) selected in Settings → Models — it's the only model that writes reliable notes."
-        }
-        if !state.settings.meetingLiveTranscriptEnabled {
-            return "“Show a live transcript while recording” is off in Settings → Meetings — live notes build on the live transcript, so turning it on enables them for future recordings."
-        }
-        if !state.settings.meetingLiveNotesEnabled {
-            return "“Build a first pass while recording” is off in Settings → Meetings — turn it on to capture live notes for future recordings."
-        }
-        return "Live notes are switched on now, so this recording probably pre-dates them — or the settings were different when it was made."
     }
 
     /// The user's own pad — editable after the meeting too, so a thought can
@@ -296,19 +228,16 @@ struct TranscriptView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     SpeakerCountChip(count: meta.speakers.count, suspicious: speakerCountLooksOff)
-                    ForEach(meta.speakers, id: \.id) { speaker in
-                        EditableSpeakerChip(speaker: speaker, session: session, allSpeakers: meta.speakers)
-                    }
                     Spacer()
                     if hasTracks {
-                        Picker("Transcript mode", selection: $transcriptMode) {
-                            Text("Conversation").tag(TranscriptMode.conversation)
-                            Text("Raw tracks").tag(TranscriptMode.raw)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
+                        MeetingSegmentedControl(
+                            segments: [
+                                (.conversation, "Conversation"),
+                                (.raw, "Raw tracks"),
+                            ],
+                            selection: $transcriptMode,
+                            compact: true
+                        )
                         .help("Conversation is the cleaned, speaker-attributed view. Raw tracks shows exactly what each track's speech recognition heard — before working out who said what, and with everything the cleanup removed still in place.")
                     }
                 }
@@ -416,102 +345,12 @@ struct TranscriptView: View {
         return intervals
     }
 
-    /// True when at least one audio track is still present on disk. Drives
-    /// the Re-process button — pruned meetings can't be re-transcribed.
-    private var hasAnyAudioOnDisk: Bool {
-        let fm = FileManager.default
-        let micPresent = meta.audioFiles.mic != nil
-            && fm.fileExists(atPath: MeetingStorage.micURL(for: meta.id).path)
-        let sysPresent = meta.audioFiles.system != nil
-            && fm.fileExists(atPath: MeetingStorage.systemURL(for: meta.id).path)
-        return micPresent || sysPresent
-    }
-
-    /// The whole meeting as Markdown — notes lead, transcript follows. This is
-    /// the primary "give me something to paste into my notes app" payload.
-    /// Falls back to a title + notes body when there's no transcript; nil when
-    /// there's nothing to copy.
     /// Heuristic for an implausible diarization result, used to flag the
     /// speaker-count chip. Only an improbably HIGH count is flagged — a single
     /// speaker is perfectly normal (solo brainstorming, or recording a video
     /// you're watching), so we don't cry wolf on it.
     private var speakerCountLooksOff: Bool {
         meta.speakers.count >= 8
-    }
-
-    private var copyLabel: String {
-        switch tab {
-        case .notes: return "Copy notes"
-        case .raw: return "Copy live notes"
-        case .pad: return "Copy pad"
-        case .transcript: return transcriptMode == .raw ? "Copy raw tracks" : "Copy transcript"
-        }
-    }
-
-    /// Cheap presence check so the header can show/hide the copy button
-    /// without rendering the (expensive) export text.
-    private var hasCopyableContent: Bool {
-        switch tab {
-        case .notes:
-            return meta.notes != nil || transcript != nil
-        case .raw:
-            return meta.rawNotes != nil
-        case .pad:
-            return !session.padText.isEmpty
-        case .transcript:
-            return (transcript.map { !$0.segments.isEmpty } ?? false) || inspection != nil
-        }
-    }
-
-    /// Markdown for the currently-selected tab, so Copy gives you exactly what
-    /// you're looking at — notes, raw notes, or the transcript.
-    private var currentTabCopyText: String? {
-        switch tab {
-        case .notes:
-            if let notes = meta.notes { return "# \(meta.title)\n\n\(notes.markdown)" }
-            if let transcript { return MeetingExporter.markdown(transcript: transcript, meta: meta) }
-            return nil
-        case .raw:
-            if let raw = meta.rawNotes { return "# \(meta.title)\n\n\(raw.markdown)" }
-            return nil
-        case .pad:
-            return session.padText.isEmpty ? nil : session.padText
-        case .transcript:
-            // Raw mode copies what's on screen — the pre-cleanup two-lane
-            // text. Conversation mode copies the merged transcript (the
-            // shareable artifact).
-            if transcriptMode == .raw, let inspection, !rawRows.isEmpty {
-                return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
-            }
-            guard let transcript, !transcript.segments.isEmpty else {
-                guard let inspection else { return nil }
-                return TrackRowBuilder.plainText(inspection: inspection, meta: meta)
-            }
-            return MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
-        }
-    }
-
-    /// NSSavePanel-driven export. The picker's allowed types determine
-    /// the on-disk format — plain text or markdown.
-    private func exportTranscript(transcript: MeetingTranscript) {
-        let panel = NSSavePanel()
-        panel.title = "Export meeting"
-        panel.message = "Choose where to save the transcript."
-        panel.allowedContentTypes = [UTType.plainText, UTType(filenameExtension: "md") ?? UTType.plainText]
-        panel.canCreateDirectories = true
-        let safeTitle = meta.title.replacingOccurrences(of: "/", with: "-")
-        panel.nameFieldStringValue = "\(safeTitle).md"
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let isMarkdown = url.pathExtension.lowercased() == "md" || url.pathExtension.lowercased() == "markdown"
-        let body = isMarkdown
-            ? MeetingExporter.markdown(transcript: transcript, meta: meta)
-            : MeetingExporter.plainText(transcript: transcript, meta: meta)
-        do {
-            try body.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            NSLog("[Dictator] Meeting export failed: \(error)")
-        }
     }
 }
 
@@ -699,7 +538,7 @@ private struct SpeakerCountChip: View {
         )
         .help(suspicious
             ? "This speaker count looks off for the audio captured. If it's wrong, use Re-process to run diarization again."
-            : "Number of distinct speakers detected. Click any speaker chip to rename or recolour.")
+            : "Number of distinct speakers detected. Rename or recolour them in the Details panel.")
     }
 
     private var label: String {
@@ -707,11 +546,13 @@ private struct SpeakerCountChip: View {
     }
 }
 
-/// Click-to-edit speaker chip. The chip itself renders identically to
-/// the read-only v0.2 design; tapping it opens a popover for renaming
-/// and recolouring. Changes flow through `session.renameSpeaker` /
-/// `session.recolorSpeaker` so they persist to meta.json immediately.
-private struct EditableSpeakerChip: View {
+/// Click-to-edit speaker chip (rename / recolour via popover, merge via
+/// context menu). Changes flow through `session.renameSpeaker` /
+/// `session.recolorSpeaker` / `session.mergeSpeaker` so they persist to
+/// meta.json immediately. Lives here but is `internal` so the Details
+/// inspector — the canonical home for speaker editing now — can render the
+/// same chip in its roster, keeping one editing affordance across the app.
+struct EditableSpeakerChip: View {
     let speaker: MeetingMeta.Speaker
     @Bindable var session: MeetingSession
     /// Full speaker list, for the merge menu's targets.
@@ -778,7 +619,7 @@ private struct EditableSpeakerChip: View {
     }
 }
 
-private struct SpeakerEditor: View {
+struct SpeakerEditor: View {
     let speaker: MeetingMeta.Speaker
     @Binding var draftName: String
     let onCommit: () -> Void
@@ -857,7 +698,6 @@ private struct NotesPanel: View {
     let meta: MeetingMeta
     var onSeek: ((Double) -> Void)?
     @State private var assistant = MeetingAssistantController()
-    @State private var showTuneSheet = false
 
     /// There's something for the assistant to act on — notes exist and an LLM
     /// is configured. Gates both the prominent button and the hotkey hint.
@@ -866,10 +706,17 @@ private struct NotesPanel: View {
     }
 
     /// The notes were written before the user's last speaker rename/merge —
-    /// the names baked into the text no longer match the chips.
+    /// the names baked into the text no longer match the roster.
     private var notesAreStale: Bool {
         guard let notes = meta.notes, let edited = meta.speakersEditedAt else { return false }
         return edited > notes.generatedAt
+    }
+
+    /// True once the polished, end-of-meeting notes exist (or a legacy
+    /// summary). A live draft (`isFinal == false`) doesn't count — the panel
+    /// still offers to generate the real notes.
+    private var hasFinalNotes: Bool {
+        meta.notes?.isFinal == true || meta.summary != nil
     }
 
     var body: some View {
@@ -887,7 +734,7 @@ private struct NotesPanel: View {
                 }
                 if meta.oneOffPrompt != nil {
                     MeetingChip("Tuned", tone: .accent, systemImage: "slider.horizontal.3")
-                        .help("A one-off instruction is set for this meeting's notes. Edit or clear it under Re-run ▾ → Tune this run.")
+                        .help("A one-off instruction is set for this meeting's notes. Edit or clear it in the Details panel under Re-run ▾ → Tune this run.")
                 }
                 Spacer()
                 if canUseAssistant {
@@ -899,7 +746,6 @@ private struct NotesPanel: View {
                     .controlSize(.small)
                     .help("Ask about or edit these notes with the on-device assistant.")
                 }
-                actionButton
             }
             if canUseAssistant, state.meetingsWindowIsKey {
                 Label("\(state.settings.hotkeyTapToToggleEnabled ? "Tap" : "Hold") \(state.assistantHotkeyDisplay) to ask the assistant — by voice, hands-free.", systemImage: "mic")
@@ -907,7 +753,7 @@ private struct NotesPanel: View {
                     .foregroundStyle(.secondary)
             }
             if notesAreStale {
-                Label("Speakers were edited after these notes were written — use Re-run to update who said what.", systemImage: "exclamationmark.triangle")
+                Label("Speakers were edited after these notes were written — re-run from the Details panel to update who said what.", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.vertical, 2)
@@ -939,9 +785,6 @@ private struct NotesPanel: View {
         .sheet(isPresented: $assistant.isPresented) {
             NotesAssistantSheet(assistant: assistant)
         }
-        .sheet(isPresented: $showTuneSheet) {
-            TuneRunSheet(session: session)
-        }
     }
 
     /// The conversational shape these notes were written for — either the type
@@ -957,8 +800,8 @@ private struct NotesPanel: View {
             systemImage: detected ? "sparkles" : nil
         )
         .help(detected
-            ? "Auto-detected from the conversation. Pick a style with Re-run ▾ to override."
-            : "Notes style for this meeting. Change it with Re-run ▾.")
+            ? "Auto-detected from the conversation. Pick a style in the Details panel to override."
+            : "Notes style for this meeting. Change it in the Details panel.")
     }
 
     /// "Written by <model> · 2:14 PM" — turns the notes from an anonymous blob
@@ -984,69 +827,122 @@ private struct NotesPanel: View {
         }
     }
 
-    /// The notes body. When there are actual notes (or a legacy summary) they
-    /// sit in the same `.notesSurface()` card the live-recording pane uses, so
-    /// the finished notes read like the rough first pass did. The transient
-    /// states (writing, hints) stay light.
+    /// The notes body. Final notes (or a legacy summary) sit in the same
+    /// `.notesSurface()` card the live-recording pane uses. With notes manual
+    /// now, the no-final-notes states lead with a review-first call to action:
+    /// a live draft is shown above its "generate the real notes" prompt; a bare
+    /// transcript shows the prompt alone.
     @ViewBuilder
     private var content: some View {
         if case .summarising = session.state {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(hasContent ? "Rewriting notes…" : "Writing notes…")
+                Text(hasFinalNotes ? "Rewriting notes…" : "Writing notes…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-        } else if let notes = meta.notes {
-            MarkdownNotesView(
-                markdown: notes.markdown,
-                speakers: meta.speakers,
-                onCommit: { session.updateNotesMarkdown($0) },
-                onSeek: onSeek,
-                onAssistant: nil   // entry point is the prominent header button now
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .notesSurface()
-        } else if let summary = meta.summary {
+        } else if hasFinalNotes, let notes = meta.notes {
+            notesCard(markdown: notes.markdown, editable: true)
+        } else if hasFinalNotes, let summary = meta.summary {
             SummaryBody(summary: summary, meta: meta)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .notesSurface()
-        } else if state.settings.activeLLMEngine() == nil {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Turn on an LLM to generate meeting notes.")
+        } else if let draft = meta.notes {
+            // Live first-pass draft, no final notes yet: show the draft, then
+            // invite the user to generate the polished version from the full
+            // transcript when they're ready.
+            VStack(alignment: .leading, spacing: 12) {
+                notesCard(markdown: draft.markdown, editable: false)
+                generateCTA(hasDraft: true)
+            }
+        } else {
+            generateCTA(hasDraft: false)
+        }
+    }
+
+    @ViewBuilder
+    private func notesCard(markdown: String, editable: Bool) -> some View {
+        let onCommit: ((String) -> Void)? = editable ? { session.updateNotesMarkdown($0) } : nil
+        MarkdownNotesView(
+            markdown: markdown,
+            speakers: meta.speakers,
+            onCommit: onCommit,
+            onSeek: onSeek,
+            onAssistant: nil   // entry point is the prominent header button now
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .notesSurface()
+    }
+
+    /// Review-first call to action shown whenever the final notes haven't been
+    /// written. Generation is on demand now, so the prompt nudges the user to
+    /// fix speaker names first, then generate — now or later. Hosts the full
+    /// `NotesGenerationControls` so it's fully usable with the inspector closed.
+    @ViewBuilder
+    private func generateCTA(hasDraft: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(hasDraft ? "Polish these into final notes" : "Ready when you are",
+                  systemImage: "sparkles")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.purple)
+            Text(hasDraft
+                 ? "These are the rough notes captured live. Check who said what in the Details panel, then generate the full notes from the complete transcript — now, or whenever's convenient."
+                 : "Your transcript is ready. Check who said what and fix any speaker names in the Details panel, then generate the notes — now, or whenever's convenient.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if state.settings.meetingsLLMSatisfied {
+                NotesGenerationControls(session: session)
+                    .controlSize(.large)
+                    .padding(.top, 2)
+            } else if state.settings.activeLLMEngine() == nil {
+                Text("Turn on an LLM in Settings → Models to write notes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Open Settings → Models") { state.openSettingsAction?() }
+                    .controlSize(.small)
+            } else {
+                Text("Meeting notes need \(ModelCatalog.meetingsRequiredLLMName) selected in Settings → Models — it's the only model that writes reliable notes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Open Settings → Models") { state.openSettingsAction?() }
                     .controlSize(.small)
             }
-        } else {
-            Text("Generate markdown notes — a summary, the key discussion points, decisions, and action items for this meeting.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .notesSurface()
     }
+}
 
-    private var hasContent: Bool { meta.notes != nil || meta.summary != nil }
+/// The notes generation control — a Generate / Re-run split button whose menu
+/// pins a notes style or opens "Tune this run". Extracted so it can live in
+/// both the Details inspector (its primary home) and the Notes-tab call to
+/// action, with the generation + persistence logic in one place. Reads
+/// settings from the environment; drives `session.generateNotes` /
+/// `session.setOneOffPrompt`. Disabled while a pass is in flight or when the
+/// required meetings LLM isn't selected — note quality from smaller models
+/// isn't worth keeping (`ModelCatalog.meetingsRequiredLLMID`).
+struct NotesGenerationControls: View {
+    @Environment(AppState.self) private var state
+    @Bindable var session: MeetingSession
+    @State private var showTuneSheet = false
 
-    /// "Summarise as ▾" chevron menu — the primary verb (Generate / Re-run)
-    /// uses whatever type the user has already pinned to this meeting (or
-    /// the install-wide default when it's still on Auto-detect), and each
-    /// menu row both pins a new type to the meeting AND kicks off a
-    /// re-summary with it. Disabled while a summary is in flight or when
-    /// the required meetings LLM isn't selected — note quality from the
-    /// smaller models isn't worth keeping, so re-runs are held to the same
-    /// bar as new recordings (`ModelCatalog.meetingsRequiredLLMID`).
-    @ViewBuilder
-    private var actionButton: some View {
+    private var meta: MeetingMeta { session.meta }
+
+    var body: some View {
         let isSummarising: Bool = {
             if case .summarising = session.state { return true }
             return false
         }()
         let isEnabled = state.settings.meetingsLLMSatisfied && !isSummarising
-        let primaryLabel = (meta.notes == nil && meta.summary == nil) ? "Generate" : "Re-run"
+        // "Re-run" only once the polished notes (or a legacy summary) exist; a
+        // bare transcript or a live draft still reads as the first "Generate".
+        let hasFinal = meta.notes?.isFinal == true || meta.summary != nil
+        let primaryLabel = hasFinal ? "Re-run" : "Generate notes"
 
         Menu {
             Section("Notes for") {
@@ -1066,32 +962,28 @@ private struct NotesPanel: View {
             Button {
                 showTuneSheet = true
             } label: {
-                if meta.oneOffPrompt == nil {
-                    Label("Tune this run…", systemImage: "slider.horizontal.3")
-                } else {
-                    Label("Tune this run… (active)", systemImage: "slider.horizontal.3")
-                }
+                Label(meta.oneOffPrompt == nil ? "Tune this run…" : "Tune this run… (active)",
+                      systemImage: "slider.horizontal.3")
             }
         } label: {
             Label(primaryLabel, systemImage: "wand.and.stars")
         } primaryAction: {
             Task { await session.generateNotes(settings: state.settings) }
         }
-        .controlSize(.small)
         .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
         .fixedSize()
         .disabled(!isEnabled)
         .help(state.settings.meetingsLLMSatisfied
-              ? ""
+              ? "Write the notes for this meeting. Use the menu to pick a style or tune the run."
               : "Meeting notes need \(ModelCatalog.meetingsRequiredLLMName) — select it in Settings → Models.")
+        .sheet(isPresented: $showTuneSheet) {
+            TuneRunSheet(session: session)
+        }
     }
 
-    /// Pin `type` to this meeting (store + session in lockstep) and kick
-    /// off a fresh notes pass so the user sees the result of their choice
-    /// immediately. The store write persists meta.json; the in-session
-    /// mutation makes sure the next `generateNotes` resolves the new type
-    /// without round-tripping via the store.
+    /// Pin `type` to this meeting (store + session in lockstep) and kick off a
+    /// fresh notes pass so the user sees the result of their choice immediately.
     private func generateNotes(as type: MeetingTypeID) {
         MeetingsStore.shared.setMeetingType(id: meta.id, type: type)
         session.meta.meetingType = type

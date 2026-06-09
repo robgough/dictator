@@ -47,38 +47,7 @@ struct MarkdownNotesView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if onCommit != nil || onAssistant != nil {
-                HStack(spacing: 8) {
-                    Spacer()
-                    if let onAssistant, !isEditing {
-                        Button(action: onAssistant) {
-                            Label("Assistant", systemImage: "wand.and.stars")
-                        }
-                        .controlSize(.small)
-                        .help("Ask about or edit these notes with the assistant.")
-                    }
-                    if onCommit != nil {
-                        if isEditing {
-                            Button("Done") {
-                                onCommit?(draft)
-                                isEditing = false
-                            }
-                            .controlSize(.small)
-                            .buttonStyle(.borderedProminent)
-                        } else {
-                            Button {
-                                draft = markdown
-                                isEditing = true
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .controlSize(.small)
-                        }
-                    }
-                }
-            }
-
+        Group {
             if isEditing {
                 // No card chrome here — callers place this view inside a
                 // `.notesSurface()`, so the editor sits directly on that.
@@ -88,18 +57,57 @@ struct MarkdownNotesView: View {
                     .scrollContentBackground(.hidden)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(MarkdownBlock.parse(markdown).enumerated()), id: \.offset) { _, block in
-                        view(for: block)
+                    ForEach(Array(MarkdownBlock.parse(markdown).enumerated()), id: \.offset) { idx, block in
+                        view(for: block, isFirst: idx == 0)
                     }
                 }
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        // Float the Edit / Assistant affordances in the top-right corner. A
+        // reserved row above the note left an empty band over the first line;
+        // overlaying lets the content sit flush at the top of its card.
+        .overlay(alignment: .topTrailing) {
+            actionRow
+        }
     }
 
     @ViewBuilder
-    private func view(for block: MarkdownBlock) -> some View {
+    private var actionRow: some View {
+        if onCommit != nil || onAssistant != nil {
+            HStack(spacing: 8) {
+                if let onAssistant, !isEditing {
+                    Button(action: onAssistant) {
+                        Label("Assistant", systemImage: "wand.and.stars")
+                    }
+                    .controlSize(.small)
+                    .help("Ask about or edit these notes with the assistant.")
+                }
+                if onCommit != nil {
+                    if isEditing {
+                        Button("Done") {
+                            onCommit?(draft)
+                            isEditing = false
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        Button {
+                            draft = markdown
+                            isEditing = true
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func view(for block: MarkdownBlock, isFirst: Bool = false) -> some View {
         switch block.kind {
         case .heading:
             HStack(spacing: 6) {
@@ -112,7 +120,9 @@ struct MarkdownNotesView: View {
                     .font(block.level <= 2 ? .headline : .subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
             }
-            .padding(.top, block.level <= 2 ? 12 : 6)
+            // The leading heading sits flush — its card padding is the top
+            // margin — so it lines up with the floating action buttons.
+            .padding(.top, isFirst ? 0 : (block.level <= 2 ? 12 : 6))
         case .bullet:
             bulletRow(marker: block.indent > 0 ? "◦" : "•", text: block.text, indent: block.indent)
         case .task:
