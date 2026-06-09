@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.6.2 — 2026-06-09
+
 - Meeting notes are now written only when you ask. A finished recording stops at the transcript, so you can read it over and fix any speaker names first, then press Generate — straight away or whenever's convenient. The "Write notes automatically" setting has been removed.
 - Redesigned the Meetings window with a cleaner, glassier layout: a new Details panel on the right for the date, speakers, and notes controls; a tidier sidebar (drop an audio file anywhere on the window to import it); and Copy and Export moved up to the toolbar.
 - New Global AI instructions box in Settings → General: anything you put there is applied to every on-device pass — dictation, the assistant, and meeting notes — so a preference like "Always use British English" or how to spell a product name only has to be set once.

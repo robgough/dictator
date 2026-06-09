@@ -329,6 +329,28 @@
                 type="application/octet-stream"
                 sparkle:edSignature="knCeIFGAlJCq/W/NFCHpOIs5tMvvpoymEmc9HDbqVmB7uVi6sYTxtQOp64C8fFHEPb92me19/0Pjo7VFuB2wAA==" />
         </item>
+        <item>
+            <title>Version 2026.6.2</title>
+            <pubDate>Tue, 09 Jun 2026 11:09:04 +0000</pubDate>
+            <sparkle:version>20</sparkle:version>
+            <sparkle:shortVersionString>2026.6.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Meeting notes are now written only when you ask. A finished recording stops at the transcript, so you can read it over and fix any speaker names first, then press Generate — straight away or whenever&#x27;s convenient. The &quot;Write notes automatically&quot; setting has been removed.</li>
+  <li>Redesigned the Meetings window with a cleaner, glassier layout: a new Details panel on the right for the date, speakers, and notes controls; a tidier sidebar (drop an audio file anywhere on the window to import it); and Copy and Export moved up to the toolbar.</li>
+  <li>New Global AI instructions box in Settings → General: anything you put there is applied to every on-device pass — dictation, the assistant, and meeting notes — so a preference like &quot;Always use British English&quot; or how to spell a product name only has to be set once.</li>
+  <li>Better meeting notes: they&#x27;re now grouped by topic rather than in time order, can include a table when content is structured (comparing options or laying out figures), and add short Notable quotes and Items to verify sections. Garbled product, tool, and AI model names are corrected where possible, and anything uncertain is flagged to check.</li>
+  <li>The Meetings window now opens just once — choosing Meetings from the menu bar brings the existing window to the front instead of opening another copy.</li>
+  <li>Fixed a rare crash that could happen during a meeting recording, more likely the longer the Meetings window had been open.</li>
+  <li>Assistant mode now reads a little of the text around your selection (the same Accessibility access used for pasting), so it can tell what &quot;reply to this&quot; or &quot;make a list here&quot; refers to and spell names the way your document does — all on-device, and never stored.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.2/Dictator.dmg"
+                length="30155068"
+                type="application/octet-stream"
+                sparkle:edSignature="lak3weyl1gsshvFX/+0REF4d/CVijTjhDccnf7+bsUg8QzJkWXCtKIsxRX+hDfdzw/8wNdWclGXsMyek3yD4Dg==" />
+        </item>
+    
     
     
     
