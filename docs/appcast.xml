@@ -350,6 +350,25 @@
                 type="application/octet-stream"
                 sparkle:edSignature="lak3weyl1gsshvFX/+0REF4d/CVijTjhDccnf7+bsUg8QzJkWXCtKIsxRX+hDfdzw/8wNdWclGXsMyek3yD4Dg==" />
         </item>
+        <item>
+            <title>Version 2026.6.3</title>
+            <pubDate>Wed, 10 Jun 2026 18:39:04 +0000</pubDate>
+            <sparkle:version>21</sparkle:version>
+            <sparkle:shortVersionString>2026.6.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>A meeting interrupted by a crash now reappears when you reopen Dictator, ready to finish — with whatever notes it had captured live — instead of vanishing. Press Process to transcribe and write it up as usual.</li>
+  <li>While a meeting records, its live notes and transcript are now written to files in the meeting&#x27;s folder as they build, so other apps can read them in near-real-time. They&#x27;re kept after the meeting ends as a first-pass record, alongside the polished notes and transcript.</li>
+  <li>Each meeting&#x27;s notes and transcript are now also saved as plain notes.md and transcript.md files in the meeting&#x27;s folder, so you can read, open, or sync them outside Dictator.</li>
+  <li>Added a Show in Finder button to the meeting toolbar that opens the current meeting&#x27;s folder.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.3/Dictator.dmg"
+                length="30228581"
+                type="application/octet-stream"
+                sparkle:edSignature="yCV2H560ZZUmPlR3h5KnJHimHwK4PlRgHBXwNqig4of5qBqyWIdUNCwJtvG+eJX1OZjj0N25LvLPk+EhxxL5Cg==" />
+        </item>
+    
     
     
     
