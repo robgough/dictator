@@ -89,6 +89,12 @@ struct MeetingsRootView: View {
                 if let session = shareableSession {
                     shareMenu(for: session)
                 }
+                if let session = currentSession {
+                    Button { showInFinder(session) } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    .help("Open this meeting's folder in Finder.")
+                }
             }
             // A small gap sets the inspector toggle apart from the action
             // group, so it reads as the open/close-sidebar control.
@@ -315,18 +321,23 @@ struct MeetingsRootView: View {
     /// The session backing the detail pane right now, but only when it's a
     /// finished meeting the Share menu can act on. Mirrors `detail`'s selection
     /// logic so the toolbar's Share button tracks what's actually on screen.
-    private var shareableSession: MeetingSession? {
-        let candidate: MeetingSession?
+    /// The meeting currently shown in the detail pane, whatever its state.
+    /// Used by actions that work regardless of progress (opening its folder),
+    /// unlike `shareableSession`, which also requires there to be something to
+    /// copy/export.
+    private var currentSession: MeetingSession? {
         if let id = selectedID, id != liveSession?.id, let s = session(for: id) {
-            candidate = s
+            return s
         } else if let live = liveSession, live.isLive || live.isProcessing {
-            candidate = live
+            return live
         } else if let id = selectedID, let s = session(for: id) {
-            candidate = s
-        } else {
-            candidate = nil
+            return s
         }
-        guard let candidate else { return nil }
+        return nil
+    }
+
+    private var shareableSession: MeetingSession? {
+        guard let candidate = currentSession else { return nil }
         switch candidate.state {
         case .ready, .idle, .summarising: return candidate
         default: return nil
@@ -357,6 +368,13 @@ struct MeetingsRootView: View {
         }
         .menuIndicator(.visible)
         .help("Copy or export this meeting's notes and transcript.")
+    }
+
+    /// Open the meeting's folder in Finder — the synced folder holding
+    /// meta.json plus the readable notes.md / transcript.md / pad.md and the
+    /// live-* mirror files. (The audio tracks live in a separate local folder.)
+    private func showInFinder(_ session: MeetingSession) {
+        NSWorkspace.shared.open(MeetingStorage.folder(for: session.id))
     }
 
     private func copyNotes(_ meta: MeetingMeta) {
