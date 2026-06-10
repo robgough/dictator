@@ -34,6 +34,11 @@ enum MeetingStorage {
     static let tracksFilename = "tracks.json"
     static let metaFilename = "meta.json"
     static let padFilename = "pad.md"
+    static let notesFilename = "notes.md"
+    static let transcriptMarkdownFilename = "transcript.md"
+    static let liveNotesFilename = "live-notes.md"
+    static let liveTranscriptFilename = "live-transcript.md"
+    static let liveStateFilename = "live.json"
 
     /// Base folder the synced text files live under (a `Meetings/` subfolder is
     /// appended). Set once during `AppState.bootstrap` from
@@ -109,6 +114,67 @@ enum MeetingStorage {
     static func writeMeta(_ meta: MeetingMeta) throws {
         let data = try jsonEncoder.encode(meta)
         try data.write(to: metaURL(for: meta.id), options: .atomic)
+        // Mirror the prose to readable `notes.md` / `transcript.md` beside
+        // meta.json. The JSON files stay the source of truth (they're what the
+        // app renders, searches, and edits in memory, and `transcript.json`
+        // carries word timings + diarization the markdown can't); these are
+        // derived, human-/tool-readable copies kept in lockstep by riding the
+        // single meta write path — speaker renames here re-render the transcript
+        // markdown too. Best-effort: a failure must not fail the real write.
+        writeNotesMarkdown(for: meta)
+        if let transcript = readTranscript(for: meta.id) {
+            writeTranscriptMarkdown(transcript, meta: meta)
+        }
+    }
+
+    static func notesMarkdownURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(notesFilename)
+    }
+
+    static func transcriptMarkdownURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(transcriptMarkdownFilename)
+    }
+
+    /// Write `notes.md` from the meeting's current notes, or remove it when
+    /// there are none. The meeting title is prefixed as an H1 (the notes body
+    /// itself starts at `## Summary`) so the file reads as a standalone document
+    /// — matching how the app copies/exports notes.
+    private static func writeNotesMarkdown(for meta: MeetingMeta) {
+        let url = notesMarkdownURL(for: meta.id)
+        let body = meta.notes?.markdown.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if body.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            try? "# \(meta.title)\n\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Write `transcript.md` — the diarized transcript rendered as readable
+    /// markdown (the canonical structured form, with word timings + speaker
+    /// segments, stays in `transcript.json`). Speaker names + title come from
+    /// `meta`, so this is re-rendered both when the transcript is written and on
+    /// any later meta change (e.g. a speaker rename).
+    private static func writeTranscriptMarkdown(_ transcript: MeetingTranscript, meta: MeetingMeta) {
+        let md = MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
+        try? md.write(to: transcriptMarkdownURL(for: meta.id), atomically: true, encoding: .utf8)
+    }
+
+    /// Ensure every meeting's derived markdown (`notes.md`, `transcript.md`)
+    /// exists — backfills meetings recorded before these files existed. Cheap
+    /// and idempotent (writes only the missing ones), so it's safe to run once
+    /// at bootstrap on every launch.
+    static func backfillDerivedMarkdown() {
+        let fm = FileManager.default
+        for meta in loadAllMetas() {
+            if meta.notes?.markdown.isEmpty == false,
+               !fm.fileExists(atPath: notesMarkdownURL(for: meta.id).path) {
+                writeNotesMarkdown(for: meta)
+            }
+            if !fm.fileExists(atPath: transcriptMarkdownURL(for: meta.id).path),
+               let transcript = readTranscript(for: meta.id) {
+                writeTranscriptMarkdown(transcript, meta: meta)
+            }
+        }
     }
 
     static func readMeta(at url: URL) -> MeetingMeta? {
@@ -119,6 +185,11 @@ enum MeetingStorage {
     static func writeTranscript(_ transcript: MeetingTranscript, for id: UUID) throws {
         let data = try jsonEncoder.encode(transcript)
         try data.write(to: transcriptURL(for: id), options: .atomic)
+        // Refresh the readable transcript.md alongside (needs meta for speaker
+        // names + title). Best-effort; transcript.json is the source of truth.
+        if let meta = readMeta(at: metaURL(for: id)) {
+            writeTranscriptMarkdown(transcript, meta: meta)
+        }
     }
 
     static func readTranscript(for id: UUID) -> MeetingTranscript? {
@@ -152,6 +223,78 @@ enum MeetingStorage {
         } else {
             try text.write(to: padURL(for: id), atomically: true, encoding: .utf8)
         }
+    }
+
+    // MARK: - Live mirror (in-progress recording)
+    //
+    // While a meeting is recording, the live first-pass notes and the rolling
+    // live transcript are mirrored to plain files refreshed every few seconds,
+    // so an external tool (e.g. a meeting-coaching app) can read the meeting as
+    // it takes shape, and so a crash mid-recording leaves the work on disk
+    // rather than only in memory. They sit in the **synced** meeting folder
+    // beside `meta.json` / `pad.md`, so a meeting's text all lives in one place
+    // and a reader watching that folder finds both the live view and (later) the
+    // canonical output. `live.json` is structured-only (status, timings, the
+    // outline groups, the transcript lines); the prose lives in the two `.md`
+    // files, never duplicated into the JSON.
+    //
+    // They are NOT deleted on stop: the final write sets `status` to `stopped`
+    // (or `interrupted`), which is the signal a reader uses to switch over to
+    // the polished `meta.json` / `transcript.json`. Note `live-transcript.md` is
+    // the coarse Me/Them live pass — after processing, `transcript.json` is the
+    // canonical, diarized one; the `live-` prefix and `status` mark these as the
+    // first-pass view, not the authoritative record.
+    //
+    // Because `live.json` is written from the first moment of recording and only
+    // a clean/interrupted stop finalises its `status`, a folder holding a
+    // `live.json` but no `meta.json` is exactly a recording a crash cut short —
+    // which is how `MeetingRecovery` finds them.
+    //
+    // The `live.json` schema is consumed by out-of-process readers; treat it as
+    // a stable contract and version it (`MeetingLiveMirror.schemaVersion`).
+
+    static func liveNotesURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(liveNotesFilename)
+    }
+
+    static func liveTranscriptURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(liveTranscriptFilename)
+    }
+
+    static func liveStateURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent(liveStateFilename)
+    }
+
+    /// Refresh all three live-mirror artefacts for an in-progress meeting.
+    /// `state` is the structured snapshot (generic so the concrete type can
+    /// live in the app target without Core depending on it). Markdown files are
+    /// written first and the JSON state last, so a reader that keys off the
+    /// JSON's `updatedAt` and then reads the markdown sees a consistent set.
+    static func writeLiveMirror<State: Encodable>(
+        notesMarkdown: String,
+        transcriptMarkdown: String,
+        state: State,
+        for id: UUID
+    ) throws {
+        let dir = folder(for: id)
+        let stateData = try jsonEncoder.encode(state)
+        try notesMarkdown.write(to: dir.appendingPathComponent(liveNotesFilename), atomically: true, encoding: .utf8)
+        try transcriptMarkdown.write(to: dir.appendingPathComponent(liveTranscriptFilename), atomically: true, encoding: .utf8)
+        try stateData.write(to: dir.appendingPathComponent(liveStateFilename), options: .atomic)
+    }
+
+    /// Patch just the `status` (and `updatedAt`) of an existing `live.json`,
+    /// leaving the `.md` files untouched. Used by recovery to clear a crashed
+    /// recording's stale `recording` status without the live producers around
+    /// to rebuild a full snapshot. No-op if there's no parseable `live.json`.
+    static func finalizeLiveState(status: String, for id: UUID) {
+        let url = liveStateURL(for: id)
+        guard let data = try? Data(contentsOf: url),
+              var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        obj["status"] = status
+        obj["updatedAt"] = ISO8601DateFormatter().string(from: Date())
+        guard let out = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? out.write(to: url, options: .atomic)
     }
 
     static func writeTrackInspection(_ inspection: MeetingTrackInspection, for id: UUID) throws {

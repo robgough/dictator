@@ -64,6 +64,11 @@ final class MeetingLiveTranscriber {
     /// Observed by the UI to choose the "Listening…" placeholder vs. text.
     private(set) var isRunning: Bool = false
 
+    /// Fired on the main actor whenever a committed line is appended to
+    /// `transcriptLines`, so an observer can mirror the live transcript to disk.
+    /// I/O-free here by design — the callback owns any persistence.
+    @ObservationIgnored var onTranscriptUpdated: (() -> Void)?
+
     private let parakeetModelID: String
 
     /// 16 kHz mono samples not yet flushed into a chunk, one buffer per source.
@@ -462,6 +467,7 @@ final class MeetingLiveTranscriber {
         }
         lastSpeaker = speaker
         trimInterimIfNeeded()
+        onTranscriptUpdated?()
     }
 
     /// Keep `interimText` to a trailing window so the live pane never lays out

@@ -72,6 +72,11 @@ final class MeetingNotesAccumulator {
         var bullets: [NoteBullet]
     }
 
+    /// Fired on the main actor whenever `liveNotes` changes (a pass folded in
+    /// new content or a correction landed), so an observer can mirror the notes
+    /// to disk. I/O-free here by design — the callback owns any persistence.
+    @ObservationIgnored var onNotesUpdated: (() -> Void)?
+
     @ObservationIgnored private weak var transcriber: MeetingLiveTranscriber?
     @ObservationIgnored private let settings: DictatorSettings
     @ObservationIgnored private var consumedLineCount = 0
@@ -300,6 +305,7 @@ final class MeetingNotesAccumulator {
             let newIDs = Set(outline.flatMap { $0.bullets.map(\.id) })
             let added = newIDs.subtracting(previousIDs)
             liveNotes = render()
+            onNotesUpdated?()
             if !added.isEmpty {
                 freshBulletIDs = added
                 lastUpdateAt = Date()
@@ -361,6 +367,7 @@ final class MeetingNotesAccumulator {
             guard applyCorrections(corrections, refs: refs) else { return }
             rebuildOutline()
             liveNotes = render()
+            onNotesUpdated?()
             // Edited bullets get a new id (their text changed); wash those in.
             // Pure drops just vanish — nothing to highlight.
             let newIDs = Set(outline.flatMap { $0.bullets.map(\.id) })

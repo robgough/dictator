@@ -13,7 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- A meeting interrupted by a crash now reappears when you reopen Dictator, ready to finish — with whatever notes it had captured live — instead of vanishing. Press Process to transcribe and write it up as usual.
+- While a meeting records, its live notes and transcript are now written to files in the meeting's folder as they build, so other apps can read them in near-real-time. They're kept after the meeting ends as a first-pass record, alongside the polished notes and transcript.
+- Each meeting's notes and transcript are now also saved as plain notes.md and transcript.md files in the meeting's folder, so you can read, open, or sync them outside Dictator.
 
 ## v2026.6.2 — 2026-06-09
 

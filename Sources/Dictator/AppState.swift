@@ -148,6 +148,13 @@ final class AppState {
         // reads the synced location.
         MeetingStorage.syncedBaseURL = SyncedStorage.directory
         MeetingStorage.migrateToSplitStorage()
+        // Recover any recording a crash cut short before its meta.json was
+        // written: synthesise the meta so it reappears as a `.captured` meeting
+        // (with its mirrored first-pass notes) the user can finish, and clear
+        // the stale live-mirror files. Must run before MeetingsStore scans.
+        MeetingRecovery.recoverInterrupted(settings: settings)
+        // Backfill notes.md / transcript.md for meetings recorded before them.
+        MeetingStorage.backfillDerivedMarkdown()
 
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy

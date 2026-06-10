@@ -130,6 +130,11 @@ final class MeetingSession: Identifiable {
     private(set) var padText: String = ""
     private var padSaveTask: Task<Void, Never>?
 
+    /// Streams the live notes + transcript to disk every few seconds while
+    /// recording (for external readers + crash safety). Present only during a
+    /// live recording, alongside `liveTranscriber`. See `MeetingLiveMirror`.
+    private var liveMirror: MeetingLiveMirror?
+
     /// Active capture warnings — currently one per source ("mic" /
     /// "system"), keyed so a re-warn from the same source overwrites
     /// instead of stacking duplicates. Surfaced by `LiveRecordingView`
@@ -255,6 +260,11 @@ final class MeetingSession: Identifiable {
             guard let self else { return }
             self.timerTask?.cancel()
             self.timerTask = nil
+            // Interrupted recording — finalise the live mirror (status
+            // `interrupted`, files kept for recovery/inspection) while the
+            // producers are still alive, then tear them down.
+            self.liveMirror?.finish(status: .interrupted)
+            self.liveMirror = nil
             self.liveTranscriber?.stop()
             self.liveTranscriber = nil
             _ = self.notesAccumulator?.stop()
@@ -299,15 +309,36 @@ final class MeetingSession: Identifiable {
             // and only when an LLM is configured. Pulls from the same
             // transcriber the UI shows, so the notes track what the user is
             // watching take shape.
+            var accumulator: MeetingNotesAccumulator?
             if AppState.shared.settings.meetingLiveNotesEnabled,
                AppState.shared.settings.activeLLMEngine() != nil {
-                let accumulator = MeetingNotesAccumulator(
+                let acc = MeetingNotesAccumulator(
                     transcriber: live,
                     settings: AppState.shared.settings
                 )
-                notesAccumulator = accumulator
-                accumulator.start()
+                notesAccumulator = acc
+                acc.start()
+                accumulator = acc
             }
+
+            // Mirror the live notes + transcript to disk as they grow, so an
+            // external tool can read the meeting in near-real-time and a crash
+            // mid-recording doesn't lose the work. Driven by the producers'
+            // update callbacks (debounced inside the mirror); torn down on stop.
+            let mirror = MeetingLiveMirror(
+                meetingID: id,
+                title: meta.title,
+                startedAt: meta.createdAt,
+                transcriber: live,
+                accumulator: accumulator
+            )
+            liveMirror = mirror
+            live.onTranscriptUpdated = { [weak mirror] in mirror?.scheduleWrite() }
+            accumulator?.onNotesUpdated = { [weak mirror] in mirror?.scheduleWrite() }
+            // Write the (empty) files immediately so they exist from t=0 and
+            // visibly fill in, instead of appearing ~30 s later on the first
+            // committed line / notes pass.
+            mirror.start()
         }
 
         do {
@@ -372,6 +403,12 @@ final class MeetingSession: Identifiable {
         await liveTranscriber?.finishPending()
         let liveNotesMarkdown = ((await notesAccumulator?.finish()) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Finalise the live mirror while the producers are still alive, so the
+        // last snapshot has the complete transcript + notes. Files are kept with
+        // status `stopped`; the canonical output lands in meta.json / the
+        // post-pass transcript.json.
+        liveMirror?.finish(status: .stopped)
+        liveMirror = nil
         liveTranscriber?.stop()
         liveTranscriber = nil
         notesAccumulator = nil
