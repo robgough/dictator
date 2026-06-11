@@ -18,16 +18,24 @@ import Foundation
 enum ScratchpadStore {
     static let filename = "scratchpad.md"
 
-    static func load() -> String {
+    /// Returns the note's contents, `""` when no file exists yet (a legitimate
+    /// fresh state), or `nil` when the file exists but couldn't be read — e.g.
+    /// an iCloud-evicted file while offline, or a coordination failure. Callers
+    /// must treat `nil` as "contents unknown" and never save over the file.
+    static func load() -> String? {
         let url = SyncedStorage.fileURL(for: filename)
+        guard FileManager.default.fileExists(atPath: url.path) else { return "" }
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordError: NSError?
-        var text = ""
+        var text: String?
         coordinator.coordinate(readingItemAt: url, options: [], error: &coordError) { coordURL in
-            text = (try? String(contentsOf: coordURL, encoding: .utf8)) ?? ""
+            text = try? String(contentsOf: coordURL, encoding: .utf8)
         }
         if let coordError {
             NSLog("[Dictator] Scratchpad: read coordination failed for \(url.path): \(coordError)")
+        }
+        if text == nil {
+            NSLog("[Dictator] Scratchpad: \(url.path) exists but couldn't be read; treating contents as unknown")
         }
         return text
     }
