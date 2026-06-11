@@ -368,6 +368,24 @@
                 type="application/octet-stream"
                 sparkle:edSignature="yCV2H560ZZUmPlR3h5KnJHimHwK4PlRgHBXwNqig4of5qBqyWIdUNCwJtvG+eJX1OZjj0N25LvLPk+EhxxL5Cg==" />
         </item>
+        <item>
+            <title>Version 2026.6.4</title>
+            <pubDate>Thu, 11 Jun 2026 02:52:57 +0000</pubDate>
+            <sparkle:version>22</sparkle:version>
+            <sparkle:shortVersionString>2026.6.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Fixed the Scratchpad note being wiped to empty when Dictator quit or restarted without the Scratchpad having been opened in that session.</li>
+  <li>Moving the synced folder now brings the Scratchpad note along with the other synced files.</li>
+  <li>The Scratchpad no longer saves over a note it couldn&#x27;t read, such as when the synced file hasn&#x27;t finished downloading from iCloud.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.4/Dictator.dmg"
+                length="30218727"
+                type="application/octet-stream"
+                sparkle:edSignature="BPp+VpNJshFVlTLS8s6e6/5v6JGEBWhbgZ+FdHiRNU4jYGwjAP37UPGHYbH5dqohzyfEtB0YoYuuIOBvGAVmAw==" />
+        </item>
+    
     
     
     

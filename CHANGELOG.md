@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.6.4 — 2026-06-11
+
 - Fixed the Scratchpad note being wiped to empty when Dictator quit or restarted without the Scratchpad having been opened in that session.
 - Moving the synced folder now brings the Scratchpad note along with the other synced files.
 - The Scratchpad no longer saves over a note it couldn't read, such as when the synced file hasn't finished downloading from iCloud.
