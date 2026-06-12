@@ -79,6 +79,14 @@ final class MeetingNotesAccumulator {
 
     @ObservationIgnored private weak var transcriber: MeetingLiveTranscriber?
     @ObservationIgnored private let settings: DictatorSettings
+    /// The coach engine, when this meeting has a checklist to watch. The
+    /// watcher rides this accumulator's cadence loop so there's only ever
+    /// ONE live LLM consumer, strictly serialised with the notes passes.
+    @ObservationIgnored private weak var coach: MeetingCoachEngine?
+    /// False = checklist-only mode (live notes off but a checklist exists):
+    /// the additive/correction passes are skipped, the loop machinery and
+    /// the watcher still run.
+    @ObservationIgnored private let notesEnabled: Bool
     @ObservationIgnored private var consumedLineCount = 0
     @ObservationIgnored private var groups: [Group] = []
     @ObservationIgnored private var loopTask: Task<Void, Never>?
@@ -91,6 +99,10 @@ final class MeetingNotesAccumulator {
     /// additive pass's `consumedLineCount`.
     @ObservationIgnored private var ticksSinceCorrection = 0
     @ObservationIgnored private var lastCorrectionLineCount = 0
+    /// Checklist-watcher cursor + cadence (see runChecklistPass).
+    @ObservationIgnored private var checklistLineCount = 0
+    @ObservationIgnored private var ticksSinceChecklist = 0
+    @ObservationIgnored private var totalTicks = 0
 
     /// One topic group in the running outline: a heading (empty for the
     /// general/un-grouped bucket) and its bullet lines (each already
@@ -139,9 +151,16 @@ final class MeetingNotesAccumulator {
     /// terse replacement, not a paragraph.
     private nonisolated static let maxEditedBulletChars = 200
 
-    init(transcriber: MeetingLiveTranscriber, settings: DictatorSettings) {
+    init(
+        transcriber: MeetingLiveTranscriber,
+        settings: DictatorSettings,
+        coach: MeetingCoachEngine? = nil,
+        notesEnabled: Bool = true
+    ) {
         self.transcriber = transcriber
         self.settings = settings
+        self.coach = coach
+        self.notesEnabled = notesEnabled
     }
 
     /// Warm the engine and start the cadence loop. Safe to call once.
@@ -234,9 +253,10 @@ final class MeetingNotesAccumulator {
         guard let transcriber else { return }
         let lines = transcriber.transcriptLines
         ticksSinceCorrection += 1
+        totalTicks += 1
 
         // ── Additive pass: fold genuinely new transcript into the outline. ──
-        if lines.count > consumedLineCount {
+        if notesEnabled, lines.count > consumedLineCount {
             let newLines = Array(lines[consumedLineCount...])
             let newChars = newLines.reduce(0) { $0 + $1.text.count }
             ticksSincePass += 1
@@ -251,11 +271,26 @@ final class MeetingNotesAccumulator {
             }
         }
 
+        // ── Checklist watcher: narrow classification over new lines —     ──
+        // which unticked key points were just addressed? Runs after the
+        // additive pass on the same single-flight loop (notes win
+        // contention by construction). Adaptive cadence: every tick for the
+        // first 5 minutes (intros and agenda-setting tick most items),
+        // every 3 ticks after.
+        if !stopped, coach?.hasChecklist == true {
+            let fastPhase = totalTicks * Int(Self.tickSeconds) < 300
+            ticksSinceChecklist += 1
+            if (fastPhase || ticksSinceChecklist >= 3),
+               lines.count > checklistLineCount {
+                await runChecklistPass(lines: lines)
+            }
+        }
+
         // ── Correction pass: on a slower cadence, revise points the later ──
         // conversation has contradicted. Runs independently of the additive
         // cursor (it may fire on the same tick that just appended) so a fast
         // meeting doesn't starve it.
-        guard !stopped, settings.meetingLiveNotesSelfCorrectEnabled else { return }
+        guard !stopped, notesEnabled, settings.meetingLiveNotesSelfCorrectEnabled else { return }
         guard ticksSinceCorrection >= Self.correctionEveryTicks else { return }
         guard pointCount >= Self.minBulletsForCorrection else { return }
         guard lines.count > lastCorrectionLineCount else { return }
@@ -264,6 +299,100 @@ final class MeetingNotesAccumulator {
         ticksSinceCorrection = 0
         await runCorrectionPass(recentLines: recent)
     }
+
+    // MARK: - Checklist watcher
+
+    /// Match new transcript lines against the coach's unticked checklist.
+    /// Tight contract mirroring the correction pass: numbered items in,
+    /// `DONE n` lines (or nothing) out, anything else ignored. Items only
+    /// ever tick — the watcher can't untick. A cheap keyword prefilter skips
+    /// the LLM call entirely when no new line shares a content word with any
+    /// unticked item, which is most of a long meeting.
+    private func runChecklistPass(lines: [MeetingLiveTranscriber.LiveLine]) async {
+        guard let coach, let engine = settings.activeLLMEngine() else { return }
+        let windowStart = checklistLineCount
+        let newLines = Array(lines[windowStart...])
+        // Claim the window up front (same as the additive pass) so a failed
+        // call doesn't replay forever. Items added mid-window become
+        // watchable from the NEXT window — never against earlier speech.
+        checklistLineCount = lines.count
+        ticksSinceChecklist = 0
+
+        let items = coach.watchableItems(beforeLine: windowStart)
+        guard !items.isEmpty else { return }
+
+        // Prefilter: any ≥4-char word from an item appearing in a new line?
+        let lineBlob = newLines.map(\.text).joined(separator: " ").lowercased()
+        let lineWords = Set(lineBlob.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).filter { $0.count >= 4 })
+        let plausible = items.contains { item in
+            item.text.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .contains { $0.count >= 4 && lineWords.contains($0) }
+        }
+        guard plausible else { return }
+
+        inflight = true
+        isThinking = true
+        defer { inflight = false; isThinking = false }
+
+        let numbered = items.enumerated()
+            .map { "\($0.offset + 1). \($0.element.text)" }
+            .joined(separator: "\n")
+        let snippet = newLines
+            .map { "\($0.speaker): \($0.text)" }
+            .joined(separator: "\n")
+        let selection = """
+        KEY POINTS NOT YET COVERED:
+        \(numbered)
+
+        NEW TRANSCRIPT:
+        \(snippet)
+        """
+
+        do {
+            let result = try await engine.assist(
+                selection: selection,
+                instruction: "Which numbered key points did the NEW TRANSCRIPT clearly address? Output only DONE lines, or nothing.",
+                systemPrompt: Self.checklistPrompt,
+                priorTurns: [],
+                summary: nil,
+                cancellation: { Task.isCancelled }
+            )
+            guard !stopped else { return }
+            let doneNumbers = Self.parseDone(LLMTextUtilities.clean(result.text))
+            let ids = doneNumbers.compactMap { n -> String? in
+                guard n >= 1, n <= items.count else { return nil }
+                return items[n - 1].id
+            }
+            guard !ids.isEmpty else { return }
+            coach.markDone(ids: ids)
+        } catch {
+            NSLog("[Dictator] Checklist watcher pass failed: \(error)")
+        }
+    }
+
+    /// Parse `DONE n` lines; anything else is ignored so stray prose can't
+    /// tick items.
+    private nonisolated static func parseDone(_ raw: String) -> [Int] {
+        raw.components(separatedBy: .newlines).compactMap { rawLine in
+            let line = stripLeadingBulletMarkers(rawLine.trimmingCharacters(in: .whitespaces))
+                .trimmingCharacters(in: .whitespaces)
+            guard line.lowercased().hasPrefix("done") else { return nil }
+            return firstInt(in: line)
+        }
+    }
+
+    private static let checklistPrompt = """
+    You are watching a meeting IN PROGRESS against a short list of key points the user wants to make sure get covered.
+
+    You receive the NOT-YET-COVERED points as a numbered list, and a NEW snippet of transcript labelled `Me:` / `Them:`.
+
+    Output ONLY lines of the form `DONE n` — one per numbered point that the NEW transcript clearly and substantively addressed. A passing mention is not enough; the point must have actually been discussed or done.
+
+    If none were addressed, output NOTHING AT ALL — an empty reply is correct and expected, and is the common case.
+
+    No preamble, no commentary. Only DONE lines, or nothing.
+    """
 
     private func runPass(newLines: [MeetingLiveTranscriber.LiveLine]) async {
         guard let engine = settings.activeLLMEngine() else { return }

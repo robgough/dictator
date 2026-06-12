@@ -227,6 +227,13 @@ struct DictatorSettings: Codable, Equatable {
     /// being computed (in-window strip, post-meeting summary) with the
     /// floating presence off. Default ON; synced.
     var meetingCoachChipEnabled: Bool = true
+    /// Reusable checklist bundles ("Client type B") layered onto a meeting's
+    /// checklist at record start, alongside the meeting type's own items.
+    /// Synced — they're personal playbooks, not hardware.
+    var coachChecklistProfiles: [CoachChecklistProfile] = []
+    /// Pre-record sheet defaults: the type and profiles picked last time.
+    var meetingLastPresetTypeID: String?
+    var meetingLastProfileIDs: [String] = []
     /// How a tap of the dictation / assistant hotkey behaves. ON (default):
     /// a quick tap-and-release (under ~0.35 s) latches listening ON — tap
     /// again to stop — while holding past the threshold is push-to-talk
@@ -459,6 +466,9 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
+        self.coachChecklistProfiles = try c.decodeIfPresent([CoachChecklistProfile].self, forKey: .coachChecklistProfiles) ?? d.coachChecklistProfiles
+        self.meetingLastPresetTypeID = try c.decodeIfPresent(String.self, forKey: .meetingLastPresetTypeID) ?? d.meetingLastPresetTypeID
+        self.meetingLastProfileIDs = try c.decodeIfPresent([String].self, forKey: .meetingLastProfileIDs) ?? d.meetingLastProfileIDs
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
@@ -1266,6 +1276,9 @@ struct DictatorSettings: Codable, Equatable {
         case meetingLiveNotesSelfCorrectEnabled
         case meetingCoachEnabled
         case meetingCoachChipEnabled
+        case coachChecklistProfiles
+        case meetingLastPresetTypeID
+        case meetingLastProfileIDs
         case hotkeyTapToToggleEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
@@ -1305,6 +1318,9 @@ struct DictatorSettings: Codable, Equatable {
         "meetingLiveNotesSelfCorrectEnabled",
         "meetingCoachEnabled",
         "meetingCoachChipEnabled",
+        "coachChecklistProfiles",
+        "meetingLastPresetTypeID",
+        "meetingLastProfileIDs",
         "hotkeyTapToToggleEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",

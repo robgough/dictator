@@ -402,6 +402,26 @@ struct LiveRecordingView: View {
             .frame(maxWidth: .infinity)
             .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+            // Live coach checklist — the key points for this meeting, ticking
+            // off as the watcher catches them, with quick-add for mid-meeting
+            // "don't forget" items. Coach data: never exported with the notes.
+            if let coach = session.coachEngine, coach.hasChecklist {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checklist")
+                            .foregroundStyle(.secondary)
+                        Text("Key points")
+                            .font(.caption.weight(.semibold))
+                            .textCase(.uppercase)
+                            .foregroundStyle(.secondary)
+                    }
+                    CoachChecklistPanel(engine: coach)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+
             // Capture warnings (mic and / or system) — surfaced when a
             // recorder fails to deliver buffers within its bring-up watchdog
             // window. Dismissible per source; UI-only, resets next recording.

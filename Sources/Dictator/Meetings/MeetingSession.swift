@@ -128,6 +128,12 @@ final class MeetingSession: Identifiable {
     /// same level callbacks that drive the meters — no capture of its own.
     /// Exposed so `LiveRecordingView` renders the metrics strip off it.
     private(set) var coachEngine: MeetingCoachEngine?
+    /// Checklist state captured at stop, consumed by `finaliseCoachMetrics`.
+    private var pendingCoachOutcome: MeetingCoachLiveState?
+    private var coachLiveWriteTask: Task<Void, Never>?
+    /// Pad lines already lifted to the checklist this session (hash-once,
+    /// so later pad edits don't re-lift).
+    private var liftedPadLines: Set<String> = []
 
     /// The user's own notes for this meeting — the pad they type into during
     /// (or after) recording. Loaded from `pad.md` on init, autosaved through
@@ -230,12 +236,23 @@ final class MeetingSession: Identifiable {
     /// recording permission first; on denial it lands in `.failed`. The
     /// probe attempts a tap creation and treats the macOS prompt outcome
     /// as the source of truth — there's no preflight API for this bucket.
-    func startRecording(preferredMicDevice: AudioDevice?) async {
+    func startRecording(
+        preferredMicDevice: AudioDevice?,
+        coachPlan: CoachSessionPlan? = nil,
+        coachDisabled: Bool = false
+    ) async {
         guard case .idle = state else { return }
         state = .warmingUp
         captureWarnings = []
         micHeard = false
         systemHeard = false
+
+        // The preset sheet's chosen type drives the notes template too —
+        // one choice, both behaviours. Persisted with the rest of meta at
+        // stop.
+        if let typeID = coachPlan?.typeID {
+            meta.meetingType = MeetingTypeID(typeID)
+        }
 
         switch await AudioRecordingPermission.probe() {
         case .granted:
@@ -319,18 +336,36 @@ final class MeetingSession: Identifiable {
             micRecorder.onBuffer = { [weak live] mono, sampleRate in
                 live?.feedMicSamples(mono, sampleRate: sampleRate)
             }
+        }
 
-            // Live first-pass notes. Built from the live transcript, so they
-            // only run when it's on. Opt-in (it runs the LLM during the call)
-            // and only when an LLM is configured. Pulls from the same
-            // transcriber the UI shows, so the notes track what the user is
-            // watching take shape.
+        // Live coach signals. Works with or without the live transcriber —
+        // levels alone give talk balance / monologues / interruptions; the
+        // transcriber adds pace / fillers / questions and the checklist
+        // watcher when it's on. Constructed before the accumulator so the
+        // watcher can ride its loop.
+        if AppState.shared.settings.meetingCoachEnabled, !coachDisabled {
+            let engine = MeetingCoachEngine(transcriber: liveTranscriber, plan: coachPlan)
+            coachEngine = engine
+            // Crash-mirror the checklist (debounced) so mid-meeting ad-hoc
+            // adds survive — same ethos as the live mirror, separate private
+            // file (never the markdown mirrors).
+            engine.onChecklistChanged = { [weak self] in self?.scheduleCoachLiveWrite() }
+            if engine.hasChecklist { scheduleCoachLiveWrite() }
+        }
+
+        if let live = liveTranscriber {
+            // Live first-pass notes and/or the checklist watcher — one
+            // accumulator, one serialised live-LLM loop. Notes need the
+            // setting on; the watcher needs a checklist; both need an LLM.
             var accumulator: MeetingNotesAccumulator?
-            if AppState.shared.settings.meetingLiveNotesEnabled,
-               AppState.shared.settings.activeLLMEngine() != nil {
+            let notesEnabled = AppState.shared.settings.meetingLiveNotesEnabled
+            if AppState.shared.settings.activeLLMEngine() != nil,
+               notesEnabled || coachEngine?.hasChecklist == true {
                 let acc = MeetingNotesAccumulator(
                     transcriber: live,
-                    settings: AppState.shared.settings
+                    settings: AppState.shared.settings,
+                    coach: coachEngine,
+                    notesEnabled: notesEnabled
                 )
                 notesAccumulator = acc
                 acc.start()
@@ -355,13 +390,6 @@ final class MeetingSession: Identifiable {
             // visibly fill in, instead of appearing ~30 s later on the first
             // committed line / notes pass.
             mirror.start()
-        }
-
-        // Live coach signals. Works with or without the live transcriber —
-        // levels alone give talk balance / monologues / interruptions; the
-        // transcriber adds pace / fillers / questions when it's on.
-        if AppState.shared.settings.meetingCoachEnabled {
-            coachEngine = MeetingCoachEngine(transcriber: liveTranscriber)
         }
 
         do {
@@ -435,6 +463,17 @@ final class MeetingSession: Identifiable {
         liveTranscriber?.stop()
         liveTranscriber = nil
         notesAccumulator = nil
+        // Capture the checklist's final state before the engine goes — the
+        // post-pass folds it into meta.coach next to the recomputed metrics.
+        coachLiveWriteTask?.cancel()
+        coachLiveWriteTask = nil
+        if let engine = coachEngine, engine.hasChecklist {
+            pendingCoachOutcome = MeetingCoachLiveState(
+                presetTypeID: engine.presetTypeID,
+                profileIDs: engine.profileIDs,
+                outcomes: engine.outcomes()
+            )
+        }
         coachEngine?.stop()
         coachEngine = nil
         AppState.shared.activeCoachEngine = nil
@@ -593,9 +632,39 @@ final class MeetingSession: Identifiable {
             mySpeakerIDs: myIDs,
             durationSeconds: meta.durationSeconds
         )
-        meta.coach = MeetingCoachResult(metrics: metrics, generatedAt: Date())
+        // Checklist outcomes: from the just-stopped session, or — after a
+        // crash / "Process now" — from the crash-mirror file.
+        let live = pendingCoachOutcome ?? MeetingStorage.readCoachLive(for: id)
+        meta.coach = MeetingCoachResult(
+            metrics: metrics,
+            generatedAt: Date(),
+            checklist: (live?.outcomes.isEmpty == false) ? live?.outcomes : nil,
+            presetTypeID: live?.presetTypeID ?? (meta.meetingType == .auto ? nil : meta.meetingType.rawValue),
+            profileIDs: (live?.profileIDs.isEmpty == false) ? live?.profileIDs : nil
+        )
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
+        MeetingStorage.deleteCoachLive(for: id)
+        pendingCoachOutcome = nil
+    }
+
+    /// Debounced crash-mirror of the live checklist state (see
+    /// `MeetingStorage.coachLiveURL`). Cancelled + replaced per change; the
+    /// final state is captured synchronously at stop.
+    private func scheduleCoachLiveWrite() {
+        coachLiveWriteTask?.cancel()
+        coachLiveWriteTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self, let engine = self.coachEngine else { return }
+            MeetingStorage.writeCoachLive(
+                MeetingCoachLiveState(
+                    presetTypeID: engine.presetTypeID,
+                    profileIDs: engine.profileIDs,
+                    outcomes: engine.outcomes()
+                ),
+                for: self.id
+            )
+        }
     }
 
     /// Release the meeting-only models once a post-pass is done. The
@@ -688,12 +757,35 @@ final class MeetingSession: Identifiable {
     /// (text), so the write itself is cheap.
     func updatePad(_ text: String) {
         guard padText != text else { return }
+        liftPadBangLines(from: text)
         padText = text
         padSaveTask?.cancel()
         padSaveTask = Task { [id] in
             try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled else { return }
             try? MeetingStorage.writePad(text, for: id)
+        }
+    }
+
+    /// Pad lift: a COMPLETED line starting `!` becomes an ad-hoc coach
+    /// checklist item — one keystroke ahead of the thought, zero new UI.
+    /// "Completed" = followed by a newline (the user pressed return), so
+    /// the partial prefixes typed on the way ("!", "!bu", "!budget…")
+    /// never lift. The pad text itself is left untouched; lifted bodies
+    /// are remembered per session so edits elsewhere don't re-lift them.
+    private func liftPadBangLines(from text: String) {
+        guard let engine = coachEngine else { return }
+        var lines = text.components(separatedBy: "\n")
+        if !text.hasSuffix("\n"), !lines.isEmpty { lines.removeLast() }
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("!") else { continue }
+            let body = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            guard !body.isEmpty else { continue }
+            let key = body.lowercased()
+            guard !liftedPadLines.contains(key) else { continue }
+            liftedPadLines.insert(key)
+            engine.addAdHocItem(body)
         }
     }
 

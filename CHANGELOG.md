@@ -16,6 +16,9 @@ entries as plain bullet lines.
 - Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you've held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.
 - The dictation HUD is now a notch island: a black panel that springs down from the top edge of the screen, merging with the notch on MacBooks and docking flush with the top of external displays.
 - During meetings the island shows a small coach strip (elapsed time, talk balance) and surfaces occasional one-line nudges — you're monologuing, interrupting, dominating, or racing — with cooldowns so it informs rather than nags. Right-click to hide it for the meeting, or turn it off in Meetings settings.
+- Recording a meeting now starts with a quick preset picker: choose the meeting type and the key points you want to make sure get covered. Interview and Client call come with ready-made checklists, and you can save reusable point lists as client profiles and layer them on.
+- The coach ticks your key points off live as the conversation covers them — watch them in the recording view or click the island strip for the checklist. Add a point mid-meeting from either place, or by typing a line starting with ! in the meeting pad; points you add mid-meeting get a reminder nudge until they're covered or dismissed.
+- Each meeting's record now includes how the checklist went — covered, missed, or dismissed — alongside the private conversation metrics.
 
 ## v2026.6.4 — 2026-06-11
 

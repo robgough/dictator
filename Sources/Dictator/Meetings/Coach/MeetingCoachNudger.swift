@@ -5,10 +5,16 @@ import Foundation
 /// interruption is how the feature gets turned off.
 struct CoachNudge: Equatable, Sendable {
     enum Kind: String, CaseIterable, Sendable {
-        case interrupting, dominating, monologue, pace
+        case reminder, interrupting, dominating, monologue, pace, askQuestion
     }
     let kind: Kind
     let message: String
+
+    /// The default behavioural set, armed when the meeting has no preset
+    /// (or its preset doesn't say otherwise). `askQuestion` is preset-armed
+    /// only — question droughts are normal in most meetings; `reminder` is
+    /// implicit (an ad-hoc item arms it by existing).
+    static let defaultArmed: Set<Kind> = [.interrupting, .dominating, .monologue, .pace]
 }
 
 /// Deterministic rules over the signal snapshots: each nudge kind has a
@@ -53,9 +59,31 @@ final class MeetingCoachNudger {
         var paceSustain: Double = 60
         var paceCooldown: Double = 480
         var paceMinElapsed: Double = 300
+
+        /// Question drought (preset-armed): no question from me in this
+        /// long, in meeting types where I should be asking (discovery,
+        /// interviews).
+        var questionDrought: Double = 420
+        var questionCooldown: Double = 420
+        var questionMinElapsed: Double = 300
+
+        /// Ad-hoc reminder: an item I flagged mid-meeting still unaddressed
+        /// this long after I added it; re-surfaces per item on the same
+        /// interval until done or dismissed.
+        var reminderAfter: Double = 300
+        var reminderRefire: Double = 300
+    }
+
+    /// An unaddressed ad-hoc checklist item, as input to the reminder rule.
+    struct PendingReminder {
+        let id: String
+        let text: String
+        let ageSeconds: Double
     }
 
     private let config: Config
+    /// Which behavioural kinds this meeting's preset armed.
+    private let armed: Set<CoachNudge.Kind>
     /// When each kind's trigger condition started holding (sustain tracking).
     private var holdingSince: [CoachNudge.Kind: Double] = [:]
     private var lastFiredAt: [CoachNudge.Kind: Double] = [:]
@@ -68,23 +96,41 @@ final class MeetingCoachNudger {
     /// Interruption total at the last interrupting-nudge fire, so the same
     /// two interruptions can't re-fire after the cooldown without any new one.
     private var interruptionsAtLastFire = 0
+    /// Per-item last reminder time (ad-hoc items resurface individually).
+    private var lastReminderAt: [String: Double] = [:]
 
-    init(config: Config = Config()) {
+    init(config: Config = Config(), armed: Set<CoachNudge.Kind> = CoachNudge.defaultArmed) {
         self.config = config
+        self.armed = armed
     }
 
     /// Evaluate one snapshot; returns a newly-fired nudge or nil. Call once
     /// per engine tick (1 Hz).
-    func evaluate(_ s: MeetingCoachSignals.Snapshot) -> CoachNudge? {
+    func evaluate(
+        _ s: MeetingCoachSignals.Snapshot,
+        reminders: [PendingReminder] = []
+    ) -> CoachNudge? {
         let t = s.elapsed
 
         // Global rate limit before any per-kind logic.
         guard t - lastAnyFireAt >= config.minSecondsBetweenNudges else { return nil }
 
+        // Ad-hoc reminders outrank everything — the user explicitly said
+        // "don't let me forget this". Not subject to escalation: an
+        // un-actioned flag deserves its steady resurface.
+        for reminder in reminders where reminder.ageSeconds >= config.reminderAfter {
+            if t - (lastReminderAt[reminder.id] ?? -.infinity) >= config.reminderRefire {
+                lastReminderAt[reminder.id] = t
+                lastAnyFireAt = t
+                return CoachNudge(kind: .reminder, message: "Still to do: \(reminder.text)")
+            }
+        }
+
         // Interrupting — event-based, no sustain: the events already are.
         // Refiring needs a full fresh batch of NEW interruptions, not one
         // straggler after the cooldown.
-        if t >= config.interruptionMinElapsed,
+        if armed.contains(.interrupting),
+           t >= config.interruptionMinElapsed,
            s.interruptionsByMeLast5Min >= config.interruptionCount,
            s.interruptionsByMe >= interruptionsAtLastFire + config.interruptionCount,
            offCooldown(.interrupting, at: t, config.interruptionCooldown) {
@@ -94,7 +140,8 @@ final class MeetingCoachNudger {
         }
 
         // Dominating — windowed share, sustained, not in the opening minutes.
-        if t >= config.dominateMinElapsed,
+        if armed.contains(.dominating),
+           t >= config.dominateMinElapsed,
            s.myTalkSeconds + s.theirTalkSeconds >= config.dominateMinWindowTalk,
            sustained(.dominating, holding: s.talkShareMeWindow >= config.dominateShare,
                      at: t, for: config.dominateSustain),
@@ -105,7 +152,8 @@ final class MeetingCoachNudger {
 
         // Monologue — current run, lightly sustained so a boundary blip
         // doesn't fire it at 89.6 s.
-        if sustained(.monologue, holding: s.currentMonologueSeconds >= config.monologueSeconds,
+        if armed.contains(.monologue),
+           sustained(.monologue, holding: s.currentMonologueSeconds >= config.monologueSeconds,
                      at: t, for: config.monologueSustain),
            offCooldown(.monologue, at: t, config.monologueCooldown) {
             return fire(.monologue, at: t,
@@ -113,11 +161,22 @@ final class MeetingCoachNudger {
         }
 
         // Pace — sustained, against the user's own baseline.
-        if t >= config.paceMinElapsed,
+        if armed.contains(.pace),
+           t >= config.paceMinElapsed,
            let pace = s.paceWordsPerMinute,
            sustained(.pace, holding: pace >= config.paceWPM, at: t, for: config.paceSustain),
            offCooldown(.pace, at: t, config.paceCooldown) {
             return fire(.pace, at: t, "\(Int(pace.rounded())) wpm — slow down")
+        }
+
+        // Question drought — preset-armed only (discovery calls, interviews).
+        if armed.contains(.askQuestion),
+           t >= config.questionMinElapsed,
+           let drought = s.secondsSinceMyQuestion,
+           drought >= config.questionDrought,
+           offCooldown(.askQuestion, at: t, config.questionCooldown) {
+            return fire(.askQuestion, at: t,
+                        "No question from you in \(Int(drought / 60)) min")
         }
 
         return nil

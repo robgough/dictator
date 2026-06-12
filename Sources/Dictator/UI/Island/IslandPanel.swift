@@ -47,6 +47,13 @@ final class IslandPanel: NSPanel {
         isReleasedWhenClosed = false
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Granted only while the coach's expanded checklist needs its quick-add
+    /// field — the ScratchpadPanel pattern: `.nonactivatingPanel` + key means
+    /// typing lands here without Dictator becoming the active app or the
+    /// user's window losing foreground. The controller flips this with the
+    /// expanded state and resigns key on collapse.
+    var allowsKey = false
+
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }

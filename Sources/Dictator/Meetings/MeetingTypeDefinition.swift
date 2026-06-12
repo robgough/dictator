@@ -27,6 +27,32 @@ struct MeetingTypeDefinition: Codable, Equatable, Identifiable, Sendable {
     /// from settings is by definition a custom type.
     var isBuiltIn: Bool
 
+    /// What the meeting coach does for this type: the key points to hit
+    /// (surfaced as the live checklist), the rubric the post-meeting report
+    /// grades against, and which live nudges are armed. nil = no
+    /// type-specific coaching (the engine still runs its default
+    /// behavioural nudges). Built-ins' configs ship in code; custom types
+    /// persist theirs alongside the template.
+    var coach: CoachConfig?
+
+    struct CoachConfig: Codable, Equatable, Sendable {
+        /// Key points to cover, one per line in the editor. Pre-fills the
+        /// per-meeting checklist (editable at record start).
+        var checklist: [String]
+        /// What "good" looks like for this meeting type — prose handed to
+        /// the post-meeting coach report pass (phase 4).
+        var rubric: String
+        /// Raw `CoachNudge.Kind` values armed for this type. Empty = the
+        /// engine's default behavioural set.
+        var armedNudges: [String]
+
+        init(checklist: [String] = [], rubric: String = "", armedNudges: [String] = []) {
+            self.checklist = checklist
+            self.rubric = rubric
+            self.armedNudges = armedNudges
+        }
+    }
+
     var meetingTypeID: MeetingTypeID { MeetingTypeID(id) }
 
     /// Keyword for the auto-detect prompt: the hand-tuned one for built-ins,
@@ -41,7 +67,8 @@ struct MeetingTypeDefinition: Codable, Equatable, Identifiable, Sendable {
         detail: String,
         template: String,
         detectionKeyword: String? = nil,
-        isBuiltIn: Bool = false
+        isBuiltIn: Bool = false,
+        coach: CoachConfig? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -49,12 +76,13 @@ struct MeetingTypeDefinition: Codable, Equatable, Identifiable, Sendable {
         self.template = template
         self.detectionKeyword = detectionKeyword
         self.isBuiltIn = isBuiltIn
+        self.coach = coach
     }
 
     /// Only custom types are ever encoded (into settings), so `isBuiltIn`
     /// and `detectionKeyword` stay out of the persisted shape entirely.
     private enum CodingKeys: String, CodingKey {
-        case id, displayName, detail, template
+        case id, displayName, detail, template, coach
     }
 
     init(from decoder: Decoder) throws {
@@ -65,6 +93,7 @@ struct MeetingTypeDefinition: Codable, Equatable, Identifiable, Sendable {
         self.template = try c.decodeIfPresent(String.self, forKey: .template) ?? ""
         self.detectionKeyword = nil
         self.isBuiltIn = false
+        self.coach = try c.decodeIfPresent(CoachConfig.self, forKey: .coach)
     }
 
     /// Lowercased, hyphen-joined alphanumerics: "Eng sync!" → "eng-sync".

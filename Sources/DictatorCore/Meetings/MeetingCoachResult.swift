@@ -60,22 +60,71 @@ struct CoachMetrics: Codable, Equatable, Sendable {
     }
 }
 
+/// Final state of one checklist item, persisted on the coach record so the
+/// scorecard can render "covered / missed / flagged-but-not-addressed".
+struct CoachChecklistOutcome: Codable, Equatable, Sendable {
+    /// "preset" | "profile" | "adhoc" — kept as a raw string so the core
+    /// schema doesn't depend on the app-side enum.
+    var source: String
+    var text: String
+    /// Seconds into the meeting the item was added (0 = pre-meeting).
+    var addedAtSeconds: Double
+    /// Seconds into the meeting the watcher marked it addressed; nil = never.
+    var doneAtSeconds: Double?
+    /// The user explicitly dismissed it ("never mind") — not a miss.
+    var dismissed: Bool
+
+    init(source: String, text: String, addedAtSeconds: Double = 0, doneAtSeconds: Double? = nil, dismissed: Bool = false) {
+        self.source = source
+        self.text = text
+        self.addedAtSeconds = addedAtSeconds
+        self.doneAtSeconds = doneAtSeconds
+        self.dismissed = dismissed
+    }
+}
+
+/// Crash-safety snapshot of the live checklist, debounce-written to a local
+/// `coach-live.json` in the meeting's audio folder while recording and
+/// deleted once the outcomes fold into `meta.coach` — so mid-meeting ad-hoc
+/// adds survive a crash. NOT one of the markdown mirrors; coach data stays
+/// out of those.
+struct MeetingCoachLiveState: Codable, Equatable, Sendable {
+    var presetTypeID: String?
+    var profileIDs: [String]
+    var outcomes: [CoachChecklistOutcome]
+}
+
 /// The coach's per-meeting record, stored on `MeetingMeta.coach`. PRIVATE BY
 /// DESIGN: this is feedback about the *user*, not about the meeting — it is
 /// never written into the markdown mirrors (`notes.md` / `transcript.md`),
 /// never included in copy/export, and renders only in the in-app Coach
-/// section. Later phases add checklist outcomes and the LLM report here;
-/// every field beyond `metrics` decodes as optional so the schema can grow.
+/// section. Every field beyond `metrics` decodes as optional so the schema
+/// can grow (the LLM report lands here in a later phase).
 struct MeetingCoachResult: Codable, Equatable, Sendable {
     var metrics: CoachMetrics
     var generatedAt: Date
+    var checklist: [CoachChecklistOutcome]?
+    /// Which meeting type's coach config ran, and which client profiles
+    /// were layered in — context for the scorecard and the future report.
+    var presetTypeID: String?
+    var profileIDs: [String]?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
 
-    init(metrics: CoachMetrics, generatedAt: Date, schemaVersion: Int = MeetingCoachResult.currentSchemaVersion) {
+    init(
+        metrics: CoachMetrics,
+        generatedAt: Date,
+        checklist: [CoachChecklistOutcome]? = nil,
+        presetTypeID: String? = nil,
+        profileIDs: [String]? = nil,
+        schemaVersion: Int = MeetingCoachResult.currentSchemaVersion
+    ) {
         self.metrics = metrics
         self.generatedAt = generatedAt
+        self.checklist = checklist
+        self.presetTypeID = presetTypeID
+        self.profileIDs = profileIDs
         self.schemaVersion = schemaVersion
     }
 
@@ -83,11 +132,14 @@ struct MeetingCoachResult: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.metrics = try c.decode(CoachMetrics.self, forKey: .metrics)
         self.generatedAt = try c.decodeIfPresent(Date.self, forKey: .generatedAt) ?? .distantPast
+        self.checklist = try c.decodeIfPresent([CoachChecklistOutcome].self, forKey: .checklist)
+        self.presetTypeID = try c.decodeIfPresent(String.self, forKey: .presetTypeID)
+        self.profileIDs = try c.decodeIfPresent([String].self, forKey: .profileIDs)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
-        case metrics, generatedAt, schemaVersion
+        case metrics, generatedAt, checklist, presetTypeID, profileIDs, schemaVersion
     }
 }
 

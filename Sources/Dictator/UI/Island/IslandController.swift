@@ -82,6 +82,7 @@ final class IslandController {
                 _ = self.state.activeCoachEngine
                 _ = self.state.activeCoachEngine?.chipHidden
                 _ = self.state.settings.meetingCoachChipEnabled
+                _ = self.context.coachExpanded
             } onChange: {
                 guard resumed.markResumed() else { return }
                 continuation.resume()
@@ -106,8 +107,26 @@ final class IslandController {
             && state.settings.meetingCoachChipEnabled
         context.coachVisible = coachVisible
 
+        // The expanded checklist collapses whenever the coach loses the
+        // surface — dictation taking over, the strip hiding, meeting end.
+        if context.coachExpanded, !coachVisible || dictationActive {
+            context.coachExpanded = false
+        }
+        // Key-window status only while the quick-add field could need
+        // typing (ScratchpadPanel's nonactivating+key pattern).
+        let wantsKey = context.coachExpanded
+        if panel.allowsKey != wantsKey {
+            panel.allowsKey = wantsKey
+            if wantsKey {
+                panel.makeKey()
+            } else if panel.isKeyWindow {
+                panel.resignKey()
+            }
+        }
+
         // Mouse policy: transparent unless something is clickable — the
-        // pipeline's hover-cancel, or the coach strip (context menu).
+        // pipeline's hover-cancel, or the coach strip (tap to expand,
+        // checklist interactions, context menu).
         panel.ignoresMouseEvents = !(s.canCancel || (coachVisible && !dictationActive))
 
         // Escape monitor: only while the pipeline is cancellable.
@@ -162,9 +181,6 @@ final class IslandController {
     private static let retractSpring = Animation.spring(response: 0.36, dampingFraction: 1.0)
 
     private func show() {
-        NSLog("[Dictator] Island reveal: revealed %d->1 framesSinceLast=%d state=%@",
-              context.revealed ? 1 : 0, IslandAnimationProbe.shared.drain(),
-              String(describing: state.pipeline.state))
         // Re-assert cross-Space behavior + z-order every show — macOS
         // sometimes binds a panel to one Space and ignores the flags later
         // (see HUDPanel's history). The panel is already on screen; this
@@ -181,8 +197,6 @@ final class IslandController {
     }
 
     private func hide() {
-        NSLog("[Dictator] Island retract: revealed %d->0 framesSinceLast=%d",
-              context.revealed ? 1 : 0, IslandAnimationProbe.shared.drain())
         withAnimation(Self.retractSpring) {
             context.revealed = false
         }

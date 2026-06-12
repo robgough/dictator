@@ -17,6 +17,11 @@ final class IslandContext {
     /// withAnimation — and it doubles as the controller's source of truth
     /// for "is the island out", so there's no separate flag to desync.
     var revealed = false
+    /// Coach checklist expanded on the island (click to open). The
+    /// controller watches this to grant the panel key-window status while
+    /// the quick-add field needs typing, and collapses it when dictation
+    /// takes the surface or the meeting ends.
+    var coachExpanded = false
 }
 
 /// The island itself: a black shape anchored to the top-centre of the
@@ -40,7 +45,7 @@ struct IslandView: View {
     private enum Mode: Equatable {
         case hidden
         case dictation
-        case coach(nudging: Bool)
+        case coach(nudging: Bool, expanded: Bool)
     }
 
     private var mode: Mode {
@@ -53,7 +58,7 @@ struct IslandView: View {
         }()
         if dictationActive { return .dictation }
         if context.coachVisible, let engine = state.activeCoachEngine {
-            return .coach(nudging: engine.activeNudge != nil)
+            return .coach(nudging: engine.activeNudge != nil, expanded: context.coachExpanded)
         }
         return .hidden
     }
@@ -85,12 +90,8 @@ struct IslandView: View {
         // above it is clipped by the window, and on notched Macs the shape
         // visibly retracts INTO the housing. The animation rides the
         // transaction of the controller's withAnimation around the
-        // `revealed` mutation. ProbingOffset is `.offset` plus a frame
-        // counter — the controller logs frames-per-transition so "did the
-        // spring run" is answerable from the logs (a standalone spike
-        // verified the mechanism at ~73 frames per transition; 1 = jumped).
-        // Reduce Motion swaps the slide for a fade.
-        .modifier(ProbingOffset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32)))
+        // `revealed` mutation. Reduce Motion swaps the slide for a fade.
+        .offset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32))
         .opacity(reduceMotion && !context.revealed ? 0 : 1)
         .environment(\.colorScheme, .dark)
         .onChange(of: mode) { _, new in
@@ -139,7 +140,13 @@ struct IslandView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
         case .coach:
             if let engine = state.activeCoachEngine {
-                CoachIslandContent(engine: engine)
+                CoachIslandContent(
+                    engine: engine,
+                    expanded: Binding(
+                        get: { context.coachExpanded },
+                        set: { context.coachExpanded = $0 }
+                    )
+                )
             }
         }
     }
@@ -156,37 +163,14 @@ struct IslandView: View {
         switch mode {
         case .hidden: 0
         case .dictation: 520
-        // Ambient hugs the notch (plus a visible lip either side so the
-        // strip registers at all); the nudge line needs room to read.
-        case .coach(nudging: false): max(geo.notchWidth + 56, 210)
-        case .coach(nudging: true): max(geo.notchWidth + 56, 380)
+        // Expanded checklist needs working room; the nudge line needs room
+        // to read; the ambient strip hugs the notch (plus a visible lip
+        // either side so it registers at all).
+        case .coach(_, expanded: true): max(geo.notchWidth + 56, 440)
+        case .coach(nudging: true, _): max(geo.notchWidth + 56, 380)
+        case .coach: max(geo.notchWidth + 56, 210)
         }
     }
-}
-
-/// `.offset` plus an animation-frame counter: `animatableData`'s setter runs
-/// once per frame while a transition animates and exactly once on a jump,
-/// so the drained count distinguishes "spring ran" from "value snapped".
-/// Costs nothing measurable; the island only transitions a few times a
-/// minute at most.
-struct ProbingOffset: GeometryEffect {
-    var y: CGFloat
-    var animatableData: CGFloat {
-        get { y }
-        set { y = newValue; IslandAnimationProbe.shared.record() }
-    }
-    func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: 0, y: y))
-    }
-}
-
-final class IslandAnimationProbe: @unchecked Sendable {
-    static let shared = IslandAnimationProbe()
-    private let lock = NSLock()
-    private var count = 0
-    func record() { lock.lock(); count += 1; lock.unlock() }
-    /// Returns frames recorded since the last drain and resets.
-    func drain() -> Int { lock.lock(); defer { count = 0; lock.unlock() }; return count }
 }
 
 /// Top-anchored island silhouette: square shoulders that meet the screen's

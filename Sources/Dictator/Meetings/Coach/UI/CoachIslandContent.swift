@@ -1,17 +1,22 @@
 import SwiftUI
 
 /// The island's meeting mode: a tiny ambient strip (talk-balance dot,
-/// elapsed, share) that expands to one terse line when a nudge fires.
-/// Reads the engine's 1 Hz snapshot; nothing here re-renders faster.
-///
-/// Phase 3 adds the click-to-expand checklist + quick-add; for now the only
-/// interaction is the context menu's "Hide for this meeting".
+/// elapsed, share, checklist count) that expands to one terse line when a
+/// nudge fires, and to the full checklist + quick-add on click. Reads the
+/// engine's 1 Hz snapshot; nothing here re-renders faster.
 struct CoachIslandContent: View {
     let engine: MeetingCoachEngine
+    /// Bound to IslandContext.coachExpanded — the controller also watches it
+    /// to grant the panel key-window status while the quick-add field needs
+    /// typing.
+    @Binding var expanded: Bool
 
     var body: some View {
         Group {
-            if let nudge = engine.activeNudge {
+            if expanded {
+                expandedPanel
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let nudge = engine.activeNudge {
                 nudgeLine(nudge)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
@@ -19,9 +24,46 @@ struct CoachIslandContent: View {
                     .transition(.opacity)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { if !expanded { expanded = true } }
         .contextMenu {
             Button("Hide for this meeting") { engine.chipHidden = true }
         }
+    }
+
+    private var expandedPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                let s = engine.snapshot
+                Circle()
+                    .fill(balanceColor(share: s.talkShareMeWindow))
+                    .frame(width: 7, height: 7)
+                Text("\(clock(s.elapsed))  ·  You \(Int((s.talkShareMe * 100).rounded()))%")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let pace = s.paceWordsPerMinute {
+                    Text("·  \(Int(pace.rounded())) wpm")
+                        .font(.system(size: 11, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Button {
+                    expanded = false
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            CoachChecklistPanel(engine: engine, compact: true)
+            Button("Hide coach for this meeting") { engine.chipHidden = true }
+                .buttonStyle(.plain)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var ambientStrip: some View {
@@ -37,6 +79,12 @@ struct CoachIslandContent: View {
                 Text("You \(Int((s.talkShareMe * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
                     .foregroundStyle(.secondary)
+            }
+            if engine.hasChecklist {
+                let done = engine.checklist.count(where: { !$0.isPending })
+                Text("\(done)/\(engine.checklist.count)")
+                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 14)
@@ -60,10 +108,12 @@ struct CoachIslandContent: View {
 
     private func icon(for kind: CoachNudge.Kind) -> String {
         switch kind {
+        case .reminder: "checklist"
         case .monologue: "person.wave.2"
         case .interrupting: "hand.raised"
         case .dominating: "chart.pie"
         case .pace: "hare"
+        case .askQuestion: "questionmark.bubble"
         }
     }
 

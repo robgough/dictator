@@ -206,6 +206,27 @@ enum MeetingStorage {
     /// beside meta.json in the synced folder rather than a field inside it:
     /// human-readable in Finder, cheap to autosave on every debounce tick,
     /// and it rides the same sync as the rest of the meeting's text.
+    /// Crash-safety snapshot of the live coach checklist. LOCAL (audio
+    /// folder, per-Mac) and transient — deleted once the outcomes fold into
+    /// meta.coach after processing. Never one of the markdown mirrors.
+    static func coachLiveURL(for id: UUID) -> URL {
+        audioFolder(for: id).appendingPathComponent("coach-live.json")
+    }
+
+    static func writeCoachLive(_ state: MeetingCoachLiveState, for id: UUID) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: coachLiveURL(for: id), options: .atomic)
+    }
+
+    static func readCoachLive(for id: UUID) -> MeetingCoachLiveState? {
+        guard let data = try? Data(contentsOf: coachLiveURL(for: id)) else { return nil }
+        return try? JSONDecoder().decode(MeetingCoachLiveState.self, from: data)
+    }
+
+    static func deleteCoachLive(for id: UUID) {
+        try? FileManager.default.removeItem(at: coachLiveURL(for: id))
+    }
+
     static func padURL(for id: UUID) -> URL {
         folder(for: id).appendingPathComponent(padFilename)
     }

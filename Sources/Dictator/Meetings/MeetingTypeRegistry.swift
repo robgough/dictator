@@ -225,7 +225,17 @@ enum MeetingTypeRegistry {
             The owner is whoever owns the next step exactly as named — interviewer, recruiter, or candidate — and include stated process commitments ("they'll hear back by Friday").
             """,
             detectionKeyword: "interview",
-            isBuiltIn: true
+            isBuiltIn: true,
+            coach: MeetingTypeDefinition.CoachConfig(
+                checklist: [
+                    "Explain the role and the process",
+                    "Ask for concrete examples, not opinions",
+                    "Leave time for their questions",
+                    "Tell them when they'll hear back",
+                ],
+                rubric: "A good interviewer talks far less than the candidate, asks open questions that pull concrete examples, never interrupts an answer, covers the must-ask areas, and closes with clear next steps and a timeline.",
+                armedNudges: ["dominating", "monologue", "interrupting", "askQuestion"]
+            )
         ),
         MeetingTypeDefinition(
             id: MeetingTypeID.clientCall.rawValue,
@@ -252,7 +262,18 @@ enum MeetingTypeRegistry {
             Anything the team still owes the client an answer on. Omit the section when there are none.
             """,
             detectionKeyword: "client-call",
-            isBuiltIn: true
+            isBuiltIn: true,
+            coach: MeetingTypeDefinition.CoachConfig(
+                checklist: [
+                    "Understand what problem they're trying to solve",
+                    "Ask about timeline",
+                    "Ask about budget",
+                    "Understand who makes the decision",
+                    "Agree the next step before ending",
+                ],
+                rubric: "A good client call is discovery-led: the client talks more than you, you ask open questions about their problem, timeline, budget, and decision process, and the call ends with an explicitly agreed next step.",
+                armedNudges: ["dominating", "monologue", "interrupting", "askQuestion"]
+            )
         ),
         MeetingTypeDefinition(
             id: MeetingTypeID.brainstorm.rawValue,
