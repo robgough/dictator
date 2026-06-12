@@ -58,8 +58,8 @@ Sources/Dictator/UI/Island/
 
 ## Phases
 
-1. **Island core + dictation**: geometry helper, panel/controller/view, dictation states restyled, pop-down animation, notched + non-notch handling, multi-screen rules. Ships as the new HUD.
-2. **Coach ambient mode**: lands with `meeting-coach.md` phase 2 — `CoachIslandContent` replaces that plan's `CoachChipPanel`/`CoachChipController` (its §7 view-state spec and focus rules apply verbatim; only the host changes).
+1. **Island core + dictation**: geometry helper, panel/controller/view, dictation states restyled, pop-down animation, notched + non-notch handling, multi-screen rules. Ships as the new HUD. — **SHIPPED 2026-06-12** (`UI/Island/`; HUDController/HUDPanel/HUDView deleted, monitors carried over).
+2. **Coach ambient mode**: lands with `meeting-coach.md` phase 2 — `CoachIslandContent` replaces that plan's `CoachChipPanel`/`CoachChipController` (its §7 view-state spec and focus rules apply verbatim; only the host changes). — **SHIPPED 2026-06-12** (ambient strip + nudge line; click-to-expand checklist arrives with coach phase 3).
 
 ## Open questions
 

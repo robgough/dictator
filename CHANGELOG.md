@@ -14,6 +14,8 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you've held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.
+- The dictation HUD is now a notch island: a black panel that pops down from the top of the screen, merging with the notch on MacBooks and appearing as a floating pill on external displays.
+- During meetings the island shows a small coach strip (elapsed time, talk balance) and surfaces occasional one-line nudges — you're monologuing, interrupting, dominating, or racing — with cooldowns so it informs rather than nags. Right-click to hide it for the meeting, or turn it off in Meetings settings.
 
 ## v2026.6.4 — 2026-06-11
 

@@ -251,8 +251,10 @@ final class MeetingSession: Identifiable {
             AppState.shared.meetingRecordingStartedAt = Date()
             self.startTimerLoop()
             // Coach clock starts when capture actually starts, so its t=0
-            // lines up with audio time.
+            // lines up with audio time. Mirrored onto AppState so the notch
+            // island can render the strip with the Meetings window closed.
             self.coachEngine?.start()
+            AppState.shared.activeCoachEngine = self.coachEngine
         }
         // Stash the latest level; the timer loop publishes it into `state` at a
         // fixed meter cadence. We deliberately do NOT push `state` per buffer:
@@ -281,6 +283,7 @@ final class MeetingSession: Identifiable {
             self.notesAccumulator = nil
             self.coachEngine?.stop()
             self.coachEngine = nil
+            AppState.shared.activeCoachEngine = nil
             AppState.shared.meetingRecordingStartedAt = nil
             self.state = .failed(reason)
         }
@@ -434,6 +437,7 @@ final class MeetingSession: Identifiable {
         notesAccumulator = nil
         coachEngine?.stop()
         coachEngine = nil
+        AppState.shared.activeCoachEngine = nil
         // Reflect what actually landed on disk. The CATap process tap owns
         // the system track; the parallel AVAudioEngine owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(

@@ -17,7 +17,20 @@ final class MeetingCoachEngine {
     /// The published signals — talk share, monologue timer, pace, etc.
     private(set) var snapshot = MeetingCoachSignals.Snapshot()
 
+    /// The nudge currently on display, if any. Set when a rule fires,
+    /// cleared automatically after `nudgeDisplaySeconds` — the island
+    /// expands while this is non-nil and shrinks back when it clears.
+    private(set) var activeNudge: CoachNudge?
+
+    /// "Hide for this meeting" — set from the island's context menu. The
+    /// island controller observes this; signals keep computing regardless
+    /// (the post-meeting metrics don't stop because the strip is hidden).
+    var chipHidden = false
+
     @ObservationIgnored private let signals = MeetingCoachSignals()
+    @ObservationIgnored private let nudger = MeetingCoachNudger()
+    @ObservationIgnored private var nudgeClearAt: Date?
+    @ObservationIgnored private static let nudgeDisplaySeconds: TimeInterval = 8
     @ObservationIgnored private weak var transcriber: MeetingLiveTranscriber?
     @ObservationIgnored private var consumedLineCount = 0
     @ObservationIgnored private var loopTask: Task<Void, Never>?
@@ -89,5 +102,16 @@ final class MeetingCoachEngine {
         }
 
         snapshot = signals.snapshot(at: now)
+
+        // Nudges: fire from the fresh snapshot, auto-expire the display.
+        // One at a time — a fire while one is showing replaces it (rare:
+        // every kind is on its own cooldown).
+        if let nudge = nudger.evaluate(snapshot) {
+            activeNudge = nudge
+            nudgeClearAt = Date().addingTimeInterval(Self.nudgeDisplaySeconds)
+        } else if let clearAt = nudgeClearAt, Date() >= clearAt {
+            activeNudge = nil
+            nudgeClearAt = nil
+        }
     }
 }

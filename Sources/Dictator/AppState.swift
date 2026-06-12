@@ -41,6 +41,14 @@ final class AppState {
     var meetingRecordingStartedAt: Date?
     var isRecordingMeeting: Bool { meetingRecordingStartedAt != nil }
 
+    /// The live meeting's coach engine, mirrored here (like
+    /// `meetingRecordingStartedAt`) so the notch island can show the coach
+    /// strip even when the Meetings window is closed — which is the normal
+    /// state mid-call. Set by `MeetingSession` when recording starts, cleared
+    /// on every teardown path. nil when no meeting is recording or the coach
+    /// is disabled.
+    var activeCoachEngine: MeetingCoachEngine?
+
     /// True while the Meetings window is the key window. Set by
     /// `MeetingsRootView` from its `controlActiveState`. Drives both the
     /// assistant-hotkey routing (below) and the "Hold ⌘⌥A to ask" affordance

@@ -92,7 +92,7 @@ struct DictatorApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var hud: HUDController?
+    private var island: IslandController?
     private var scratchpad: ScratchpadController?
     // Held by the delegate so the strong reference outlives every
     // services-menu invocation. `NSApp.servicesProvider` is `weak`.
@@ -188,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let state = AppState.shared
-        hud = HUDController(state: state)
+        island = IslandController(state: state)
         // Create the Scratchpad controller and hand it to AppState before
         // bootstrap, so the toggle hotkey bound there has a live panel to drive.
         let scratchpad = ScratchpadController()

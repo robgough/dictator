@@ -272,12 +272,18 @@ final class MeetingCoachSignals {
         // lines shouldn't dilute the rate).
         let textWindowStart = max(0, Int(t - config.textWindowSeconds))
         let recent = myLineStats.filter { $0.at >= Double(textWindowStart) }
+        // 45 s floor: with less of my active speech in the window the
+        // denominator is noise. The 450 wpm ceiling discards readings where
+        // the bleed discount ate active-time the transcript lines still
+        // carry words for (replay produced a phantom "415 wpm" without it —
+        // nobody actually speaks at 415).
         let myActiveInWindow = sum(micBins, from: textWindowStart)
-        if myActiveInWindow >= 20 {
+        if myActiveInWindow >= 45 {
             let words = recent.reduce(0) { $0 + $1.words }
             let fillers = recent.reduce(0) { $0 + $1.fillers }
             let minutes = myActiveInWindow / 60
-            if words > 0 { s.paceWordsPerMinute = Double(words) / minutes }
+            let pace = Double(words) / minutes
+            if words > 0, pace <= 450 { s.paceWordsPerMinute = pace }
             s.fillerWordsPerMinute = Double(fillers) / minutes
         }
 

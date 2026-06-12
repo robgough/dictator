@@ -115,6 +115,12 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingCoachEnabled },
                     set: { s.settings.meetingCoachEnabled = $0; state.save() }
                 ))
+                Toggle("Show the coach on the notch island", isOn: Binding(
+                    get: { s.settings.meetingCoachChipEnabled },
+                    set: { s.settings.meetingCoachChipEnabled = $0; state.save() }
+                ))
+                .disabled(!s.settings.meetingCoachEnabled)
+                .padding(.leading, 18)
                 Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }

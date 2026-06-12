@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Literal RGB tints for the non-blue HUD accents. We deliberately don't use
+// Literal RGB tints for the non-blue island accents. We deliberately don't use
 // SwiftUI's semantic colours (`.indigo`, `.purple`, `.pink`, `.teal`,
 // `.orange`) here: those are dynamic and re-resolve under the visual-effect
 // view's vibrancy appearance, which itself shifts with the window content
@@ -15,7 +15,7 @@ private extension Color {
     static let hudOrange = Color(red: 1.0,   green: 0.624, blue: 0.039) // ~#FF9F0A
 }
 
-struct HUDView: View {
+struct DictationIslandContent: View {
     @Environment(AppState.self) private var state
     @State private var deviceManager = AudioDeviceManager.shared
     @State private var hovering = false
@@ -25,16 +25,11 @@ struct HUDView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // `.regularMaterial` (vs the thinner variant) blocks more of the
-            // underlying window so the waveform doesn't desaturate when the
-            // HUD floats over a dark or colourful background. SwiftUI clips
-            // the material to the rounded shape, so macOS draws the window
-            // shadow following the pill outline.
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-            )
+            // No background here — this renders inside the island's black
+            // shape (IslandView owns the chrome). The forced-dark scheme up
+            // there resolves .primary/.secondary light-on-black; the literal
+            // accent colours above hold their values on black just as they
+            // did over the old material.
             .overlay(alignment: .topTrailing) {
                 if hovering && state.pipeline.state.canCancel {
                     Button {
