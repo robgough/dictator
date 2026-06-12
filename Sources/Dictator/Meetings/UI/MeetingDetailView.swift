@@ -1042,7 +1042,14 @@ private struct LiveTranscriptPane: View {
                         // ScrollViewReader pins to as new chunks land —
                         // gives us the auto-scroll-to-bottom behaviour
                         // without any manual scroll-offset math.
-                        Text(transcriber.interimText)
+                        // TypewriterText streams each settled utterance in
+                        // word-by-word (and visibly deletes revisions), with
+                        // per-word ticks keeping the scroll pinned.
+                        TypewriterText(
+                            target: transcriber.interimText,
+                            showsListeningDots: transcriber.isRunning,
+                            onTick: { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+                        )
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
