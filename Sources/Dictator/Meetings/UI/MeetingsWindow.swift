@@ -47,9 +47,6 @@ struct MeetingsRootView: View {
     /// off a multi-hundred-MB download in the middle of a live recording.
     @State private var showingParakeetGate = false
 
-    /// Pre-record coach sheet (meeting type + profiles + checklist).
-    @State private var showingPresetSheet = false
-
     /// Raised when the user tries to record/import without the one LLM that
     /// writes acceptable meeting notes selected (see
     /// `ModelCatalog.meetingsRequiredLLMID`). Blocking up front beats
@@ -131,12 +128,6 @@ struct MeetingsRootView: View {
         // won't fire again, but the @Observable flag flip does.
         .onChange(of: state.pendingMeetingRecording) { _, isPending in
             if isPending { consumePendingRecordingRequest() }
-        }
-        .sheet(isPresented: $showingPresetSheet) {
-            CoachPresetSheet { plan, coachDisabled in
-                Task { await beginRecording(plan: plan, coachDisabled: coachDisabled) }
-            }
-            .environment(state)
         }
         .alert("Download the Parakeet speech model", isPresented: $showingParakeetGate) {
             Button("Download") {
@@ -480,27 +471,15 @@ struct MeetingsRootView: View {
             permissionMessage = "Dictator needs System Audio Recording permission. Open System Settings, then come back."
             return
         }
-        // With the coach on, route through the preset sheet (meeting type +
-        // client profiles + checklist) before recording begins. With it off,
-        // straight to recording as before.
-        if state.settings.meetingCoachEnabled {
-            showingPresetSheet = true
-        } else {
-            await beginRecording(plan: nil, coachDisabled: false)
-        }
-    }
-
-    private func beginRecording(plan: CoachSessionPlan?, coachDisabled: Bool) async {
+        // Straight to recording — no pre-record ceremony. The coach
+        // checklist is built (or skipped) from inside the meeting via the
+        // Key points card's quick-add and "Add from set" menu.
         let session = MeetingSession(forLiveRecording: UUID())
         liveSession = session
         selectedID = session.id
         sessionCache.byID[session.id] = session
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
-        await session.startRecording(
-            preferredMicDevice: preferred,
-            coachPlan: plan,
-            coachDisabled: coachDisabled
-        )
+        await session.startRecording(preferredMicDevice: preferred)
     }
 
     private func importFile() async {

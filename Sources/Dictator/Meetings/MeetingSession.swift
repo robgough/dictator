@@ -359,8 +359,11 @@ final class MeetingSession: Identifiable {
             // setting on; the watcher needs a checklist; both need an LLM.
             var accumulator: MeetingNotesAccumulator?
             let notesEnabled = AppState.shared.settings.meetingLiveNotesEnabled
+            // The coach's checklist starts empty and fills mid-meeting, so
+            // the watcher's loop must exist whenever the coach does — it
+            // no-ops until items arrive.
             if AppState.shared.settings.activeLLMEngine() != nil,
-               notesEnabled || coachEngine?.hasChecklist == true {
+               notesEnabled || coachEngine != nil {
                 let acc = MeetingNotesAccumulator(
                     transcriber: live,
                     settings: AppState.shared.settings,

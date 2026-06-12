@@ -403,9 +403,11 @@ struct LiveRecordingView: View {
             .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             // Live coach checklist — the key points for this meeting, ticking
-            // off as the watcher catches them, with quick-add for mid-meeting
-            // "don't forget" items. Coach data: never exported with the notes.
-            if let coach = session.coachEngine, coach.hasChecklist {
+            // off as the watcher catches them. Always present while the coach
+            // runs (it starts empty — items come from typing, pasting a list,
+            // a saved set, or `!` lines in the pad). Coach data: never
+            // exported with the notes.
+            if let coach = session.coachEngine {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Image(systemName: "checklist")
@@ -414,6 +416,17 @@ struct LiveRecordingView: View {
                             .font(.caption.weight(.semibold))
                             .textCase(.uppercase)
                             .foregroundStyle(.secondary)
+                        Spacer()
+                        if coach.chipHidden {
+                            Button {
+                                coach.chipHidden = false
+                            } label: {
+                                Label("Show on island", systemImage: "arrow.up.forward.square")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.link)
+                            .help("Bring the coach strip back to the top of the screen")
+                        }
                     }
                     CoachChecklistPanel(engine: coach)
                 }
@@ -851,6 +864,7 @@ private struct PulsingDot: View {
 /// authoritative input.
 struct MeetingPadEditor: View {
     @Bindable var session: MeetingSession
+    @FocusState private var focused: Bool
 
     var body: some View {
         TextEditor(text: Binding(
@@ -858,20 +872,33 @@ struct MeetingPadEditor: View {
             set: { session.updatePad($0) }
         ))
         .font(.system(.callout, design: .monospaced))
+        .focused($focused)
         .scrollContentBackground(.hidden)
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .notesSurface()
         .overlay(alignment: .topLeading) {
-            if session.padText.isEmpty {
-                Text("Jot your own notes here — names, decisions, things to chase. They're folded into the final notes as ground truth.")
-                    .font(.callout)
+            // Hidden on focus — the caret sits at the editor's own text
+            // inset, which never quite matched the overlay's, so a blinking
+            // caret misaligned with ghost text read as a glitch.
+            if session.padText.isEmpty && !focused {
+                Text(placeholder)
+                    .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.tertiary)
-                    .padding(14)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
                     .allowsHitTesting(false)
             }
         }
         .onDisappear { session.flushPad() }
+    }
+
+    private var placeholder: String {
+        var text = "Jot your own notes here — names, decisions, things to chase. They're folded into the final notes as ground truth."
+        if session.coachEngine != nil {
+            text += " Start a line with ! to add it to the coach's key points."
+        }
+        return text
     }
 }
 

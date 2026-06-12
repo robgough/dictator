@@ -153,18 +153,61 @@ final class MeetingCoachEngine {
     /// Add an ad-hoc item mid-meeting ("oh — I need to remember to say X").
     /// Tracked like any checklist item, plus it arms the reminder nudge.
     func addAdHocItem(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        adhocCounter += 1
-        checklist.append(CoachChecklistEntry(
-            id: "adhoc-\(adhocCounter)",
-            text: trimmed,
-            source: .adhoc,
-            addedAtSeconds: elapsedSeconds,
-            eligibleFromLine: transcriber?.transcriptLines.count ?? 0,
-            status: .pending
-        ))
-        onChecklistChanged?()
+        add(texts: [text], source: .adhoc)
+    }
+
+    /// Bulk-add (from a built-in set, a saved profile, or a pasted list).
+    /// Lines are cleaned of markdown list markers, blanks dropped, and
+    /// items already on the checklist (case-insensitive) skipped.
+    func add(texts: [String], source: CoachChecklistEntry.Source) {
+        let existing = Set(checklist.map { $0.text.lowercased() })
+        var added = false
+        var seen = existing
+        for raw in texts {
+            let cleaned = Self.cleanItemText(raw)
+            guard !cleaned.isEmpty, !seen.contains(cleaned.lowercased()) else { continue }
+            seen.insert(cleaned.lowercased())
+            adhocCounter += 1
+            checklist.append(CoachChecklistEntry(
+                id: "\(source.rawValue)-\(adhocCounter)",
+                text: cleaned,
+                source: source,
+                addedAtSeconds: elapsedSeconds,
+                eligibleFromLine: transcriber?.transcriptLines.count ?? 0,
+                status: .pending
+            ))
+            added = true
+        }
+        if added { onChecklistChanged?() }
+    }
+
+    /// Strip markdown list furniture so a pasted `- [ ] Ask about budget`
+    /// lands as `Ask about budget` — leading bullets (`-`, `*`, `+`, `•`),
+    /// checkbox brackets, and `1.` / `1)` numbering.
+    static func cleanItemText(_ raw: String) -> String {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var changed = true
+        while changed {
+            changed = false
+            for marker in ["- ", "* ", "+ ", "• ", "– "] where t.hasPrefix(marker) {
+                t = String(t.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
+                changed = true
+            }
+            for box in ["[ ]", "[x]", "[X]"] where t.hasPrefix(box) {
+                t = String(t.dropFirst(box.count)).trimmingCharacters(in: .whitespaces)
+                changed = true
+            }
+            // `1.` / `12)` numbering.
+            let digits = t.prefix(while: \.isNumber)
+            if !digits.isEmpty, t.count > digits.count {
+                let after = t[t.index(t.startIndex, offsetBy: digits.count)]
+                if after == "." || after == ")" {
+                    t = String(t.dropFirst(digits.count + 1)).trimmingCharacters(in: .whitespaces)
+                    changed = true
+                }
+            }
+        }
+        return t
     }
 
     /// "Never mind" — the item leaves the pending set and the scorecard
