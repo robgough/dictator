@@ -11,6 +11,13 @@ final class IslandContext {
     /// hidden, setting on). The controller computes this — the view also
     /// needs it because dictation/coach share the surface.
     var coachVisible = false
+    /// Drives the emergence animation: false = island tucked up behind the
+    /// screen's top edge (inside the notch, where there is one), true =
+    /// dropped down into view. The controller sequences this around the
+    /// panel's order-front/order-out so the spring is actually seen — a
+    /// SwiftUI change committed while the window is ordered out animates
+    /// nothing.
+    var revealed = false
 }
 
 /// The island itself: a black shape anchored to the top-centre of the
@@ -23,7 +30,13 @@ final class IslandContext {
 /// All motion happens here in SwiftUI — the panel never animates its frame.
 struct IslandView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let context: IslandContext
+
+    /// The last non-hidden mode, retained so the retract animation has
+    /// content to slide away — by the time we're hiding, `mode` itself has
+    /// already gone `.hidden`.
+    @State private var displayMode: Mode?
 
     private enum Mode: Equatable {
         case hidden
@@ -48,17 +61,32 @@ struct IslandView: View {
 
     var body: some View {
         let geo = context.geometry
-        let mode = self.mode
 
         ZStack(alignment: .top) {
-            if mode != .hidden {
-                island(for: mode, geo: geo)
-                    .transition(.opacity)
+            if let displayMode {
+                island(for: displayMode, geo: geo)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: mode)
+        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: displayMode)
+        // Emergence: slide up behind the screen's top edge when tucked —
+        // the panel sits flush with the screen top, so anything offset
+        // above it is clipped by the window, and on notched Macs the shape
+        // visibly retracts INTO the housing. Reveal gets a touch of spring
+        // overshoot (the "pop"); retract is a quick clean tuck. Reduce
+        // Motion swaps the slide for a plain fade.
+        .offset(y: reduceMotion || context.revealed ? 0 : -IslandPanel.canvasSize.height)
+        .opacity(reduceMotion && !context.revealed ? 0 : 1)
+        .animation(
+            context.revealed
+                ? .spring(response: 0.45, dampingFraction: 0.72)
+                : .spring(response: 0.32, dampingFraction: 1.0),
+            value: context.revealed
+        )
         .environment(\.colorScheme, .dark)
+        .onChange(of: mode) { _, new in
+            if new != .hidden { displayMode = new }
+        }
     }
 
     @ViewBuilder

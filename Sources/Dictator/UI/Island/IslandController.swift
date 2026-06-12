@@ -21,6 +21,10 @@ final class IslandController {
     private let context = IslandContext()
     private var visible = false
     private var observationTask: Task<Void, Never>?
+    /// In-flight reveal delay (one committed tucked-up frame must exist
+    /// before the spring) or retract-then-orderOut. Whichever direction is
+    /// current cancels the other.
+    private var transitionTask: Task<Void, Never>?
 
     /// The screen the coach strip is pinned to for the current meeting.
     /// Captured when the engine first appears, cleared with it.
@@ -141,31 +145,43 @@ final class IslandController {
     }
 
     private func show() {
+        transitionTask?.cancel()
+        visible = true
         // Re-assert cross-Space behavior every show — macOS sometimes binds
         // the panel to its first Space and ignores the flags on later
         // orderFronts (see HUDPanel's history).
         panel.collectionBehavior = IslandPanel.crossSpaceBehavior
-        panel.alphaValue = 0
+        panel.alphaValue = 1
+        let wasOnScreen = panel.isVisible
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
-            ctx.timingFunction = .init(name: .easeOut)
-            panel.animator().alphaValue = 1
+        if wasOnScreen {
+            // Window already up (re-show mid-retract) — spring straight back.
+            context.revealed = true
+        } else {
+            // The window must commit one frame with the island tucked up
+            // behind the top edge, or SwiftUI has no "from" state and the
+            // reveal pops in with no motion. One brief hop is enough.
+            context.revealed = false
+            transitionTask = Task { @MainActor [context] in
+                try? await Task.sleep(for: .milliseconds(30))
+                guard !Task.isCancelled else { return }
+                context.revealed = true
+            }
         }
-        visible = true
     }
 
     private func hide() {
         visible = false
+        transitionTask?.cancel()
+        // Retract first (the view springs the shape up into the notch /
+        // past the top edge), then order out once the motion has finished.
+        context.revealed = false
         let panel = self.panel
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.22
-            ctx.timingFunction = .init(name: .easeIn)
-            panel.animator().alphaValue = 0
-        }, completionHandler: {
-            // AppKit doesn't strictly guarantee main — hop explicitly.
-            Task { @MainActor in panel.orderOut(nil) }
-        })
+        transitionTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            panel.orderOut(nil)
+        }
     }
 
     /// Anchor the canvas top-centre, flush with the screen's top edge, and
