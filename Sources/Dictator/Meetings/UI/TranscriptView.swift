@@ -32,7 +32,7 @@ struct TranscriptView: View {
     /// first-pass notes get their own tab too, but only when a meeting actually
     /// has them (see `hasLiveNotes`) — so they're one click away to compare
     /// against the final notes without cluttering meetings that have none.
-    enum Tab: Hashable { case notes, liveNotes, transcript, pad }
+    enum Tab: Hashable { case notes, liveNotes, transcript, pad, coach }
 
     var body: some View {
         // The view owns its scrolling so the tab picker — and the playback bar
@@ -55,6 +55,8 @@ struct TranscriptView: View {
                             padTab
                         case .transcript:
                             transcriptTab
+                        case .coach:
+                            CoachReportView(session: session)
                         }
                     }
                     .padding(.top, 2)
@@ -72,6 +74,7 @@ struct TranscriptView: View {
             // doesn't have any, fall back to Notes so the picker isn't left with
             // a selection that has no segment.
             if tab == .liveNotes, !hasLiveNotes { tab = .notes }
+            if tab == .coach, session.meta.coach == nil { tab = .notes }
         }
         .onChange(of: session.state.isProcessing) { _, processing in
             // Re-process finished — pick up the freshly written track data.
@@ -158,6 +161,9 @@ struct TranscriptView: View {
         if hasLiveNotes { segments.append((.liveNotes, "Live notes")) }
         segments.append((.pad, "Pad"))
         segments.append((.notes, "Notes"))
+        // Coach: only for meetings that have coach data, and only for the
+        // person it judges — it's private feedback, last in the row.
+        if session.meta.coach != nil { segments.append((.coach, "Coach")) }
         return segments
     }
 

@@ -130,6 +130,9 @@ final class MeetingSession: Identifiable {
     private(set) var coachEngine: MeetingCoachEngine?
     /// Checklist state captured at stop, consumed by `finaliseCoachMetrics`.
     private var pendingCoachOutcome: MeetingCoachLiveState?
+    /// True while the coach-report LLM pass runs — drives the Coach tab's
+    /// spinner/disabled re-run button.
+    private(set) var coachReportRunning = false
     private var coachLiveWriteTask: Task<Void, Never>?
     /// Pad lines already lifted to the checklist this session (hash-once,
     /// so later pad edits don't re-lift).
@@ -745,11 +748,35 @@ final class MeetingSession: Identifiable {
             try? MeetingStorage.writeMeta(meta)
             MeetingsStore.shared.upsert(meta)
             state = .ready
+            // The coach report rides the same user action — one Generate
+            // produces notes AND the private report (it also wants the
+            // fresh notes as context, and the detected type's rubric).
+            // Best-effort: a report failure never disturbs the notes.
+            await generateCoachReport(settings: settings)
         } catch {
             NSLog("[Dictator] Meeting notes failed for \(id): \(error)")
             notesError = (error as? LocalizedError)?.errorDescription
                 ?? "Couldn't write the notes. Tap Generate to try again."
             state = .ready
+        }
+    }
+
+    /// Generate (or regenerate) the private coach report. Rides every notes
+    /// generation and is re-runnable on its own from the Coach tab. No-op
+    /// when the meeting has no coach data (coach off, or an import).
+    func generateCoachReport(settings: DictatorSettings) async {
+        guard meta.coach != nil, !coachReportRunning else { return }
+        coachReportRunning = true
+        defer { coachReportRunning = false }
+        do {
+            meta.coach = try await MeetingCoachReportService.generateReport(
+                meta: meta,
+                settings: settings
+            )
+            try? MeetingStorage.writeMeta(meta)
+            MeetingsStore.shared.upsert(meta)
+        } catch {
+            NSLog("[Dictator] Coach report failed for \(id): \(error)")
         }
     }
 

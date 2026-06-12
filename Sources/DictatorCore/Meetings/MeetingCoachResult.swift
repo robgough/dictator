@@ -105,9 +105,15 @@ struct MeetingCoachResult: Codable, Equatable, Sendable {
     var generatedAt: Date
     var checklist: [CoachChecklistOutcome]?
     /// Which meeting type's coach config ran, and which client profiles
-    /// were layered in — context for the scorecard and the future report.
+    /// were layered in — context for the scorecard and the report's rubric.
     var presetTypeID: String?
     var profileIDs: [String]?
+    /// The LLM coach report — blunt, grounded in the computed metrics and
+    /// checklist outcomes. nil until the user generates notes (the report
+    /// rides the same action) or hits the Coach tab's re-run.
+    var reportMarkdown: String?
+    var reportGeneratedAt: Date?
+    var reportModelID: String?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -118,6 +124,9 @@ struct MeetingCoachResult: Codable, Equatable, Sendable {
         checklist: [CoachChecklistOutcome]? = nil,
         presetTypeID: String? = nil,
         profileIDs: [String]? = nil,
+        reportMarkdown: String? = nil,
+        reportGeneratedAt: Date? = nil,
+        reportModelID: String? = nil,
         schemaVersion: Int = MeetingCoachResult.currentSchemaVersion
     ) {
         self.metrics = metrics
@@ -125,6 +134,9 @@ struct MeetingCoachResult: Codable, Equatable, Sendable {
         self.checklist = checklist
         self.presetTypeID = presetTypeID
         self.profileIDs = profileIDs
+        self.reportMarkdown = reportMarkdown
+        self.reportGeneratedAt = reportGeneratedAt
+        self.reportModelID = reportModelID
         self.schemaVersion = schemaVersion
     }
 
@@ -135,11 +147,15 @@ struct MeetingCoachResult: Codable, Equatable, Sendable {
         self.checklist = try c.decodeIfPresent([CoachChecklistOutcome].self, forKey: .checklist)
         self.presetTypeID = try c.decodeIfPresent(String.self, forKey: .presetTypeID)
         self.profileIDs = try c.decodeIfPresent([String].self, forKey: .profileIDs)
+        self.reportMarkdown = try c.decodeIfPresent(String.self, forKey: .reportMarkdown)
+        self.reportGeneratedAt = try c.decodeIfPresent(Date.self, forKey: .reportGeneratedAt)
+        self.reportModelID = try c.decodeIfPresent(String.self, forKey: .reportModelID)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
-        case metrics, generatedAt, checklist, presetTypeID, profileIDs, schemaVersion
+        case metrics, generatedAt, checklist, presetTypeID, profileIDs
+        case reportMarkdown, reportGeneratedAt, reportModelID, schemaVersion
     }
 }
 

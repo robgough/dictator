@@ -227,6 +227,11 @@ struct DictatorSettings: Codable, Equatable {
     /// being computed (in-window strip, post-meeting summary) with the
     /// floating presence off. Default ON; synced.
     var meetingCoachChipEnabled: Bool = true
+    /// Appended under the built-in coach-report prompt (the warmth lever —
+    /// the default voice is deliberately blunt). Synced.
+    var meetingCoachPromptAddendum: String = ""
+    /// When set, replaces the built-in coach prompt wholesale.
+    var meetingCoachPromptOverride: String?
     /// Reusable checklist bundles ("Client type B") layered onto a meeting's
     /// checklist at record start, alongside the meeting type's own items.
     /// Synced — they're personal playbooks, not hardware.
@@ -466,6 +471,8 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
+        self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
+        self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
         self.coachChecklistProfiles = try c.decodeIfPresent([CoachChecklistProfile].self, forKey: .coachChecklistProfiles) ?? d.coachChecklistProfiles
         self.meetingLastPresetTypeID = try c.decodeIfPresent(String.self, forKey: .meetingLastPresetTypeID) ?? d.meetingLastPresetTypeID
         self.meetingLastProfileIDs = try c.decodeIfPresent([String].self, forKey: .meetingLastProfileIDs) ?? d.meetingLastProfileIDs
@@ -590,6 +597,16 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     // MARK: - Effective prompts
+
+    /// Resolved coach-report prompt: override wins; otherwise built-in +
+    /// addendum (the addendum is the warmth lever — the built-in default is
+    /// deliberately blunt). Global instructions stack outermost as always.
+    var effectiveMeetingCoachPrompt: String {
+        Self.combine(builtin: Self.builtinMeetingCoachPrompt,
+                     override: meetingCoachPromptOverride,
+                     addendum: meetingCoachPromptAddendum,
+                     global: globalPromptAddendum)
+    }
 
     /// Resolved meeting summary prompt: override wins if set, otherwise
     /// built-in + addendum. Same shape as `effectiveAssistantPrompt` —
@@ -941,6 +958,32 @@ struct DictatorSettings: Codable, Equatable {
     "we need three — sorry, four people on the call" → We need four people on the call.
     """
 
+    /// The coach report's built-in system prompt. Blunt by decision — terse
+    /// factual sentences in the nudges' voice, no praise padding; the
+    /// addendum is where a user softens it. The hard rules: the metrics and
+    /// checklist outcomes are COMPUTED inputs the model must cite as given,
+    /// never recalculate or invent.
+    static let builtinMeetingCoachPrompt = """
+    You are a blunt, factual conversation coach reviewing how the user — always labelled "Me" — handled a meeting they recorded. You are speaking directly to them; write in the second person.
+
+    You receive: THEIR CONVERSATION METRICS (computed from the recording — these numbers are facts; cite them as given, never recalculate, never invent others), the KEY POINTS outcomes (computed — covered, missed, or dismissed), an optional RUBRIC describing what good looks like for this kind of meeting, and the MEETING NOTES for context about what was discussed.
+
+    Write a short markdown report, no more than ~12 lines total:
+
+    ## How it went
+    Two to four terse bullets on how they handled the conversation, each grounded in a specific metric or key-point outcome. Lead with whatever mattered most. A key point they flagged mid-meeting and never got to is always worth a bullet.
+
+    ## Work on
+    At most TWO items, one line each — the highest-leverage changes, tied to the rubric where one is provided. Skip the section entirely if the conversation was genuinely well handled.
+
+    Rules:
+    - Blunt and factual. No praise padding, no hedging, no "consider perhaps".
+    - Every claim must trace to a given metric, key-point outcome, or the notes. Never invent events, quotes, or numbers.
+    - Filler-word counts are approximate by nature — treat them as a relative signal, not a precise tally.
+    - Judge only "Me". Never coach or characterise the other participants.
+    - No preamble, no sign-off. Start at the first heading.
+    """
+
     static let builtinMeetingSummaryPrompt = """
     You write clean, copy-pasteable meeting notes in Markdown from a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
 
@@ -1276,6 +1319,8 @@ struct DictatorSettings: Codable, Equatable {
         case meetingLiveNotesSelfCorrectEnabled
         case meetingCoachEnabled
         case meetingCoachChipEnabled
+        case meetingCoachPromptAddendum
+        case meetingCoachPromptOverride
         case coachChecklistProfiles
         case meetingLastPresetTypeID
         case meetingLastProfileIDs
@@ -1318,6 +1363,8 @@ struct DictatorSettings: Codable, Equatable {
         "meetingLiveNotesSelfCorrectEnabled",
         "meetingCoachEnabled",
         "meetingCoachChipEnabled",
+        "meetingCoachPromptAddendum",
+        "meetingCoachPromptOverride",
         "coachChecklistProfiles",
         "meetingLastPresetTypeID",
         "meetingLastProfileIDs",
