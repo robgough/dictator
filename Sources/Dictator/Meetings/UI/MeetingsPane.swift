@@ -112,22 +112,6 @@ struct MeetingsPane: View {
                 ))
                 .disabled(!s.settings.meetingLiveTranscriptEnabled || !s.settings.meetingLiveNotesEnabled)
                 .padding(.leading, 36)
-                Toggle("Track conversation metrics while recording", isOn: Binding(
-                    get: { s.settings.meetingCoachEnabled },
-                    set: { s.settings.meetingCoachEnabled = $0; state.save() }
-                ))
-                Toggle("Show the coach on the notch island", isOn: Binding(
-                    get: { s.settings.meetingCoachChipEnabled },
-                    set: { s.settings.meetingCoachChipEnabled = $0; state.save() }
-                ))
-                .disabled(!s.settings.meetingCoachEnabled)
-                .padding(.leading, 18)
-                Button {
-                    showingSetsEditor = true
-                } label: {
-                    Label("Edit key point sets…", systemImage: "checklist")
-                }
-                .disabled(!s.settings.meetingCoachEnabled)
                 Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }
@@ -145,7 +129,33 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                Text("Meetings write their notes with \(ModelCatalog.meetingsRequiredLLMName) — it's the only model that does it reliably, so it must be the selected model in Settings → Models before you record or import. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes. \"Track conversation metrics\" shows live talk balance, pace, and monologue length while you record, and stores a private per-meeting summary of them afterwards — it's computed from the audio levels and transcript the recording already produces, costs nothing extra, and never appears in the meeting's notes or exports.")
+                Text("Meetings write their notes with \(ModelCatalog.meetingsRequiredLLMName) — it's the only model that does it reliably, so it must be the selected model in Settings → Models before you record or import. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!effectivelyEnabled)
+
+            Section {
+                Toggle("Coach your meetings", isOn: Binding(
+                    get: { s.settings.meetingCoachEnabled },
+                    set: { s.settings.meetingCoachEnabled = $0; state.save() }
+                ))
+                Toggle("Show the coach on the notch island", isOn: Binding(
+                    get: { s.settings.meetingCoachChipEnabled },
+                    set: { s.settings.meetingCoachChipEnabled = $0; state.save() }
+                ))
+                .disabled(!s.settings.meetingCoachEnabled)
+                .padding(.leading, 18)
+                Button {
+                    showingSetsEditor = true
+                } label: {
+                    Label("Edit key point sets…", systemImage: "checklist")
+                }
+                .disabled(!s.settings.meetingCoachEnabled)
+            } header: {
+                Text("Coach")
+            } footer: {
+                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

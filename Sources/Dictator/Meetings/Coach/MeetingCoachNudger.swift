@@ -167,10 +167,21 @@ final class MeetingCoachNudger {
                         "\(s.interruptionsByMeLast5Min) interruptions in 5 min — let them finish")
         }
 
+        // Belt for the level-based "you're talking" accusations: when the
+        // live transcript flows, demand a committed "Me" line recently —
+        // hard evidence I actually spoke (the transcriber's bleed gate
+        // drops speaker bleed, so Me-lines are trustworthy). Levels alone
+        // accused the user of monologuing when only the remote side had
+        // been talking through their speakers. nil (no transcript) → pass.
+        let textEvidence: (Double) -> Bool = { window in
+            s.secondsSinceMyLine.map { $0 <= window } ?? true
+        }
+
         // Dominating — windowed share, sustained, not in the opening minutes.
         if armed.contains(.dominating),
            t >= config.dominateMinElapsed,
            s.myTalkSeconds + s.theirTalkSeconds >= config.dominateMinWindowTalk,
+           textEvidence(120),
            sustained(.dominating, holding: s.talkShareMeWindow >= config.dominateShare,
                      at: t, for: config.dominateSustain),
            offCooldown(.dominating, at: t, config.dominateCooldown) {
@@ -179,8 +190,10 @@ final class MeetingCoachNudger {
         }
 
         // Monologue — current run, lightly sustained so a boundary blip
-        // doesn't fire it at 89.6 s.
+        // doesn't fire it at 89.6 s. The evidence window matches the run
+        // length: a real 90 s monologue commits Me-lines along the way.
         if armed.contains(.monologue),
+           textEvidence(config.monologueSeconds),
            sustained(.monologue, holding: s.currentMonologueSeconds >= config.monologueSeconds,
                      at: t, for: config.monologueSustain),
            offCooldown(.monologue, at: t, config.monologueCooldown) {

@@ -37,9 +37,19 @@ final class MeetingCoachSignals {
         /// Mic-bleed separation, mirroring `MeetingLiveTranscriber`'s
         /// constants: below `bleedSystemFloor` the remote side is essentially
         /// quiet so a hot mic is genuinely me; otherwise my mic must reach
-        /// `bleedFraction` × the concurrent system level to count as me.
+        /// `bleedFraction` × the system level to count as me. The comparison
+        /// uses an ENVELOPE of the system level (instant attack, slow
+        /// release), not the instantaneous value: the remote speaker's
+        /// inter-word dips cleared suspicion for an instant while the bleed
+        /// in the mic persisted, and those instants chained into phantom
+        /// "you've held the floor" monologues on open-speaker setups.
         var bleedFraction: Float = 0.5
         var bleedSystemFloor: Float = 0.012
+        /// Exponential release of the system-level envelope (seconds to
+        /// fall to ~37%). Long enough to bridge inter-word dips, short
+        /// enough that the user talking right after the remote side stops
+        /// isn't suppressed.
+        var bleedEnvelopeRelease: Double = 0.6
         /// Gaps under this don't break a monologue run.
         var monologueGapSeconds: Double = 2.0
         /// They must have held the floor this long before my voice starts for
@@ -81,6 +91,12 @@ final class MeetingCoachSignals {
         /// Seconds since my last question-shaped line; nil before the first
         /// transcript line ever arrives (no signal ≠ a 40-minute drought).
         var secondsSinceMyQuestion: Double? = nil
+        /// Seconds since the live transcriber last committed a "Me" line —
+        /// hard evidence I actually spoke (its bleed gate drops speaker
+        /// bleed). nil when no transcript flows (live transcript off) or
+        /// before my first line. Level-based nudges that accuse me of
+        /// talking use this as a sanity check.
+        var secondsSinceMyLine: Double? = nil
         var micActive: Bool = false
         var systemActive: Bool = false
     }
@@ -91,6 +107,9 @@ final class MeetingCoachSignals {
 
     private var lastMicLevel: Float = 0
     private var lastSystemLevel: Float = 0
+    /// Envelope-followed system level (instant attack, exponential release)
+    /// — the reference the bleed discount compares the mic against.
+    private var sysEnvelope: Float = 0
     private var lastIngestAt: Double = 0
 
     private var micVoiceUntil: Double = -1     // last voice time + hangover
@@ -104,6 +123,11 @@ final class MeetingCoachSignals {
     /// indexed by floor(t). A 3-hour meeting is ~10.8k floats per side.
     private var micBins: [Double] = []
     private var sysBins: [Double] = []
+    /// Seconds where the mic was hot but the bleed discount rejected it —
+    /// a per-window measure of how contested the mic signal was. When this
+    /// rivals the credited mic time, rate metrics over mic-time denominators
+    /// (pace) are unreliable and withheld.
+    private var suppressedBins: [Double] = []
     private var myTalkTotal: Double = 0
     private var theirTalkTotal: Double = 0
 
@@ -125,6 +149,7 @@ final class MeetingCoachSignals {
     }
     private var myLineStats: [LineStats] = []
     private var lastMyQuestionAt: Double?
+    private var lastMyLineAt: Double?
     private var sawAnyLine = false
 
     init(config: Config = Config()) {
@@ -152,12 +177,22 @@ final class MeetingCoachSignals {
         let from = lastIngestAt
         lastIngestAt = t
 
-        // Voice decisions from the current levels. Mic is bleed-discounted:
-        // a hot mic while the remote side is loud and the mic is compar-
-        // atively quiet is their voice arriving through my speakers.
+        // System envelope: rises instantly with the remote level, releases
+        // exponentially — so the bleed reference holds through inter-word
+        // dips instead of clearing the mic's suspicion for an instant.
+        let dtEnv = t - from
+        if dtEnv > 0 {
+            sysEnvelope *= Float(exp(-dtEnv / config.bleedEnvelopeRelease))
+        }
+        sysEnvelope = max(sysEnvelope, lastSystemLevel)
+
+        // Voice decisions. Mic is bleed-discounted against the ENVELOPE:
+        // a hot mic while the remote side is (or was a beat ago) loud, with
+        // the mic comparatively quiet, is their voice arriving through my
+        // speakers — not me.
         let micIsVoice = lastMicLevel >= config.vadLevel
-            && (lastSystemLevel < config.bleedSystemFloor
-                || lastMicLevel >= config.bleedFraction * lastSystemLevel)
+            && (sysEnvelope < config.bleedSystemFloor
+                || lastMicLevel >= config.bleedFraction * sysEnvelope)
         let sysIsVoice = lastSystemLevel >= config.vadLevel
 
         if micIsVoice { micVoiceUntil = t + config.hangoverSeconds }
@@ -195,6 +230,9 @@ final class MeetingCoachSignals {
         if dt > 0, dt < 5 {   // a long stall (paused process) shouldn't credit anyone
             if micActive { credit(&micBins, from: from, dt: dt); myTalkTotal += dt }
             if sysActive { credit(&sysBins, from: from, dt: dt); theirTalkTotal += dt }
+            if !micIsVoice, lastMicLevel >= config.vadLevel {
+                credit(&suppressedBins, from: from, dt: dt)
+            }
         }
         if micActive || sysActive { lastVoiceAt = t }
 
@@ -228,6 +266,7 @@ final class MeetingCoachSignals {
     func ingestLine(isMe: Bool, text: String, at t: Double) {
         sawAnyLine = true
         guard isMe else { return }
+        lastMyLineAt = t
         let words = text.split(whereSeparator: \.isWhitespace).count
         let fillers = CoachMetricsBuilder.fillerCount(in: text)
         myLineStats.append(LineStats(at: t, words: words, fillers: fillers))
@@ -273,17 +312,26 @@ final class MeetingCoachSignals {
         let textWindowStart = max(0, Int(t - config.textWindowSeconds))
         let recent = myLineStats.filter { $0.at >= Double(textWindowStart) }
         // 45 s floor: with less of my active speech in the window the
-        // denominator is noise. The 450 wpm ceiling discards readings where
-        // the bleed discount ate active-time the transcript lines still
-        // carry words for (replay produced a phantom "415 wpm" without it —
-        // nobody actually speaks at 415).
+        // denominator is noise. The ceiling discards readings where the
+        // bleed discount ate active-time the transcript lines still carry
+        // words for — replay produced phantom 375–415 wpm readings that
+        // way (the user's genuine bursts top out around 300). Better no
+        // pace reading than an inflated one driving a "slow down" nudge.
         let myActiveInWindow = sum(micBins, from: textWindowStart)
+        let suppressedInWindow = sum(suppressedBins, from: textWindowStart)
+        // Withhold pace when the mic signal was contested in the window —
+        // bleed suppression eating active-time inflates the rate. 20%:
+        // replay still produced a 339 wpm phantom at 35% on an
+        // open-speaker meeting whose true average was 232.
+        let denominatorTrustworthy = suppressedInWindow < myActiveInWindow * 0.2
         if myActiveInWindow >= 45 {
             let words = recent.reduce(0) { $0 + $1.words }
             let fillers = recent.reduce(0) { $0 + $1.fillers }
             let minutes = myActiveInWindow / 60
             let pace = Double(words) / minutes
-            if words > 0, pace <= 450 { s.paceWordsPerMinute = pace }
+            if words > 0, pace <= 340, denominatorTrustworthy {
+                s.paceWordsPerMinute = pace
+            }
             s.fillerWordsPerMinute = Double(fillers) / minutes
         }
 
@@ -291,6 +339,9 @@ final class MeetingCoachSignals {
             s.secondsSinceMyQuestion = max(0, t - q)
         } else if sawAnyLine {
             s.secondsSinceMyQuestion = t   // lines flow but I've asked nothing yet
+        }
+        if sawAnyLine {
+            s.secondsSinceMyLine = lastMyLineAt.map { max(0, t - $0) } ?? t
         }
         return s
     }
