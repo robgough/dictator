@@ -5,7 +5,7 @@ import Foundation
 /// interruption is how the feature gets turned off.
 struct CoachNudge: Equatable, Sendable {
     enum Kind: String, CaseIterable, Sendable {
-        case reminder, interrupting, dominating, monologue, pace, askQuestion
+        case reminder, checklist, interrupting, dominating, monologue, pace, askQuestion
     }
     let kind: Kind
     let message: String
@@ -72,6 +72,14 @@ final class MeetingCoachNudger {
         /// interval until done or dismissed.
         var reminderAfter: Double = 300
         var reminderRefire: Double = 300
+
+        /// Key-point roll-up: open SET items remind as one combined nudge
+        /// ("3 key points still open — …"), not per item — six set items
+        /// reminding individually would fire every global-gap for the whole
+        /// meeting. First pass once the meeting's had time to get to them;
+        /// refires escalate like every other kind.
+        var checklistFirstAfter: Double = 600
+        var checklistCooldown: Double = 420
     }
 
     /// An unaddressed ad-hoc checklist item, as input to the reminder rule.
@@ -114,7 +122,8 @@ final class MeetingCoachNudger {
     /// per engine tick (1 Hz).
     func evaluate(
         _ s: MeetingCoachSignals.Snapshot,
-        reminders: [PendingReminder] = []
+        reminders: [PendingReminder] = [],
+        pendingKeyPoints: [String] = []
     ) -> CoachNudge? {
         let t = s.elapsed
 
@@ -130,6 +139,19 @@ final class MeetingCoachNudger {
                 lastAnyFireAt = t
                 return CoachNudge(kind: .reminder, message: "Still to do: \(reminder.text)")
             }
+        }
+
+        // Key-point roll-up — open set items as ONE combined reminder.
+        if !pendingKeyPoints.isEmpty,
+           t >= config.checklistFirstAfter,
+           offCooldown(.checklist, at: t, config.checklistCooldown) {
+            let first = pendingKeyPoints[0].count > 44
+                ? pendingKeyPoints[0].prefix(42) + "…"
+                : pendingKeyPoints[0]
+            let message = pendingKeyPoints.count == 1
+                ? "Key point still open: \(first)"
+                : "\(pendingKeyPoints.count) key points open — \(first), +\(pendingKeyPoints.count - 1)"
+            return fire(.checklist, at: t, message)
         }
 
         // Interrupting — event-based, no sustain: the events already are.

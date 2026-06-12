@@ -321,7 +321,11 @@ final class MeetingCoachEngine {
             .map { MeetingCoachNudger.PendingReminder(
                 id: $0.id, text: $0.text, ageSeconds: now - $0.addedAtSeconds
             ) }
-        if let nudge = nudger.evaluate(snapshot, reminders: reminders) {
+        // Set/profile/pasted items remind as one roll-up, not per item.
+        let pendingKeyPoints = checklist
+            .filter { $0.isPending && $0.source != .adhoc }
+            .map(\.text)
+        if let nudge = nudger.evaluate(snapshot, reminders: reminders, pendingKeyPoints: pendingKeyPoints) {
             activeNudge = nudge
             nudgeClearAt = Date().addingTimeInterval(Self.nudgeDisplaySeconds)
         } else if let clearAt = nudgeClearAt, Date() >= clearAt {

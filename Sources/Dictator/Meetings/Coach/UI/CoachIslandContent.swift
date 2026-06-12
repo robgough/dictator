@@ -111,7 +111,8 @@ struct CoachIslandContent: View {
 
     private func icon(for kind: CoachNudge.Kind) -> String {
         switch kind {
-        case .reminder: "checklist"
+        case .reminder: "exclamationmark.circle"
+        case .checklist: "checklist"
         case .monologue: "person.wave.2"
         case .interrupting: "hand.raised"
         case .dominating: "chart.pie"
