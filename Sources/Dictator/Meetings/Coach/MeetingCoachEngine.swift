@@ -181,6 +181,15 @@ final class MeetingCoachEngine {
         if added { onChecklistChanged?() }
     }
 
+    /// Arm additional nudges mid-meeting — adding a key-point set arms that
+    /// set's nudges (a discovery checklist without the ask-question nudge
+    /// is half a set). Additive; nothing de-arms.
+    func armNudges(_ rawKinds: [String]) {
+        let kinds = Set(rawKinds.compactMap(CoachNudge.Kind.init(rawValue:)))
+        guard !kinds.isEmpty else { return }
+        nudger.arm(kinds)
+    }
+
     /// Strip markdown list furniture so a pasted `- [ ] Ask about budget`
     /// lands as `Ask about budget` — leading bullets (`-`, `*`, `+`, `•`),
     /// checkbox brackets, and `1.` / `1)` numbering.

@@ -36,7 +36,7 @@ struct CoachIslandContent: View {
             HStack {
                 let s = engine.snapshot
                 Circle()
-                    .fill(balanceColor(share: s.talkShareMeWindow))
+                    .fill(Color.red)
                     .frame(width: 7, height: 7)
                 Text("\(clock(s.elapsed))  ·  You \(Int((s.talkShareMe * 100).rounded()))%")
                     .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
@@ -69,8 +69,11 @@ struct CoachIslandContent: View {
     private var ambientStrip: some View {
         let s = engine.snapshot
         return HStack(spacing: 8) {
+            // RED, like every recording indicator everywhere — a green dot
+            // here read as "weird recording light". Talk balance moved to
+            // the share figure's colour instead.
             Circle()
-                .fill(balanceColor(share: s.talkShareMeWindow))
+                .fill(Color.red)
                 .frame(width: 7, height: 7)
             Text(clock(s.elapsed))
                 .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
@@ -78,7 +81,7 @@ struct CoachIslandContent: View {
             if s.myTalkSeconds + s.theirTalkSeconds >= 30 {
                 Text("You \(Int((s.talkShareMe * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(shareStyle(share: s.talkShareMeWindow))
             }
             if engine.hasChecklist {
                 let done = engine.checklist.count(where: { !$0.isPending })
@@ -117,13 +120,13 @@ struct CoachIslandContent: View {
         }
     }
 
-    /// Green while balanced, amber when leaning, orange past dominating —
-    /// the windowed share, so it recovers when you do.
-    private func balanceColor(share: Double) -> Color {
+    /// The share figure stays quiet while balanced and warms as you lean on
+    /// the conversation — the windowed share, so it recovers when you do.
+    private func shareStyle(share: Double) -> AnyShapeStyle {
         switch share {
-        case ..<0.55: .green
-        case ..<0.70: .yellow
-        default: .orange
+        case ..<0.55: AnyShapeStyle(.secondary)
+        case ..<0.70: AnyShapeStyle(Color.yellow)
+        default: AnyShapeStyle(Color.orange)
         }
     }
 

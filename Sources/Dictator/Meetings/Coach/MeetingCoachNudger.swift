@@ -82,8 +82,10 @@ final class MeetingCoachNudger {
     }
 
     private let config: Config
-    /// Which behavioural kinds this meeting's preset armed.
-    private let armed: Set<CoachNudge.Kind>
+    /// Which behavioural kinds are armed. Starts from the meeting's plan
+    /// (or the default set) and can grow mid-meeting — adding a key-point
+    /// set arms that set's nudges too. Additive only; nothing de-arms.
+    private var armed: Set<CoachNudge.Kind>
     /// When each kind's trigger condition started holding (sustain tracking).
     private var holdingSince: [CoachNudge.Kind: Double] = [:]
     private var lastFiredAt: [CoachNudge.Kind: Double] = [:]
@@ -102,6 +104,10 @@ final class MeetingCoachNudger {
     init(config: Config = Config(), armed: Set<CoachNudge.Kind> = CoachNudge.defaultArmed) {
         self.config = config
         self.armed = armed
+    }
+
+    func arm(_ kinds: Set<CoachNudge.Kind>) {
+        armed.formUnion(kinds)
     }
 
     /// Evaluate one snapshot; returns a newly-fired nudge or nil. Call once

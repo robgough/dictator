@@ -9,6 +9,7 @@ import SwiftUI
 struct MeetingsPane: View {
     @Environment(AppState.self) private var state
     @State private var showSummaryPromptSheet = false
+    @State private var showingSetsEditor = false
     @State private var typeEditor: MeetingTypeEditorMode?
 
     var body: some View {
@@ -121,6 +122,12 @@ struct MeetingsPane: View {
                 ))
                 .disabled(!s.settings.meetingCoachEnabled)
                 .padding(.leading, 18)
+                Button {
+                    showingSetsEditor = true
+                } label: {
+                    Label("Edit key point sets…", systemImage: "checklist")
+                }
+                .disabled(!s.settings.meetingCoachEnabled)
                 Picker("Default notes style", selection: Binding(
                     get: { s.settings.defaultMeetingType },
                     set: { s.settings.defaultMeetingType = $0; state.save() }
@@ -194,6 +201,9 @@ struct MeetingsPane: View {
         // refresh on entry so a model downloaded since the last look (or
         // removed behind our back) is reflected immediately.
         .onAppear { ModelManager.shared.refreshCachedStates() }
+        .sheet(isPresented: $showingSetsEditor) {
+            CoachSetsEditor()
+        }
         .sheet(isPresented: $showSummaryPromptSheet) {
             SummaryPromptSheet(isPresented: $showSummaryPromptSheet)
         }

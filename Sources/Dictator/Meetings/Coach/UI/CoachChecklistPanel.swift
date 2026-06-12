@@ -14,6 +14,7 @@ struct CoachChecklistPanel: View {
     @State private var newItemText = ""
     @State private var showingSaveAsSet = false
     @State private var newSetName = ""
+    @State private var showingSetsEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 5 : 8) {
@@ -28,6 +29,9 @@ struct CoachChecklistPanel: View {
             Button("Cancel", role: .cancel) { newSetName = "" }
         } message: {
             Text("Saved sets appear in the add menu for any future meeting.")
+        }
+        .sheet(isPresented: $showingSetsEditor) {
+            CoachSetsEditor().environment(state)
         }
     }
 
@@ -95,18 +99,25 @@ struct CoachChecklistPanel: View {
             Section("Add from set") {
                 ForEach(MeetingTypeRegistry.builtIns.filter { ($0.coach?.checklist.isEmpty == false) }) { def in
                     Button(def.displayName) {
+                        // A set is its checklist AND its nudges — adding the
+                        // Client call set arms the discovery nudges too.
                         engine.add(texts: def.coach?.checklist ?? [], source: .preset)
+                        engine.armNudges(def.coach?.armedNudges ?? [])
                     }
                 }
                 ForEach(state.settings.coachChecklistProfiles) { profile in
                     Button(profile.name) {
                         engine.add(texts: profile.items, source: .profile)
+                        engine.armNudges(profile.armedNudges ?? [])
                     }
                 }
             }
+            Divider()
             if engine.checklist.contains(where: { $0.status != .dismissed }) {
-                Divider()
                 Button("Save current points as a set…") { showingSaveAsSet = true }
+            }
+            if !compact {
+                Button("Edit sets…") { showingSetsEditor = true }
             }
         } label: {
             Image(systemName: "tray.and.arrow.down")
