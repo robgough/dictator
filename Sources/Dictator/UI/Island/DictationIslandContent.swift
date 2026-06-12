@@ -131,9 +131,14 @@ struct DictationIslandContent: View {
                     }
                     .frame(maxWidth: 200, alignment: .trailing)
                 }
-                if !interim.isEmpty {
+                // The preview well is RESERVED for the whole recording (with
+                // a quiet placeholder until words arrive) rather than
+                // inserted when text lands — appearing mid-recording resized
+                // the island around the waveform row, which read as the
+                // whole HUD jumping. Gated on the interim setting so users
+                // who've turned the preview off never see the empty well.
+                if state.settings.realtimeInterimEnabled {
                     InterimPreview(text: interim)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
         case .transcribing:
@@ -295,12 +300,14 @@ private struct InterimPreview: View {
             Rectangle()
                 .fill(Color.secondary.opacity(0.22))
                 .frame(width: 1, height: 11)
-            Text(text)
+            // Placeholder keeps the well occupied (and the island steady)
+            // before the first interim words land.
+            Text(text.isEmpty ? "listening…" : text)
                 .font(.system(size: 11, weight: .regular, design: .rounded).italic())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(text.isEmpty ? .tertiary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: text.isEmpty ? .leading : .trailing)
                 .contentTransition(.opacity)
                 .animation(.snappy(duration: 0.18), value: text)
         }

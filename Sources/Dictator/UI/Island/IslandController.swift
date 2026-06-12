@@ -155,11 +155,12 @@ final class IslandController {
     /// Reveal: a touch of spring overshoot (the "pop" — the shape's top
     /// bleed absorbs it). Retract: a quick clean tuck; bounce on the way
     /// out reads as hesitation.
-    private static let revealSpring = Animation.spring(response: 0.45, dampingFraction: 0.72)
-    private static let retractSpring = Animation.spring(response: 0.32, dampingFraction: 1.0)
+    private static let revealSpring = Animation.spring(response: 0.55, dampingFraction: 0.70)
+    private static let retractSpring = Animation.spring(response: 0.36, dampingFraction: 1.0)
 
     private func show() {
         visible = true
+        NSLog("[Dictator] Island reveal (panel visible=%d)", panel.isVisible ? 1 : 0)
         // Re-assert cross-Space behavior + z-order every show — macOS
         // sometimes binds a panel to one Space and ignores the flags later
         // (see HUDPanel's history). The panel is already on screen; this
@@ -177,6 +178,7 @@ final class IslandController {
 
     private func hide() {
         visible = false
+        NSLog("[Dictator] Island retract")
         withAnimation(Self.retractSpring) {
             context.revealed = false
         }

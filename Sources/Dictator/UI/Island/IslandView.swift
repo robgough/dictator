@@ -59,12 +59,24 @@ struct IslandView: View {
         return .hidden
     }
 
+    /// Measured height of the current island, so the tuck offset is exactly
+    /// "just past hidden" rather than the full canvas. Tucking the full
+    /// canvas height meant ~40% of the spring's travel happened above the
+    /// screen edge — the shape entered view at peak velocity and the
+    /// emergence read as a blink rather than a slide.
+    @State private var islandHeight: CGFloat = IslandPanel.canvasSize.height
+
     var body: some View {
         let geo = context.geometry
 
         ZStack(alignment: .top) {
             if let displayMode {
                 island(for: displayMode, geo: geo)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        islandHeight = height
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -75,7 +87,7 @@ struct IslandView: View {
         // visibly retracts INTO the housing. The animation rides the
         // transaction of the controller's withAnimation around the
         // `revealed` mutation. Reduce Motion swaps the slide for a fade.
-        .offset(y: reduceMotion || context.revealed ? 0 : -IslandPanel.canvasSize.height)
+        .offset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32))
         .opacity(reduceMotion && !context.revealed ? 0 : 1)
         .environment(\.colorScheme, .dark)
         .onChange(of: mode) { _, new in
@@ -119,8 +131,12 @@ struct IslandView: View {
         case .hidden:
             EmptyView()
         case .dictation:
+            // Taller while the interim-preview well is reserved (recording
+            // with the setting on); the one height morph happens at
+            // recording start/end, never mid-recording.
             DictationIslandContent()
-                .frame(height: 96)
+                .frame(height: dictationHeight)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
         case .coach:
             if let engine = state.activeCoachEngine {
                 CoachIslandContent(engine: engine)
@@ -131,6 +147,14 @@ struct IslandView: View {
     private func isCoach(_ mode: Mode) -> Bool {
         if case .coach = mode { return true }
         return false
+    }
+
+    private var dictationHeight: CGFloat {
+        if case .recording = state.pipeline.state,
+           state.settings.realtimeInterimEnabled {
+            return 134
+        }
+        return 96
     }
 
     private func width(for mode: Mode, geo: NotchGeometry) -> CGFloat {
