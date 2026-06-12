@@ -59,14 +59,6 @@ struct IslandView: View {
         return .hidden
     }
 
-    /// Local mirror of `context.revealed` whose every change is wrapped in
-    /// an explicit `withAnimation` (see onChange below). The implicit
-    /// `.animation(value:)` form proved unreliable across show/hide cycles —
-    /// the first reveal animated, subsequent ones applied instantly.
-    /// `withAnimation` animates from the current presentation value
-    /// unconditionally, which is the guarantee we actually need.
-    @State private var dropped = false
-
     var body: some View {
         let geo = context.geometry
 
@@ -80,29 +72,14 @@ struct IslandView: View {
         // Emergence: slide up behind the screen's top edge when tucked —
         // the panel sits flush with the screen top, so anything offset
         // above it is clipped by the window, and on notched Macs the shape
-        // visibly retracts INTO the housing. Reduce Motion swaps the slide
-        // for a plain fade.
-        .offset(y: reduceMotion || dropped ? 0 : -IslandPanel.canvasSize.height)
-        .opacity(reduceMotion && !dropped ? 0 : 1)
+        // visibly retracts INTO the housing. The animation rides the
+        // transaction of the controller's withAnimation around the
+        // `revealed` mutation. Reduce Motion swaps the slide for a fade.
+        .offset(y: reduceMotion || context.revealed ? 0 : -IslandPanel.canvasSize.height)
+        .opacity(reduceMotion && !context.revealed ? 0 : 1)
         .environment(\.colorScheme, .dark)
         .onChange(of: mode) { _, new in
             if new != .hidden { displayMode = new }
-        }
-        .onChange(of: context.revealed) { _, revealedNow in
-            guard !reduceMotion else {
-                withAnimation(.easeOut(duration: 0.18)) { dropped = revealedNow }
-                return
-            }
-            // Reveal gets a touch of spring overshoot (the "pop"); retract
-            // is a quick clean tuck — bounce on the way out reads as
-            // hesitation.
-            withAnimation(
-                revealedNow
-                    ? .spring(response: 0.45, dampingFraction: 0.72)
-                    : .spring(response: 0.32, dampingFraction: 1.0)
-            ) {
-                dropped = revealedNow
-            }
         }
     }
 

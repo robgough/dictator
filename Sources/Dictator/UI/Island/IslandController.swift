@@ -21,10 +21,6 @@ final class IslandController {
     private let context = IslandContext()
     private var visible = false
     private var observationTask: Task<Void, Never>?
-    /// In-flight reveal delay (one committed tucked-up frame must exist
-    /// before the spring) or retract-then-orderOut. Whichever direction is
-    /// current cancels the other.
-    private var transitionTask: Task<Void, Never>?
 
     /// The screen the coach strip is pinned to for the current meeting.
     /// Captured when the engine first appears, cleared with it.
@@ -47,6 +43,18 @@ final class IslandController {
         host.autoresizingMask = [.width, .height]
         host.frame = panel.contentLayoutRect
         panel.contentView = host
+        // The panel lives on screen permanently: tucked, it's fully
+        // invisible (transparent window, shape parked above the screen
+        // edge, mouse-transparent), and never ordering it out is what makes
+        // the emergence animation reliable — an orderOut/orderFront cycle
+        // rebuilds the window's layer tree, and Core Animation renders
+        // changes against freshly attached layers at their final values
+        // (the "reveal only animated the first time" bug). With the window
+        // always present, the tucked frame is always the committed state
+        // for the spring to depart from.
+        position(on: activeScreen())
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
         startObserving()
     }
 
@@ -144,47 +152,33 @@ final class IslandController {
         return false
     }
 
+    /// Reveal: a touch of spring overshoot (the "pop" — the shape's top
+    /// bleed absorbs it). Retract: a quick clean tuck; bounce on the way
+    /// out reads as hesitation.
+    private static let revealSpring = Animation.spring(response: 0.45, dampingFraction: 0.72)
+    private static let retractSpring = Animation.spring(response: 0.32, dampingFraction: 1.0)
+
     private func show() {
-        transitionTask?.cancel()
         visible = true
-        // Re-assert cross-Space behavior every show — macOS sometimes binds
-        // the panel to its first Space and ignores the flags on later
-        // orderFronts (see HUDPanel's history).
+        // Re-assert cross-Space behavior + z-order every show — macOS
+        // sometimes binds a panel to one Space and ignores the flags later
+        // (see HUDPanel's history). The panel is already on screen; this
+        // just refreshes its standing.
         panel.collectionBehavior = IslandPanel.crossSpaceBehavior
-        panel.alphaValue = 1
-        let wasOnScreen = panel.isVisible
         panel.orderFrontRegardless()
-        if wasOnScreen {
-            // Window already up (re-show mid-retract) — spring straight back.
+        // The observable mutation carries the transaction — IslandView's
+        // offset animates with it. No sequencing needed: the window is
+        // always on screen, so the tucked "from" frame is already the
+        // committed state.
+        withAnimation(Self.revealSpring) {
             context.revealed = true
-        } else {
-            // The window must commit one frame with the island tucked up
-            // behind the top edge before the reveal flips — the view's
-            // withAnimation springs from the current presentation value, and
-            // a freshly ordered-front window needs a beat to have one.
-            // Force the layout pass now, then flip on a short delay.
-            context.revealed = false
-            panel.contentView?.layoutSubtreeIfNeeded()
-            panel.displayIfNeeded()
-            transitionTask = Task { @MainActor [context] in
-                try? await Task.sleep(for: .milliseconds(50))
-                guard !Task.isCancelled else { return }
-                context.revealed = true
-            }
         }
     }
 
     private func hide() {
         visible = false
-        transitionTask?.cancel()
-        // Retract first (the view springs the shape up into the notch /
-        // past the top edge), then order out once the motion has finished.
-        context.revealed = false
-        let panel = self.panel
-        transitionTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(450))
-            guard !Task.isCancelled else { return }
-            panel.orderOut(nil)
+        withAnimation(Self.retractSpring) {
+            context.revealed = false
         }
     }
 
