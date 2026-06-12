@@ -20,6 +20,20 @@ struct DictationIslandContent: View {
     @State private var deviceManager = AudioDeviceManager.shared
     @State private var hovering = false
 
+    /// The last non-idle pipeline state, kept so the retract has content to
+    /// carry: when dictation finishes the pipeline snaps to `.idle` in the
+    /// same beat the island starts sliding up, and rendering the live state
+    /// made the text vanish instantly (and collapsed the shape under the
+    /// in-flight offset animation). While the pipeline is live we render it
+    /// directly — this cache is read only during `.idle`, i.e. the retract.
+    @State private var lastNonIdleState: PipelineState?
+
+    private var renderState: PipelineState {
+        let live = state.pipeline.state
+        if case .idle = live { return lastNonIdleState ?? live }
+        return live
+    }
+
     var body: some View {
         content
             .padding(.horizontal, 22)
@@ -49,10 +63,19 @@ struct DictationIslandContent: View {
             .animation(.snappy(duration: 0.18), value: hovering)
             .animation(.snappy(duration: 0.25), value: stateKey)
             .onHover { hovering = $0 }
+            .onChange(of: liveStateKey) { _, _ in
+                let live = state.pipeline.state
+                if case .idle = live { return }
+                // Cache on case transitions only — `.done`'s text is fixed
+                // at the moment it's entered, which is exactly what the
+                // retract should carry. (Per-level `.recording` churn keeps
+                // the same key, so this doesn't fire per meter tick.)
+                lastNonIdleState = live
+            }
     }
 
     @ViewBuilder private var content: some View {
-        switch state.pipeline.state {
+        switch renderState {
         case .idle:
             EmptyView()
         case .capturingSelection:
@@ -188,8 +211,14 @@ struct DictationIslandContent: View {
         }
     }
 
-    private var stateKey: String {
-        switch state.pipeline.state {
+    /// Content-swap animation key, derived from what's RENDERED (so the
+    /// retract doesn't animate a swap to empty when the live state hits
+    /// `.idle`). `liveStateKey` tracks the actual pipeline for the cache.
+    private var stateKey: String { Self.key(for: renderState) }
+    private var liveStateKey: String { Self.key(for: state.pipeline.state) }
+
+    private static func key(for s: PipelineState) -> String {
+        switch s {
         case .idle: "idle"
         case .capturingSelection: "capturingSelection"
         case .warmingUp: "warmingUp"
