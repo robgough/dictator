@@ -1033,7 +1033,7 @@ private struct LiveTranscriptPane: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Group {
-                    if transcriber.interimText.isEmpty {
+                    if transcriber.liveDisplayText.isEmpty {
                         Text("Listening…")
                             .italic()
                             .foregroundStyle(.tertiary)
@@ -1042,11 +1042,13 @@ private struct LiveTranscriptPane: View {
                         // ScrollViewReader pins to as new chunks land —
                         // gives us the auto-scroll-to-bottom behaviour
                         // without any manual scroll-offset math.
-                        // TypewriterText streams each settled utterance in
-                        // word-by-word (and visibly deletes revisions), with
-                        // per-word ticks keeping the scroll pinned.
+                        // TypewriterText streams each utterance in word by
+                        // word the moment its provisional transcription
+                        // lands, then visibly revises when the settled
+                        // version replaces it; per-word ticks keep the
+                        // scroll pinned.
                         TypewriterText(
-                            target: transcriber.interimText,
+                            target: transcriber.liveDisplayText,
                             showsListeningDots: transcriber.isRunning,
                             onTick: { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
                         )

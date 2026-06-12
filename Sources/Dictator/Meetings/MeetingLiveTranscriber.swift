@@ -52,8 +52,18 @@ final class MeetingLiveTranscriber {
     static let themLabel = "Them"
 
     /// The growing draft transcript, rendered with `Me:` / `Them:` labels.
-    /// Observable so the SwiftUI pane re-renders as new text lands.
+    /// SETTLED text only — the post-context re-transcription. The notes
+    /// accumulator and mirror derive from this (via `transcriptLines`).
     private(set) var interimText: String = ""
+
+    /// What the live pane actually renders: settled text plus the
+    /// PROVISIONAL tail — each utterance first-pass transcribed the moment
+    /// its pause lands, shown immediately, then visibly replaced when its
+    /// settled version commits (the typewriter view animates the revision).
+    /// Without this, a phrase stayed invisible until `holdback` more
+    /// utterances piled up behind it — tens of seconds on a chatty track.
+    /// Display-only: nothing downstream consumes provisional text.
+    private(set) var liveDisplayText: String = ""
 
     /// Structured form of the same draft — read by `MeetingNotesAccumulator`
     /// on its own cadence. Not observed (the notes pane renders the LLM output,
@@ -80,13 +90,25 @@ final class MeetingLiveTranscriber {
     @ObservationIgnored private var micContext: [Float] = []
     @ObservationIgnored private var systemContext: [Float] = []
 
-    /// Segmented-but-not-yet-committed utterance audio per source. We hold the
+    /// One segmented-but-not-yet-settled utterance: its audio, a sequence
+    /// number for cross-source display ordering, and the provisional text
+    /// once its first-pass transcription lands (nil = in flight or skipped).
+    struct PendingUtterance {
+        let id = UUID()
+        let seq: Int
+        let samples: [Float]
+        var provisional: String?
+    }
+
+    /// Segmented-but-not-yet-committed utterances per source. We hold the
     /// most recent few back and only commit the oldest once enough have piled
     /// up behind it — re-transcribing it together with the following speech so
     /// a continued thought isn't punctuated as a finished sentence. Only
-    /// committed lines reach the transcript and the notes.
-    @ObservationIgnored private var pendingMic: [[Float]] = []
-    @ObservationIgnored private var pendingSystem: [[Float]] = []
+    /// committed lines reach the transcript and the notes; the provisional
+    /// texts reach the display only.
+    @ObservationIgnored private var pendingMic: [PendingUtterance] = []
+    @ObservationIgnored private var pendingSystem: [PendingUtterance] = []
+    @ObservationIgnored private var utteranceSeq = 0
 
     /// Cached resamplers — one per source, each confined to the thread that
     /// feeds it (system on the main actor, mic on the capture queue) so they
@@ -241,6 +263,7 @@ final class MeetingLiveTranscriber {
         systemContext.removeAll(keepingCapacity: false)
         pendingMic.removeAll(keepingCapacity: false)
         pendingSystem.removeAll(keepingCapacity: false)
+        rebuildDisplay()
     }
 
     // MARK: - Main-actor state
@@ -270,24 +293,69 @@ final class MeetingLiveTranscriber {
                 // remote audio (you're only listening) rather than mislabelling
                 // them as "Me" — the system track already carries that speech.
                 if Self.isLikelyBleed(mic: chunk, systemBuffer: systemBuffer) { continue }
-                pendingMic.append(chunk)
-                if pendingMic.count > Self.maxPending {
-                    pendingMic.removeFirst(pendingMic.count - Self.maxPending)
-                }
+                enqueue(chunk, on: .mic)
                 continue
             }
             if let (chunk, consume) = Self.voiceChunk(systemBuffer) {
                 systemBuffer.removeFirst(consume)
                 if chunk.isEmpty { continue }
-                pendingSystem.append(chunk)
-                if pendingSystem.count > Self.maxPending {
-                    pendingSystem.removeFirst(pendingSystem.count - Self.maxPending)
-                }
+                enqueue(chunk, on: .system)
                 continue
             }
             break
         }
         settleIfReady()
+    }
+
+    /// Queue a freshly segmented utterance and kick its provisional
+    /// transcription so the display shows it within a beat of the pause —
+    /// unless the queue is already backed up (thermal, contention), in which
+    /// case the provisional pass is skipped and the display simply waits for
+    /// the settle, i.e. degrades to the old behaviour.
+    private func enqueue(_ chunk: [Float], on source: Source) {
+        utteranceSeq += 1
+        let utterance = PendingUtterance(seq: utteranceSeq, samples: chunk, provisional: nil)
+        switch source {
+        case .mic:
+            pendingMic.append(utterance)
+            if pendingMic.count > Self.maxPending {
+                pendingMic.removeFirst(pendingMic.count - Self.maxPending)
+            }
+        case .system:
+            pendingSystem.append(utterance)
+            if pendingSystem.count > Self.maxPending {
+                pendingSystem.removeFirst(pendingSystem.count - Self.maxPending)
+            }
+        }
+        let backlog = (source == .mic ? pendingMic : pendingSystem).count
+        guard backlog <= Self.holdback + 2, !finishing else { return }
+        startProvisional(for: utterance, source: source)
+    }
+
+    /// First-pass transcribe one utterance for display. Serialised through
+    /// the same meeting ASR actor as the settle passes; an utterance that
+    /// settles before its provisional lands just discards the result.
+    private func startProvisional(for utterance: PendingUtterance, source: Source) {
+        let samples = utterance.samples
+        let id = utterance.id
+        let modelID = parakeetModelID
+        Task { @MainActor [weak self] in
+            guard let self, self.isRunning else { return }
+            let text = (try? await MeetingParakeetServiceHolder.shared.transcribe(
+                samples: samples, modelID: modelID
+            )) ?? ""
+            guard self.isRunning else { return }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch source {
+            case .mic:
+                guard let idx = self.pendingMic.firstIndex(where: { $0.id == id }) else { return }
+                self.pendingMic[idx].provisional = trimmed
+            case .system:
+                guard let idx = self.pendingSystem.firstIndex(where: { $0.id == id }) else { return }
+                self.pendingSystem[idx].provisional = trimmed
+            }
+            self.rebuildDisplay()
+        }
     }
 
     /// Commit the oldest pending utterance once `holdback` more sit behind it,
@@ -320,21 +388,27 @@ final class MeetingLiveTranscriber {
     private func settleOne(source: Source) async {
         let pending = source == .mic ? pendingMic : pendingSystem
         guard let oldest = pending.first else { return }
-        let following = pending[1...].prefix(Self.lookahead).reduce(into: [Float]()) { $0 += $1 }
+        let following = pending[1...].prefix(Self.lookahead).reduce(into: [Float]()) { $0 += $1.samples }
         let prevContext = source == .mic ? micContext : systemContext
         let speaker = source == .mic ? Self.meLabel : Self.themLabel
 
-        let text = (try? await transcribeSettling(oldest: oldest, following: following, prevContext: prevContext)) ?? ""
+        let text = (try? await transcribeSettling(oldest: oldest.samples, following: following, prevContext: prevContext)) ?? ""
         guard !Task.isCancelled else { return }
         if source == .mic {
             if !pendingMic.isEmpty { pendingMic.removeFirst() }
-            micContext = Array(oldest.suffix(Self.maxContextSamples))
+            micContext = Array(oldest.samples.suffix(Self.maxContextSamples))
         } else {
             if !pendingSystem.isEmpty { pendingSystem.removeFirst() }
-            systemContext = Array(oldest.suffix(Self.maxContextSamples))
+            systemContext = Array(oldest.samples.suffix(Self.maxContextSamples))
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { appendLine(speaker: speaker, text: trimmed) }
+        if !trimmed.isEmpty {
+            appendLine(speaker: speaker, text: trimmed)
+        } else {
+            // Nothing committed, but the settled utterance's provisional
+            // line (if any) must leave the display.
+            rebuildDisplay()
+        }
     }
 
     /// Settle and commit every held-back utterance, so stopping a recording
@@ -349,9 +423,15 @@ final class MeetingLiveTranscriber {
         // trailing buffer (speech after the last pause, which never triggered a
         // cut) into pending so the very last words aren't lost.
         try? await Task.sleep(for: .milliseconds(60))
-        if micBuffer.count >= Self.minChunkSamples { pendingMic.append(micBuffer) }
+        if micBuffer.count >= Self.minChunkSamples {
+            utteranceSeq += 1
+            pendingMic.append(PendingUtterance(seq: utteranceSeq, samples: micBuffer, provisional: nil))
+        }
         micBuffer.removeAll(keepingCapacity: false)
-        if systemBuffer.count >= Self.minChunkSamples { pendingSystem.append(systemBuffer) }
+        if systemBuffer.count >= Self.minChunkSamples {
+            utteranceSeq += 1
+            pendingSystem.append(PendingUtterance(seq: utteranceSeq, samples: systemBuffer, provisional: nil))
+        }
         systemBuffer.removeAll(keepingCapacity: false)
         while isRunning, !(pendingMic.isEmpty && pendingSystem.isEmpty) {
             if !pendingMic.isEmpty { await settleOne(source: .mic) }
@@ -467,7 +547,24 @@ final class MeetingLiveTranscriber {
         }
         lastSpeaker = speaker
         trimInterimIfNeeded()
+        rebuildDisplay()
         onTranscriptUpdated?()
+    }
+
+    /// Compose what the pane renders: the settled transcript plus the
+    /// provisional tail (both sources, in arrival order). The typewriter
+    /// view diffs successive values, so a provisional line being replaced
+    /// by its settled version animates as a visible revision.
+    private func rebuildDisplay() {
+        var text = interimText
+        let provisionals = (pendingMic.map { ($0.seq, Self.meLabel, $0.provisional) }
+            + pendingSystem.map { ($0.seq, Self.themLabel, $0.provisional) })
+            .sorted { $0.0 < $1.0 }
+        for (_, speaker, provisional) in provisionals {
+            guard let provisional, !provisional.isEmpty else { continue }
+            text += text.isEmpty ? "\(speaker): \(provisional)" : "\n\(speaker): \(provisional)"
+        }
+        if liveDisplayText != text { liveDisplayText = text }
     }
 
     /// Keep `interimText` to a trailing window so the live pane never lays out
