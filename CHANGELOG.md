@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you've held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.
 
 ## v2026.6.4 — 2026-06-11
 

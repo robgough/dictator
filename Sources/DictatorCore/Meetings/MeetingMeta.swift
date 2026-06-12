@@ -93,6 +93,10 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// The notes panel compares this against `notes.generatedAt` to prompt a
     /// re-run — notes written before the edit still carry the old names.
     var speakersEditedAt: Date?
+    /// The meeting coach's record — deterministic conversation metrics now,
+    /// checklist outcomes + report in later phases. PRIVATE: rendered only by
+    /// the in-app Coach UI; the markdown mirrors and copy/export never read it.
+    var coach: MeetingCoachResult?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -112,6 +116,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         meetingType: MeetingTypeID = .auto,
         oneOffPrompt: String? = nil,
         speakersEditedAt: Date? = nil,
+        coach: MeetingCoachResult? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -128,6 +133,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.meetingType = meetingType
         self.oneOffPrompt = oneOffPrompt
         self.speakersEditedAt = speakersEditedAt
+        self.coach = coach
         self.schemaVersion = schemaVersion
     }
 
@@ -152,12 +158,13 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.meetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .meetingType) ?? .auto
         self.oneOffPrompt = try c.decodeIfPresent(String.self, forKey: .oneOffPrompt)
         self.speakersEditedAt = try c.decodeIfPresent(Date.self, forKey: .speakersEditedAt)
+        self.coach = try c.decodeIfPresent(MeetingCoachResult.self, forKey: .coach)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
-        case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, schemaVersion
+        case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, coach, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

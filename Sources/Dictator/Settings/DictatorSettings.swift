@@ -215,6 +215,13 @@ struct DictatorSettings: Codable, Equatable {
     /// small local models truncate). Only matters when `meetingLiveNotesEnabled`
     /// is on; default ON.
     var meetingLiveNotesSelfCorrectEnabled: Bool = true
+    /// The meeting coach: live conversation metrics (talk balance, monologue
+    /// timer, pace) computed while recording, plus a private per-meeting
+    /// metrics summary stored afterwards. Derived entirely from the level
+    /// callbacks and live transcript the recording already produces — no
+    /// extra capture, negligible cost. Default ON. Synced across Macs —
+    /// wanting coaching is a personal preference, not hardware-dependent.
+    var meetingCoachEnabled: Bool = true
     /// How a tap of the dictation / assistant hotkey behaves. ON (default):
     /// a quick tap-and-release (under ~0.35 s) latches listening ON — tap
     /// again to stop — while holding past the threshold is push-to-talk
@@ -445,6 +452,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveTranscriptEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveTranscriptEnabled) ?? d.meetingLiveTranscriptEnabled
         self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
+        self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
@@ -1250,6 +1258,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingLiveTranscriptEnabled
         case meetingLiveNotesEnabled
         case meetingLiveNotesSelfCorrectEnabled
+        case meetingCoachEnabled
         case hotkeyTapToToggleEnabled
         case meetingSummaryPromptAddendum
         case meetingSummaryPromptOverride
@@ -1287,6 +1296,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingLiveTranscriptEnabled",
         "meetingLiveNotesEnabled",
         "meetingLiveNotesSelfCorrectEnabled",
+        "meetingCoachEnabled",
         "hotkeyTapToToggleEnabled",
         "meetingSummaryPromptAddendum",
         "meetingSummaryPromptOverride",

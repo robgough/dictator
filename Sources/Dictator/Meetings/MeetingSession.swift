@@ -123,6 +123,12 @@ final class MeetingSession: Identifiable {
     /// starts or succeeds.
     private(set) var notesError: String?
 
+    /// Live coach signals (talk balance, monologue timer, pace…), present for
+    /// the duration of a recording when the coach is enabled. Fed from the
+    /// same level callbacks that drive the meters — no capture of its own.
+    /// Exposed so `LiveRecordingView` renders the metrics strip off it.
+    private(set) var coachEngine: MeetingCoachEngine?
+
     /// The user's own notes for this meeting — the pad they type into during
     /// (or after) recording. Loaded from `pad.md` on init, autosaved through
     /// `updatePad` with a short debounce, and fed to the final notes pass as
@@ -244,6 +250,9 @@ final class MeetingSession: Identifiable {
             self.state = .recording(elapsed: 0, micLevel: 0, sysLevel: 0)
             AppState.shared.meetingRecordingStartedAt = Date()
             self.startTimerLoop()
+            // Coach clock starts when capture actually starts, so its t=0
+            // lines up with audio time.
+            self.coachEngine?.start()
         }
         // Stash the latest level; the timer loop publishes it into `state` at a
         // fixed meter cadence. We deliberately do NOT push `state` per buffer:
@@ -255,6 +264,7 @@ final class MeetingSession: Identifiable {
             guard let self else { return }
             self.lastSystemLevel = sys
             if sys > 0.02 { self.systemHeard = true }
+            self.coachEngine?.ingestSystemLevel(sys)
         }
         recorder.onUnexpectedStop = { [weak self] reason in
             guard let self else { return }
@@ -269,6 +279,8 @@ final class MeetingSession: Identifiable {
             self.liveTranscriber = nil
             _ = self.notesAccumulator?.stop()
             self.notesAccumulator = nil
+            self.coachEngine?.stop()
+            self.coachEngine = nil
             AppState.shared.meetingRecordingStartedAt = nil
             self.state = .failed(reason)
         }
@@ -279,6 +291,7 @@ final class MeetingSession: Identifiable {
             guard let self else { return }
             self.lastMicLevel = mic
             if mic > 0.02 { self.micHeard = true }
+            self.coachEngine?.ingestMicLevel(mic)
         }
         micRecorder.onCaptureWarning = { [weak self] message in
             self?.upsertCaptureWarning(source: .mic, message: message)
@@ -339,6 +352,13 @@ final class MeetingSession: Identifiable {
             // visibly fill in, instead of appearing ~30 s later on the first
             // committed line / notes pass.
             mirror.start()
+        }
+
+        // Live coach signals. Works with or without the live transcriber —
+        // levels alone give talk balance / monologues / interruptions; the
+        // transcriber adds pace / fillers / questions when it's on.
+        if AppState.shared.settings.meetingCoachEnabled {
+            coachEngine = MeetingCoachEngine(transcriber: liveTranscriber)
         }
 
         do {
@@ -412,6 +432,8 @@ final class MeetingSession: Identifiable {
         liveTranscriber?.stop()
         liveTranscriber = nil
         notesAccumulator = nil
+        coachEngine?.stop()
+        coachEngine = nil
         // Reflect what actually landed on disk. The CATap process tap owns
         // the system track; the parallel AVAudioEngine owns the mic.
         meta.audioFiles = MeetingMeta.AudioFiles(
@@ -499,6 +521,14 @@ final class MeetingSession: Identifiable {
             }
             MeetingsStore.shared.upsert(meta)
 
+            // Coach metrics — deterministic, recomputed from the finished
+            // transcript's word timings (authoritative where the live signals
+            // were provisional). Cheap pure code, so it runs for every
+            // meeting regardless of preset; the LLM coach report (later
+            // phase) is the part that stays user-triggered. Private: lands
+            // on meta.coach, which the markdown mirrors never read.
+            finaliseCoachMetrics()
+
             // Processing always finishes at the transcript. Final notes are
             // never written automatically any more — the user reviews the
             // transcript and fixes speaker names first, then triggers the
@@ -544,6 +574,24 @@ final class MeetingSession: Identifiable {
         } catch {
             state = .failed("Transcription failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Compute the deterministic conversation metrics from the finished
+    /// transcript and persist them on `meta.coach`. Silent no-op when there's
+    /// no transcript or nobody is marked `isMe` (imports — there's no "me"
+    /// side to coach).
+    private func finaliseCoachMetrics() {
+        guard let transcript = MeetingStorage.readTranscript(for: id) else { return }
+        let myIDs = Set(meta.speakers.filter(\.isMe).map(\.id))
+        guard !myIDs.isEmpty else { return }
+        let metrics = CoachMetricsBuilder.build(
+            transcript: transcript,
+            mySpeakerIDs: myIDs,
+            durationSeconds: meta.durationSeconds
+        )
+        meta.coach = MeetingCoachResult(metrics: metrics, generatedAt: Date())
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
     }
 
     /// Release the meeting-only models once a post-pass is done. The

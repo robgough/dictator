@@ -394,6 +394,9 @@ struct LiveRecordingView: View {
                         waitingHint: systemWaitingHint
                     )
                 }
+                if let coach = session.coachEngine {
+                    CoachMetricsStrip(engine: coach)
+                }
             }
             .padding(16)
             .frame(maxWidth: .infinity)
