@@ -1051,7 +1051,6 @@ private struct LiveTranscriptPane: View {
                             onTick: { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
                         )
                             .font(.callout)
-                            .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
