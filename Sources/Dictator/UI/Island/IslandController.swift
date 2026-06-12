@@ -159,11 +159,15 @@ final class IslandController {
             context.revealed = true
         } else {
             // The window must commit one frame with the island tucked up
-            // behind the top edge, or SwiftUI has no "from" state and the
-            // reveal pops in with no motion. One brief hop is enough.
+            // behind the top edge before the reveal flips — the view's
+            // withAnimation springs from the current presentation value, and
+            // a freshly ordered-front window needs a beat to have one.
+            // Force the layout pass now, then flip on a short delay.
             context.revealed = false
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
             transitionTask = Task { @MainActor [context] in
-                try? await Task.sleep(for: .milliseconds(30))
+                try? await Task.sleep(for: .milliseconds(50))
                 guard !Task.isCancelled else { return }
                 context.revealed = true
             }

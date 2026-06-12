@@ -59,6 +59,14 @@ struct IslandView: View {
         return .hidden
     }
 
+    /// Local mirror of `context.revealed` whose every change is wrapped in
+    /// an explicit `withAnimation` (see onChange below). The implicit
+    /// `.animation(value:)` form proved unreliable across show/hide cycles —
+    /// the first reveal animated, subsequent ones applied instantly.
+    /// `withAnimation` animates from the current presentation value
+    /// unconditionally, which is the guarantee we actually need.
+    @State private var dropped = false
+
     var body: some View {
         let geo = context.geometry
 
@@ -72,39 +80,59 @@ struct IslandView: View {
         // Emergence: slide up behind the screen's top edge when tucked —
         // the panel sits flush with the screen top, so anything offset
         // above it is clipped by the window, and on notched Macs the shape
-        // visibly retracts INTO the housing. Reveal gets a touch of spring
-        // overshoot (the "pop"); retract is a quick clean tuck. Reduce
-        // Motion swaps the slide for a plain fade.
-        .offset(y: reduceMotion || context.revealed ? 0 : -IslandPanel.canvasSize.height)
-        .opacity(reduceMotion && !context.revealed ? 0 : 1)
-        .animation(
-            context.revealed
-                ? .spring(response: 0.45, dampingFraction: 0.72)
-                : .spring(response: 0.32, dampingFraction: 1.0),
-            value: context.revealed
-        )
+        // visibly retracts INTO the housing. Reduce Motion swaps the slide
+        // for a plain fade.
+        .offset(y: reduceMotion || dropped ? 0 : -IslandPanel.canvasSize.height)
+        .opacity(reduceMotion && !dropped ? 0 : 1)
         .environment(\.colorScheme, .dark)
         .onChange(of: mode) { _, new in
             if new != .hidden { displayMode = new }
         }
+        .onChange(of: context.revealed) { _, revealedNow in
+            guard !reduceMotion else {
+                withAnimation(.easeOut(duration: 0.18)) { dropped = revealedNow }
+                return
+            }
+            // Reveal gets a touch of spring overshoot (the "pop"); retract
+            // is a quick clean tuck — bounce on the way out reads as
+            // hesitation.
+            withAnimation(
+                revealedNow
+                    ? .spring(response: 0.45, dampingFraction: 0.72)
+                    : .spring(response: 0.32, dampingFraction: 1.0)
+            ) {
+                dropped = revealedNow
+            }
+        }
     }
+
+    /// Extra shape height hidden above the screen edge on the attached
+    /// (flush-top) modes. The reveal spring overshoots downward by a few
+    /// points before settling; without this bleed the island's top briefly
+    /// detaches from the screen edge — jarring, especially on plain
+    /// monitors where there's no black housing to mask it. The bleed sits
+    /// in the window's clipped region at rest, so it costs nothing visually.
+    private static let topBleed: CGFloat = 28
 
     @ViewBuilder
     private func island(for mode: Mode, geo: NotchGeometry) -> some View {
         // The long-lived coach strip is the only state that must not cover
         // the menu bar on plain screens; everything else merges with the top
-        // edge (and the notch where there is one).
+        // edge (and the notch where there is one). The detached pill needs
+        // no bleed — it's free-floating, so overshoot just moves it.
         let detached = !geo.hasNotch && isCoach(mode)
         let topClearance = detached ? 0 : geo.topInset
+        let bleed = detached ? 0 : Self.topBleed
 
         content(for: mode)
             .frame(width: width(for: mode, geo: geo))
-            .padding(.top, topClearance)            // content clears notch / menu bar
+            .padding(.top, topClearance + bleed)    // content clears notch / menu bar / bleed
             .background(
                 IslandShape(detached: detached)
                     .fill(.black)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             )
+            .offset(y: -bleed)                      // park the bleed above the screen edge
             .padding(.top, detached ? geo.topInset + 6 : 0)   // drop the pill below the menu bar
     }
 
