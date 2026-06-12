@@ -13,10 +13,9 @@ final class IslandContext {
     var coachVisible = false
     /// Drives the emergence animation: false = island tucked up behind the
     /// screen's top edge (inside the notch, where there is one), true =
-    /// dropped down into view. The controller sequences this around the
-    /// panel's order-front/order-out so the spring is actually seen — a
-    /// SwiftUI change committed while the window is ordered out animates
-    /// nothing.
+    /// dropped down into view. Mutated only by the controller, inside
+    /// withAnimation — and it doubles as the controller's source of truth
+    /// for "is the island out", so there's no separate flag to desync.
     var revealed = false
 }
 
@@ -86,8 +85,12 @@ struct IslandView: View {
         // above it is clipped by the window, and on notched Macs the shape
         // visibly retracts INTO the housing. The animation rides the
         // transaction of the controller's withAnimation around the
-        // `revealed` mutation. Reduce Motion swaps the slide for a fade.
-        .offset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32))
+        // `revealed` mutation. ProbingOffset is `.offset` plus a frame
+        // counter — the controller logs frames-per-transition so "did the
+        // spring run" is answerable from the logs (a standalone spike
+        // verified the mechanism at ~73 frames per transition; 1 = jumped).
+        // Reduce Motion swaps the slide for a fade.
+        .modifier(ProbingOffset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32)))
         .opacity(reduceMotion && !context.revealed ? 0 : 1)
         .environment(\.colorScheme, .dark)
         .onChange(of: mode) { _, new in
@@ -167,6 +170,31 @@ struct IslandView: View {
         case .coach(nudging: true): max(geo.notchWidth + 56, 380)
         }
     }
+}
+
+/// `.offset` plus an animation-frame counter: `animatableData`'s setter runs
+/// once per frame while a transition animates and exactly once on a jump,
+/// so the drained count distinguishes "spring ran" from "value snapped".
+/// Costs nothing measurable; the island only transitions a few times a
+/// minute at most.
+struct ProbingOffset: GeometryEffect {
+    var y: CGFloat
+    var animatableData: CGFloat {
+        get { y }
+        set { y = newValue; IslandAnimationProbe.shared.record() }
+    }
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: 0, y: y))
+    }
+}
+
+final class IslandAnimationProbe: @unchecked Sendable {
+    static let shared = IslandAnimationProbe()
+    private let lock = NSLock()
+    private var count = 0
+    func record() { lock.lock(); count += 1; lock.unlock() }
+    /// Returns frames recorded since the last drain and resets.
+    func drain() -> Int { lock.lock(); defer { count = 0; lock.unlock() }; return count }
 }
 
 /// Top-anchored island silhouette: square shoulders that meet the screen's

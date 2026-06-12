@@ -19,7 +19,6 @@ final class IslandController {
     private let panel: IslandPanel
     private let state: AppState
     private let context = IslandContext()
-    private var visible = false
     private var observationTask: Task<Void, Never>?
 
     /// The screen the coach strip is pinned to for the current meeting.
@@ -138,11 +137,15 @@ final class IslandController {
         let targetScreen = dictationActive ? activeScreen() : pinnedCoachScreen ?? activeScreen()
         let shouldShow = dictationActive || coachVisible
 
+        // Stateless reconciliation: the desired visibility is compared
+        // against `context.revealed` itself — no separate bookkeeping flag
+        // to desync. If an intermediate state change is ever missed (the
+        // observation loop's registration gap), the next update self-heals.
         if shouldShow {
             position(on: targetScreen)
-            if !visible { show() }
-        } else if visible {
-            hide()
+        }
+        if shouldShow != context.revealed {
+            if shouldShow { show() } else { hide() }
         }
     }
 
@@ -159,8 +162,9 @@ final class IslandController {
     private static let retractSpring = Animation.spring(response: 0.36, dampingFraction: 1.0)
 
     private func show() {
-        visible = true
-        NSLog("[Dictator] Island reveal (panel visible=%d)", panel.isVisible ? 1 : 0)
+        NSLog("[Dictator] Island reveal: revealed %d->1 framesSinceLast=%d state=%@",
+              context.revealed ? 1 : 0, IslandAnimationProbe.shared.drain(),
+              String(describing: state.pipeline.state))
         // Re-assert cross-Space behavior + z-order every show — macOS
         // sometimes binds a panel to one Space and ignores the flags later
         // (see HUDPanel's history). The panel is already on screen; this
@@ -177,8 +181,8 @@ final class IslandController {
     }
 
     private func hide() {
-        visible = false
-        NSLog("[Dictator] Island retract")
+        NSLog("[Dictator] Island retract: revealed %d->0 framesSinceLast=%d",
+              context.revealed ? 1 : 0, IslandAnimationProbe.shared.drain())
         withAnimation(Self.retractSpring) {
             context.revealed = false
         }
