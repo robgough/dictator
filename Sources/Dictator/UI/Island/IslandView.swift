@@ -98,34 +98,31 @@ struct IslandView: View {
         }
     }
 
-    /// Extra shape height hidden above the screen edge on the attached
-    /// (flush-top) modes. The reveal spring overshoots downward by a few
-    /// points before settling; without this bleed the island's top briefly
-    /// detaches from the screen edge — jarring, especially on plain
-    /// monitors where there's no black housing to mask it. The bleed sits
-    /// in the window's clipped region at rest, so it costs nothing visually.
+    /// Extra shape height hidden above the screen edge. The reveal spring
+    /// overshoots downward by a few points before settling; without this
+    /// bleed the island's top briefly detaches from the screen edge —
+    /// jarring, especially on plain monitors where there's no black housing
+    /// to mask it. The bleed sits in the window's clipped region at rest,
+    /// so it costs nothing visually.
     private static let topBleed: CGFloat = 28
 
     @ViewBuilder
     private func island(for mode: Mode, geo: NotchGeometry) -> some View {
-        // The long-lived coach strip is the only state that must not cover
-        // the menu bar on plain screens; everything else merges with the top
-        // edge (and the notch where there is one). The detached pill needs
-        // no bleed — it's free-floating, so overshoot just moves it.
-        let detached = !geo.hasNotch && isCoach(mode)
-        let topClearance = detached ? 0 : geo.topInset
-        let bleed = detached ? 0 : Self.topBleed
-
+        // Every mode docks flush with the top edge — the coach strip
+        // included. (An earlier cut floated the coach as a detached pill
+        // below the menu bar on plain monitors; in use it read as a
+        // disconnected blob rather than the same island, so the coach now
+        // gets the identical faux-notch treatment and simply covers the
+        // empty centre of the menu bar for the meeting's duration.)
         content(for: mode)
             .frame(width: width(for: mode, geo: geo))
-            .padding(.top, topClearance + bleed)    // content clears notch / menu bar / bleed
+            .padding(.top, geo.topInset + Self.topBleed)   // clear notch / menu bar / bleed
             .background(
-                IslandShape(detached: detached)
+                IslandShape()
                     .fill(.black)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             )
-            .offset(y: -bleed)                      // park the bleed above the screen edge
-            .padding(.top, detached ? geo.topInset + 6 : 0)   // drop the pill below the menu bar
+            .offset(y: -Self.topBleed)                     // park the bleed above the screen edge
     }
 
     @ViewBuilder
@@ -145,11 +142,6 @@ struct IslandView: View {
                 CoachIslandContent(engine: engine)
             }
         }
-    }
-
-    private func isCoach(_ mode: Mode) -> Bool {
-        if case .coach = mode { return true }
-        return false
     }
 
     private var dictationHeight: CGFloat {
@@ -199,16 +191,10 @@ final class IslandAnimationProbe: @unchecked Sendable {
 
 /// Top-anchored island silhouette: square shoulders that meet the screen's
 /// top edge (merging with the notch housing where there is one), rounded
-/// bottom corners. `detached` renders the fully-rounded standalone pill used
-/// below the menu bar on plain screens.
+/// bottom corners.
 private struct IslandShape: Shape {
-    let detached: Bool
-
     func path(in rect: CGRect) -> Path {
         let radius = min(18, rect.height / 2)
-        if detached {
-            return Path(roundedRect: rect, cornerRadius: radius)
-        }
         return Path(
             roundedRect: rect,
             cornerRadii: RectangleCornerRadii(

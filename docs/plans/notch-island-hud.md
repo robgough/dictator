@@ -17,7 +17,7 @@ The existing `HUDPanel` + `HUDController` (`UI/HUDController.swift`) already pro
 Per-screen anchor computation:
 
 - **Notched screens**: `NSScreen.safeAreaInsets.top > 0` detects the notch (macOS 12+). Notch width = screen width − `auxiliaryTopLeftArea.width` − `auxiliaryTopRightArea.width`. The island anchors flush to the top edge, horizontally centred on the notch, idle width = exactly the notch width — so the black shape and the physical notch read as one object, and the menu bar items either side stay visible/usable.
-- **Non-notch screens** (externals — the common case on this desk): no notch to merge with, so the island is an intentional floating black pill, top-centre. Two sub-cases: transient dictation states sit flush to the top edge (over the menu bar, briefly — fine); the *long-lived* meeting ambient strip drops just **below** the menu bar instead, so it doesn't cover the clock/status items for an hour.
+- **Non-notch screens** (externals — the common case on this desk): no notch to merge with, so the island docks flush with the top edge, faux-notch style — **all modes, the coach strip included** (revised 2026-06-12: the original design floated the long-lived coach strip as a detached pill below the menu bar to spare the clock/status items, but in use it read as a disconnected blob; the strip is narrow and covers only the empty centre of the menu bar, so flush-top won).
 
 ### Window & animation mechanics
 
@@ -66,4 +66,5 @@ Sources/Dictator/UI/Island/
 - [x] Keep the old bottom-centre style behind a `hudStyle` setting? **Decided 2026-06-12: replace outright** — no fallback style; revisit only if the island annoys in practice.
 - [ ] Island idle during a meeting on a notched Mac: exactly notch-width is invisible-by-design — is that *too* quiet for the ambient strip's habit-forming job? May want a 2–3 pt visible lip or subtle glow.
 - [ ] Hover-to-peek (expand on mouse-over like the third-party notch apps) — nice later, not v1; interacts with `ignoresMouseEvents` toggling.
-- [ ] Non-notch ambient pill below the menu bar: does it collide with apps that put content hard against the top (full-height browser tabs)? Check during dogfood.
+- [x] Non-notch ambient pill below the menu bar — **moot 2026-06-12**: the detached pill is gone; the coach strip docks flush-top everywhere like every other mode.
+- [x] Dictation/assistant during a recorded meeting — **decided 2026-06-12: works, no special handling.** The ASR isolation already permits it; the user accepts dictated speech landing in the meeting record. (A "meeting ignores dictation windows" suppression option was offered and declined — revisit only if transcript pollution becomes a real annoyance.)
