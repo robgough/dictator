@@ -144,7 +144,9 @@ final class MeetingSession: Identifiable {
 
     /// Opt-in window-scoped screen capture, live for the recording. The start
     /// runs in its own task so SCStream setup doesn't delay the audio path.
-    private let screenCapturer = MeetingScreenCapturer()
+    /// Non-private so the live-recording UI can show the current target +
+    /// latest frame and drive the change-target menu.
+    let screenCapturer = MeetingScreenCapturer()
     private var screenCaptureTask: Task<Void, Never>?
 
     /// Per-speaker voice embeddings from the post-pass diarization, set by

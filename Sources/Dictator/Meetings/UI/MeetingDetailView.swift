@@ -448,6 +448,12 @@ struct LiveRecordingView: View {
                 }
             }
 
+            // Shared-screen capture — what's being grabbed, the most recent
+            // frame, and a control to retarget. Only when the feature's on.
+            if state.settings.meetingCaptureScreenshots {
+                LiveScreenCapturePanel(session: session)
+            }
+
             // Live transcript — the running draft, given the column's spare
             // vertical room (it's the live proof of capture).
             if let transcriber = session.liveTranscriber {
@@ -791,6 +797,140 @@ private struct CaptureWarningBanner: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.orange.opacity(0.12))
         )
+    }
+}
+
+/// Live shared-screen capture card: what window is being grabbed, a thumbnail
+/// of the most recent kept frame, and a "Change" menu to retarget. Reads the
+/// observable `MeetingScreenCapturer` so the target + latest frame update live.
+/// Handles its own empty / no-window / permission states so the parent only has
+/// to decide whether the feature is on.
+private struct LiveScreenCapturePanel: View {
+    @Bindable var session: MeetingSession
+
+    @State private var targets: [MeetingScreenCapturer.CaptureTarget] = []
+    @State private var latestImage: NSImage?
+    @State private var hasPermission = true
+
+    private var capturer: MeetingScreenCapturer { session.screenCapturer }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.on.rectangle.angled")
+                    .foregroundStyle(.secondary)
+                Text("Shared screen")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                changeMenu
+            }
+
+            if !hasPermission {
+                permissionNotice
+            } else {
+                targetLine
+                preview
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .task(id: capturer.latestScreenshotURL) {
+            guard let url = capturer.latestScreenshotURL else { latestImage = nil; return }
+            latestImage = await Task.detached(priority: .utility) { NSImage(contentsOf: url) }.value
+        }
+        .task(id: capturer.currentTarget?.id) {
+            await refreshTargets()
+        }
+    }
+
+    private var changeMenu: some View {
+        Menu {
+            if targets.isEmpty {
+                Text("No meeting windows found")
+            }
+            ForEach(targets) { target in
+                Button {
+                    Task { await capturer.switchTo(windowID: target.windowID); await refreshTargets() }
+                } label: {
+                    if target.id == capturer.currentTarget?.id {
+                        Label(target.label, systemImage: "checkmark")
+                    } else {
+                        Text(target.label)
+                    }
+                }
+            }
+            Divider()
+            Button("Refresh list") { Task { await refreshTargets() } }
+        } label: {
+            Label("Change", systemImage: "macwindow.on.rectangle")
+                .font(.caption2)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose which meeting window to capture")
+    }
+
+    @ViewBuilder
+    private var targetLine: some View {
+        if let target = capturer.currentTarget {
+            Text("Capturing \(target.label)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else {
+            Text("No window selected yet — pick one with Change, or it'll attach when a meeting window appears.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.25))
+            if let latestImage {
+                Image(nsImage: latestImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "rectangle.dashed")
+                        .imageScale(.large)
+                        .foregroundStyle(.tertiary)
+                    Text(capturer.currentTarget == nil ? "Waiting for a window" : "Waiting for shared content…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .frame(height: 116)
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.secondary.opacity(0.2)))
+    }
+
+    private var permissionNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Screen Recording permission is needed to capture shared screens.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open System Settings") {
+                ScreenRecordingPermission.openSystemSettings()
+            }
+            .font(.caption2)
+            .buttonStyle(.link)
+        }
+    }
+
+    private func refreshTargets() async {
+        hasPermission = ScreenRecordingPermission.hasAccess()
+        targets = await capturer.availableTargets()
     }
 }
 

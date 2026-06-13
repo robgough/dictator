@@ -21,11 +21,22 @@ import AppKit
 /// alongside them. The heavy per-frame work (downscale, hash, encode) runs on
 /// the stream's own serial sample-handler queue, off the main actor.
 @MainActor
+@Observable
 final class MeetingScreenCapturer {
     enum StartResult {
         case started(windowTitle: String?)
         case noWindow
         case failed(String)
+    }
+
+    /// A selectable capture target — one on-screen meeting/browser window. The
+    /// `windowID` is the stable handle the picker round-trips through.
+    struct CaptureTarget: Identifiable, Hashable, Sendable {
+        let windowID: CGWindowID
+        let appName: String
+        let windowTitle: String
+        var id: CGWindowID { windowID }
+        var label: String { windowTitle.isEmpty ? appName : "\(appName) — \(windowTitle)" }
     }
 
     /// Capture cadence — 1 fps is ample for slides/demos and keeps the encode
@@ -35,14 +46,23 @@ final class MeetingScreenCapturer {
     /// for the v2 Vision pass. ~2560 keeps a shared 16:9 deck readable.
     private static let maxLongEdgePixels: CGFloat = 2560
 
-    private var stream: SCStream?
-    private var sink: FrameSink?
-    private(set) var didCapture = false
+    /// The window currently being captured — observable so the live UI can show
+    /// "Capturing: Zoom — Screen Share" and drive the change menu's checkmark.
+    private(set) var currentTarget: CaptureTarget?
+    /// File URL of the most recently kept keyframe — observable so the live UI
+    /// can show a thumbnail of the last thing captured.
+    private(set) var latestScreenshotURL: URL?
+    private(set) var isCapturing = false
+
+    @ObservationIgnored private var stream: SCStream?
+    @ObservationIgnored private var sink: FrameSink?
+    @ObservationIgnored private var folder: URL?
 
     /// Start capturing the meeting window. `preferredBundleID` biases window
     /// selection toward the app that was frontmost at record start. Never
     /// throws — capture is best-effort and must not fail the meeting.
     func start(folder: URL, preferredBundleID: String?) async -> StartResult {
+        self.folder = folder
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
@@ -50,67 +70,132 @@ final class MeetingScreenCapturer {
             guard let window = Self.pickWindow(from: content.windows, preferredBundleID: preferredBundleID) else {
                 return .noWindow
             }
-
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            let config = SCStreamConfiguration()
-            config.minimumFrameInterval = CMTime(value: 1, timescale: Self.captureFPS)
-            config.queueDepth = 3
-            config.showsCursor = false
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-            let (w, h) = Self.captureSize(for: window.frame.size)
-            config.width = w
-            config.height = h
-
-            let sink = FrameSink(folder: folder)
-            let stream = SCStream(filter: filter, configuration: config, delegate: sink)
-            try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: sink.queue)
-            try await stream.startCapture()
-            self.stream = stream
-            self.sink = sink
-            NSLog("[Dictator] Screenshots: capturing window '\(window.title ?? "—")' of \(window.owningApplication?.bundleIdentifier ?? "?") at \(w)×\(h)")
+            try await beginStream(on: window, folder: folder)
             return .started(windowTitle: window.title)
         } catch {
             return .failed(error.localizedDescription)
         }
     }
 
+    /// On-screen meeting/browser windows the user can switch capture to. Empty
+    /// when Screen Recording isn't granted (the query throws) — the UI reads
+    /// that as the permission prompt.
+    func availableTargets() async -> [CaptureTarget] {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true
+        ) else { return [] }
+        return Self.hostWindows(from: content.windows).map {
+            CaptureTarget(
+                windowID: $0.windowID,
+                appName: $0.owningApplication?.applicationName ?? "—",
+                windowTitle: $0.title ?? ""
+            )
+        }
+    }
+
+    /// Retarget capture to a chosen window. Reuses the running stream
+    /// (`updateContentFilter` keeps the keyframe state intact, so the count and
+    /// dedup carry across the switch); starts a fresh stream if none was running
+    /// (auto-resolution found nothing and the user picked manually).
+    @discardableResult
+    func switchTo(windowID: CGWindowID) async -> Bool {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true
+        ), let window = content.windows.first(where: { $0.windowID == windowID }) else { return false }
+        do {
+            if let stream {
+                try await stream.updateContentFilter(SCContentFilter(desktopIndependentWindow: window))
+                try await stream.updateConfiguration(Self.configuration(for: window.frame.size))
+                setTarget(window)
+            } else if let folder {
+                try await beginStream(on: window, folder: folder)
+            } else {
+                return false
+            }
+            NSLog("[Dictator] Screenshots: switched capture to '\(window.title ?? "—")'")
+            return true
+        } catch {
+            NSLog("[Dictator] Screenshots: switch failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Stop the stream and flush the index. Returns the captured keyframes.
     @discardableResult
     func stop() async -> MeetingScreenshotIndex {
+        isCapturing = false
         guard let stream else { return MeetingScreenshotIndex() }
         try? await stream.stopCapture()
         self.stream = nil
         let index = sink?.finish() ?? MeetingScreenshotIndex()
         sink = nil
-        didCapture = !index.screenshots.isEmpty
         return index
+    }
+
+    // MARK: - Stream bring-up
+
+    private func beginStream(on window: SCWindow, folder: URL) async throws {
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let sink = self.sink ?? FrameSink(folder: folder, onKeep: { [weak self] url in
+            Task { @MainActor in self?.latestScreenshotURL = url }
+        })
+        let stream = SCStream(filter: filter, configuration: Self.configuration(for: window.frame.size), delegate: sink)
+        try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: sink.queue)
+        try await stream.startCapture()
+        self.stream = stream
+        self.sink = sink
+        self.isCapturing = true
+        setTarget(window)
+        NSLog("[Dictator] Screenshots: capturing window '\(window.title ?? "—")' of \(window.owningApplication?.bundleIdentifier ?? "?")")
+    }
+
+    private func setTarget(_ window: SCWindow) {
+        currentTarget = CaptureTarget(
+            windowID: window.windowID,
+            appName: window.owningApplication?.applicationName ?? "—",
+            windowTitle: window.title ?? ""
+        )
+    }
+
+    private static func configuration(for pointSize: CGSize) -> SCStreamConfiguration {
+        let config = SCStreamConfiguration()
+        config.minimumFrameInterval = CMTime(value: 1, timescale: captureFPS)
+        config.queueDepth = 3
+        config.showsCursor = false
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        let (w, h) = captureSize(for: pointSize)
+        config.width = w
+        config.height = h
+        return config
     }
 
     // MARK: - Window selection
 
-    /// Pick the meeting window to scope to: among on-screen windows owned by a
-    /// known host app (meeting client or browser), prefer the frontmost app's,
-    /// then fall back to the largest. nil when nothing host-owned is on screen —
-    /// we never default to whole-display capture.
-    private static func pickWindow(from windows: [SCWindow], preferredBundleID: String?) -> SCWindow? {
-        let hostWindows = windows.filter { window in
+    /// On-screen windows owned by a known host app (meeting client or browser),
+    /// large enough to be a call rather than a utility HUD.
+    private static func hostWindows(from windows: [SCWindow]) -> [SCWindow] {
+        windows.filter { window in
             guard window.isOnScreen,
                   let bundleID = window.owningApplication?.bundleIdentifier,
                   MeetingHostApps.hostBundleIDs.contains(bundleID) else { return false }
-            // Ignore tiny utility windows (pickers, HUDs) — a call is large.
             return window.frame.width >= 320 && window.frame.height >= 240
         }
-        guard !hostWindows.isEmpty else { return nil }
+    }
 
+    /// Pick the meeting window to scope to: prefer the frontmost app's, then the
+    /// largest. nil when nothing host-owned is on screen — we never default to
+    /// whole-display capture.
+    private static func pickWindow(from windows: [SCWindow], preferredBundleID: String?) -> SCWindow? {
+        let hosts = hostWindows(from: windows)
+        guard !hosts.isEmpty else { return nil }
         func area(_ w: SCWindow) -> CGFloat { w.frame.width * w.frame.height }
-
         if let preferredBundleID {
-            let preferred = hostWindows
+            let preferred = hosts
                 .filter { $0.owningApplication?.bundleIdentifier == preferredBundleID }
                 .max(by: { area($0) < area($1) })
             if let preferred { return preferred }
         }
-        return hostWindows.max(by: { area($0) < area($1) })
+        return hosts.max(by: { area($0) < area($1) })
     }
 
     /// Pixel size for the capture: 2× the window's point size (retina-ish
@@ -150,6 +235,9 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private let folder: URL
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let recordingStart = Date()
+    /// Called on the sink's queue each time a keyframe lands — the capturer
+    /// hops it to the main actor to update the live "latest screenshot" view.
+    private let onKeep: (@Sendable (URL) -> Void)?
 
     private var lastKeptHash: UInt64?
     private var lastKeptAt: Date?
@@ -158,8 +246,9 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var recentKeeps: [Date] = []
     private var records: [ScreenshotRecord] = []
 
-    init(folder: URL) {
+    init(folder: URL, onKeep: (@Sendable (URL) -> Void)? = nil) {
         self.folder = folder
+        self.onKeep = onKeep
         super.init()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
@@ -215,7 +304,8 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
         let offset = now.timeIntervalSince(recordingStart)
         let filename = String(format: "%04d-%@.heic", records.count + 1, Self.clock(offset))
-        guard writeHEIC(pixelBuffer, to: folder.appendingPathComponent(filename)) else { return }
+        let url = folder.appendingPathComponent(filename)
+        guard writeHEIC(pixelBuffer, to: url) else { return }
 
         lastKeptHash = hash
         lastKeptAt = now
@@ -230,6 +320,7 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
             ocrText: nil
         ))
         writeIndex()  // incremental, so a crash keeps what we've captured
+        onKeep?(url)
     }
 
     /// Flush the index and hand back the keyframes. Synchronised on `queue` so
