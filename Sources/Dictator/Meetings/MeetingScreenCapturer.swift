@@ -100,15 +100,29 @@ final class MeetingScreenCapturer {
         self.stream = nil
     }
 
-    /// Force one keep of the current screen right now, bypassing the
-    /// change/debounce/rate gates. Turns capture on first if it's off — we
-    /// can't grab a frame without a live stream, and flipping the toggle on is
-    /// the honest reflection that the screen is now being captured.
+    /// Grab exactly ONE still of the current screen, bypassing the
+    /// change/debounce/rate "discard" gates — Capture now is "save this frame",
+    /// nothing more. If capture is already running we just force a frame and
+    /// leave it running (the user turned the toggle on deliberately). If it was
+    /// OFF this is a true one-shot: bring the stream up, take a single frame,
+    /// then tear it straight back down — no lingering sampling, and the system
+    /// capture indicator goes away again the moment the still is taken.
     func captureNow() async {
-        if stream == nil {
-            guard case .started = await enable() else { return }
+        if stream != nil {
+            sink?.requestForceCapture()
+            return
         }
+        guard case .started = await enable() else { return }
+        let before = latestScreenshotURL
         sink?.requestForceCapture()
+        // Wait for the forced frame to land (capture runs at 1 fps, so up to ~a
+        // second, plus slack), then stop. Polls the observable URL the keep
+        // updates on the main actor; the sleeps yield so that update can run.
+        for _ in 0..<25 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if latestScreenshotURL != before { break }
+        }
+        await disable()
     }
 
     /// On-screen meeting/browser windows the user can switch capture to. Empty
