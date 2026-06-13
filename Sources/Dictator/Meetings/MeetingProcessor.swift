@@ -258,7 +258,7 @@ final class MeetingProcessor {
         let micDiarIn = micDiar
         let systemDiarIn = systemDiar
         let gateInspectionIn = gateInspection
-        let usedSpeakerIDs = try await Task.detached(priority: .userInitiated) {
+        let (usedSpeakerIDs, speakerEmbeddings) = try await Task.detached(priority: .userInitiated) {
             try Self.assembleAndWriteTranscript(
                 sessionID: sessionID,
                 micTimedWords: micWordsIn,
@@ -282,6 +282,9 @@ final class MeetingProcessor {
         var meta = session.meta
         meta.durationSeconds = max(micDuration, systemDuration)
         meta.speakers = Self.buildSpeakerPalette(speakerIDs: usedSpeakerIDs)
+        // Hand the per-speaker voice embeddings to the session for the
+        // people-store link pass (runs after speaker naming).
+        session.speakerEmbeddings = speakerEmbeddings
         if let reason = diarFailureReason {
             // Surface the failure in NSLog only — we don't have a per-meeting
             // notes field yet, and a clean fallback transcript is more useful
@@ -314,7 +317,7 @@ final class MeetingProcessor {
         gateInspection: MeetingTrackInspection.GateInfo?,
         speechLevels: (mic: Double?, system: Double?),
         vocabulary: [VocabularyEntry]
-    ) throws -> [String] {
+    ) throws -> (speakerIDs: [String], embeddings: [String: [Float]]) {
         // ── Speaker-space unification ────────────────────────────────────
         // Build one global speaker space from the (possibly two) per-track
         // diarizer outputs. The mapping tells us which final speaker_N (or
@@ -478,7 +481,11 @@ final class MeetingProcessor {
         }
         let transcript = MeetingTranscript(segments: segments)
         try MeetingStorage.writeTranscript(transcript, for: sessionID)
-        return usedSpeakerIDs
+        // Embeddings only for the speakers that actually survived into the
+        // transcript (folds and bleed drops shed the rest).
+        let surviving = Set(usedSpeakerIDs)
+        let embeddings = unified.unifiedCentroids.filter { surviving.contains($0.key) }
+        return (usedSpeakerIDs, embeddings)
     }
 
     // MARK: - Track transcription
@@ -932,6 +939,9 @@ final class MeetingProcessor {
         let micMapping: [String: String]
         let systemMapping: [String: String]
         let discoveredOrder: [String]
+        /// Voice embedding per unified speaker id — the diarizer's cluster
+        /// centroid that won the slot. Feeds the cross-meeting people store.
+        let unifiedCentroids: [String: [Float]]
     }
 
     /// Sentinel speaker ID for mic clusters identified as bleed (the remote
@@ -1136,7 +1146,8 @@ final class MeetingProcessor {
         return UnifiedSpeakerSpace(
             micMapping: micMapping,
             systemMapping: systemMapping,
-            discoveredOrder: orderedIDs
+            discoveredOrder: orderedIDs,
+            unifiedCentroids: unifiedCentroids
         )
     }
 

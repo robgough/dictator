@@ -142,6 +142,10 @@ final class MeetingSession: Identifiable {
     private let sourceAppDetector = MeetingSourceAppDetector()
     private var calendarMatchTask: Task<Void, Never>?
 
+    /// Per-speaker voice embeddings from the post-pass diarization, set by
+    /// `MeetingProcessor.run` — input to the people-store link pass.
+    @ObservationIgnored var speakerEmbeddings: [String: [Float]]?
+
     /// The user's own notes for this meeting — the pad they type into during
     /// (or after) recording. Loaded from `pad.md` on init, autosaved through
     /// `updatePad` with a short debounce, and fed to the final notes pass as
@@ -626,6 +630,11 @@ final class MeetingSession: Identifiable {
                 await inferSpeakerNames(settings: settings)
             }
 
+            // People recognition: match this meeting's speaker voices against
+            // the cross-meeting store (after naming, so a new face gets
+            // learned under its best-known name).
+            linkPeopleAcrossMeetings()
+
             // Auto title suggestion. Always runs when an LLM is
             // available — the call is short and cheap, and a meeting
             // titled "Q3 launch planning" is dramatically more useful
@@ -716,6 +725,77 @@ final class MeetingSession: Identifiable {
         MeetingParakeetServiceHolder.shared.unload()
         DiarizerServiceHolder.shared.unload(modelID: ModelCatalog.defaultDiarization.id)
         MLXLLMServiceHolder.shared.releaseGPUCache()
+    }
+
+    /// Match this meeting's speakers against the people store by voice:
+    /// a known voice links (and brings its name to default/guessed labels);
+    /// a named stranger becomes a new person; calendar attendees donate
+    /// emails to name-matched people. Voice-only and conservative — a wrong
+    /// link writes the wrong name, so unmatched anonymous speakers stay
+    /// anonymous rather than spawning "Speaker 2" person records.
+    private func linkPeopleAcrossMeetings() {
+        guard AppState.shared.settings.peopleRecognitionEnabled else { return }
+        guard let embeddings = speakerEmbeddings, !embeddings.isEmpty else { return }
+        let store = PeopleStore.shared
+        let modelID = ModelCatalog.defaultDiarization.id
+        var changed = false
+
+        func isDefaultLabel(_ name: String) -> Bool {
+            name == "Other" || name == "Me" || name.hasPrefix("Speaker ")
+        }
+
+        for idx in meta.speakers.indices {
+            let speaker = meta.speakers[idx]
+            guard !speaker.isMe, let embedding = embeddings[speaker.id] else { continue }
+
+            if let personID = speaker.personID {
+                // Re-process of an already-linked meeting — refresh the voice.
+                store.recordObservation(personID: personID, embedding: embedding, modelID: modelID)
+                continue
+            }
+
+            if let match = store.bestMatch(for: embedding, modelID: modelID) {
+                meta.speakers[idx].personID = match.person.id
+                store.recordObservation(personID: match.person.id, embedding: embedding, modelID: modelID)
+                if isDefaultLabel(speaker.displayName) || speaker.nameInferred {
+                    // The store's name wins over a default/guessed label.
+                    // Marked inferred so a user rename stays authoritative
+                    // (and propagates back via renameSpeaker).
+                    meta.speakers[idx].displayName = match.person.name
+                    meta.speakers[idx].nameInferred = true
+                } else if isDefaultLabel(match.person.name) {
+                    // The speaker label is better than what the store holds.
+                    store.rename(id: match.person.id, to: speaker.displayName)
+                }
+                NSLog("[Dictator] People: \(speaker.id) matched '\(match.person.name)' (sim=\(String(format: "%.2f", match.similarity)))")
+                changed = true
+            } else if !isDefaultLabel(speaker.displayName) {
+                // A named voice we haven't met — learn them.
+                let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
+                meta.speakers[idx].personID = person.id
+                changed = true
+            }
+        }
+
+        // Calendar attendees donate emails to name-matched linked people.
+        if let attendees = meta.calendar?.attendees {
+            for speaker in meta.speakers {
+                guard let personID = speaker.personID,
+                      let person = store.person(id: personID),
+                      person.emails.isEmpty else { continue }
+                let firstName = person.name.split(separator: " ").first.map(String.init)?.lowercased()
+                guard let firstName, firstName.count >= 3 else { continue }
+                if let attendee = attendees.first(where: { ($0.name ?? "").lowercased().contains(firstName) }),
+                   let email = attendee.email {
+                    store.attachEmail(id: personID, email: email)
+                }
+            }
+        }
+
+        if changed {
+            try? MeetingStorage.writeMeta(meta)
+            MeetingsStore.shared.upsert(meta)
+        }
     }
 
     /// Run the title-suggestion LLM call and, if the suggestion passes
@@ -911,8 +991,12 @@ final class MeetingSession: Identifiable {
         guard meta.speakers[idx].displayName != trimmed else { return }
         meta.speakers[idx].displayName = trimmed
         // A hand-typed name is authoritative — drop the "auto-detected" flag so
-        // it loses the sparkle and a re-process never overwrites it.
+        // it loses the sparkle and a re-process never overwrites it. It also
+        // propagates to the linked person, so the store learns corrections.
         meta.speakers[idx].nameInferred = false
+        if let personID = meta.speakers[idx].personID {
+            PeopleStore.shared.rename(id: personID, to: trimmed)
+        }
         meta.speakersEditedAt = Date()
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)

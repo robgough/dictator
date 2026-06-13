@@ -10,6 +10,7 @@ struct MeetingsPane: View {
     @Environment(AppState.self) private var state
     @State private var showSummaryPromptSheet = false
     @State private var showingSetsEditor = false
+    @State private var showingPeopleEditor = false
     @State private var typeEditor: MeetingTypeEditorMode?
 
     var body: some View {
@@ -156,10 +157,19 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingCalendarMatchingEnabled },
                     set: { s.settings.meetingCalendarMatchingEnabled = $0; state.save() }
                 ))
+                Toggle("Recognise people across meetings", isOn: Binding(
+                    get: { s.settings.peopleRecognitionEnabled },
+                    set: { s.settings.peopleRecognitionEnabled = $0; state.save() }
+                ))
+                Button {
+                    showingPeopleEditor = true
+                } label: {
+                    Label("Edit people…", systemImage: "person.2")
+                }
             } header: {
                 Text("Coach")
             } footer: {
-                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it. \"Match meetings to calendar events\" asks for calendar access the first time and gives each recording its real title, attendees, and scheduled length (which also powers the coach's wrapping-up reminder); calendar data never leaves your Mac.")
+                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it. \"Match meetings to calendar events\" asks for calendar access the first time and gives each recording its real title, attendees, and scheduled length (which also powers the coach's wrapping-up reminder); calendar data never leaves your Mac. \"Recognise people across meetings\" remembers each named speaker's voice on this Mac, so the same person is recognised and named automatically in future meetings — Edit people shows everything stored and lets you forget anyone, voice included.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -217,6 +227,9 @@ struct MeetingsPane: View {
         .onAppear { ModelManager.shared.refreshCachedStates() }
         .sheet(isPresented: $showingSetsEditor) {
             CoachSetsEditor()
+        }
+        .sheet(isPresented: $showingPeopleEditor) {
+            PeopleEditor()
         }
         .sheet(isPresented: $showSummaryPromptSheet) {
             SummaryPromptSheet(isPresented: $showSummaryPromptSheet)

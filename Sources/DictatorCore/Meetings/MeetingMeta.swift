@@ -23,17 +23,22 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         /// guess while still never clobbering a name the user typed, and lets
         /// the UI flag a name as auto-detected so it gets a second look.
         var nameInferred: Bool
+        /// Link into the cross-meeting people store (people.json) — set when
+        /// this speaker's voice matched a known person, or when the store
+        /// learned this speaker as a new person. nil = unlinked.
+        var personID: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, displayName, colorHex = "color", isMe, nameInferred
+            case id, displayName, colorHex = "color", isMe, nameInferred, personID
         }
 
-        init(id: String, displayName: String, colorHex: String, isMe: Bool = false, nameInferred: Bool = false) {
+        init(id: String, displayName: String, colorHex: String, isMe: Bool = false, nameInferred: Bool = false, personID: String? = nil) {
             self.id = id
             self.displayName = displayName
             self.colorHex = colorHex
             self.isMe = isMe
             self.nameInferred = nameInferred
+            self.personID = personID
         }
 
         /// Backwards-compatible decode — `nameInferred` (and defensively
@@ -46,6 +51,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
             self.colorHex = try c.decode(String.self, forKey: .colorHex)
             self.isMe = try c.decodeIfPresent(Bool.self, forKey: .isMe) ?? false
             self.nameInferred = try c.decodeIfPresent(Bool.self, forKey: .nameInferred) ?? false
+            self.personID = try c.decodeIfPresent(String.self, forKey: .personID)
         }
     }
 

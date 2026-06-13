@@ -1,0 +1,124 @@
+import Foundation
+import Observation
+
+/// The cross-meeting people store: who the user meets with, keyed by voice.
+/// Each post-processed meeting offers its speakers' embeddings here — a
+/// match links the speaker to a known person (and applies their name); a
+/// named stranger becomes a new person. `people.json` lives in synced
+/// storage next to settings/history.
+///
+/// Matching is voice-only and deliberately conservative: a false merge
+/// writes someone else's name on a speaker, which is worse than leaving
+/// them anonymous. Embeddings are compared only within the same diarizer
+/// model's space.
+@MainActor
+@Observable
+final class PeopleStore {
+    static let shared = PeopleStore()
+
+    private(set) var people: [PersonRecord] = []
+
+    /// Minimum cosine similarity to call two voices the same person across
+    /// meetings. Same-session cross-track matching uses 0.78; across
+    /// meetings/devices the same voice drifts more, but the cost of a wrong
+    /// match is higher — 0.74 splits the difference until real multi-meeting
+    /// data says otherwise.
+    static let matchThreshold: Float = 0.74
+
+    private static let filename = "people.json"
+
+    private init() {
+        load()
+    }
+
+    // MARK: - Matching & learning
+
+    /// Best same-model match at/above the threshold, or nil.
+    func bestMatch(for embedding: [Float], modelID: String) -> (person: PersonRecord, similarity: Float)? {
+        var best: (PersonRecord, Float)?
+        for person in people where person.embeddingModelID == modelID {
+            for stored in person.embeddings {
+                let sim = MeetingProcessor.cosineSimilarity(embedding, stored)
+                if sim >= Self.matchThreshold, sim > (best?.1 ?? 0) {
+                    best = (person, sim)
+                }
+            }
+        }
+        return best
+    }
+
+    /// Fold a fresh observation of a known person's voice into their record.
+    /// A model change resets the embedding set (old vectors live in a
+    /// different space and would poison matching).
+    func recordObservation(personID: String, embedding: [Float], modelID: String) {
+        guard let idx = people.firstIndex(where: { $0.id == personID }) else { return }
+        if people[idx].embeddingModelID != modelID {
+            people[idx].embeddings = []
+            people[idx].embeddingModelID = modelID
+        }
+        people[idx].embeddings.append(embedding)
+        if people[idx].embeddings.count > PersonRecord.maxEmbeddings {
+            people[idx].embeddings.removeFirst(people[idx].embeddings.count - PersonRecord.maxEmbeddings)
+        }
+        people[idx].updatedAt = Date()
+        save()
+    }
+
+    @discardableResult
+    func createPerson(name: String, embedding: [Float]?, modelID: String?) -> PersonRecord {
+        let person = PersonRecord(
+            name: name,
+            embeddings: embedding.map { [$0] } ?? [],
+            embeddingModelID: embedding != nil ? modelID : nil
+        )
+        people.append(person)
+        save()
+        return person
+    }
+
+    func person(id: String) -> PersonRecord? {
+        people.first { $0.id == id }
+    }
+
+    func rename(id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let idx = people.firstIndex(where: { $0.id == id }),
+              people[idx].name != trimmed else { return }
+        people[idx].name = trimmed
+        people[idx].updatedAt = Date()
+        save()
+    }
+
+    func attachEmail(id: String, email: String) {
+        let normalized = email.lowercased()
+        guard let idx = people.firstIndex(where: { $0.id == id }),
+              !people[idx].emails.contains(normalized) else { return }
+        people[idx].emails.append(normalized)
+        people[idx].updatedAt = Date()
+        save()
+    }
+
+    /// Per-person delete — removes the record AND its voice embeddings (the
+    /// privacy contract for default-on recognition). Past meetings keep
+    /// their text; their speakers' personID just dangles harmlessly.
+    func delete(id: String) {
+        people.removeAll { $0.id == id }
+        save()
+    }
+
+    // MARK: - Persistence
+
+    private func load() {
+        let url = SyncedStorage.fileURL(for: Self.filename)
+        guard let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(PeopleFile.self, from: data) else { return }
+        people = file.people
+    }
+
+    private func save() {
+        let url = SyncedStorage.fileURL(for: Self.filename)
+        guard let data = try? JSONEncoder().encode(PeopleFile(people: people)) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+}

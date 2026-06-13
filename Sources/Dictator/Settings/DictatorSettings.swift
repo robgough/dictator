@@ -227,6 +227,12 @@ struct DictatorSettings: Codable, Equatable {
     /// being computed (in-window strip, post-meeting summary) with the
     /// floating presence off. Default ON; synced.
     var meetingCoachChipEnabled: Bool = true
+    /// Recognise people across meetings by voice: persist speaker
+    /// embeddings to people.json, link returning voices to their person
+    /// (applying the known name), learn named strangers. Default ON — one
+    /// switch, not per-person consent — with per-person delete (embeddings
+    /// purged) as the hygiene valve. All on-device. Synced.
+    var peopleRecognitionEnabled: Bool = true
     /// Match each recording to its calendar event (title, attendees,
     /// scheduled span) at record time. Prompts for calendar access on first
     /// use; denial leaves meetings without calendar context, silently.
@@ -476,6 +482,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
+        self.peopleRecognitionEnabled = try c.decodeIfPresent(Bool.self, forKey: .peopleRecognitionEnabled) ?? d.peopleRecognitionEnabled
         self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
         self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
         self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
@@ -1325,6 +1332,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingLiveNotesSelfCorrectEnabled
         case meetingCoachEnabled
         case meetingCoachChipEnabled
+        case peopleRecognitionEnabled
         case meetingCalendarMatchingEnabled
         case meetingCoachPromptAddendum
         case meetingCoachPromptOverride
@@ -1370,6 +1378,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingLiveNotesSelfCorrectEnabled",
         "meetingCoachEnabled",
         "meetingCoachChipEnabled",
+        "peopleRecognitionEnabled",
         "meetingCalendarMatchingEnabled",
         "meetingCoachPromptAddendum",
         "meetingCoachPromptOverride",
