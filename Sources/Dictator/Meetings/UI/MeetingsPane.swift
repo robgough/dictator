@@ -152,10 +152,14 @@ struct MeetingsPane: View {
                     Label("Edit key point sets…", systemImage: "checklist")
                 }
                 .disabled(!s.settings.meetingCoachEnabled)
+                Toggle("Match meetings to calendar events", isOn: Binding(
+                    get: { s.settings.meetingCalendarMatchingEnabled },
+                    set: { s.settings.meetingCalendarMatchingEnabled = $0; state.save() }
+                ))
             } header: {
                 Text("Coach")
             } footer: {
-                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it.")
+                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it. \"Match meetings to calendar events\" asks for calendar access the first time and gives each recording its real title, attendees, and scheduled length (which also powers the coach's wrapping-up reminder); calendar data never leaves your Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

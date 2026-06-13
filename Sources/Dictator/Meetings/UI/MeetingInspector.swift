@@ -22,9 +22,50 @@ struct MeetingInspector: View {
 
     private var meta: MeetingMeta { session.meta }
 
+    /// The "Context" section: which app hosted the call and the calendar
+    /// event the recording matched — subject, attendees, companies.
+    @ViewBuilder
+    private var contextSection: some View {
+        if meta.sourceApp != nil || meta.calendar != nil {
+            Section("Context") {
+                if let app = meta.sourceApp {
+                    LabeledContent("App", value: app.name)
+                }
+                if let calendar = meta.calendar {
+                    LabeledContent("Event") {
+                        Text(calendar.title)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Scheduled", value: Self.scheduledSpan(calendar))
+                    if !calendar.attendees.isEmpty {
+                        LabeledContent("Attendees") {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                ForEach(Array(calendar.attendees.enumerated()), id: \.offset) { _, attendee in
+                                    Text(attendee.name ?? attendee.email ?? "—")
+                                        .help(attendee.email ?? "")
+                                }
+                            }
+                        }
+                    }
+                    let companies = calendar.companyDomains
+                    if !companies.isEmpty {
+                        LabeledContent("Companies", value: companies.joined(separator: ", "))
+                    }
+                }
+            }
+        }
+    }
+
+    private static func scheduledSpan(_ calendar: MeetingCalendarContext) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return "\(f.string(from: calendar.startDate))–\(f.string(from: calendar.endDate))"
+    }
+
     var body: some View {
         Form {
             aboutSection
+            contextSection
             speakersSection
             notesSection
             actionsSection

@@ -5,7 +5,7 @@ import Foundation
 /// interruption is how the feature gets turned off.
 struct CoachNudge: Equatable, Sendable {
     enum Kind: String, CaseIterable, Sendable {
-        case reminder, checklist, interrupting, dominating, monologue, pace, askQuestion
+        case reminder, checklist, checklistPending, interrupting, dominating, monologue, pace, askQuestion
     }
     let kind: Kind
     let message: String
@@ -123,12 +123,26 @@ final class MeetingCoachNudger {
     func evaluate(
         _ s: MeetingCoachSignals.Snapshot,
         reminders: [PendingReminder] = [],
-        pendingKeyPoints: [String] = []
+        pendingKeyPoints: [String] = [],
+        scheduledFraction: Double? = nil
     ) -> CoachNudge? {
         let t = s.elapsed
 
         // Global rate limit before any per-kind logic.
         guard t - lastAnyFireAt >= config.minSecondsBetweenNudges else { return nil }
+
+        // Wrapping up with key points open — fires ONCE, when the calendar
+        // says the meeting is in its final quarter. The most actionable
+        // nudge the coach has; it outranks even ad-hoc reminders.
+        if let fraction = scheduledFraction,
+           fraction >= 0.75, fraction <= 1.1,
+           !pendingKeyPoints.isEmpty,
+           lastFiredAt[.checklistPending] == nil {
+            return fire(.checklistPending, at: t,
+                        pendingKeyPoints.count == 1
+                            ? "Wrapping up — still open: \(pendingKeyPoints[0])"
+                            : "Wrapping up — \(pendingKeyPoints.count) key points still open")
+        }
 
         // Ad-hoc reminders outrank everything — the user explicitly said
         // "don't let me forget this". Not subject to escalation: an

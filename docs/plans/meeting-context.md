@@ -56,7 +56,7 @@ Voice-embedding re-identification across sessions/mics is the research-flavoured
 
 ## Proposed phasing
 
-1. **v1 — Context capture**: `sourceApp` detection (Core Audio process list + frontmost), EventKit match → subject/attendees/companies into `meta.json`, shown in `MeetingInspector`. No new heavy permissions beyond Calendar.
+1. **v1 — Context capture**: `sourceApp` detection (Core Audio process list + frontmost), EventKit match → subject/attendees/companies into `meta.json`, shown in `MeetingInspector`. No new heavy permissions beyond Calendar. — **SHIPPED 2026-06-13.** Implementation notes: detector samples output-emitting audio processes every 45 s with a known-meeting-apps > browsers > anything ranking (media players excluded); calendar match scores by start-time distance with a 10-min handicap for attendee-less events; matched titles rename default-titled meetings deterministically (LLM title suggestion skipped); the scheduled end arms the coach's new one-shot `checklistPending` "wrapping up" nudge; `meetingCalendarMatchingEnabled` (default on, synced) gates the EventKit prompt. NOTE: Info.plist is GENERATED — usage strings go in project.yml's `info:` block, not the plist.
 2. **v2 — People store**: `people.json`, embedding persistence + matching, `personID` on speakers, manual link/unlink UI, single default-on toggle + per-person delete.
 3. **v3 — Cross-meeting queries**: person filter in `MeetingsWindow` sidebar/search, "ask across meetings" via the assistant path.
 4. **Later — vision-assisted participants**: piggyback on screenshot OCR (see `meeting-screenshots.md`), never as the primary signal.

@@ -39,6 +39,8 @@
 	<string>Dictator pastes transcribed text into the focused app, and (if you turn on "Pause other audio" in Settings) tells Spotify or Music to pause while you're dictating.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Dictator captures system audio during meetings to transcribe what's coming out of your speakers — the other side of your call — alongside your microphone. Audio is processed entirely on your Mac.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dictator matches a meeting recording to its calendar event so the meeting gets the right title, attendees, and scheduled timing. Calendar data never leaves your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dictator needs microphone access to listen and transcribe your speech.</string>
 	<key>NSServices</key>

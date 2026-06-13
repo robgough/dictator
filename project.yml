@@ -162,6 +162,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
         NSAudioCaptureUsageDescription: "Dictator captures system audio during meetings to transcribe what's coming out of your speakers — the other side of your call — alongside your microphone. Audio is processed entirely on your Mac."
+        NSCalendarsFullAccessUsageDescription: "Dictator matches a meeting recording to its calendar event so the meeting gets the right title, attendees, and scheduled timing. Calendar data never leaves your Mac."
         NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app, and (if you turn on \"Pause other audio\" in Settings) tells Spotify or Music to pause while you're dictating."
         # Sparkle auto-updates. The appcast lives at the URL below (served by
         # GitHub Pages from docs/appcast.xml). SUPublicEDKey is the EdDSA

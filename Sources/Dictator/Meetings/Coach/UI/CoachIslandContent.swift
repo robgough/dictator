@@ -113,6 +113,7 @@ struct CoachIslandContent: View {
         switch kind {
         case .reminder: "exclamationmark.circle"
         case .checklist: "checklist"
+        case .checklistPending: "clock.badge.exclamationmark"
         case .monologue: "person.wave.2"
         case .interrupting: "hand.raised"
         case .dominating: "chart.pie"

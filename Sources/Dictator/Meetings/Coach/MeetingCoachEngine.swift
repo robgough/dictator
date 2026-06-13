@@ -83,6 +83,12 @@ final class MeetingCoachEngine {
     let presetTypeID: String?
     let profileIDs: [String]
 
+    /// Where the meeting's SCHEDULED end falls on this engine's elapsed
+    /// clock, set when the calendar match lands. Unlocks the "wrapping up
+    /// with key points open" nudge; nil (no calendar match) leaves that
+    /// rule disarmed.
+    @ObservationIgnored var scheduledEndElapsedSeconds: Double?
+
     /// Fired (debounced upstream by the caller) whenever checklist state
     /// changes, so the session can crash-mirror it to coach-live.json.
     @ObservationIgnored var onChecklistChanged: (() -> Void)?
@@ -325,7 +331,15 @@ final class MeetingCoachEngine {
         let pendingKeyPoints = checklist
             .filter { $0.isPending && $0.source != .adhoc }
             .map(\.text)
-        if let nudge = nudger.evaluate(snapshot, reminders: reminders, pendingKeyPoints: pendingKeyPoints) {
+        let scheduledFraction = scheduledEndElapsedSeconds.flatMap { end in
+            end > 60 ? now / end : nil
+        }
+        if let nudge = nudger.evaluate(
+            snapshot,
+            reminders: reminders,
+            pendingKeyPoints: pendingKeyPoints,
+            scheduledFraction: scheduledFraction
+        ) {
             activeNudge = nudge
             nudgeClearAt = Date().addingTimeInterval(Self.nudgeDisplaySeconds)
         } else if let clearAt = nudgeClearAt, Date() >= clearAt {

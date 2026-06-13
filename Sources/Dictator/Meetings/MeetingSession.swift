@@ -138,6 +138,10 @@ final class MeetingSession: Identifiable {
     /// so later pad edits don't re-lift).
     private var liftedPadLines: Set<String> = []
 
+    /// Source-app detection + calendar matching, live for the recording.
+    private let sourceAppDetector = MeetingSourceAppDetector()
+    private var calendarMatchTask: Task<Void, Never>?
+
     /// The user's own notes for this meeting — the pad they type into during
     /// (or after) recording. Loaded from `pad.md` on init, autosaved through
     /// `updatePad` with a short debounce, and fed to the final notes pass as
@@ -275,6 +279,23 @@ final class MeetingSession: Identifiable {
             // island can render the strip with the Meetings window closed.
             self.coachEngine?.start()
             AppState.shared.activeCoachEngine = self.coachEngine
+            // Context: who's hosting the call (audio-process sampling) and
+            // which calendar event this is. Both off the critical path —
+            // results land on meta at stop / when the match returns.
+            self.sourceAppDetector.start()
+            if AppState.shared.settings.meetingCalendarMatchingEnabled {
+                self.calendarMatchTask = Task { @MainActor [weak self] in
+                    guard let context = await MeetingCalendarMatcher.match(recordingStart: Date()) else { return }
+                    guard let self, self.state.isLive else { return }
+                    self.meta.calendar = context
+                    // The scheduled end unlocks the coach's "wrapping up"
+                    // nudge — express it on the engine's elapsed clock.
+                    if let engine = self.coachEngine {
+                        engine.scheduledEndElapsedSeconds =
+                            engine.elapsedSeconds + context.endDate.timeIntervalSinceNow
+                    }
+                }
+            }
         }
         // Stash the latest level; the timer loop publishes it into `state` at a
         // fixed meter cadence. We deliberately do NOT push `state` per buffer:
@@ -305,6 +326,11 @@ final class MeetingSession: Identifiable {
             self.coachEngine = nil
             AppState.shared.activeCoachEngine = nil
             AppState.shared.meetingRecordingStartedAt = nil
+            self.calendarMatchTask?.cancel()
+            self.calendarMatchTask = nil
+            if self.meta.sourceApp == nil {
+                self.meta.sourceApp = self.sourceAppDetector.stop()
+            }
             self.state = .failed(reason)
         }
         recorder.onCaptureWarning = { [weak self] message in
@@ -441,6 +467,11 @@ final class MeetingSession: Identifiable {
         AppState.shared.meetingRecordingStartedAt = nil
         timerTask?.cancel()
         timerTask = nil
+        calendarMatchTask?.cancel()
+        calendarMatchTask = nil
+        if meta.sourceApp == nil {
+            meta.sourceApp = sourceAppDetector.stop()
+        }
         // Tear down both recorders in parallel so we don't double the wait.
         async let systemStop: MeetingAudioRecorder.StopResult = recorder.stop()
         async let micStop: Void = micRecorder.stop()
@@ -693,6 +724,13 @@ final class MeetingSession: Identifiable {
     /// just keeps its default title.
     private func maybeAutoRename(settings: DictatorSettings) async {
         guard MeetingSummaryService.isDefaultMeetingTitle(meta.title) else { return }
+        // Deterministic first: a matched calendar event's title IS the
+        // meeting's name — no LLM guess needed (or wanted).
+        if let calendarTitle = meta.calendar?.title.trimmingCharacters(in: .whitespacesAndNewlines),
+           !calendarTitle.isEmpty {
+            rename(to: calendarTitle)
+            return
+        }
         guard let transcript = MeetingStorage.readTranscript(for: id) else { return }
         do {
             if let suggestion = try await MeetingSummaryService.suggestTitle(

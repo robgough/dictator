@@ -227,6 +227,11 @@ struct DictatorSettings: Codable, Equatable {
     /// being computed (in-window strip, post-meeting summary) with the
     /// floating presence off. Default ON; synced.
     var meetingCoachChipEnabled: Bool = true
+    /// Match each recording to its calendar event (title, attendees,
+    /// scheduled span) at record time. Prompts for calendar access on first
+    /// use; denial leaves meetings without calendar context, silently.
+    /// Default ON; synced.
+    var meetingCalendarMatchingEnabled: Bool = true
     /// Appended under the built-in coach-report prompt (the warmth lever —
     /// the default voice is deliberately blunt). Synced.
     var meetingCoachPromptAddendum: String = ""
@@ -471,6 +476,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
+        self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
         self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
         self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
         self.coachChecklistProfiles = try c.decodeIfPresent([CoachChecklistProfile].self, forKey: .coachChecklistProfiles) ?? d.coachChecklistProfiles
@@ -1319,6 +1325,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingLiveNotesSelfCorrectEnabled
         case meetingCoachEnabled
         case meetingCoachChipEnabled
+        case meetingCalendarMatchingEnabled
         case meetingCoachPromptAddendum
         case meetingCoachPromptOverride
         case coachChecklistProfiles
@@ -1363,6 +1370,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingLiveNotesSelfCorrectEnabled",
         "meetingCoachEnabled",
         "meetingCoachChipEnabled",
+        "meetingCalendarMatchingEnabled",
         "meetingCoachPromptAddendum",
         "meetingCoachPromptOverride",
         "coachChecklistProfiles",

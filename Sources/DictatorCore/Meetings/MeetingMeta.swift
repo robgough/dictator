@@ -97,6 +97,12 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// checklist outcomes + report in later phases. PRIVATE: rendered only by
     /// the in-app Coach UI; the markdown mirrors and copy/export never read it.
     var coach: MeetingCoachResult?
+    /// Which app the meeting ran in (Zoom, Teams, a browser…), detected from
+    /// the audio-process list at record time.
+    var sourceApp: MeetingSourceApp?
+    /// The calendar event this recording matched — subject, attendees,
+    /// scheduled span. Snapshot taken at record time.
+    var calendar: MeetingCalendarContext?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -117,6 +123,8 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         oneOffPrompt: String? = nil,
         speakersEditedAt: Date? = nil,
         coach: MeetingCoachResult? = nil,
+        sourceApp: MeetingSourceApp? = nil,
+        calendar: MeetingCalendarContext? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -134,6 +142,8 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.oneOffPrompt = oneOffPrompt
         self.speakersEditedAt = speakersEditedAt
         self.coach = coach
+        self.sourceApp = sourceApp
+        self.calendar = calendar
         self.schemaVersion = schemaVersion
     }
 
@@ -159,12 +169,15 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.oneOffPrompt = try c.decodeIfPresent(String.self, forKey: .oneOffPrompt)
         self.speakersEditedAt = try c.decodeIfPresent(Date.self, forKey: .speakersEditedAt)
         self.coach = try c.decodeIfPresent(MeetingCoachResult.self, forKey: .coach)
+        self.sourceApp = try c.decodeIfPresent(MeetingSourceApp.self, forKey: .sourceApp)
+        self.calendar = try c.decodeIfPresent(MeetingCalendarContext.self, forKey: .calendar)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
-        case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, coach, schemaVersion
+        case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, coach
+        case sourceApp, calendar, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

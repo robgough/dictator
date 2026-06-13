@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Meetings now know their context: which app hosted the call (Zoom, Teams, a browser…) and — with calendar access, asked once — the matching calendar event, with its title, attendees, companies, and scheduled times shown in the meeting's inspector. A matched event names the meeting directly instead of guessing a title from the transcript, and the scheduled end powers a new coach reminder when you're wrapping up with key points still open. Everything stays on your Mac, and calendar matching can be turned off in Meetings settings.
 - Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you've held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.
 - The dictation HUD is now a notch island: a black panel that springs down from the top edge of the screen, merging with the notch on MacBooks and docking flush with the top of external displays.
 - During meetings the island shows a small coach strip (elapsed time, talk balance) and surfaces occasional one-line nudges — you're monologuing, interrupting, dominating, or racing — with cooldowns so it informs rather than nags. Right-click to hide it for the meeting, or turn it off in Meetings settings.
