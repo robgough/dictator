@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Duplicate people can now be merged: right-click a person in the People editor to fold them into another — emails and voice samples combine, past meetings carry over, and same-named duplicates are flagged with a warning badge.
 - Naming a speaker by hand now adds them to your people list — previously only names detected automatically during processing were learned, so a person you named yourself never showed up there.
 - Right-clicking a speaker chip when there is nobody to merge with now shows a disabled explanation instead of doing nothing.
 - When two people in your people list share a name, a new speaker with that name is left unlinked instead of silently adding a third record — rename to something distinct (like adding a surname) to link them.

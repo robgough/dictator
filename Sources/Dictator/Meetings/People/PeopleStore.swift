@@ -128,6 +128,41 @@ final class PeopleStore {
         save()
     }
 
+    /// Fold one person into another — the fix for duplicate records of the
+    /// same human (created before the name bridge existed, or by renaming
+    /// onto a name someone already holds). Emails union; voice samples
+    /// combine through the same novelty guard as live observation, but only
+    /// when both sets share a model space — mixed-model vectors don't
+    /// compare, so the target's set wins and the source's is dropped.
+    /// The caller re-points past meetings (`MeetingsStore.repointPerson`);
+    /// this store only knows about people.
+    func merge(id sourceID: String, into targetID: String) {
+        guard sourceID != targetID,
+              let source = people.first(where: { $0.id == sourceID }),
+              let dst = people.firstIndex(where: { $0.id == targetID }) else { return }
+        for email in source.emails where !people[dst].emails.contains(email) {
+            people[dst].emails.append(email)
+        }
+        if people[dst].embeddings.isEmpty, !source.embeddings.isEmpty {
+            people[dst].embeddings = source.embeddings
+            people[dst].embeddingModelID = source.embeddingModelID
+        } else if people[dst].embeddingModelID == source.embeddingModelID {
+            for embedding in source.embeddings {
+                let novel = people[dst].embeddings.allSatisfy {
+                    MeetingProcessor.cosineSimilarity(embedding, $0) < Self.noveltyCeiling
+                }
+                if novel { people[dst].embeddings.append(embedding) }
+            }
+            if people[dst].embeddings.count > PersonRecord.maxEmbeddings {
+                people[dst].embeddings.removeFirst(people[dst].embeddings.count - PersonRecord.maxEmbeddings)
+            }
+        }
+        people[dst].createdAt = min(people[dst].createdAt, source.createdAt)
+        people[dst].updatedAt = Date()
+        people.removeAll { $0.id == sourceID }
+        save()
+    }
+
     /// Per-person delete — removes the record AND its voice embeddings (the
     /// privacy contract for default-on recognition). Past meetings keep
     /// their text; their speakers' personID just dangles harmlessly.

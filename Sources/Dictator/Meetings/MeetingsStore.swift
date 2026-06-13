@@ -56,6 +56,25 @@ final class MeetingsStore {
         metas.removeAll { $0.id == id }
     }
 
+    /// Rewrite every speaker link from one person to another, in memory and
+    /// on disk — the meetings half of a people-store merge, so the absorbed
+    /// record's history follows the survivor instead of dangling. An open
+    /// MeetingSession holds its own meta copy and could stomp this on its
+    /// next write; merges happen from settings, so in practice that copy is
+    /// stale-but-idle, and a re-link costs one rename anyway.
+    func repointPerson(from sourceID: String, to targetID: String) {
+        for idx in metas.indices {
+            var changed = false
+            for s in metas[idx].speakers.indices where metas[idx].speakers[s].personID == sourceID {
+                metas[idx].speakers[s].personID = targetID
+                changed = true
+            }
+            if changed {
+                try? MeetingStorage.writeMeta(metas[idx])
+            }
+        }
+    }
+
     /// Persist a meeting-type override for one meeting. Used by the
     /// "Summarise as ▾" picker on the transcript page — the picker
     /// updates the store (which writes meta.json) and the session's
