@@ -385,6 +385,45 @@
                 type="application/octet-stream"
                 sparkle:edSignature="BPp+VpNJshFVlTLS8s6e6/5v6JGEBWhbgZ+FdHiRNU4jYGwjAP37UPGHYbH5dqohzyfEtB0YoYuuIOBvGAVmAw==" />
         </item>
+        <item>
+            <title>Version 2026.6.5</title>
+            <pubDate>Sat, 13 Jun 2026 14:05:41 +0000</pubDate>
+            <sparkle:version>23</sparkle:version>
+            <sparkle:shortVersionString>2026.6.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>A meeting&#x27;s captured screens now show as a thumbnail strip at the top of its Transcript, each labelled with when it was captured; click one to open it full size in Quick Look. (Fixes a bug where captured screenshots were saved but never appeared in the app afterwards.)</li>
+  <li>The meeting&#x27;s transcript markdown now links to each captured screen at the point it was taken, and a new &quot;Export with screenshots…&quot; option saves a folder with the markdown plus the images so the links work anywhere you open it.</li>
+  <li>Captured screenshots now sync between your Macs along with the meeting&#x27;s notes and transcript (they&#x27;re small), so a meeting opened on another Mac shows its shared screens too.</li>
+  <li>Meetings can now capture shared screens: Dictator keeps still frames of slides and demos shown during a call — only the frames that change, scoped to the meeting window so nothing else on your screen is seen, shown as a filmstrip in the meeting&#x27;s Details. Needs macOS Screen Recording permission, and the frames stay on your Mac.</li>
+  <li>Screen capture can be turned on and off per meeting from the &quot;Shared screen&quot; panel while recording — leave the setting off and flip capture on only for the moments that matter, or turn it on in settings to start every meeting capturing. A &quot;Capture now&quot; button grabs a single frame on demand; if capture is off it takes just that one still and stays off.</li>
+  <li>The &quot;Shared screen&quot; panel shows which window is being captured and a large preview of the most recent frame; click it (or any screenshot in a meeting&#x27;s Details) to open it full size in Quick Look. A Change menu points capture at a different meeting window.</li>
+  <li>Two speakers in one meeting can no longer both be matched to the same person — the closest voice wins and the other stays separate, so a similar-sounding stranger can&#x27;t get folded into someone&#x27;s record.</li>
+  <li>The People editor now shows how many people are stored.</li>
+  <li>Duplicate people can now be merged: right-click a person in the People editor to fold them into another — emails and voice samples combine, past meetings carry over, and same-named duplicates are flagged with a warning badge.</li>
+  <li>Naming a speaker by hand now adds them to your people list — previously only names detected automatically during processing were learned, so a person you named yourself never showed up there.</li>
+  <li>Right-clicking a speaker chip when there is nobody to merge with now shows a disabled explanation instead of doing nothing.</li>
+  <li>When two people in your people list share a name, a new speaker with that name is left unlinked instead of silently adding a third record — rename to something distinct (like adding a surname) to link them.</li>
+  <li>Dictator now recognises people across meetings by voice: once a speaker has a name, their voice is remembered (on this Mac only), and the same person is matched and named automatically in future meetings — renames carry forward, and calendar attendees fill in email addresses. A People editor in Meetings settings shows everything stored and can forget anyone, voice included; the whole feature is one switch.</li>
+  <li>Meetings now know their context: which app hosted the call (Zoom, Teams, a browser…) and — with calendar access, asked once — the matching calendar event, with its title, attendees, companies, and scheduled times shown in the meeting&#x27;s inspector. A matched event names the meeting directly instead of guessing a title from the transcript, and the scheduled end powers a new coach reminder when you&#x27;re wrapping up with key points still open. Everything stays on your Mac, and calendar matching can be turned off in Meetings settings.</li>
+  <li>Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you&#x27;ve held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.</li>
+  <li>The dictation HUD is now a notch island: a black panel that springs down from the top edge of the screen, merging with the notch on MacBooks and docking flush with the top of external displays.</li>
+  <li>During meetings the island shows a small coach strip (elapsed time, talk balance) and surfaces occasional one-line nudges — you&#x27;re monologuing, interrupting, dominating, or racing — with cooldowns so it informs rather than nags. Right-click to hide it for the meeting, or turn it off in Meetings settings.</li>
+  <li>Meetings gain a Key points checklist the coach ticks off live as the conversation covers them — in the recording view, or click the island strip to see it there. Type points in, paste a whole markdown list (bullets are stripped), pull in a ready-made set (Interview, Client call) or one of your own saved sets, or start a pad line with ! to flag one mid-meeting. Flagged points get a reminder nudge until covered or dismissed, and recording itself starts instantly — no setup step.</li>
+  <li>Each meeting&#x27;s record notes how the key points went — covered, missed, or dismissed — alongside the private conversation metrics, and a &quot;Show on island&quot; button brings the coach strip back if you&#x27;ve hidden it.</li>
+  <li>The live transcript now appears within a beat of each pause instead of trailing the conversation by half a minute: every phrase shows a first-pass transcription immediately, then visibly corrects itself once the polished version is ready — deleting and retyping like a model rethinking.</li>
+  <li>It also streams in word by word with a typing cursor, each word fading in, and the cursor blinking gently between phrases. The dictation preview in the island gets the same treatment, with corrections snapping back and retyping as the recogniser refines its draft. (Honours Reduce Motion.)</li>
+  <li>The coach has its own section in Meetings settings with a single switch that turns all of it off — nudges, checklist, metrics, report.</li>
+  <li>Fixed the coach counting your speakers&#x27; audio as you speaking on open-speaker setups — it no longer claims &quot;you&#x27;ve held the floor&quot; when only the other side has been talking.</li>
+  <li>Meetings gain a private Coach tab: your conversation metrics at a glance, the key-points scorecard, and a short, blunt written read on how you handled the meeting — graded against what good looks like for that kind of meeting. It writes itself when you generate the notes (re-run it any time), stays on-device, and never appears in the meeting&#x27;s notes or exports.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.5/Dictator.dmg"
+                length="31056906"
+                type="application/octet-stream"
+                sparkle:edSignature="7WF+kF1KgTZEIgUokVvImg+iivwB/OU+XtYR9TKjIHMibyyexNH1ZLw3fWc/g4xBObktBea4g3CO/CX8eXWqCQ==" />
+        </item>
+    
     
     
     
