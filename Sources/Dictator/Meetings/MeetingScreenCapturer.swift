@@ -422,7 +422,8 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private func writeIndex() {
         let index = MeetingScreenshotIndex(screenshots: records)
         let url = folder.appendingPathComponent(MeetingStorage.screenshotIndexFilename)
-        guard let data = try? JSONEncoder().encode(index) else { return }
+        // Single encode/decode contract — must match `readScreenshotIndex`.
+        guard let data = MeetingStorage.encodeScreenshotIndex(index) else { return }
         try? data.write(to: url, options: .atomic)
     }
 

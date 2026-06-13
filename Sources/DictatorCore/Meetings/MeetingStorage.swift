@@ -116,11 +116,22 @@ enum MeetingStorage {
         screenshotsFolder(for: id).appendingPathComponent(screenshotIndexFilename)
     }
 
+    /// The screenshot index is written by `MeetingScreenCapturer.FrameSink`
+    /// with a plain `JSONEncoder()` (Date → numeric), so it must be read with a
+    /// matching plain decoder — NOT the shared `jsonDecoder`, whose `.iso8601`
+    /// date strategy expects a string and silently fails the decode (which left
+    /// the post-meeting screenshot strip empty even though the frames existed).
     static func readScreenshotIndex(for id: UUID) -> MeetingScreenshotIndex? {
         guard let data = try? Data(contentsOf: screenshotIndexURL(for: id)),
-              let index = try? jsonDecoder.decode(MeetingScreenshotIndex.self, from: data),
+              let index = try? JSONDecoder().decode(MeetingScreenshotIndex.self, from: data),
               !index.screenshots.isEmpty else { return nil }
         return index
+    }
+
+    /// Encode a screenshot index the way `readScreenshotIndex` expects — plain
+    /// `JSONEncoder`. The single writer of this contract on each side.
+    static func encodeScreenshotIndex(_ index: MeetingScreenshotIndex) -> Data? {
+        try? JSONEncoder().encode(index)
     }
 
     static func micURL(for id: UUID) -> URL {
