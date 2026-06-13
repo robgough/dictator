@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- A meeting's captured screens now show as a thumbnail strip at the top of its Transcript, each labelled with when it was captured; click one to open it full size in Quick Look.
+- The meeting's transcript markdown now links to each captured screen at the point it was taken, and a new "Export with screenshots…" option saves a folder with the markdown plus the images so the links work anywhere you open it.
+- Captured screenshots now sync between your Macs along with the meeting's notes and transcript (they're small), so a meeting opened on another Mac shows its shared screens too.
 - Meetings can now capture shared screens: Dictator keeps still frames of slides and demos shown during a call — only the frames that change, scoped to the meeting window so nothing else on your screen is seen, shown as a filmstrip in the meeting's Details. Needs macOS Screen Recording permission, and the frames stay on your Mac.
 - Screen capture can be turned on and off per meeting from the "Shared screen" panel while recording — leave the setting off and flip capture on only for the moments that matter, or turn it on in settings to start every meeting capturing. A "Capture now" button grabs a single frame on demand; if capture is off it takes just that one still and stays off.
 - The "Shared screen" panel shows which window is being captured and a large preview of the most recent frame; click it (or any screenshot in a meeting's Details) to open it full size in Quick Look. A Change menu points capture at a different meeting window.

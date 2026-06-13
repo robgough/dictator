@@ -34,9 +34,9 @@ enum MeetingExporter {
 
     /// Markdown with speaker headings, blockquoted transcript text, and
     /// a summary section at the top if present. Designed to round-trip
-    /// cleanly into notes apps (Obsidian, Bear, Notion).
-    static func markdown(transcript: MeetingTranscript, meta: MeetingMeta) -> String {
-        let nameByID = Dictionary(uniqueKeysWithValues: meta.speakers.map { ($0.id, $0.displayName) })
+    /// cleanly into notes apps (Obsidian, Bear, Notion). `screenshots`, when
+    /// given, are interleaved as clickable links at their timeline position.
+    static func markdown(transcript: MeetingTranscript, meta: MeetingMeta, screenshots: [ScreenshotRecord] = []) -> String {
         var lines: [String] = []
         lines.append("# \(meta.title)")
         lines.append("")
@@ -54,29 +54,53 @@ enum MeetingExporter {
         }
         lines.append("## Transcript")
         lines.append("")
-        for seg in transcript.segments {
-            let name = nameByID[seg.speakerId] ?? seg.speakerId
-            lines.append("**\(name)** · `\(formatTime(seg.start))`")
-            lines.append("")
-            lines.append(seg.text)
-            lines.append("")
-        }
+        lines.append(contentsOf: transcriptBody(transcript: transcript, meta: meta, screenshots: screenshots))
         return lines.joined(separator: "\n")
     }
 
     /// Transcript only, as Markdown — title + header + speaker turns, no notes
-    /// section. Used when the user copies from the Transcript tab specifically.
-    static func transcriptMarkdown(transcript: MeetingTranscript, meta: MeetingMeta) -> String {
-        let nameByID = Dictionary(uniqueKeysWithValues: meta.speakers.map { ($0.id, $0.displayName) })
+    /// section. Used when the user copies from the Transcript tab specifically,
+    /// and to render the on-disk `transcript.md` (where `screenshots` carries
+    /// the captured keyframes so their links land at the right moment).
+    static func transcriptMarkdown(transcript: MeetingTranscript, meta: MeetingMeta, screenshots: [ScreenshotRecord] = []) -> String {
         var lines: [String] = ["# \(meta.title)", "", "_\(formatHeader(meta: meta))_", ""]
+        lines.append(contentsOf: transcriptBody(transcript: transcript, meta: meta, screenshots: screenshots))
+        return lines.joined(separator: "\n")
+    }
+
+    /// The speaker-turn body, with screenshot links interleaved at their
+    /// capture time (each flushed just before the first turn that starts at or
+    /// after it; any trailing ones land after the last turn).
+    private static func transcriptBody(transcript: MeetingTranscript, meta: MeetingMeta, screenshots: [ScreenshotRecord]) -> [String] {
+        let nameByID = Dictionary(uniqueKeysWithValues: meta.speakers.map { ($0.id, $0.displayName) })
+        let shots = screenshots.sorted { $0.offsetSeconds < $1.offsetSeconds }
+        var si = 0
+        var lines: [String] = []
+        func flushShots(upTo time: Double) {
+            while si < shots.count, shots[si].offsetSeconds <= time {
+                lines.append(screenshotLink(shots[si]))
+                lines.append("")
+                si += 1
+            }
+        }
         for seg in transcript.segments {
+            flushShots(upTo: seg.start)
             let name = nameByID[seg.speakerId] ?? seg.speakerId
             lines.append("**\(name)** · `\(formatTime(seg.start))`")
             lines.append("")
             lines.append(seg.text)
             lines.append("")
         }
-        return lines.joined(separator: "\n")
+        flushShots(upTo: .greatestFiniteMagnitude)
+        return lines
+    }
+
+    /// A clickable markdown link to one captured frame, relative to the meeting
+    /// folder (`screenshots/<file>`). A link rather than an `![embed]` because
+    /// HEIC doesn't render inline in most markdown viewers, but the link opens
+    /// it in any of them.
+    private static func screenshotLink(_ shot: ScreenshotRecord) -> String {
+        "🖼 [Shared screen · \(formatTime(shot.offsetSeconds))](\(MeetingStorage.screenshotsFolderName)/\(shot.filename))"
     }
 
     // MARK: - Helpers

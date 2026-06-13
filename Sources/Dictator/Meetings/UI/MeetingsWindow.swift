@@ -363,6 +363,11 @@ struct MeetingsRootView: View {
             Button { exportMeeting(session) } label: {
                 Label("Export…", systemImage: "square.and.arrow.up")
             }
+            if (meta.screenshotCount ?? 0) > 0 {
+                Button { exportMeetingBundle(session) } label: {
+                    Label("Export with screenshots…", systemImage: "photo.on.rectangle")
+                }
+            }
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
@@ -418,6 +423,50 @@ struct MeetingsRootView: View {
             try body.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             NSLog("[Dictator] Meeting export failed: \(error)")
+        }
+    }
+
+    /// Export a self-contained folder: the meeting's markdown (notes +
+    /// transcript with screenshot links interleaved at their timestamps) plus a
+    /// `screenshots/` subfolder of the images, so the relative links resolve and
+    /// the bundle is portable. Reveals the folder in Finder when done.
+    private func exportMeetingBundle(_ session: MeetingSession) {
+        let meta = session.meta
+        let safeTitle = meta.title.replacingOccurrences(of: "/", with: "-")
+        let panel = NSSavePanel()
+        panel.title = "Export meeting with screenshots"
+        panel.message = "A folder with the meeting's markdown and screenshots will be created."
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = safeTitle
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let shots = MeetingStorage.readScreenshotIndex(for: meta.id)?.screenshots ?? []
+        let body: String
+        if let t = MeetingStorage.readTranscript(for: meta.id) {
+            body = MeetingExporter.markdown(transcript: t, meta: meta, screenshots: shots)
+        } else if let notes = meta.notes {
+            body = "# \(meta.title)\n\n\(notes.markdown)"
+        } else {
+            return
+        }
+        do {
+            let fm = FileManager.default
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            try body.write(to: url.appendingPathComponent("\(safeTitle).md"), atomically: true, encoding: .utf8)
+            if !shots.isEmpty {
+                let src = MeetingStorage.screenshotsFolder(for: meta.id)
+                let dst = url.appendingPathComponent("screenshots", isDirectory: true)
+                try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+                for shot in shots {
+                    try? fm.copyItem(
+                        at: src.appendingPathComponent(shot.filename),
+                        to: dst.appendingPathComponent(shot.filename)
+                    )
+                }
+            }
+            NSWorkspace.shared.open(url)
+        } catch {
+            NSLog("[Dictator] Meeting bundle export failed: \(error)")
         }
     }
 

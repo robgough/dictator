@@ -98,13 +98,16 @@ enum MeetingStorage {
     static let screenshotsFolderName = "screenshots"
     static let screenshotIndexFilename = "index.json"
 
-    /// Local folder for a meeting's captured screen keyframes (HEICs + their
-    /// `index.json`). Sits under the per-Mac audio folder — the frames are
-    /// large-ish and per-machine like the audio, never synced. Folder removal
-    /// in `deleteMeeting` / auto-delete already covers them (they're inside
-    /// `audioFolder`).
+    /// Folder for a meeting's captured screen keyframes (HEICs + their
+    /// `index.json`). Lives in the SYNCED meeting folder beside `transcript.md`
+    /// / `notes.md`, so the markdown's relative screenshot links resolve in
+    /// place, the frames travel between Macs with the rest of the meeting's
+    /// text, and export bundles them by copying one folder. They're small
+    /// (deduped HEICs), so the audio-stays-local rationale doesn't apply.
+    /// Folder removal in `deleteMeeting` / auto-delete covers them (they're
+    /// inside `folder(for:)`).
     static func screenshotsFolder(for id: UUID) -> URL {
-        let dir = audioFolder(for: id).appendingPathComponent(screenshotsFolderName, isDirectory: true)
+        let dir = folder(for: id).appendingPathComponent(screenshotsFolderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -180,7 +183,11 @@ enum MeetingStorage {
     /// `meta`, so this is re-rendered both when the transcript is written and on
     /// any later meta change (e.g. a speaker rename).
     private static func writeTranscriptMarkdown(_ transcript: MeetingTranscript, meta: MeetingMeta) {
-        let md = MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta)
+        // Interleave clickable links to any captured screen keyframes at their
+        // timeline position — they're co-located in `screenshots/`, so the
+        // relative links resolve wherever this file is read.
+        let shots = readScreenshotIndex(for: meta.id)?.screenshots ?? []
+        let md = MeetingExporter.transcriptMarkdown(transcript: transcript, meta: meta, screenshots: shots)
         try? md.write(to: transcriptMarkdownURL(for: meta.id), atomically: true, encoding: .utf8)
     }
 

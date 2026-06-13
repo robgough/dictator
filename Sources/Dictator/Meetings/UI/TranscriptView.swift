@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import QuickLook
 
 /// Renders the chronological speaker turns for a ready meeting. Per-speaker
 /// colour bar on the leading edge. Plain `Text(.textSelection(.enabled))`
@@ -26,6 +27,11 @@ struct TranscriptView: View {
     enum TranscriptMode: Hashable { case conversation, raw }
     /// Invalidates in-flight detached loads when the meeting changes under us.
     @State private var loadToken = UUID()
+    /// Captured screen keyframes for this meeting (empty when none). Drives the
+    /// filmstrip at the top of the transcript tab.
+    @State private var screenshots: [ScreenshotRecord] = []
+    /// Bound to `.quickLookPreview` — set to a frame's URL to preview it.
+    @State private var screenshotQuickLook: URL?
 
     /// Notes are the primary surface; the user's own pad and the transcript
     /// (two-lane mic/system view) live behind other tabs. The rough live
@@ -66,6 +72,7 @@ struct TranscriptView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .quickLookPreview($screenshotQuickLook)
         .onAppear { loadAudio() }
         .onDisappear { player.unload() }
         .onChange(of: meta.id) { _, _ in
@@ -232,6 +239,13 @@ struct TranscriptView: View {
         let hasTracks = inspection != nil && !trackRows.isEmpty
         if hasTracks || (transcript.map { !$0.segments.isEmpty } ?? false) {
             VStack(alignment: .leading, spacing: 14) {
+                if !screenshots.isEmpty {
+                    ScreenshotStrip(
+                        screenshots: screenshots,
+                        meetingID: meta.id,
+                        onOpen: { screenshotQuickLook = $0 }
+                    )
+                }
                 HStack(spacing: 8) {
                     SpeakerCountChip(count: meta.speakers.count, suspicious: speakerCountLooksOff)
                     Spacer()
@@ -303,6 +317,9 @@ struct TranscriptView: View {
         let micURL: URL? = meta.audioFiles.mic.map { _ in MeetingStorage.micURL(for: meta.id) }
         let sysURL: URL? = meta.audioFiles.system.map { _ in MeetingStorage.systemURL(for: meta.id) }
         hasAudio = player.load(micURL: micURL, systemURL: sysURL)
+        screenshots = (meta.screenshotCount ?? 0) > 0
+            ? (MeetingStorage.readScreenshotIndex(for: meta.id)?.screenshots ?? [])
+            : []
         reloadInspection()
     }
 
@@ -1764,5 +1781,91 @@ private struct TrackRowView: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
         }
+    }
+}
+
+/// Horizontal strip of a meeting's captured screen keyframes, pinned above the
+/// transcript so they're visible in every transcript mode. Each thumbnail is
+/// labelled with the moment it was captured and opens full size in Quick Look
+/// on click. (The true positional, in-flow placement lives in the exported /
+/// on-disk markdown, where the links sit between the turns at their timestamp.)
+private struct ScreenshotStrip: View {
+    let screenshots: [ScreenshotRecord]
+    let meetingID: UUID
+    let onOpen: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Shared screens · \(screenshots.count)")
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(screenshots) { shot in
+                        let url = MeetingStorage.screenshotsFolder(for: meetingID)
+                            .appendingPathComponent(shot.filename)
+                        ScreenshotThumbnailStrip(url: url, offsetSeconds: shot.offsetSeconds) {
+                            onOpen(url)
+                        }
+                    }
+                }
+                .padding(.bottom, 2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+}
+
+/// One screen keyframe: a thumbnail with its timeline offset, opening full size
+/// in Quick Look on click. Loads the image lazily off the main actor so a strip
+/// of them doesn't stutter the transcript.
+private struct ScreenshotThumbnailStrip: View {
+    let url: URL
+    let offsetSeconds: Double
+    let onOpen: () -> Void
+
+    @State private var thumbnail: NSImage?
+    private static let height: CGFloat = 72
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Group {
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.12))
+                        .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
+                }
+            }
+            .frame(width: Self.height * 16 / 9, height: Self.height)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+
+            Text(Self.timestamp(offsetSeconds))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .onTapGesture { onOpen() }
+        .help("Captured at \(Self.timestamp(offsetSeconds)) — click to open full size")
+        .task(id: url) {
+            thumbnail = await Task.detached(priority: .utility) { NSImage(contentsOf: url) }.value
+        }
+    }
+
+    private static func timestamp(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%d:%02d", m, s)
     }
 }
