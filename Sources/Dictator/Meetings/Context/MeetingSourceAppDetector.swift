@@ -38,7 +38,7 @@ final class MeetingSourceAppDetector {
 
     private func sample() {
         for bundleID in Self.bundleIDsEmittingOutputAudio() {
-            guard !Self.excluded.contains(bundleID),
+            guard !MeetingHostApps.excluded.contains(bundleID),
                   bundleID != Bundle.main.bundleIdentifier else { continue }
             hits[bundleID, default: 0] += 1
         }
@@ -51,15 +51,15 @@ final class MeetingSourceAppDetector {
             return MeetingSourceApp(bundleID: top.key, name: table[top.key]!)
         }
         // Known meeting app emitting audio — the unambiguous case.
-        if let app = best(in: Self.meetingApps) { return app }
+        if let app = best(in: MeetingHostApps.meetingApps) { return app }
         // Browser emitting audio (Meet, in-browser Teams/Zoom). Prefer the
         // one that was frontmost at start when several browsers played audio.
         if let front = frontmostAtStart,
-           Self.browsers[front.bundleID] != nil,
+           MeetingHostApps.browsers[front.bundleID] != nil,
            hits[front.bundleID] != nil {
-            return MeetingSourceApp(bundleID: front.bundleID, name: Self.browsers[front.bundleID]!)
+            return MeetingSourceApp(bundleID: front.bundleID, name: MeetingHostApps.browsers[front.bundleID]!)
         }
-        if let browser = best(in: Self.browsers) { return browser }
+        if let browser = best(in: MeetingHostApps.browsers) { return browser }
         // Anything else that played audio throughout — better than nothing,
         // displayed by its real name when we can resolve one.
         if let top = hits.max(by: { $0.value < $1.value }) {
@@ -110,40 +110,7 @@ final class MeetingSourceAppDetector {
         return out
     }
 
-    private static let meetingApps: [String: String] = [
-        "us.zoom.xos": "Zoom",
-        "com.microsoft.teams2": "Microsoft Teams",
-        "com.microsoft.teams": "Microsoft Teams",
-        "com.apple.FaceTime": "FaceTime",
-        "Cisco-Systems.Spark": "Webex",
-        "com.cisco.webexmeetingsapp": "Webex",
-        "com.tinyspeck.slackmacgap": "Slack",
-        "com.hnc.Discord": "Discord",
-        "net.whatsapp.WhatsApp": "WhatsApp",
-        "com.skype.skype": "Skype",
-        "com.ringcentral.glip": "RingCentral",
-        "com.gotomeeting.GoToMeeting": "GoToMeeting",
-    ]
-
-    private static let browsers: [String: String] = [
-        "com.google.Chrome": "Chrome",
-        "com.apple.Safari": "Safari",
-        "org.mozilla.firefox": "Firefox",
-        "company.thebrowser.Browser": "Arc",
-        "com.microsoft.edgemac": "Edge",
-        "com.brave.Browser": "Brave",
-        "com.vivaldi.Vivaldi": "Vivaldi",
-    ]
-
-    /// Apps whose output audio never indicates a meeting.
-    private static let excluded: Set<String> = [
-        "com.apple.Music",
-        "com.spotify.client",
-        "com.apple.TV",
-        "com.apple.Podcasts",
-        "com.apple.QuickTimePlayerX",
-        "tv.plex.desktop",
-        "com.colliderli.iina",
-        "org.videolan.vlc",
-    ]
+    // Meeting-app / browser / excluded bundle-ID tables live in
+    // `MeetingHostApps` — shared with the screen capturer so both context
+    // features agree on what a meeting app is.
 }

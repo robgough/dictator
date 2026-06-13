@@ -176,6 +176,20 @@ struct MeetingsPane: View {
             .disabled(!effectivelyEnabled)
 
             Section {
+                Toggle("Capture shared screens", isOn: Binding(
+                    get: { s.settings.meetingCaptureScreenshots },
+                    set: { s.settings.meetingCaptureScreenshots = $0; state.save() }
+                ))
+            } header: {
+                Text("Shared screens")
+            } footer: {
+                Text("Captures still frames of shared content during a meeting — slides, demos, whatever's on the call window — and keeps only the ones that change, as images in the meeting's folder. Capture is scoped to the meeting window only: your other windows, notifications, and second screen are never seen. This needs macOS Screen Recording permission (the system shows a purple capture indicator while recording, and you'll be asked to grant it the first time — capture begins from the next meeting after that). Frames stay on this Mac and are deleted with the meeting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!effectivelyEnabled)
+
+            Section {
                 ForEach(MeetingTypeRegistry.builtIns) { def in
                     typeRow(def)
                 }

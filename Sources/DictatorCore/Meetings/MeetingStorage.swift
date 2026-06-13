@@ -95,6 +95,31 @@ enum MeetingStorage {
         return dir
     }
 
+    static let screenshotsFolderName = "screenshots"
+    static let screenshotIndexFilename = "index.json"
+
+    /// Local folder for a meeting's captured screen keyframes (HEICs + their
+    /// `index.json`). Sits under the per-Mac audio folder — the frames are
+    /// large-ish and per-machine like the audio, never synced. Folder removal
+    /// in `deleteMeeting` / auto-delete already covers them (they're inside
+    /// `audioFolder`).
+    static func screenshotsFolder(for id: UUID) -> URL {
+        let dir = audioFolder(for: id).appendingPathComponent(screenshotsFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func screenshotIndexURL(for id: UUID) -> URL {
+        screenshotsFolder(for: id).appendingPathComponent(screenshotIndexFilename)
+    }
+
+    static func readScreenshotIndex(for id: UUID) -> MeetingScreenshotIndex? {
+        guard let data = try? Data(contentsOf: screenshotIndexURL(for: id)),
+              let index = try? jsonDecoder.decode(MeetingScreenshotIndex.self, from: data),
+              !index.screenshots.isEmpty else { return nil }
+        return index
+    }
+
     static func micURL(for id: UUID) -> URL {
         audioFolder(for: id).appendingPathComponent(micFilename)
     }

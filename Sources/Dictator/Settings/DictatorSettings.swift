@@ -238,6 +238,12 @@ struct DictatorSettings: Codable, Equatable {
     /// use; denial leaves meetings without calendar context, silently.
     /// Default ON; synced.
     var meetingCalendarMatchingEnabled: Bool = true
+    /// Capture keyframes of shared screen content during meetings
+    /// (window-scoped, kept as HEICs in the meeting's local folder). OFF by
+    /// default — it needs the Screen Recording permission, the heaviest grant
+    /// the app holds, and the system shows the purple capture indicator while
+    /// it runs. The toggle preference syncs; the grant is per-Mac.
+    var meetingCaptureScreenshots: Bool = false
     /// Appended under the built-in coach-report prompt (the warmth lever —
     /// the default voice is deliberately blunt). Synced.
     var meetingCoachPromptAddendum: String = ""
@@ -484,6 +490,7 @@ struct DictatorSettings: Codable, Equatable {
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
         self.peopleRecognitionEnabled = try c.decodeIfPresent(Bool.self, forKey: .peopleRecognitionEnabled) ?? d.peopleRecognitionEnabled
         self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
+        self.meetingCaptureScreenshots = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureScreenshots) ?? d.meetingCaptureScreenshots
         self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
         self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
         self.coachChecklistProfiles = try c.decodeIfPresent([CoachChecklistProfile].self, forKey: .coachChecklistProfiles) ?? d.coachChecklistProfiles
@@ -1334,6 +1341,7 @@ struct DictatorSettings: Codable, Equatable {
         case meetingCoachChipEnabled
         case peopleRecognitionEnabled
         case meetingCalendarMatchingEnabled
+        case meetingCaptureScreenshots
         case meetingCoachPromptAddendum
         case meetingCoachPromptOverride
         case coachChecklistProfiles
@@ -1380,6 +1388,7 @@ struct DictatorSettings: Codable, Equatable {
         "meetingCoachChipEnabled",
         "peopleRecognitionEnabled",
         "meetingCalendarMatchingEnabled",
+        "meetingCaptureScreenshots",
         "meetingCoachPromptAddendum",
         "meetingCoachPromptOverride",
         "coachChecklistProfiles",

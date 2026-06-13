@@ -109,6 +109,11 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
     /// The calendar event this recording matched — subject, attendees,
     /// scheduled span. Snapshot taken at record time.
     var calendar: MeetingCalendarContext?
+    /// How many screen keyframes were captured (window-scoped, opt-in). nil /
+    /// absent means none — the frames themselves live in the meeting's local
+    /// `screenshots/` folder; this is just the badge count so the sidebar /
+    /// inspector needn't stat the folder.
+    var screenshotCount: Int?
     var schemaVersion: Int
 
     static let currentSchemaVersion = 1
@@ -131,6 +136,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         coach: MeetingCoachResult? = nil,
         sourceApp: MeetingSourceApp? = nil,
         calendar: MeetingCalendarContext? = nil,
+        screenshotCount: Int? = nil,
         schemaVersion: Int = MeetingMeta.currentSchemaVersion
     ) {
         self.id = id
@@ -150,6 +156,7 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.coach = coach
         self.sourceApp = sourceApp
         self.calendar = calendar
+        self.screenshotCount = screenshotCount
         self.schemaVersion = schemaVersion
     }
 
@@ -177,13 +184,14 @@ struct MeetingMeta: Codable, Equatable, Identifiable, Sendable {
         self.coach = try c.decodeIfPresent(MeetingCoachResult.self, forKey: .coach)
         self.sourceApp = try c.decodeIfPresent(MeetingSourceApp.self, forKey: .sourceApp)
         self.calendar = try c.decodeIfPresent(MeetingCalendarContext.self, forKey: .calendar)
+        self.screenshotCount = try c.decodeIfPresent(Int.self, forKey: .screenshotCount)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? MeetingMeta.currentSchemaVersion
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, createdAt, durationSeconds, source, sourceFilename
         case audioFiles, speakers, notes, rawNotes, summary, meetingType, oneOffPrompt, speakersEditedAt, coach
-        case sourceApp, calendar, schemaVersion
+        case sourceApp, calendar, screenshotCount, schemaVersion
     }
 
     /// Default speaker palette used when a live meeting is created — only

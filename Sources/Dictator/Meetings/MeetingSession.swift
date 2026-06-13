@@ -142,6 +142,11 @@ final class MeetingSession: Identifiable {
     private let sourceAppDetector = MeetingSourceAppDetector()
     private var calendarMatchTask: Task<Void, Never>?
 
+    /// Opt-in window-scoped screen capture, live for the recording. The start
+    /// runs in its own task so SCStream setup doesn't delay the audio path.
+    private let screenCapturer = MeetingScreenCapturer()
+    private var screenCaptureTask: Task<Void, Never>?
+
     /// Per-speaker voice embeddings from the post-pass diarization, set by
     /// `MeetingProcessor.run` — input to the people-store link pass.
     @ObservationIgnored var speakerEmbeddings: [String: [Float]]?
@@ -335,6 +340,18 @@ final class MeetingSession: Identifiable {
             if self.meta.sourceApp == nil {
                 self.meta.sourceApp = self.sourceAppDetector.stop()
             }
+            // Release the screen-capture stream (frames already on disk stand).
+            self.screenCaptureTask?.cancel()
+            self.screenCaptureTask = nil
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let shots = await self.screenCapturer.stop()
+                if !shots.screenshots.isEmpty {
+                    self.meta.screenshotCount = shots.screenshots.count
+                    try? MeetingStorage.writeMeta(self.meta)
+                    MeetingsStore.shared.upsert(self.meta)
+                }
+            }
             self.state = .failed(reason)
         }
         recorder.onCaptureWarning = { [weak self] message in
@@ -440,8 +457,40 @@ final class MeetingSession: Identifiable {
                 at: MeetingStorage.micURL(for: id),
                 preferredDevice: preferredMicDevice
             )
+            // Opt-in screen capture, fired after audio is up so SCStream setup
+            // never delays the recording going live. Best-effort — it never
+            // fails the meeting.
+            if AppState.shared.settings.meetingCaptureScreenshots {
+                startScreenCapture()
+            }
         } catch {
             state = .failed("Couldn't start recording: \(error.localizedDescription)")
+        }
+    }
+
+    /// Kick off window-scoped screen capture if Screen Recording is granted.
+    /// When it isn't, trigger the one-time system prompt so the *next* meeting
+    /// can capture (the grant only takes effect after the prompt/relaunch), and
+    /// leave this meeting audio-only. Runs in `screenCaptureTask` so the
+    /// SCShareableContent query + stream start don't block record start.
+    private func startScreenCapture() {
+        guard ScreenRecordingPermission.hasAccess() else {
+            ScreenRecordingPermission.request()
+            NSLog("[Dictator] Screenshots: Screen Recording not granted — prompted; capture skipped this meeting")
+            return
+        }
+        let hint = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let folder = MeetingStorage.screenshotsFolder(for: id)
+        screenCaptureTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            switch await self.screenCapturer.start(folder: folder, preferredBundleID: hint) {
+            case .started:
+                break
+            case .noWindow:
+                NSLog("[Dictator] Screenshots: no meeting window on screen — capture skipped (window-scoped only, never whole display)")
+            case .failed(let message):
+                NSLog("[Dictator] Screenshots: capture failed to start: \(message)")
+            }
         }
     }
 
@@ -481,6 +530,13 @@ final class MeetingSession: Identifiable {
         async let micStop: Void = micRecorder.stop()
         let systemResult = await systemStop
         await micStop
+        // Stop screen capture: let the start task settle first (it may still be
+        // bringing the stream up), then flush. Off the critical UI path — the
+        // count lands on meta below.
+        await screenCaptureTask?.value
+        screenCaptureTask = nil
+        let screenshots = await screenCapturer.stop()
+        meta.screenshotCount = screenshots.screenshots.isEmpty ? nil : screenshots.screenshots.count
         // Tear down the live transcriber after the recorders so any final
         // buffers they enqueued get a chance to land before we cancel the
         // in-flight chunk task. The Parakeet weights themselves live in
