@@ -329,13 +329,13 @@ private struct InterimPreview: View {
             Rectangle()
                 .fill(Color.secondary.opacity(0.22))
                 .frame(width: 1, height: 11)
-            // Same streaming treatment as the meeting live transcript: words
-            // type in and fade, the realtime engine's re-decodes visibly
-            // delete-and-retype, and the cycling dots double as the
-            // "listening" placeholder before the first words land. Mounted
-            // for the whole recording so the first utterance types rather
-            // than jumping in.
-            TypewriterText(target: text, showsListeningDots: true)
+            // Same streaming treatment as the meeting live transcript, tuned
+            // for the realtime engine's constant re-decodes: revisions SNAP
+            // back and retype (word-by-word deletion here read as churn),
+            // and a blinking cursor doubles as the "listening" placeholder
+            // before the first words land. Mounted for the whole recording
+            // so the first utterance types rather than jumping in.
+            TypewriterText(target: text, idleIndicator: .blinkingCursor, revisionStyle: .snap)
                 .font(.system(size: 11, weight: .regular, design: .rounded).italic())
                 .lineLimit(1)
                 .truncationMode(.head)

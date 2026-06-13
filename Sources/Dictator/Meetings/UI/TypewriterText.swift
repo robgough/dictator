@@ -24,11 +24,31 @@ import SwiftUI
 /// transcript's head-trim rotates thousands of characters off the front —
 /// deleting and retyping them would be slapstick) and Reduce Motion.
 struct TypewriterText: View {
+    /// What trails the text while idle (not actively streaming).
+    enum IdleIndicator {
+        case none
+        /// A blinking block cursor — the native "ready, listening" idiom.
+        /// Blinked via alpha on the cursor glyph, never by removing it, so
+        /// the layout doesn't shift each phase.
+        case blinkingCursor
+    }
+
+    /// How a revision (target diverging from what's shown) plays out.
+    enum RevisionStyle {
+        /// Delete the divergent tail word-by-word, then retype — the
+        /// "rethinking" effect. Right where revisions are rare and
+        /// meaningful (the meeting transcript's settle commits).
+        case typewriter
+        /// Snap straight back to the common prefix and only animate the
+        /// retype. Right where revisions are constant (the dictation
+        /// preview's realtime re-decodes) and watching deletions reads as
+        /// churn.
+        case snap
+    }
+
     let target: String
-    /// While true and not actively streaming, a chat-style cycling ellipsis
-    /// trails the last word — "still listening, more coming" — so the pane
-    /// never reads as stalled between utterances.
-    var showsListeningDots = false
+    var idleIndicator: IdleIndicator = .none
+    var revisionStyle: RevisionStyle = .typewriter
     var baseColor: NSColor = .secondaryLabelColor
     /// Fired on every published step — the live pane uses it to keep the
     /// scroll pinned to the bottom while words land.
@@ -38,7 +58,7 @@ struct TypewriterText: View {
     @State private var displayed = ""
     @State private var streaming = false
     @State private var animator: Task<Void, Never>?
-    @State private var dotPhase = 0
+    @State private var cursorOn = true
     /// Character ranges of recently-typed words and when each appeared —
     /// the fade set. Cleared shortly after streaming settles.
     @State private var fades: [FadeEntry] = []
@@ -69,24 +89,21 @@ struct TypewriterText: View {
             streaming = false
             fades = []
         }
-        .task(id: showsListeningDots && !reduceMotion) {
-            guard showsListeningDots, !reduceMotion else { return }
+        .task(id: idleIndicator == .blinkingCursor && !reduceMotion) {
+            guard idleIndicator == .blinkingCursor, !reduceMotion else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(450))
-                dotPhase = (dotPhase + 1) % 4
+                try? await Task.sleep(for: .milliseconds(530))
+                cursorOn.toggle()
             }
         }
     }
 
-    private var suffix: String {
-        if streaming { return "▍" }
-        guard showsListeningDots else { return "" }
-        if reduceMotion { return " …" }
-        return " " + String(repeating: ".", count: dotPhase)
+    private var showsCursor: Bool {
+        streaming || idleIndicator == .blinkingCursor
     }
 
     private func attributedText(at now: Date) -> AttributedString {
-        var attr = AttributedString(displayed + suffix)
+        var attr = AttributedString(displayed + (showsCursor ? "▍" : ""))
         attr.foregroundColor = Color(nsColor: baseColor)
         let count = displayed.count
         for fade in fades {
@@ -96,6 +113,13 @@ struct TypewriterText: View {
             let s = attr.index(attr.startIndex, offsetByCharacters: fade.start)
             let e = attr.index(attr.startIndex, offsetByCharacters: min(fade.end, count))
             attr[s..<e].foregroundColor = Color(nsColor: baseColor.withAlphaComponent(alpha))
+        }
+        if showsCursor {
+            // Solid while typing; alpha-blinked while idle (the glyph stays
+            // in layout either way). Reduce Motion: steady and dim.
+            let alpha: CGFloat = streaming ? 1 : (reduceMotion ? 0.4 : (cursorOn ? 0.85 : 0))
+            let s = attr.index(attr.endIndex, offsetByCharacters: -1)
+            attr[s..<attr.endIndex].foregroundColor = Color(nsColor: baseColor.withAlphaComponent(alpha))
         }
         return attr
     }
@@ -123,9 +147,18 @@ struct TypewriterText: View {
         }
 
         let commonCount = common
+        let style = revisionStyle
         animator = Task { @MainActor in
             streaming = true
             defer { streaming = false }
+
+            // Snap style: no deletion theatre — straight back to the common
+            // prefix, then the retype animates as usual.
+            if style == .snap, displayed.count > commonCount {
+                displayed = String(oldChars.prefix(commonCount))
+                fades.removeAll { $0.start >= commonCount }
+                onTick?()
+            }
 
             // Delete the divergent tail, word by word.
             while !Task.isCancelled, displayed.count > commonCount {

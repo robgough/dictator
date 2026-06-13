@@ -1049,7 +1049,7 @@ private struct LiveTranscriptPane: View {
                         // scroll pinned.
                         TypewriterText(
                             target: transcriber.liveDisplayText,
-                            showsListeningDots: transcriber.isRunning,
+                            idleIndicator: transcriber.isRunning ? .blinkingCursor : .none,
                             onTick: { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
                         )
                             .font(.callout)
