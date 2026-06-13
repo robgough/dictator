@@ -593,7 +593,9 @@ struct EditableSpeakerChip: View {
         .contextMenu {
             // Manual fix for an over-split diarization: fold this chip's
             // words into another speaker. Re-processing re-runs diarization
-            // and may split them again.
+            // and may split them again. With no merge targets the menu must
+            // still render SOMETHING — an empty builder means macOS shows no
+            // menu at all, which reads as right-click being broken.
             let targets = allSpeakers.filter { $0.id != speaker.id }
             if !targets.isEmpty {
                 Menu("Merge into") {
@@ -604,6 +606,9 @@ struct EditableSpeakerChip: View {
                     }
                 }
                 .help("This speaker's words are re-attributed to the one you pick, and this chip disappears. Use when the same person was split into two speakers.")
+            } else {
+                Button("Merge into… (no other speakers)") {}
+                    .disabled(true)
             }
         }
         .popover(isPresented: $isEditing, arrowEdge: .top) {

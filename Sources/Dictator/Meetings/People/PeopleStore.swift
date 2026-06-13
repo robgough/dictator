@@ -76,17 +76,17 @@ final class PeopleStore {
         save()
     }
 
-    /// The single person whose name matches (normalized, exact) — nil when
-    /// nobody or AMBIGUOUS (two distinct "Jack"s must not auto-merge; name
-    /// them apart and the ambiguity resolves). The name bridge: when a
-    /// known person's voice arrives from a new room/mic and misses the
-    /// voice match, their name links them — and the new environment's
-    /// embedding gets stored, so next time the VOICE matches directly.
-    func personMatching(name: String) -> PersonRecord? {
+    /// Everyone whose name matches (normalized, exact). Callers branch on
+    /// count: exactly one is the name bridge — a known person's voice from a
+    /// new room/mic misses the voice match, but their name links them, and
+    /// the new environment's embedding gets stored so next time the VOICE
+    /// matches directly. Zero means a genuine stranger (safe to create).
+    /// Two or more is AMBIGUOUS — two distinct "Jack"s must neither
+    /// auto-merge nor spawn a third record; name them apart and it resolves.
+    func peopleMatching(name: String) -> [PersonRecord] {
         let key = Self.normalized(name)
-        guard !key.isEmpty else { return nil }
-        let matches = people.filter { Self.normalized($0.name) == key }
-        return matches.count == 1 ? matches[0] : nil
+        guard !key.isEmpty else { return [] }
+        return people.filter { Self.normalized($0.name) == key }
     }
 
     private static func normalized(_ name: String) -> String {

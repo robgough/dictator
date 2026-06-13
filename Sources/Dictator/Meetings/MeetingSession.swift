@@ -770,20 +770,28 @@ final class MeetingSession: Identifiable {
                 NSLog("[Dictator] People: \(speaker.id) matched '\(match.person.name)' (sim=\(String(format: "%.2f", match.similarity)))")
                 changed = true
             } else if !isDefaultLabel(speaker.displayName) {
-                if let existing = store.personMatching(name: speaker.displayName) {
+                let sameName = store.peopleMatching(name: speaker.displayName)
+                if sameName.count == 1 {
                     // Known person, unrecognised voice — same human calling
                     // from a different room/mic. The name bridges the gap,
                     // and storing THIS environment's embedding under them
                     // means next time the voice matches directly.
-                    meta.speakers[idx].personID = existing.id
-                    store.recordObservation(personID: existing.id, embedding: embedding, modelID: modelID)
-                    NSLog("[Dictator] People: \(speaker.id) linked to '\(existing.name)' by name (voice below threshold — new environment learned)")
-                } else {
+                    meta.speakers[idx].personID = sameName[0].id
+                    store.recordObservation(personID: sameName[0].id, embedding: embedding, modelID: modelID)
+                    NSLog("[Dictator] People: \(speaker.id) linked to '\(sameName[0].name)' by name (voice below threshold — new environment learned)")
+                    changed = true
+                } else if sameName.isEmpty {
                     // A named voice we haven't met — learn them.
                     let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
                     meta.speakers[idx].personID = person.id
+                    changed = true
+                } else {
+                    // Two+ people already share this name — linking would
+                    // guess and creating would add a third indistinguishable
+                    // record. Leave unlinked; a rename to a distinct name
+                    // ("Jack R") links via renameSpeaker.
+                    NSLog("[Dictator] People: \(speaker.id) name '\(speaker.displayName)' is ambiguous (\(sameName.count) people) — left unlinked")
                 }
-                changed = true
             }
         }
 
@@ -1003,24 +1011,38 @@ final class MeetingSession: Identifiable {
         // A hand-typed name is authoritative — drop the "auto-detected" flag so
         // it loses the sparkle and a re-process never overwrites it. It also
         // propagates to the linked person, so the store learns corrections.
-        // Renaming an UNLINKED speaker to a known person's name IS linking:
-        // the rename bridges a voice the matcher missed (different room/mic),
-        // and this meeting's embedding gets stored under them so the new
-        // environment matches by voice next time.
+        // Renaming an UNLINKED speaker IS the people-store entry point: a
+        // known person's name bridges a voice the matcher missed (different
+        // room/mic) and this meeting's embedding gets stored under them; a
+        // brand-new name creates the person on the spot — the post-pass only
+        // learns names it had at processing time, and a hand-typed name is
+        // the strongest naming signal in the system, so it must not be the
+        // one path that leaves no record. Embedding may be nil (rename after
+        // relaunch — speakerEmbeddings is in-memory only); the person is
+        // still created and their voice gets learned via the name bridge
+        // next time they're heard.
         meta.speakers[idx].nameInferred = false
         if let personID = meta.speakers[idx].personID {
             PeopleStore.shared.rename(id: personID, to: trimmed)
-        } else if AppState.shared.settings.peopleRecognitionEnabled,
-                  !meta.speakers[idx].isMe,
-                  let person = PeopleStore.shared.personMatching(name: trimmed) {
-            meta.speakers[idx].personID = person.id
-            if let embedding = speakerEmbeddings?[id] {
-                PeopleStore.shared.recordObservation(
-                    personID: person.id,
+        } else if AppState.shared.settings.peopleRecognitionEnabled, !meta.speakers[idx].isMe {
+            let store = PeopleStore.shared
+            let embedding = speakerEmbeddings?[id]
+            let modelID = ModelCatalog.defaultDiarization.id
+            let sameName = store.peopleMatching(name: trimmed)
+            if sameName.count == 1 {
+                meta.speakers[idx].personID = sameName[0].id
+                if let embedding {
+                    store.recordObservation(personID: sameName[0].id, embedding: embedding, modelID: modelID)
+                }
+            } else if sameName.isEmpty {
+                let person = store.createPerson(
+                    name: trimmed,
                     embedding: embedding,
-                    modelID: ModelCatalog.defaultDiarization.id
+                    modelID: embedding != nil ? modelID : nil
                 )
+                meta.speakers[idx].personID = person.id
             }
+            // Two+ same-named people: linking would guess — leave unlinked.
         }
         meta.speakersEditedAt = Date()
         try? MeetingStorage.writeMeta(meta)

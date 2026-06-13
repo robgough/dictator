@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Naming a speaker by hand now adds them to your people list — previously only names detected automatically during processing were learned, so a person you named yourself never showed up there.
+- Right-clicking a speaker chip when there is nobody to merge with now shows a disabled explanation instead of doing nothing.
+- When two people in your people list share a name, a new speaker with that name is left unlinked instead of silently adding a third record — rename to something distinct (like adding a surname) to link them.
 - Dictator now recognises people across meetings by voice: once a speaker has a name, their voice is remembered (on this Mac only), and the same person is matched and named automatically in future meetings — renames carry forward, and calendar attendees fill in email addresses. A People editor in Meetings settings shows everything stored and can forget anyone, voice included; the whole feature is one switch.
 - Meetings now know their context: which app hosted the call (Zoom, Teams, a browser…) and — with calendar access, asked once — the matching calendar event, with its title, attendees, companies, and scheduled times shown in the meeting's inspector. A matched event names the meeting directly instead of guessing a title from the transcript, and the scheduled end powers a new coach reminder when you're wrapping up with key points still open. Everything stays on your Mac, and calendar matching can be turned off in Meetings settings.
 - Meetings now show live conversation metrics while you record — your share of the talking, your pace, and a heads-up when you've held the floor a while. Computed on-device from the recording itself, kept private to the app (never in notes or exports), and can be turned off in Meetings settings.
