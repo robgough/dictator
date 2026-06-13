@@ -296,14 +296,28 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var pendingSince: Date?
     private var recentKeeps: [Date] = []
     private var records: [ScreenshotRecord] = []
-    /// Set by `requestForceCapture()`; the next frame is kept unconditionally.
+    /// Fallback flag for `requestForceCapture()` before any frame has arrived —
+    /// the next frame is then kept unconditionally.
     private var forceNext = false
+    /// Most recent delivered frame, retained so "Capture now" can write it
+    /// instantly. Essential because ScreenCaptureKit stops sending fresh frames
+    /// when the screen is static — which is exactly when you'd hit the button —
+    /// so waiting for a "next" frame could wait forever.
+    private var lastPixelBuffer: CVPixelBuffer?
 
-    /// Keep the very next frame regardless of the change/debounce/rate gates —
-    /// the "Capture now" button. Hops onto the sink's queue so it races cleanly
-    /// with the frame callbacks.
+    /// "Capture now" — save a still immediately, bypassing the change/debounce/
+    /// rate "discard" gates. Writes the most recent delivered frame straight
+    /// away (works on a static screen); only if nothing's arrived yet does it
+    /// flag the first frame instead. Hops onto the sink's queue so it races
+    /// cleanly with the frame callbacks.
     func requestForceCapture() {
-        queue.async { self.forceNext = true }
+        queue.async {
+            if let buffer = self.lastPixelBuffer, let hash = self.averageHash(buffer) {
+                self.keep(buffer, hash: hash, at: Date(), forced: true)
+            } else {
+                self.forceNext = true
+            }
+        }
     }
 
     init(folder: URL, onKeep: (@Sendable (URL) -> Void)? = nil) {
@@ -327,11 +341,14 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     }
 
     private func process(_ pixelBuffer: CVPixelBuffer) {
+        // Retain the latest frame so a force-capture can write it instantly,
+        // even if SCK delivers nothing further (static screen).
+        lastPixelBuffer = pixelBuffer
         let now = Date()
         guard let hash = averageHash(pixelBuffer) else { return }
 
-        // "Capture now" — keep this frame unconditionally, even if it matches
-        // the last kept one (the user asked for a still of exactly this moment).
+        // A force-capture requested before any frame had arrived — keep this
+        // first one unconditionally (even if it matches the last kept).
         if forceNext {
             forceNext = false
             keep(pixelBuffer, hash: hash, at: now, forced: true)
