@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuickLook
 
 /// Renders one meeting. The three modes (live recording, processing,
 /// ready) all share a header and switch the body underneath.
@@ -448,11 +449,12 @@ struct LiveRecordingView: View {
                 }
             }
 
-            // Shared-screen capture — what's being grabbed, the most recent
-            // frame, and a control to retarget. Only when the feature's on.
-            if state.settings.meetingCaptureScreenshots {
-                LiveScreenCapturePanel(session: session)
-            }
+            // Shared-screen capture — the per-meeting on/off, a force-capture,
+            // what's being grabbed, and the most recent frame. Always available
+            // during a recording so capture can be flipped on for a key moment
+            // even when the default is off; the setting just decides whether it
+            // auto-starts.
+            LiveScreenCapturePanel(session: session)
 
             // Live transcript — the running draft, given the column's spare
             // vertical room (it's the live proof of capture).
@@ -811,6 +813,8 @@ private struct LiveScreenCapturePanel: View {
     @State private var targets: [MeetingScreenCapturer.CaptureTarget] = []
     @State private var latestImage: NSImage?
     @State private var hasPermission = true
+    @State private var busy = false
+    @State private var quickLookURL: URL?
 
     private var capturer: MeetingScreenCapturer { session.screenCapturer }
 
@@ -824,12 +828,13 @@ private struct LiveScreenCapturePanel: View {
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 Spacer()
-                changeMenu
+                if hasPermission { changeMenu }
             }
 
             if !hasPermission {
                 permissionNotice
             } else {
+                controls
                 targetLine
                 preview
             }
@@ -837,12 +842,45 @@ private struct LiveScreenCapturePanel: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .quickLookPreview($quickLookURL)
         .task(id: capturer.latestScreenshotURL) {
             guard let url = capturer.latestScreenshotURL else { latestImage = nil; return }
             latestImage = await Task.detached(priority: .utility) { NSImage(contentsOf: url) }.value
         }
-        .task(id: capturer.currentTarget?.id) {
-            await refreshTargets()
+        .task(id: capturer.isCapturing) { await refreshTargets() }
+        .task { await refreshTargets() }
+    }
+
+    // The per-meeting on/off + a force-capture. The toggle genuinely starts /
+    // stops the stream, so the system capture indicator tracks reality.
+    private var controls: some View {
+        HStack(spacing: 10) {
+            Toggle("Capture", isOn: Binding(
+                get: { capturer.isCapturing },
+                set: { on in
+                    Task {
+                        busy = true
+                        if on { await capturer.enable() } else { await capturer.disable() }
+                        await refreshTargets()
+                        busy = false
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(busy)
+
+            Spacer()
+
+            Button {
+                Task { busy = true; await capturer.captureNow(); await refreshTargets(); busy = false }
+            } label: {
+                Label("Capture now", systemImage: "camera")
+                    .font(.caption2)
+            }
+            .controlSize(.small)
+            .disabled(busy)
+            .help("Grab a screenshot of the meeting window right now")
         }
     }
 
@@ -853,7 +891,7 @@ private struct LiveScreenCapturePanel: View {
             }
             ForEach(targets) { target in
                 Button {
-                    Task { await capturer.switchTo(windowID: target.windowID); await refreshTargets() }
+                    Task { busy = true; await capturer.switchTo(windowID: target.windowID); await refreshTargets(); busy = false }
                 } label: {
                     if target.id == capturer.currentTarget?.id {
                         Label(target.label, systemImage: "checkmark")
@@ -875,21 +913,22 @@ private struct LiveScreenCapturePanel: View {
 
     @ViewBuilder
     private var targetLine: some View {
-        if let target = capturer.currentTarget {
+        if capturer.isCapturing, let target = capturer.currentTarget {
             Text("Capturing \(target.label)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         } else {
-            Text("No window selected yet — pick one with Change, or it'll attach when a meeting window appears.")
+            Text("Capture is off. Turn it on for a stretch, or hit Capture now for a one-off — frames stay on this Mac.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    @ViewBuilder
+    // Stretches the most recent frame to the full card width (height follows the
+    // image's aspect) so it's as large as the column allows; click → Quick Look.
     private var preview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -898,20 +937,27 @@ private struct LiveScreenCapturePanel: View {
                 Image(nsImage: latestImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 VStack(spacing: 4) {
                     Image(systemName: "rectangle.dashed")
                         .imageScale(.large)
                         .foregroundStyle(.tertiary)
-                    Text(capturer.currentTarget == nil ? "Waiting for a window" : "Waiting for shared content…")
+                    Text(capturer.isCapturing ? "Waiting for shared content…" : "Nothing captured yet")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
+                .frame(height: 120)
             }
         }
-        .frame(height: 116)
+        .frame(maxWidth: .infinity)
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.secondary.opacity(0.2)))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if capturer.latestScreenshotURL != nil { quickLookURL = capturer.latestScreenshotURL }
+        }
+        .help(latestImage != nil ? "Click to open full size" : "")
     }
 
     private var permissionNotice: some View {

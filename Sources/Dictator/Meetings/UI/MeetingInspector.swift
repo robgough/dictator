@@ -1,4 +1,5 @@
 import SwiftUI
+import QuickLook
 
 /// Trailing Details inspector for a finished meeting. Consolidates the
 /// per-meeting metadata and actions that used to be scattered across the
@@ -22,6 +23,8 @@ struct MeetingInspector: View {
     /// Captured screen keyframes, loaded from the meeting's local folder. nil
     /// until the `.task` reads `index.json` (and stays nil when none exist).
     @State private var screenshotIndex: MeetingScreenshotIndex?
+    /// Bound to `.quickLookPreview` — set to a frame's URL to preview it.
+    @State private var quickLookURL: URL?
 
     private var meta: MeetingMeta { session.meta }
 
@@ -76,6 +79,7 @@ struct MeetingInspector: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .quickLookPreview($quickLookURL)
         .task(id: session.id) {
             screenshotIndex = (meta.screenshotCount ?? 0) > 0
                 ? MeetingStorage.readScreenshotIndex(for: session.id)
@@ -92,11 +96,11 @@ struct MeetingInspector: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(index.screenshots) { shot in
-                            ScreenshotThumbnail(
-                                url: MeetingStorage.screenshotsFolder(for: session.id)
-                                    .appendingPathComponent(shot.filename),
-                                offsetSeconds: shot.offsetSeconds
-                            )
+                            let url = MeetingStorage.screenshotsFolder(for: session.id)
+                                .appendingPathComponent(shot.filename)
+                            ScreenshotThumbnail(url: url, offsetSeconds: shot.offsetSeconds) {
+                                quickLookURL = url
+                            }
                         }
                     }
                     .padding(.vertical, 2)
@@ -265,6 +269,7 @@ struct MeetingInspector: View {
 private struct ScreenshotThumbnail: View {
     let url: URL
     let offsetSeconds: Double
+    let onOpen: () -> Void
 
     @State private var thumbnail: NSImage?
 
@@ -291,7 +296,7 @@ private struct ScreenshotThumbnail: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .onTapGesture { NSWorkspace.shared.open(url) }
+        .onTapGesture { onOpen() }
         .help("Captured at \(Self.timestamp(offsetSeconds)) — click to open full size")
         .task(id: url) {
             // NSImage loads (and decodes) on a background queue; hand the ready

@@ -57,12 +57,23 @@ final class MeetingScreenCapturer {
     @ObservationIgnored private var stream: SCStream?
     @ObservationIgnored private var sink: FrameSink?
     @ObservationIgnored private var folder: URL?
+    @ObservationIgnored private var preferredBundleID: String?
 
-    /// Start capturing the meeting window. `preferredBundleID` biases window
-    /// selection toward the app that was frontmost at record start. Never
-    /// throws — capture is best-effort and must not fail the meeting.
-    func start(folder: URL, preferredBundleID: String?) async -> StartResult {
+    /// Stash where frames go + the window hint, so the live per-meeting toggle
+    /// can start/stop capture at any point — even on a meeting that began with
+    /// capture off. Called once at record start regardless of the setting.
+    func configure(folder: URL, preferredBundleID: String?) {
         self.folder = folder
+        self.preferredBundleID = preferredBundleID
+    }
+
+    /// Begin (or resume) keeping keyframes — resolves the meeting window from
+    /// the stashed hint and brings the stream up. Idempotent when already
+    /// capturing. Never throws; capture is best-effort.
+    @discardableResult
+    func enable() async -> StartResult {
+        if stream != nil { return .started(windowTitle: currentTarget?.windowTitle) }
+        guard let folder else { return .failed("screen capture not configured") }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
@@ -75,6 +86,29 @@ final class MeetingScreenCapturer {
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    /// Stop keeping keyframes and drop the stream so the system's purple
+    /// screen-capture indicator goes away — the honest signal that we're not
+    /// watching the screen right now. The frame sink (and everything captured
+    /// so far this meeting) is kept, so re-enabling continues the same index.
+    func disable() async {
+        isCapturing = false
+        currentTarget = nil
+        guard let stream else { return }
+        try? await stream.stopCapture()
+        self.stream = nil
+    }
+
+    /// Force one keep of the current screen right now, bypassing the
+    /// change/debounce/rate gates. Turns capture on first if it's off — we
+    /// can't grab a frame without a live stream, and flipping the toggle on is
+    /// the honest reflection that the screen is now being captured.
+    func captureNow() async {
+        if stream == nil {
+            guard case .started = await enable() else { return }
+        }
+        sink?.requestForceCapture()
     }
 
     /// On-screen meeting/browser windows the user can switch capture to. Empty
@@ -120,13 +154,16 @@ final class MeetingScreenCapturer {
         }
     }
 
-    /// Stop the stream and flush the index. Returns the captured keyframes.
+    /// Stop the stream and flush the index — the end-of-meeting teardown.
+    /// Returns the captured keyframes.
     @discardableResult
     func stop() async -> MeetingScreenshotIndex {
         isCapturing = false
-        guard let stream else { return MeetingScreenshotIndex() }
-        try? await stream.stopCapture()
-        self.stream = nil
+        currentTarget = nil
+        if let stream {
+            try? await stream.stopCapture()
+            self.stream = nil
+        }
         let index = sink?.finish() ?? MeetingScreenshotIndex()
         sink = nil
         return index
@@ -245,6 +282,15 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var pendingSince: Date?
     private var recentKeeps: [Date] = []
     private var records: [ScreenshotRecord] = []
+    /// Set by `requestForceCapture()`; the next frame is kept unconditionally.
+    private var forceNext = false
+
+    /// Keep the very next frame regardless of the change/debounce/rate gates —
+    /// the "Capture now" button. Hops onto the sink's queue so it races cleanly
+    /// with the frame callbacks.
+    func requestForceCapture() {
+        queue.async { self.forceNext = true }
+    }
 
     init(folder: URL, onKeep: (@Sendable (URL) -> Void)? = nil) {
         self.folder = folder
@@ -269,6 +315,14 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private func process(_ pixelBuffer: CVPixelBuffer) {
         let now = Date()
         guard let hash = averageHash(pixelBuffer) else { return }
+
+        // "Capture now" — keep this frame unconditionally, even if it matches
+        // the last kept one (the user asked for a still of exactly this moment).
+        if forceNext {
+            forceNext = false
+            keep(pixelBuffer, hash: hash, at: now, forced: true)
+            return
+        }
 
         // First frame establishes the baseline without keeping — a meeting
         // usually opens on the (non-shared) call window, not content worth a still.
@@ -297,10 +351,12 @@ private final class FrameSink: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         }
     }
 
-    private func keep(_ pixelBuffer: CVPixelBuffer, hash: UInt64, at now: Date) {
-        if let last = lastKeptAt, now.timeIntervalSince(last) < minKeepInterval { return }
-        recentKeeps = recentKeeps.filter { now.timeIntervalSince($0) < 60 }
-        guard recentKeeps.count < perMinuteCap else { return }
+    private func keep(_ pixelBuffer: CVPixelBuffer, hash: UInt64, at now: Date, forced: Bool = false) {
+        if !forced {
+            if let last = lastKeptAt, now.timeIntervalSince(last) < minKeepInterval { return }
+            recentKeeps = recentKeeps.filter { now.timeIntervalSince($0) < 60 }
+            guard recentKeeps.count < perMinuteCap else { return }
+        }
 
         let offset = now.timeIntervalSince(recordingStart)
         let filename = String(format: "%04d-%@.heic", records.count + 1, Self.clock(offset))

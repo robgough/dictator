@@ -459,9 +459,14 @@ final class MeetingSession: Identifiable {
                 at: MeetingStorage.micURL(for: id),
                 preferredDevice: preferredMicDevice
             )
-            // Opt-in screen capture, fired after audio is up so SCStream setup
-            // never delays the recording going live. Best-effort — it never
-            // fails the meeting.
+            // Configure screen capture unconditionally — the live "Shared
+            // screen" panel can toggle it on/off per meeting even when the
+            // default is off. Auto-start only when the setting wants it. Done
+            // after audio is up so SCStream setup never delays record-live.
+            screenCapturer.configure(
+                folder: MeetingStorage.screenshotsFolder(for: id),
+                preferredBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            )
             if AppState.shared.settings.meetingCaptureScreenshots {
                 startScreenCapture()
             }
@@ -470,22 +475,21 @@ final class MeetingSession: Identifiable {
         }
     }
 
-    /// Kick off window-scoped screen capture if Screen Recording is granted.
-    /// When it isn't, trigger the one-time system prompt so the *next* meeting
-    /// can capture (the grant only takes effect after the prompt/relaunch), and
-    /// leave this meeting audio-only. Runs in `screenCaptureTask` so the
-    /// SCShareableContent query + stream start don't block record start.
+    /// Auto-start window-scoped capture if Screen Recording is granted. When it
+    /// isn't, trigger the one-time system prompt so the *next* meeting can
+    /// capture (the grant only takes effect after the prompt/relaunch), and
+    /// leave this meeting audio-only — the user can still flip capture on from
+    /// the live panel once granted. Runs in `screenCaptureTask` so the stream
+    /// bring-up doesn't block record start.
     private func startScreenCapture() {
         guard ScreenRecordingPermission.hasAccess() else {
             ScreenRecordingPermission.request()
             NSLog("[Dictator] Screenshots: Screen Recording not granted — prompted; capture skipped this meeting")
             return
         }
-        let hint = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let folder = MeetingStorage.screenshotsFolder(for: id)
         screenCaptureTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            switch await self.screenCapturer.start(folder: folder, preferredBundleID: hint) {
+            switch await self.screenCapturer.enable() {
             case .started:
                 break
             case .noWindow:

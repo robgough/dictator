@@ -13,8 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- Meetings can now capture shared screens: turn on "Capture shared screens" in Meetings settings and Dictator keeps still frames of slides and demos shown during a call — only the frames that change, scoped to the meeting window so nothing else on your screen is seen, shown as a filmstrip in the meeting's Details. Off by default; needs macOS Screen Recording permission, and the frames stay on your Mac.
-- While recording, a "Shared screen" panel shows which window is being captured and a thumbnail of the most recent frame, with a Change menu to point capture at a different meeting window.
+- Meetings can now capture shared screens: Dictator keeps still frames of slides and demos shown during a call — only the frames that change, scoped to the meeting window so nothing else on your screen is seen, shown as a filmstrip in the meeting's Details. Needs macOS Screen Recording permission, and the frames stay on your Mac.
+- Screen capture can be turned on and off per meeting from the "Shared screen" panel while recording — leave the setting off and flip capture on only for the moments that matter, or turn it on in settings to start every meeting capturing. A "Capture now" button grabs a frame on demand.
+- The "Shared screen" panel shows which window is being captured and a large preview of the most recent frame; click it (or any screenshot in a meeting's Details) to open it full size in Quick Look. A Change menu points capture at a different meeting window.
 - Two speakers in one meeting can no longer both be matched to the same person — the closest voice wins and the other stays separate, so a similar-sounding stranger can't get folded into someone's record.
 - The People editor now shows how many people are stored.
 - Duplicate people can now be merged: right-click a person in the People editor to fold them into another — emails and voice samples combine, past meetings carry over, and same-named duplicates are flagged with a warning badge.
