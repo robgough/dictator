@@ -14,7 +14,7 @@ entries as plain bullet lines.
 ## Unreleased
 
 - Two speakers in one meeting can no longer both be matched to the same person — the closest voice wins and the other stays separate, so a similar-sounding stranger can't get folded into someone's record.
-- The People editor now shows how many people are stored and how much space their voice data uses, both per-person and in total.
+- The People editor now shows how many people are stored.
 - Duplicate people can now be merged: right-click a person in the People editor to fold them into another — emails and voice samples combine, past meetings carry over, and same-named duplicates are flagged with a warning badge.
 - Naming a speaker by hand now adds them to your people list — previously only names detected automatically during processing were learned, so a person you named yourself never showed up there.
 - Right-clicking a speaker chip when there is nobody to merge with now shows a disabled explanation instead of doing nothing.

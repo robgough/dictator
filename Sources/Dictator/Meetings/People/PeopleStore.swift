@@ -176,22 +176,6 @@ final class PeopleStore {
         save()
     }
 
-    // MARK: - Storage size
-
-    /// On-disk JSON byte count for one person — almost entirely their voice
-    /// embeddings (256 float32s per sample, ~2.8 KB each as JSON text). Names
-    /// and emails are rounding error next to that.
-    func storageBytes(for person: PersonRecord) -> Int {
-        (try? JSONEncoder().encode(person).count) ?? 0
-    }
-
-    /// Total people.json footprint. Tiny in absolute terms (a person with the
-    /// full 8 samples is ~22 KB), surfaced in the editor only so the store
-    /// never feels like an unbounded black box.
-    var totalStorageBytes: Int {
-        (try? JSONEncoder().encode(PeopleFile(people: people)).count) ?? 0
-    }
-
     // MARK: - Persistence
 
     private func load() {

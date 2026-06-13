@@ -25,7 +25,7 @@ struct PeopleEditor: View {
                 Text("People")
                     .font(.title3.weight(.semibold))
                 if !store.people.isEmpty {
-                    Text("\(store.people.count) · \(Self.formatBytes(store.totalStorageBytes)) voice data")
+                    Text("\(store.people.count) \(store.people.count == 1 ? "person" : "people")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -95,7 +95,7 @@ struct PeopleEditor: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text("\(person.embeddings.count) voice sample\(person.embeddings.count == 1 ? "" : "s") · \(Self.formatBytes(store.storageBytes(for: person)))")
+                    Text("\(person.embeddings.count) voice sample\(person.embeddings.count == 1 ? "" : "s")")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -134,13 +134,6 @@ struct PeopleEditor: View {
                     .disabled(true)
             }
         }
-    }
-
-    private static func formatBytes(_ bytes: Int) -> String {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        f.allowedUnits = [.useKB, .useMB]
-        return f.string(fromByteCount: Int64(bytes))
     }
 
     /// Disambiguates same-named targets in the merge menu — two plain
