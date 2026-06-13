@@ -770,9 +770,19 @@ final class MeetingSession: Identifiable {
                 NSLog("[Dictator] People: \(speaker.id) matched '\(match.person.name)' (sim=\(String(format: "%.2f", match.similarity)))")
                 changed = true
             } else if !isDefaultLabel(speaker.displayName) {
-                // A named voice we haven't met — learn them.
-                let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
-                meta.speakers[idx].personID = person.id
+                if let existing = store.personMatching(name: speaker.displayName) {
+                    // Known person, unrecognised voice — same human calling
+                    // from a different room/mic. The name bridges the gap,
+                    // and storing THIS environment's embedding under them
+                    // means next time the voice matches directly.
+                    meta.speakers[idx].personID = existing.id
+                    store.recordObservation(personID: existing.id, embedding: embedding, modelID: modelID)
+                    NSLog("[Dictator] People: \(speaker.id) linked to '\(existing.name)' by name (voice below threshold — new environment learned)")
+                } else {
+                    // A named voice we haven't met — learn them.
+                    let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
+                    meta.speakers[idx].personID = person.id
+                }
                 changed = true
             }
         }
@@ -993,9 +1003,24 @@ final class MeetingSession: Identifiable {
         // A hand-typed name is authoritative — drop the "auto-detected" flag so
         // it loses the sparkle and a re-process never overwrites it. It also
         // propagates to the linked person, so the store learns corrections.
+        // Renaming an UNLINKED speaker to a known person's name IS linking:
+        // the rename bridges a voice the matcher missed (different room/mic),
+        // and this meeting's embedding gets stored under them so the new
+        // environment matches by voice next time.
         meta.speakers[idx].nameInferred = false
         if let personID = meta.speakers[idx].personID {
             PeopleStore.shared.rename(id: personID, to: trimmed)
+        } else if AppState.shared.settings.peopleRecognitionEnabled,
+                  !meta.speakers[idx].isMe,
+                  let person = PeopleStore.shared.personMatching(name: trimmed) {
+            meta.speakers[idx].personID = person.id
+            if let embedding = speakerEmbeddings?[id] {
+                PeopleStore.shared.recordObservation(
+                    personID: person.id,
+                    embedding: embedding,
+                    modelID: ModelCatalog.defaultDiarization.id
+                )
+            }
         }
         meta.speakersEditedAt = Date()
         try? MeetingStorage.writeMeta(meta)

@@ -47,21 +47,50 @@ final class PeopleStore {
         return best
     }
 
+    /// Skip storing an embedding this similar to one already held — a ninth
+    /// near-identical desk-mic sample adds nothing, and under the k-recent
+    /// cap it would eventually EVICT the rare different-environment sample
+    /// (the car voice, the AirPods voice) that diversity exists to keep.
+    private static let noveltyCeiling: Float = 0.92
+
     /// Fold a fresh observation of a known person's voice into their record.
     /// A model change resets the embedding set (old vectors live in a
-    /// different space and would poison matching).
+    /// different space and would poison matching). Near-duplicates of an
+    /// existing sample are skipped so the set stays DIVERSE — one person,
+    /// many rooms/mics — rather than eight copies of their usual setup.
     func recordObservation(personID: String, embedding: [Float], modelID: String) {
         guard let idx = people.firstIndex(where: { $0.id == personID }) else { return }
         if people[idx].embeddingModelID != modelID {
             people[idx].embeddings = []
             people[idx].embeddingModelID = modelID
         }
+        let novel = people[idx].embeddings.allSatisfy {
+            MeetingProcessor.cosineSimilarity(embedding, $0) < Self.noveltyCeiling
+        }
+        guard novel || people[idx].embeddings.isEmpty else { return }
         people[idx].embeddings.append(embedding)
         if people[idx].embeddings.count > PersonRecord.maxEmbeddings {
             people[idx].embeddings.removeFirst(people[idx].embeddings.count - PersonRecord.maxEmbeddings)
         }
         people[idx].updatedAt = Date()
         save()
+    }
+
+    /// The single person whose name matches (normalized, exact) — nil when
+    /// nobody or AMBIGUOUS (two distinct "Jack"s must not auto-merge; name
+    /// them apart and the ambiguity resolves). The name bridge: when a
+    /// known person's voice arrives from a new room/mic and misses the
+    /// voice match, their name links them — and the new environment's
+    /// embedding gets stored, so next time the VOICE matches directly.
+    func personMatching(name: String) -> PersonRecord? {
+        let key = Self.normalized(name)
+        guard !key.isEmpty else { return nil }
+        let matches = people.filter { Self.normalized($0.name) == key }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func normalized(_ name: String) -> String {
+        name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @discardableResult
