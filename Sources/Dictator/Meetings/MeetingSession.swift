@@ -744,54 +744,94 @@ final class MeetingSession: Identifiable {
             name == "Other" || name == "Me" || name.hasPrefix("Speaker ")
         }
 
+        // A person may be claimed by at most ONE speaker in a meeting. Two
+        // chips resolving to the same person is either an over-split we won't
+        // auto-merge (manual rename + speaker-merge is the right fix) or two
+        // similar-sounding humans — and in that second case letting the loser
+        // also "match" would fold a stranger's voice into the winner's record
+        // and poison recognition for good. Assignment below is exclusive.
+        var claimedPeople = Set<String>()
+
+        // Phase 0 — re-processed meetings: existing links claim their person
+        // first (and refresh the voice) so a fresh match can't steal them.
         for idx in meta.speakers.indices {
             let speaker = meta.speakers[idx]
-            guard !speaker.isMe, let embedding = embeddings[speaker.id] else { continue }
-
-            if let personID = speaker.personID {
-                // Re-process of an already-linked meeting — refresh the voice.
+            guard !speaker.isMe, let personID = speaker.personID else { continue }
+            claimedPeople.insert(personID)
+            if let embedding = embeddings[speaker.id] {
                 store.recordObservation(personID: personID, embedding: embedding, modelID: modelID)
-                continue
             }
+        }
 
-            if let match = store.bestMatch(for: embedding, modelID: modelID) {
-                meta.speakers[idx].personID = match.person.id
-                store.recordObservation(personID: match.person.id, embedding: embedding, modelID: modelID)
-                if isDefaultLabel(speaker.displayName) || speaker.nameInferred {
-                    // The store's name wins over a default/guessed label.
-                    // Marked inferred so a user rename stays authoritative
-                    // (and propagates back via renameSpeaker).
-                    meta.speakers[idx].displayName = match.person.name
-                    meta.speakers[idx].nameInferred = true
-                } else if isDefaultLabel(match.person.name) {
-                    // The speaker label is better than what the store holds.
-                    store.rename(id: match.person.id, to: speaker.displayName)
-                }
-                NSLog("[Dictator] People: \(speaker.id) matched '\(match.person.name)' (sim=\(String(format: "%.2f", match.similarity)))")
+        // Phase 1 — voice matching, globally greedy and exclusive. Collect
+        // every (speaker, person, similarity) candidate above threshold, then
+        // assign best-first: the closest voice wins a contested person, and a
+        // speaker whose best is taken falls through to its next-best here or
+        // the name bridge below — never to a duplicate.
+        struct VoiceCandidate { let speakerIdx: Int; let personID: String; let similarity: Float }
+        var candidates: [VoiceCandidate] = []
+        for idx in meta.speakers.indices {
+            let speaker = meta.speakers[idx]
+            guard !speaker.isMe, speaker.personID == nil, let embedding = embeddings[speaker.id] else { continue }
+            for m in store.matches(for: embedding, modelID: modelID) {
+                candidates.append(VoiceCandidate(speakerIdx: idx, personID: m.person.id, similarity: m.similarity))
+            }
+        }
+        candidates.sort { $0.similarity > $1.similarity }
+        var assignedSpeakers = Set<Int>()
+        for c in candidates {
+            guard !assignedSpeakers.contains(c.speakerIdx), !claimedPeople.contains(c.personID),
+                  let person = store.person(id: c.personID),
+                  let embedding = embeddings[meta.speakers[c.speakerIdx].id] else { continue }
+            let speaker = meta.speakers[c.speakerIdx]
+            meta.speakers[c.speakerIdx].personID = person.id
+            store.recordObservation(personID: person.id, embedding: embedding, modelID: modelID)
+            if isDefaultLabel(speaker.displayName) || speaker.nameInferred {
+                // The store's name wins over a default/guessed label. Marked
+                // inferred so a user rename stays authoritative (and
+                // propagates back via renameSpeaker).
+                meta.speakers[c.speakerIdx].displayName = person.name
+                meta.speakers[c.speakerIdx].nameInferred = true
+            } else if isDefaultLabel(person.name) {
+                // The speaker label is better than what the store holds.
+                store.rename(id: person.id, to: speaker.displayName)
+            }
+            assignedSpeakers.insert(c.speakerIdx)
+            claimedPeople.insert(person.id)
+            changed = true
+            NSLog("[Dictator] People: \(speaker.id) matched '\(person.name)' (sim=\(String(format: "%.2f", c.similarity)))")
+        }
+
+        // Phase 2 — name bridge + named strangers, for speakers voice didn't
+        // place. Still exclusive: a name can't bridge to an already-claimed
+        // person (some other speaker voice-matched them this meeting; linking
+        // the name too would double-assign one human onto two chips).
+        for idx in meta.speakers.indices {
+            let speaker = meta.speakers[idx]
+            guard !speaker.isMe, speaker.personID == nil, let embedding = embeddings[speaker.id],
+                  !isDefaultLabel(speaker.displayName) else { continue }
+            let sameName = store.peopleMatching(name: speaker.displayName)
+            if sameName.count == 1, !claimedPeople.contains(sameName[0].id) {
+                // Known person, unrecognised voice — same human calling from a
+                // different room/mic. The name bridges the gap, and storing
+                // THIS environment's embedding means next time voice matches.
+                meta.speakers[idx].personID = sameName[0].id
+                store.recordObservation(personID: sameName[0].id, embedding: embedding, modelID: modelID)
+                claimedPeople.insert(sameName[0].id)
+                NSLog("[Dictator] People: \(speaker.id) linked to '\(sameName[0].name)' by name (voice below threshold — new environment learned)")
                 changed = true
-            } else if !isDefaultLabel(speaker.displayName) {
-                let sameName = store.peopleMatching(name: speaker.displayName)
-                if sameName.count == 1 {
-                    // Known person, unrecognised voice — same human calling
-                    // from a different room/mic. The name bridges the gap,
-                    // and storing THIS environment's embedding under them
-                    // means next time the voice matches directly.
-                    meta.speakers[idx].personID = sameName[0].id
-                    store.recordObservation(personID: sameName[0].id, embedding: embedding, modelID: modelID)
-                    NSLog("[Dictator] People: \(speaker.id) linked to '\(sameName[0].name)' by name (voice below threshold — new environment learned)")
-                    changed = true
-                } else if sameName.isEmpty {
-                    // A named voice we haven't met — learn them.
-                    let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
-                    meta.speakers[idx].personID = person.id
-                    changed = true
-                } else {
-                    // Two+ people already share this name — linking would
-                    // guess and creating would add a third indistinguishable
-                    // record. Leave unlinked; a rename to a distinct name
-                    // ("Jack R") links via renameSpeaker.
-                    NSLog("[Dictator] People: \(speaker.id) name '\(speaker.displayName)' is ambiguous (\(sameName.count) people) — left unlinked")
-                }
+            } else if sameName.isEmpty {
+                // A named voice we haven't met — learn them.
+                let person = store.createPerson(name: speaker.displayName, embedding: embedding, modelID: modelID)
+                meta.speakers[idx].personID = person.id
+                claimedPeople.insert(person.id)
+                changed = true
+            } else {
+                // Ambiguous name (2+ share it), or the lone same-named person
+                // is already claimed by a closer voice this meeting — either
+                // way, guessing risks the wrong name. Leave unlinked; a rename
+                // to a distinct name ("Jack R") links via renameSpeaker.
+                NSLog("[Dictator] People: \(speaker.id) name '\(speaker.displayName)' not bridged (ambiguous or already claimed) — left unlinked")
             }
         }
 

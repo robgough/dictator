@@ -121,7 +121,7 @@ enum SyncedStorage {
     /// instead of leaving behind stranded copies in the old location.
     @MainActor
     static func relocateContents(from old: URL, to new: URL) {
-        let filenames = ["settings.json", "vocabulary.json", "history.json", "conversations.json", "scratchpad.md"]
+        let filenames = ["settings.json", "vocabulary.json", "history.json", "conversations.json", "scratchpad.md", "people.json"]
         ensureDirectory(at: new)
         for name in filenames {
             let src = old.appendingPathComponent(name)

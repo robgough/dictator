@@ -21,8 +21,15 @@ struct PeopleEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("People")
-                .font(.title3.weight(.semibold))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("People")
+                    .font(.title3.weight(.semibold))
+                if !store.people.isEmpty {
+                    Text("\(store.people.count) · \(Self.formatBytes(store.totalStorageBytes)) voice data")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if store.people.isEmpty {
                 Text("Nobody yet. People appear here as meetings are processed — a named speaker's voice is remembered, so they're recognised next time.")
@@ -41,10 +48,11 @@ struct PeopleEditor: View {
             }
 
             HStack {
-                Text("Deleting a person removes their stored voice. Past meeting transcripts are unaffected.")
+                Text("Stored in your synced folder, so people travel between your Macs if it's in iCloud Drive. Deleting removes the voice too; past transcripts are unaffected.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                Spacer()
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
@@ -87,7 +95,7 @@ struct PeopleEditor: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text("\(person.embeddings.count) voice sample\(person.embeddings.count == 1 ? "" : "s")")
+                    Text("\(person.embeddings.count) voice sample\(person.embeddings.count == 1 ? "" : "s") · \(Self.formatBytes(store.storageBytes(for: person)))")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -126,6 +134,13 @@ struct PeopleEditor: View {
                     .disabled(true)
             }
         }
+    }
+
+    private static func formatBytes(_ bytes: Int) -> String {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowedUnits = [.useKB, .useMB]
+        return f.string(fromByteCount: Int64(bytes))
     }
 
     /// Disambiguates same-named targets in the merge menu — two plain

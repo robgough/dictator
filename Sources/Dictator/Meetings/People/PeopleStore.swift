@@ -33,18 +33,23 @@ final class PeopleStore {
 
     // MARK: - Matching & learning
 
-    /// Best same-model match at/above the threshold, or nil.
-    func bestMatch(for embedding: [Float], modelID: String) -> (person: PersonRecord, similarity: Float)? {
-        var best: (PersonRecord, Float)?
+    /// Every same-model person matching this voice at/above the threshold,
+    /// best-first. The linker uses the FULL ranked list, not just the top:
+    /// a person can be claimed by only one speaker per meeting, so a speaker
+    /// whose best person is taken by a closer-matching speaker needs its
+    /// next-best to fall back to rather than spawning a duplicate. Each
+    /// person's score is its single closest stored sample (max, not mean —
+    /// a match against any one environment counts).
+    func matches(for embedding: [Float], modelID: String) -> [(person: PersonRecord, similarity: Float)] {
+        var out: [(PersonRecord, Float)] = []
         for person in people where person.embeddingModelID == modelID {
+            var best: Float = 0
             for stored in person.embeddings {
-                let sim = MeetingProcessor.cosineSimilarity(embedding, stored)
-                if sim >= Self.matchThreshold, sim > (best?.1 ?? 0) {
-                    best = (person, sim)
-                }
+                best = max(best, MeetingProcessor.cosineSimilarity(embedding, stored))
             }
+            if best >= Self.matchThreshold { out.append((person, best)) }
         }
-        return best
+        return out.sorted { $0.1 > $1.1 }
     }
 
     /// Skip storing an embedding this similar to one already held — a ninth
@@ -169,6 +174,22 @@ final class PeopleStore {
     func delete(id: String) {
         people.removeAll { $0.id == id }
         save()
+    }
+
+    // MARK: - Storage size
+
+    /// On-disk JSON byte count for one person — almost entirely their voice
+    /// embeddings (256 float32s per sample, ~2.8 KB each as JSON text). Names
+    /// and emails are rounding error next to that.
+    func storageBytes(for person: PersonRecord) -> Int {
+        (try? JSONEncoder().encode(person).count) ?? 0
+    }
+
+    /// Total people.json footprint. Tiny in absolute terms (a person with the
+    /// full 8 samples is ~22 KB), surfaced in the editor only so the store
+    /// never feels like an unbounded black box.
+    var totalStorageBytes: Int {
+        (try? JSONEncoder().encode(PeopleFile(people: people)).count) ?? 0
     }
 
     // MARK: - Persistence
