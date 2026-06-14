@@ -60,7 +60,10 @@ struct DictatorApp: App {
                 .environment(appState)
                 .frame(minWidth: 760, minHeight: 480)
         }
-        .defaultSize(width: 980, height: 640)
+        // Roomier default so the live recording layout (three columns + the
+        // shared-screen/transcript inspector) opens comfortably; the status bar
+        // compresses gracefully below this, down to the 760pt minimum.
+        .defaultSize(width: 1280, height: 760)
         .handlesExternalEvents(matching: ["meetings"])
     }
 

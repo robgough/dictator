@@ -86,7 +86,8 @@ struct MeetingDetailView: View {
     }
 
     /// Drives `.inspector`: the remembered preference, gated on the meeting
-    /// actually being a finished one. Writing through it persists the toggle.
+    /// actually being a finished one. (Live recordings show the evidence as an
+    /// in-window column, not an inspector — see `MeetingLiveColumns`.)
     private var inspectorBinding: Binding<Bool> {
         Binding(
             get: { inspectorVisible && canShowInspector },
@@ -281,164 +282,32 @@ private struct ProcessingPill: View {
     }
 }
 
-/// Live-recording body. Two columns: the notes the meeting is producing on the
-/// left (the star of the show), and the recording controls + live transcript
-/// stacked on the right. The notes are shown in a read-only text field so
-/// they're easy to select and copy and read like a notes app.
+/// Live-recording body. A persistent status bar (timer, level meters, notes
+/// style, Stop) sits above the work area: three columns — the user's **Pad**,
+/// the **Live notes**, and the **Coach** (metrics + key points + opportunities)
+/// — plus a collapsible right **sidebar** holding the live evidence (the latest
+/// shared-screen frame over the running transcript). The columns fold 3 → 2 → 1
+/// as the window narrows; every column and the sidebar scroll on their own.
 struct LiveRecordingView: View {
     @Environment(AppState.self) private var state
     @Bindable var session: MeetingSession
     let isWarming: Bool
+    /// Evidence column (shared screen + transcript) visibility, toggled from the
+    /// toolbar. In-window, not a native inspector — the inspector kept breaking
+    /// the detail's top safe area on relayout during a live recording.
+    @AppStorage("meetingLiveEvidenceVisible") private var showEvidence = true
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            notesColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            controlsColumn
-                .frame(width: 300)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
+        // Same shape as the (inspector-compatible) TranscriptView: a plain VStack
+        // with the fixed bits on top and the filling content below, the whole
+        // thing pinned topLeading. No GeometryReader (it fought the inspector's
+        // relayout). The status bar is `fixedSize` vertically so the VStack hands
+        // the columns the *remaining* height instead of the full height, which is
+        // what was overflowing and pushing the bar up under the toolbar.
+        VStack(spacing: 12) {
+            LiveStatusBar(session: session, isWarming: isWarming, onStop: performStop)
+                .fixedSize(horizontal: false, vertical: true)
 
-    // MARK: - Notes column (left, emphasised)
-
-    /// Pad over live notes: the user's own editable pad on top, the LLM's
-    /// streaming first pass below, split by a draggable divider so both stay
-    /// visible while typing. When live notes are off the pad takes the whole
-    /// column and a one-line caption explains why nothing streams below.
-    @ViewBuilder
-    private var notesColumn: some View {
-        if session.notesAccumulator != nil {
-            VSplitView {
-                padPane
-                    .frame(minHeight: 110)
-                    .padding(.bottom, 8)
-                liveNotesPane
-                    .frame(minHeight: 130)
-                    .padding(.top, 8)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                padPane
-                Text(notesDisabledMessage)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    private var padPane: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "pencil.line")
-                    .foregroundStyle(.secondary)
-                Text("Pad")
-                    .font(.headline)
-                Spacer()
-                if !session.padText.isEmpty {
-                    CopyButton(text: session.padText, label: "Copy")
-                }
-            }
-            MeetingPadEditor(session: session)
-        }
-    }
-
-    private var liveNotesPane: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.purple)
-                Text("Live notes")
-                    .font(.headline)
-                Spacer()
-                if let notes = session.notesAccumulator?.liveNotes, !notes.isEmpty {
-                    CopyButton(text: notes, label: "Copy")
-                }
-            }
-            if let acc = session.notesAccumulator {
-                NotesStatusLine(accumulator: acc)
-                LiveNotesField(accumulator: acc)
-            }
-        }
-    }
-
-    private var notesDisabledMessage: String {
-        if state.settings.activeLLMEngine() == nil {
-            return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
-        }
-        if !state.settings.meetingLiveTranscriptEnabled {
-            return "Live transcript is off. Turn on “Show a live transcript while recording” in Meetings settings to watch notes build here."
-        }
-        return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
-    }
-
-    // MARK: - Controls column (right, de-emphasised)
-
-    private var controlsColumn: some View {
-        VStack(spacing: 14) {
-            // Status band — timer + honest meters + capture confidence.
-            VStack(spacing: 12) {
-                timerView
-                if isWarming {
-                    Label("Connecting microphone and call audio…", systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    LabeledWaveform(label: "You", level: levels.mic, tint: .accentColor, heard: session.micHeard)
-                    LabeledWaveform(
-                        label: "Other side",
-                        level: levels.system,
-                        tint: .indigo,
-                        heard: session.systemHeard,
-                        waitingHint: systemWaitingHint
-                    )
-                }
-                if let coach = session.coachEngine {
-                    CoachMetricsStrip(engine: coach)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity)
-            .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            // Live coach checklist — the key points for this meeting, ticking
-            // off as the watcher catches them. Always present while the coach
-            // runs (it starts empty — items come from typing, pasting a list,
-            // a saved set, or `!` lines in the pad). Coach data: never
-            // exported with the notes.
-            if let coach = session.coachEngine {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checklist")
-                            .foregroundStyle(.secondary)
-                        Text("Key points")
-                            .font(.caption.weight(.semibold))
-                            .textCase(.uppercase)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if coach.chipHidden {
-                            Button {
-                                coach.chipHidden = false
-                            } label: {
-                                Label("Show on island", systemImage: "arrow.up.forward.square")
-                                    .font(.caption2)
-                            }
-                            .buttonStyle(.link)
-                            .help("Bring the coach strip back to the top of the screen")
-                        }
-                    }
-                    CoachChecklistPanel(engine: coach)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-
-            // Capture warnings (mic and / or system) — surfaced when a
-            // recorder fails to deliver buffers within its bring-up watchdog
-            // window. Dismissible per source; UI-only, resets next recording.
             if !session.captureWarnings.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(session.captureWarnings) { warning in
@@ -447,51 +316,84 @@ struct LiveRecordingView: View {
                         }
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
 
-            // Shared-screen capture — the per-meeting on/off, a force-capture,
-            // what's being grabbed, and the most recent frame. Always available
-            // during a recording so capture can be flipped on for a key moment
-            // even when the default is off; the setting just decides whether it
-            // auto-starts.
-            LiveScreenCapturePanel(session: session)
+            MeetingLiveColumns(session: session, showEvidence: showEvidence)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
 
-            // Live transcript — the running draft, given the column's spare
-            // vertical room (it's the live proof of capture).
-            if let transcriber = session.liveTranscriber {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Live transcript")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(.secondary)
-                    LiveTranscriptPane(transcriber: transcriber)
+    private func performStop() {
+        Task {
+            await session.stopRecording(parakeetModelID: state.settings.parakeetModelID)
+        }
+    }
+}
+
+/// Always-visible top bar for a live recording. Holds the things that must
+/// never scroll out of reach: the elapsed timer, the You / Other side meters
+/// with their "heard" confirmation, the notes-style picker, and the deliberate
+/// Stop control (keeping the first-click catcher so Stop works even when the
+/// window is inactive).
+private struct LiveStatusBar: View {
+    @Environment(AppState.self) private var state
+    @Bindable var session: MeetingSession
+    let isWarming: Bool
+    let onStop: () -> Void
+
+    var body: some View {
+        // A single non-wrapping row would impose a ~700pt minimum width on the
+        // detail pane, which — with the sidebar and inspector also taking room —
+        // forces the whole window content wider than the window and overflows
+        // both sides. ViewThatFits picks the densest row that fits: full → drop
+        // the notes-style picker → drop the meters. Timer + Stop always remain.
+        ViewThatFits(in: .horizontal) {
+            bar(showMeters: true, showPicker: true)
+            bar(showMeters: true, showPicker: false)
+            bar(showMeters: false, showPicker: false)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+        .meetingGlassControl(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func bar(showMeters: Bool, showPicker: Bool) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            timerView
+            if showMeters {
+                Divider().frame(height: 22)
+                HStack(alignment: .center, spacing: 14) {
+                    LabeledWaveform(label: "You", level: levels.mic, tint: .accentColor, heard: session.micHeard)
+                        .frame(width: 110)
+                    LabeledWaveform(label: "Other side", level: levels.system, tint: .indigo, heard: session.systemHeard)
+                        .frame(width: 130)
                 }
-                .frame(maxHeight: .infinity, alignment: .top)
-            } else {
-                Spacer(minLength: 0)
             }
-
-            // Footer — configuration + the deliberate end-of-session control.
-            VStack(spacing: 10) {
-                meetingTypeRow
-                stopButton
+            if isWarming {
+                Label("Connecting…", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+            Spacer(minLength: 12)
+            if showPicker { meetingTypeRow }
+            stopButton
         }
     }
 
-    /// Soft hint when the remote side has stayed silent a while into the call
-    /// despite the mic being live — usually means call audio isn't routed
-    /// through this Mac for the system tap to capture.
-    private var systemWaitingHint: String? {
-        guard case .recording(let elapsed, _, _) = session.state else { return nil }
-        guard !session.systemHeard, session.micHeard, elapsed > 6 else { return nil }
-        return "Silent so far — is call audio playing through this Mac?"
+    private var timerView: some View {
+        Text(timerText)
+            .font(.system(.title2, design: .rounded).weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
     }
 
-    /// Meeting-type picker as a compact chip, settable mid-recording so the
-    /// end-of-meeting notes pass is biased toward the right shape (stand-up,
-    /// retro, 1-on-1, …). Bound straight to the live session's meta; persisted
-    /// when recording stops along with the rest of the meta.
+    /// Meeting-type picker, settable mid-recording so the end-of-meeting notes
+    /// pass is biased toward the right shape. Bound straight to the live
+    /// session's meta; persisted when recording stops.
     private var meetingTypeRow: some View {
         HStack(spacing: 6) {
             Text("Notes style")
@@ -505,16 +407,14 @@ struct LiveRecordingView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .fixedSize()
-            Spacer()
         }
     }
 
     private var stopButton: some View {
         Button(role: .destructive) {
-            performStop()
+            onStop()
         } label: {
-            Label("Stop recording", systemImage: "stop.fill")
-                .frame(maxWidth: .infinity)
+            Label("Stop", systemImage: "stop.fill")
         }
         .controlSize(.large)
         .buttonStyle(.borderedProminent)
@@ -522,20 +422,7 @@ struct LiveRecordingView: View {
         .disabled(isWarming)
         // Respond on the FIRST click even when the Meetings window is inactive,
         // instead of the click just focusing the window and needing a second.
-        .overlay(FirstMouseCatcher(isEnabled: !isWarming, action: performStop))
-    }
-
-    private func performStop() {
-        Task {
-            await session.stopRecording(parakeetModelID: state.settings.parakeetModelID)
-        }
-    }
-
-    private var timerView: some View {
-        Text(timerText)
-            .font(.system(.largeTitle, design: .rounded).weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(.primary)
+        .overlay(FirstMouseCatcher(isEnabled: !isWarming, action: onStop))
     }
 
     private var timerText: String {
@@ -561,6 +448,192 @@ struct LiveRecordingView: View {
             return String(format: "%d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%02d:%02d", minutes, secs)
+    }
+}
+
+/// The main columns — Pad, Live notes, Coach, and (when shown) the Evidence
+/// column (shared screen + transcript) — side by side. Every column uses a
+/// fixed-height header zone so their content surfaces start at the same Y and
+/// line up, whatever's in the header (the live-notes status line slots under its
+/// title without shifting the surface).
+private struct MeetingLiveColumns: View {
+    @Environment(AppState.self) private var state
+    @Bindable var session: MeetingSession
+    /// Whether the Evidence column (shared screen + transcript) is shown.
+    let showEvidence: Bool
+
+    private static let spacing: CGFloat = 14
+    /// Fixed header zone so every column's surface starts at the same Y — the
+    /// title sits at the top with room beneath for an optional sub-line (the
+    /// live-notes status) without shifting the surface.
+    private static let headerHeight: CGFloat = 40
+
+    var body: some View {
+        // Fixed columns side by side — Pad, Live notes, Coach, and (when shown)
+        // the Evidence column (shared screen + transcript). The evidence is
+        // in-window, not a native inspector: the inspector repeatedly broke the
+        // detail's top safe area on relayout during a recording. Toggling it is a
+        // clean fade + reflow, not a slide-off panel.
+        HStack(alignment: .top, spacing: Self.spacing) {
+            padSection
+            liveNotesSection
+            coachSection
+            if showEvidence {
+                evidenceColumn
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .animation(.easeInOut(duration: 0.2), value: showEvidence)
+    }
+
+    // MARK: - Columns (uniform header height → aligned surfaces)
+
+    private var padSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "pencil.line").foregroundStyle(.secondary)
+                Text("Pad").font(.headline)
+                Spacer()
+                if !session.padText.isEmpty {
+                    CopyButton(text: session.padText, label: "Copy")
+                }
+            }
+            .frame(height: Self.headerHeight, alignment: .topLeading)
+            MeetingPadEditor(session: session)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var liveNotesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles").foregroundStyle(.purple)
+                    Text("Live notes").font(.headline)
+                    Spacer()
+                    if let notes = session.notesAccumulator?.liveNotes, !notes.isEmpty {
+                        CopyButton(text: notes, label: "Copy")
+                    }
+                }
+                if let acc = session.notesAccumulator {
+                    NotesStatusLine(accumulator: acc)
+                }
+            }
+            .frame(height: Self.headerHeight, alignment: .topLeading)
+
+            if let acc = session.notesAccumulator {
+                LiveNotesField(accumulator: acc)
+            } else {
+                Text(notesDisabledMessage)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Coach rail: live metrics, the committed Key points, and the semi-optional
+    /// Opportunities — all in one scrolling card so the column never overflows.
+    @ViewBuilder
+    private var coachSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "checklist").foregroundStyle(.secondary)
+                Text("Coach").font(.headline)
+                Spacer()
+                if session.coachEngine?.chipHidden == true {
+                    Button { session.coachEngine?.chipHidden = false } label: {
+                        Label("Show on island", systemImage: "arrow.up.forward.square")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.link)
+                    .help("Bring the coach strip back to the top of the screen")
+                }
+            }
+            .frame(height: Self.headerHeight, alignment: .topLeading)
+
+            if let coach = session.coachEngine {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CoachMetricsStrip(engine: coach)
+                        coachSubsection("Key points") {
+                            CoachChecklistPanel(engine: coach)
+                        }
+                        Divider()
+                        coachSubsection("Opportunities") {
+                            CoachOpportunitiesPanel(engine: coach)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .notesSurface()
+                    .padding(.bottom, 2)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                Text("Coach is off for this meeting.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func coachSubsection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            content()
+        }
+    }
+
+    private var notesDisabledMessage: String {
+        if state.settings.activeLLMEngine() == nil {
+            return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
+        }
+        if !state.settings.meetingLiveTranscriptEnabled {
+            return "Live transcript is off. Turn on “Show a live transcript while recording” in Meetings settings to watch notes build here."
+        }
+        return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
+    }
+
+    /// The Evidence column: a uniform header, the latest shared-screen frame
+    /// (fixed-height compact preview), and the running transcript beneath it.
+    private var evidenceColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.on.rectangle.angled").foregroundStyle(.secondary)
+                Text("Shared screen").font(.headline)
+                Spacer()
+            }
+            .frame(height: Self.headerHeight, alignment: .topLeading)
+
+            LiveScreenCapturePanel(session: session, compact: true)
+
+            if let transcriber = session.liveTranscriber {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Live transcript")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    LiveTranscriptPane(transcriber: transcriber)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -809,6 +882,9 @@ private struct CaptureWarningBanner: View {
 /// to decide whether the feature is on.
 private struct LiveScreenCapturePanel: View {
     @Bindable var session: MeetingSession
+    /// In the evidence column the preview is capped so the transcript beneath it
+    /// keeps room; full size is always a click away via Quick Look.
+    var compact = false
 
     @State private var targets: [MeetingScreenCapturer.CaptureTarget] = []
     @State private var latestImage: NSImage?
@@ -841,7 +917,9 @@ private struct LiveScreenCapturePanel: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // Content panel → solid surface, matching the Pad / Live-notes / Coach
+        // columns. Glass here produced the stray drop shadow against the column.
+        .notesSurface()
         .quickLookPreview($quickLookURL)
         .task(id: capturer.latestScreenshotURL) {
             guard let url = capturer.latestScreenshotURL else { latestImage = nil; return }
@@ -911,24 +989,27 @@ private struct LiveScreenCapturePanel: View {
         .help("Choose which meeting window to capture")
     }
 
+    // Always one line (same height whether capturing or off) so toggling Capture
+    // doesn't change the panel's height and reflow the inspector.
     @ViewBuilder
     private var targetLine: some View {
-        if capturer.isCapturing, let target = capturer.currentTarget {
-            Text("Capturing \(target.label)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        } else {
-            Text("Capture is off. Turn it on for a stretch, or hit Capture now for a one-off — frames stay on this Mac.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        Group {
+            if capturer.isCapturing, let target = capturer.currentTarget {
+                Text("Capturing \(target.label)")
+            } else {
+                Text("Capture is off — turn it on, or hit Capture now.")
+            }
         }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // Stretches the most recent frame to the full card width (height follows the
-    // image's aspect) so it's as large as the column allows; click → Quick Look.
+    // Fixed height regardless of state (image ⇄ placeholder), so toggling Capture
+    // never changes the panel's height — a height change here reflows the whole
+    // inspector and re-trips the content-under-the-toolbar bug. Click → Quick Look.
     private var preview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -937,8 +1018,6 @@ private struct LiveScreenCapturePanel: View {
                 Image(nsImage: latestImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 VStack(spacing: 4) {
                     Image(systemName: "rectangle.dashed")
@@ -948,10 +1027,11 @@ private struct LiveScreenCapturePanel: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                .frame(height: 120)
             }
         }
         .frame(maxWidth: .infinity)
+        .frame(height: compact ? 180 : 240)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.secondary.opacity(0.2)))
         .contentShape(Rectangle())
         .onTapGesture {

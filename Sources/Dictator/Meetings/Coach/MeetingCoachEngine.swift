@@ -27,7 +27,7 @@ struct CoachSessionPlan: Sendable {
 /// One live checklist item. `id` is stable for the meeting's duration so
 /// SwiftUI rows keep identity and the watcher's numbered references map back.
 struct CoachChecklistEntry: Identifiable, Equatable, Sendable {
-    enum Source: String, Sendable { case preset, profile, adhoc }
+    enum Source: String, Sendable { case preset, profile, adhoc, suggested }
     enum Status: Equatable, Sendable {
         case pending
         case done(atSeconds: Double)
@@ -128,6 +128,21 @@ final class MeetingCoachEngine {
 
     var hasChecklist: Bool { !checklist.isEmpty }
 
+    /// Committed checklist items — the things the user means to cover. Excludes
+    /// auto-suggested opportunities and dismissed rows. Drives the key-points
+    /// panel, the island progress badge, and the wrap-up nudge.
+    var keyPoints: [CoachChecklistEntry] {
+        checklist.filter { $0.source != .suggested && $0.status != .dismissed }
+    }
+
+    /// Semi-optional opportunities the coach surfaced (the scout pass) — threads
+    /// worth circling back to. Never counted as commitments: kept out of the
+    /// progress badge and the wrap-up nudge, so they can't pressure. They still
+    /// auto-tick if the watcher sees the topic get picked back up.
+    var opportunities: [CoachChecklistEntry] {
+        checklist.filter { $0.source == .suggested && $0.status != .dismissed }
+    }
+
     /// Begin the clock + the 1 Hz publish loop. Called from the recorder's
     /// onReady (when capture actually starts), so t=0 is real audio time.
     func start() {
@@ -160,6 +175,14 @@ final class MeetingCoachEngine {
     /// Tracked like any checklist item, plus it arms the reminder nudge.
     func addAdHocItem(_ text: String) {
         add(texts: [text], source: .adhoc)
+    }
+
+    /// Add coach-surfaced opportunities (the scout pass's output) as
+    /// semi-optional items. They're watched and auto-tick like any item if you
+    /// circle back to the topic, but never pressure-nudge (see `pendingKeyPoints`)
+    /// and don't count toward checklist progress.
+    func addOpportunities(_ texts: [String]) {
+        add(texts: texts, source: .suggested)
     }
 
     /// Bulk-add (from a built-in set, a saved profile, or a pasted list).
@@ -328,8 +351,10 @@ final class MeetingCoachEngine {
                 id: $0.id, text: $0.text, ageSeconds: now - $0.addedAtSeconds
             ) }
         // Set/profile/pasted items remind as one roll-up, not per item.
+        // Ad-hoc items remind individually (above); suggested opportunities
+        // never feed the wrap-up nudge — they're optional by design.
         let pendingKeyPoints = checklist
-            .filter { $0.isPending && $0.source != .adhoc }
+            .filter { $0.isPending && ($0.source == .preset || $0.source == .profile) }
             .map(\.text)
         let scheduledFraction = scheduledEndElapsedSeconds.flatMap { end in
             end > 60 ? now / end : nil

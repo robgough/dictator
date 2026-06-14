@@ -57,6 +57,20 @@ struct CoachIslandContent: View {
                 .buttonStyle(.plain)
             }
             CoachChecklistPanel(engine: engine, compact: true)
+            if !engine.opportunities.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "lightbulb")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    Text("Opportunities")
+                        .font(.system(size: 9, weight: .semibold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.top, 2)
+                CoachOpportunitiesPanel(engine: engine, compact: true, showsEmptyState: false)
+            }
             Button("Hide coach for this meeting") { engine.chipHidden = true }
                 .buttonStyle(.plain)
                 .font(.caption2)
@@ -83,9 +97,10 @@ struct CoachIslandContent: View {
                     .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
                     .foregroundStyle(shareStyle(share: s.talkShareMeWindow))
             }
-            if engine.hasChecklist {
-                let done = engine.checklist.count(where: { !$0.isPending })
-                Text("\(done)/\(engine.checklist.count)")
+            let key = engine.keyPoints
+            if !key.isEmpty {
+                let done = key.count(where: { !$0.isPending })
+                Text("\(done)/\(key.count)")
                     .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }

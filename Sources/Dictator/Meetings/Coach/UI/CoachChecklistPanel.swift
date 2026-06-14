@@ -18,7 +18,7 @@ struct CoachChecklistPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 5 : 8) {
-            ForEach(engine.checklist.filter { $0.status != .dismissed }) { entry in
+            ForEach(engine.keyPoints) { entry in
                 row(entry)
             }
             addRow
@@ -113,7 +113,7 @@ struct CoachChecklistPanel: View {
                 }
             }
             Divider()
-            if engine.checklist.contains(where: { $0.status != .dismissed }) {
+            if !engine.keyPoints.isEmpty {
                 Button("Save current points as a set…") { showingSaveAsSet = true }
             }
             if !compact {
@@ -148,9 +148,7 @@ struct CoachChecklistPanel: View {
         let name = newSetName.trimmingCharacters(in: .whitespaces)
         newSetName = ""
         guard !name.isEmpty else { return }
-        let items = engine.checklist
-            .filter { $0.status != .dismissed }
-            .map(\.text)
+        let items = engine.keyPoints.map(\.text)
         guard !items.isEmpty else { return }
         let existing = Set(state.settings.coachChecklistProfiles.map(\.id))
         let id = MeetingTypeDefinition.makeID(from: name, existing: existing)
@@ -158,5 +156,71 @@ struct CoachChecklistPanel: View {
             CoachChecklistProfile(id: id, name: name, items: items)
         )
         state.save()
+    }
+}
+
+/// The opportunities list — semi-optional threads the coach surfaced for you to
+/// circle back to. Renders the same way in the recording pane's Coach column and
+/// the island's expanded panel. Each row can be ticked (you followed up) or
+/// dismissed (not worth it); both are one-click and unobtrusive — these are
+/// suggestions, never obligations. Items here come from the scout pass via
+/// `engine.addOpportunities`; until that lands the list is empty and (in the
+/// window) shows a quiet placeholder.
+struct CoachOpportunitiesPanel: View {
+    let engine: MeetingCoachEngine
+    var compact = false
+    /// Window shows a placeholder when empty so the section reads as "ready";
+    /// the island hides itself entirely when there's nothing to circle back to.
+    var showsEmptyState = true
+
+    var body: some View {
+        let items = engine.opportunities
+        if items.isEmpty {
+            if showsEmptyState {
+                Text("Threads worth circling back to will show up here as the coach spots them.")
+                    .font(.system(size: compact ? 11 : 12))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: compact ? 5 : 8) {
+                ForEach(items) { entry in
+                    row(entry)
+                }
+            }
+        }
+    }
+
+    private func row(_ entry: CoachChecklistEntry) -> some View {
+        HStack(spacing: 7) {
+            Button {
+                engine.toggleDone(id: entry.id)
+            } label: {
+                Image(systemName: entry.isPending ? "lightbulb" : "checkmark.circle.fill")
+                    .foregroundStyle(entry.isPending ? AnyShapeStyle(Color.yellow) : AnyShapeStyle(Color.green))
+                    .font(.system(size: compact ? 12 : 14))
+            }
+            .buttonStyle(.plain)
+            .help(entry.isPending ? "Mark this as followed up" : "Followed up")
+
+            Text(entry.text)
+                .font(.system(size: compact ? 11 : 12))
+                .strikethrough(!entry.isPending)
+                .foregroundStyle(entry.isPending ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                .lineLimit(2)
+
+            Spacer(minLength: 0)
+            if entry.isPending {
+                Button {
+                    engine.dismissItem(id: entry.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — not worth pursuing")
+            }
+        }
     }
 }

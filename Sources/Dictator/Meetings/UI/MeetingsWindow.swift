@@ -64,6 +64,10 @@ struct MeetingsRootView: View {
     /// flexible spacer before it) so the toggle sits above the inspector while
     /// the capture + document controls stay above the main content.
     @AppStorage("meetingsInspectorVisible") private var inspectorVisible = true
+    /// Visibility of the live evidence inspector (shared screen + transcript)
+    /// shown while recording. Shares its key with `MeetingDetailView`, so this
+    /// toolbar toggle and the inspector stay in lockstep.
+    @AppStorage("meetingLiveEvidenceVisible") private var liveEvidenceVisible = true
 
     /// Whether the Parakeet model meetings depend on is downloaded and ready.
     private var parakeetReady: Bool {
@@ -97,14 +101,24 @@ struct MeetingsRootView: View {
                 }
             }
             // A small gap sets the inspector toggle apart from the action
-            // group, so it reads as the open/close-sidebar control.
-            if shareableSession != nil {
+            // group, so it reads as the open/close-sidebar control. While
+            // recording it toggles the live evidence inspector (shared screen +
+            // transcript); on a finished meeting it toggles Details.
+            if let toggleSession = inspectorToggleSession {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
-                    Button { inspectorVisible.toggle() } label: {
-                        Label("Details", systemImage: "sidebar.right")
+                    Button {
+                        if toggleSession.isLive { liveEvidenceVisible.toggle() }
+                        else { inspectorVisible.toggle() }
+                    } label: {
+                        Label(
+                            toggleSession.isLive ? "Screen & transcript" : "Details",
+                            systemImage: "sidebar.right"
+                        )
                     }
-                    .help("Show or hide meeting details.")
+                    .help(toggleSession.isLive
+                          ? "Show or hide the shared screen & transcript."
+                          : "Show or hide meeting details.")
                 }
             }
         }
@@ -338,10 +352,24 @@ struct MeetingsRootView: View {
 
     private var shareableSession: MeetingSession? {
         guard let candidate = currentSession else { return nil }
+        // Don't read the ticking `state` while live: it's reassigned 10×/sec
+        // during a recording, and reading it here re-vends the whole toolbar on
+        // every tick — the unreliable-buttons symptom (and the autolayout crash
+        // the isLive/isProcessing mirrors were added to prevent). A live session
+        // is never shareable anyway, so short-circuit on the stable mirror first.
+        if candidate.isLive { return nil }
         switch candidate.state {
         case .ready, .idle, .summarising: return candidate
         default: return nil
         }
+    }
+
+    /// The session whose trailing inspector the toolbar toggle controls: a live
+    /// recording (the evidence panel) or a finished meeting (Details). Nil in
+    /// processing / empty states, where there's no inspector to toggle.
+    private var inspectorToggleSession: MeetingSession? {
+        if currentSession?.isLive == true { return currentSession }
+        return shareableSession
     }
 
     /// Copy / export menu. Tab-independent, so it lives in the window toolbar
