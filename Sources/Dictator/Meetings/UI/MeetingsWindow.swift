@@ -64,10 +64,6 @@ struct MeetingsRootView: View {
     /// flexible spacer before it) so the toggle sits above the inspector while
     /// the capture + document controls stay above the main content.
     @AppStorage("meetingsInspectorVisible") private var inspectorVisible = true
-    /// Visibility of the live evidence inspector (shared screen + transcript)
-    /// shown while recording. Shares its key with `MeetingDetailView`, so this
-    /// toolbar toggle and the inspector stay in lockstep.
-    @AppStorage("meetingLiveEvidenceVisible") private var liveEvidenceVisible = true
 
     /// Whether the Parakeet model meetings depend on is downloaded and ready.
     private var parakeetReady: Bool {
@@ -75,7 +71,13 @@ struct MeetingsRootView: View {
     }
 
     var body: some View {
-        content
+        NavigationSplitView {
+            sidebar
+                .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
+        } detail: {
+            detail
+        }
+        .navigationTitle("Meetings")
         // Two glass clusters on macOS 26: the mic + record/stop capture
         // controls, then Import on its own. ToolbarSpacer splits them into
         // separate Liquid Glass capsules. The detail view contributes a third
@@ -95,24 +97,14 @@ struct MeetingsRootView: View {
                 }
             }
             // A small gap sets the inspector toggle apart from the action
-            // group, so it reads as the open/close-sidebar control. While
-            // recording it toggles the live evidence inspector (shared screen +
-            // transcript); on a finished meeting it toggles Details.
-            if let toggleSession = inspectorToggleSession {
+            // group, so it reads as the open/close-sidebar control.
+            if shareableSession != nil {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        if toggleSession.isLive { liveEvidenceVisible.toggle() }
-                        else { inspectorVisible.toggle() }
-                    } label: {
-                        Label(
-                            toggleSession.isLive ? "Screen & transcript" : "Details",
-                            systemImage: "sidebar.right"
-                        )
+                    Button { inspectorVisible.toggle() } label: {
+                        Label("Details", systemImage: "sidebar.right")
                     }
-                    .help(toggleSession.isLive
-                          ? "Show or hide the shared screen & transcript."
-                          : "Show or hide meeting details.")
+                    .help("Show or hide meeting details.")
                 }
             }
         }
@@ -173,28 +165,6 @@ struct MeetingsRootView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isDropTargeted)
-    }
-
-    /// The window's main content. While a meeting is **live** (warming up /
-    /// recording / stopping) the recording screen is shown FULL-WINDOW, outside
-    /// the NavigationSplitView. NavigationSplitView's detail column mis-propagates
-    /// the safe area on macOS (rdar://122947424) and the live view's rapid
-    /// relayouts expose it (the whole content jumps under the toolbar) — hosting
-    /// it outside the split view dodges the bug. Browsing / finished meetings keep
-    /// the NavigationSplitView, where the bug doesn't surface (static content).
-    @ViewBuilder
-    private var content: some View {
-        if let live = liveSession, live.isLive {
-            MeetingDetailView(session: live)
-        } else {
-            NavigationSplitView {
-                sidebar
-                    .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
-            } detail: {
-                detail
-            }
-            .navigationTitle("Meetings")
-        }
     }
 
     /// Block a record/import attempt unless the one LLM that writes decent
@@ -368,24 +338,10 @@ struct MeetingsRootView: View {
 
     private var shareableSession: MeetingSession? {
         guard let candidate = currentSession else { return nil }
-        // Don't read the ticking `state` while live: it's reassigned 10×/sec
-        // during a recording, and reading it here re-vends the whole toolbar on
-        // every tick — the unreliable-buttons symptom (and the autolayout crash
-        // the isLive/isProcessing mirrors were added to prevent). A live session
-        // is never shareable anyway, so short-circuit on the stable mirror first.
-        if candidate.isLive { return nil }
         switch candidate.state {
         case .ready, .idle, .summarising: return candidate
         default: return nil
         }
-    }
-
-    /// The session whose trailing inspector the toolbar toggle controls: a live
-    /// recording (the evidence panel) or a finished meeting (Details). Nil in
-    /// processing / empty states, where there's no inspector to toggle.
-    private var inspectorToggleSession: MeetingSession? {
-        if currentSession?.isLive == true { return currentSession }
-        return shareableSession
     }
 
     /// Copy / export menu. Tab-independent, so it lives in the window toolbar
