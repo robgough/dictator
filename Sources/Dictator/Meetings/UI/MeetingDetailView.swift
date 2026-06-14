@@ -451,61 +451,80 @@ private struct LiveStatusBar: View {
     }
 }
 
-/// The main columns — Pad, Live notes, Coach, and (when shown) the Evidence
-/// column (shared screen + transcript) — side by side. Every column uses a
-/// fixed-height header zone so their content surfaces start at the same Y and
-/// line up, whatever's in the header (the live-notes status line slots under its
-/// title without shifting the surface).
+private enum MeetingColumnMetrics {
+    /// Fixed header zone so every column's content surface starts at the same Y.
+    static let headerHeight: CGFloat = 40
+}
+
+/// The main columns — Pad, Live notes, Coach, and (when shown) Evidence (shared
+/// screen + transcript). A plain SwiftUI `HStack`. This is robust now that the
+/// live recording is hosted **full-window** (outside the `NavigationSplitView`
+/// detail) — the safe-area-propagation bug that broke the hand-built fill-column
+/// layout (rdar://122947424) lives specifically in `NavigationSplitView`'s
+/// detail column, so a plain HStack outside it lays out reliably.
 private struct MeetingLiveColumns: View {
-    @Environment(AppState.self) private var state
     @Bindable var session: MeetingSession
     /// Whether the Evidence column (shared screen + transcript) is shown.
     let showEvidence: Bool
 
-    private static let spacing: CGFloat = 14
-    /// Fixed header zone so every column's surface starts at the same Y — the
-    /// title sits at the top with room beneath for an optional sub-line (the
-    /// live-notes status) without shifting the surface.
-    private static let headerHeight: CGFloat = 40
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            PadColumn(session: session)
+            LiveNotesColumn(session: session)
+            CoachColumn(session: session)
+            if showEvidence {
+                EvidenceColumn(session: session)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// One column: a fixed-height header zone (so every column's surface starts at
+/// the same Y) over its content. Shared shape across all four live columns.
+private struct ColumnFrame<Trailing: View, Content: View>: View {
+    let title: String
+    let systemImage: String
+    var tint: Color = .secondary
+    @ViewBuilder var trailing: () -> Trailing
+    @ViewBuilder var content: () -> Content
 
     var body: some View {
-        // Fixed columns side by side — Pad, Live notes, Coach, and (when shown)
-        // the Evidence column (shared screen + transcript). The evidence is
-        // in-window, not a native inspector: the inspector repeatedly broke the
-        // detail's top safe area on relayout during a recording. Toggling it is a
-        // clean fade + reflow, not a slide-off panel.
-        HStack(alignment: .top, spacing: Self.spacing) {
-            padSection
-            liveNotesSection
-            coachSection
-            if showEvidence {
-                evidenceColumn
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.easeInOut(duration: 0.2), value: showEvidence)
-    }
-
-    // MARK: - Columns (uniform header height → aligned surfaces)
-
-    private var padSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "pencil.line").foregroundStyle(.secondary)
-                Text("Pad").font(.headline)
+                Image(systemName: systemImage).foregroundStyle(tint)
+                Text(title).font(.headline)
                 Spacer()
-                if !session.padText.isEmpty {
-                    CopyButton(text: session.padText, label: "Copy")
-                }
+                trailing()
             }
-            .frame(height: Self.headerHeight, alignment: .topLeading)
-            MeetingPadEditor(session: session)
+            .frame(height: MeetingColumnMetrics.headerHeight, alignment: .topLeading)
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+}
 
-    private var liveNotesSection: some View {
+private struct PadColumn: View {
+    @Bindable var session: MeetingSession
+    var body: some View {
+        ColumnFrame(title: "Pad", systemImage: "pencil.line") {
+            if !session.padText.isEmpty {
+                CopyButton(text: session.padText, label: "Copy")
+            }
+        } content: {
+            MeetingPadEditor(session: session)
+        }
+    }
+}
+
+private struct LiveNotesColumn: View {
+    @Environment(AppState.self) private var state
+    @Bindable var session: MeetingSession
+
+    var body: some View {
+        // The live-notes status line slots under the title inside the fixed-height
+        // header, so the surface still lines up with the other columns.
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -520,7 +539,7 @@ private struct MeetingLiveColumns: View {
                     NotesStatusLine(accumulator: acc)
                 }
             }
-            .frame(height: Self.headerHeight, alignment: .topLeading)
+            .frame(height: MeetingColumnMetrics.headerHeight, alignment: .topLeading)
 
             if let acc = session.notesAccumulator {
                 LiveNotesField(accumulator: acc)
@@ -535,55 +554,53 @@ private struct MeetingLiveColumns: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// Coach rail: live metrics, the committed Key points, and the semi-optional
-    /// Opportunities — all in one scrolling card so the column never overflows.
-    @ViewBuilder
-    private var coachSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "checklist").foregroundStyle(.secondary)
-                Text("Coach").font(.headline)
-                Spacer()
-                if session.coachEngine?.chipHidden == true {
-                    Button { session.coachEngine?.chipHidden = false } label: {
-                        Label("Show on island", systemImage: "arrow.up.forward.square")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.link)
-                    .help("Bring the coach strip back to the top of the screen")
-                }
-            }
-            .frame(height: Self.headerHeight, alignment: .topLeading)
+    private var notesDisabledMessage: String {
+        if state.settings.activeLLMEngine() == nil {
+            return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
+        }
+        if !state.settings.meetingLiveTranscriptEnabled {
+            return "Live transcript is off. Turn on “Show a live transcript while recording” in Meetings settings to watch notes build here."
+        }
+        return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
+    }
+}
 
+private struct CoachColumn: View {
+    @Bindable var session: MeetingSession
+
+    var body: some View {
+        ColumnFrame(title: "Coach", systemImage: "checklist") {
+            if session.coachEngine?.chipHidden == true {
+                Button { session.coachEngine?.chipHidden = false } label: {
+                    Label("Show on island", systemImage: "arrow.up.forward.square")
+                        .font(.caption2)
+                }
+                .buttonStyle(.link)
+                .help("Bring the coach strip back to the top of the screen")
+            }
+        } content: {
             if let coach = session.coachEngine {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         CoachMetricsStrip(engine: coach)
-                        coachSubsection("Key points") {
-                            CoachChecklistPanel(engine: coach)
-                        }
+                        subsection("Key points") { CoachChecklistPanel(engine: coach) }
                         Divider()
-                        coachSubsection("Opportunities") {
-                            CoachOpportunitiesPanel(engine: coach)
-                        }
+                        subsection("Opportunities") { CoachOpportunitiesPanel(engine: coach) }
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .notesSurface()
                     .padding(.bottom, 2)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 Text("Coach is off for this meeting.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func coachSubsection<Content: View>(
+    private func subsection<Content: View>(
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -596,44 +613,31 @@ private struct MeetingLiveColumns: View {
             content()
         }
     }
+}
 
-    private var notesDisabledMessage: String {
-        if state.settings.activeLLMEngine() == nil {
-            return "Turn on an LLM in Settings → Models to see notes build live as the meeting happens."
-        }
-        if !state.settings.meetingLiveTranscriptEnabled {
-            return "Live transcript is off. Turn on “Show a live transcript while recording” in Meetings settings to watch notes build here."
-        }
-        return "Live notes are off. Turn on “Build a first pass while recording” in Meetings settings to watch them build here."
-    }
+private struct EvidenceColumn: View {
+    @Bindable var session: MeetingSession
 
-    /// The Evidence column: a uniform header, the latest shared-screen frame
-    /// (fixed-height compact preview), and the running transcript beneath it.
-    private var evidenceColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "rectangle.on.rectangle.angled").foregroundStyle(.secondary)
-                Text("Shared screen").font(.headline)
-                Spacer()
-            }
-            .frame(height: Self.headerHeight, alignment: .topLeading)
-
-            LiveScreenCapturePanel(session: session, compact: true)
-
-            if let transcriber = session.liveTranscriber {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Live transcript")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(.secondary)
-                    LiveTranscriptPane(transcriber: transcriber)
+    var body: some View {
+        ColumnFrame(title: "Shared screen", systemImage: "rectangle.on.rectangle.angled") {
+            EmptyView()
+        } content: {
+            VStack(alignment: .leading, spacing: 14) {
+                LiveScreenCapturePanel(session: session, compact: true)
+                if let transcriber = session.liveTranscriber {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Live transcript")
+                            .font(.caption.weight(.semibold))
+                            .textCase(.uppercase)
+                            .foregroundStyle(.secondary)
+                        LiveTranscriptPane(transcriber: transcriber)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                Spacer(minLength: 0)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

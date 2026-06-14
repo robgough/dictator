@@ -75,13 +75,7 @@ struct MeetingsRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
-        } detail: {
-            detail
-        }
-        .navigationTitle("Meetings")
+        content
         // Two glass clusters on macOS 26: the mic + record/stop capture
         // controls, then Import on its own. ToolbarSpacer splits them into
         // separate Liquid Glass capsules. The detail view contributes a third
@@ -179,6 +173,28 @@ struct MeetingsRootView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isDropTargeted)
+    }
+
+    /// The window's main content. While a meeting is **live** (warming up /
+    /// recording / stopping) the recording screen is shown FULL-WINDOW, outside
+    /// the NavigationSplitView. NavigationSplitView's detail column mis-propagates
+    /// the safe area on macOS (rdar://122947424) and the live view's rapid
+    /// relayouts expose it (the whole content jumps under the toolbar) — hosting
+    /// it outside the split view dodges the bug. Browsing / finished meetings keep
+    /// the NavigationSplitView, where the bug doesn't surface (static content).
+    @ViewBuilder
+    private var content: some View {
+        if let live = liveSession, live.isLive {
+            MeetingDetailView(session: live)
+        } else {
+            NavigationSplitView {
+                sidebar
+                    .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
+            } detail: {
+                detail
+            }
+            .navigationTitle("Meetings")
+        }
     }
 
     /// Block a record/import attempt unless the one LLM that writes decent

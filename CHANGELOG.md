@@ -13,8 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- The live recording screen has been redesigned into three columns — your Pad, the Live notes, and the Coach — each scrolling on its own, so content no longer gets squeezed until things vanish. The timer, level meters and Stop button now sit in a bar that's always in view.
-- The shared screen and live transcript now live in a collapsible side panel during recording — toggle it from the toolbar's sidebar button, and the notes columns take the freed-up room when it's hidden.
+- The live recording screen is now a focused full-window layout with separate columns — your Pad, the Live notes, and the Coach — each scrolling on its own, plus a persistent bar with the timer, level meters and Stop. (The meeting list returns when you stop recording.)
+- The shared screen and live transcript sit in their own column you can show or hide from the toolbar button, so the notes columns take the room when you don't need them.
 - The Coach now has an Opportunities section, beside Key points, for threads worth circling back to — visible both in the recording screen and in the coach island.
 
 ## v2026.6.5 — 2026-06-13
