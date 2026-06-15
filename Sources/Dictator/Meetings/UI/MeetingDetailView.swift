@@ -375,103 +375,91 @@ struct LiveRecordingView: View {
     // MARK: - Controls column (right, de-emphasised)
 
     private var controlsColumn: some View {
-        VStack(spacing: 14) {
-            // Status band — timer + honest meters + capture confidence.
-            VStack(spacing: 12) {
-                timerView
-                if isWarming {
-                    Label("Connecting microphone and call audio…", systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    LabeledWaveform(label: "You", level: levels.mic, tint: .accentColor, heard: session.micHeard)
-                    LabeledWaveform(
-                        label: "Other side",
-                        level: levels.system,
-                        tint: .indigo,
-                        heard: session.systemHeard,
-                        waitingHint: systemWaitingHint
-                    )
-                }
-                if let coach = session.coachEngine {
-                    CoachMetricsStrip(engine: coach)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity)
-            .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // Everything scrolls except the footer, so nothing gets squashed when
+        // there's a lot of content (long key-point list, transcript, screenshot)
+        // and Stop stays pinned and reachable.
+        VStack(spacing: 12) {
+            ScrollView {
+                VStack(spacing: 14) {
+                    // Status band — timer + per-source capture indicators.
+                    VStack(spacing: 12) {
+                        timerView
+                        if isWarming {
+                            Label("Connecting microphone and call audio…", systemImage: "antenna.radiowaves.left.and.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        VStack(alignment: .leading, spacing: 10) {
+                            LabeledWaveform(label: "You", level: levels.mic, tint: .accentColor, heard: session.micHeard)
+                            LabeledWaveform(
+                                label: "Other side",
+                                level: levels.system,
+                                tint: .indigo,
+                                heard: session.systemHeard,
+                                waitingHint: systemWaitingHint
+                            )
+                        }
+                        if let coach = session.coachEngine {
+                            CoachMetricsStrip(engine: coach)
+                        }
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity)
+                    .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            // Live coach checklist — the key points for this meeting, ticking
-            // off as the watcher catches them. Always present while the coach
-            // runs (it starts empty — items come from typing, pasting a list,
-            // a saved set, or `!` lines in the pad). Coach data: never
-            // exported with the notes.
-            if let coach = session.coachEngine {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checklist")
-                            .foregroundStyle(.secondary)
-                        Text("Key points")
-                            .font(.caption.weight(.semibold))
-                            .textCase(.uppercase)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if coach.chipHidden {
-                            Button {
-                                coach.chipHidden = false
-                            } label: {
-                                Label("Show on island", systemImage: "arrow.up.forward.square")
-                                    .font(.caption2)
+                    // Live coach checklist — the key points for this meeting,
+                    // ticking off as the watcher catches them. Coach data is never
+                    // exported with the notes.
+                    if let coach = session.coachEngine {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checklist")
+                                    .foregroundStyle(.secondary)
+                                Text("Key points")
+                                    .font(.caption.weight(.semibold))
+                                    .textCase(.uppercase)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if coach.chipHidden {
+                                    Button {
+                                        coach.chipHidden = false
+                                    } label: {
+                                        Label("Show on island", systemImage: "arrow.up.forward.square")
+                                            .font(.caption2)
+                                    }
+                                    .buttonStyle(.link)
+                                    .help("Bring the coach strip back to the top of the screen")
+                                }
                             }
-                            .buttonStyle(.link)
-                            .help("Bring the coach strip back to the top of the screen")
+                            CoachChecklistPanel(engine: coach)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+
+                    // Shared-screen capture — the per-meeting on/off, a
+                    // force-capture, what's being grabbed, and the most recent frame.
+                    LiveScreenCapturePanel(session: session)
+
+                    // Live transcript — fixed height so it scrolls within itself
+                    // rather than squashing the cards above it.
+                    if let transcriber = session.liveTranscriber {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Live transcript")
+                                .font(.caption.weight(.semibold))
+                                .textCase(.uppercase)
+                                .foregroundStyle(.secondary)
+                            LiveTranscriptPane(transcriber: transcriber)
+                                .frame(height: 220)
                         }
                     }
-                    CoachChecklistPanel(engine: coach)
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .meetingGlassControl(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.bottom, 4)
             }
 
-            // Capture warnings (mic and / or system) — surfaced when a
-            // recorder fails to deliver buffers within its bring-up watchdog
-            // window. Dismissible per source; UI-only, resets next recording.
-            if !session.captureWarnings.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(session.captureWarnings) { warning in
-                        CaptureWarningBanner(message: warning.message) {
-                            session.dismissCaptureWarning(source: warning.source)
-                        }
-                    }
-                }
-            }
-
-            // Shared-screen capture — the per-meeting on/off, a force-capture,
-            // what's being grabbed, and the most recent frame. Always available
-            // during a recording so capture can be flipped on for a key moment
-            // even when the default is off; the setting just decides whether it
-            // auto-starts.
-            LiveScreenCapturePanel(session: session)
-
-            // Live transcript — the running draft, given the column's spare
-            // vertical room (it's the live proof of capture).
-            if let transcriber = session.liveTranscriber {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Live transcript")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(.secondary)
-                    LiveTranscriptPane(transcriber: transcriber)
-                }
-                .frame(maxHeight: .infinity, alignment: .top)
-            } else {
-                Spacer(minLength: 0)
-            }
-
-            // Footer — configuration + the deliberate end-of-session control.
+            // Footer — pinned below the scroll so Stop is always reachable.
             VStack(spacing: 10) {
                 meetingTypeRow
                 stopButton
@@ -485,7 +473,7 @@ struct LiveRecordingView: View {
     private var systemWaitingHint: String? {
         guard case .recording(let elapsed, _, _) = session.state else { return nil }
         guard !session.systemHeard, session.micHeard, elapsed > 6 else { return nil }
-        return "Silent so far — is call audio playing through this Mac?"
+        return "No call audio yet"
     }
 
     /// Meeting-type picker as a compact chip, settable mid-recording so the
@@ -608,41 +596,82 @@ private struct FirstMouseCatcher: NSViewRepresentable {
     }
 }
 
+/// Per-source capture indicator: a state icon, the label, a live level bar, and
+/// a plain-language status. Replaces the old waveform, which didn't make it clear
+/// whether a side was actually being heard — the green check + "Hearing audio"
+/// (or amber "No call audio yet") states the point directly.
 private struct LabeledWaveform: View {
     let label: String
     let level: Float
     let tint: Color
-    /// Once this side has delivered real audio, show an affirmative check —
+    /// Once this side has delivered real audio, show an affirmative state —
     /// positive proof the source is being captured.
     var heard: Bool = false
-    /// Soft hint shown under the meter when this side has stayed silent while
-    /// the other is active (e.g. call audio not routed through this Mac).
+    /// Set when this side is expected but has stayed silent (e.g. call audio not
+    /// routed through this Mac) — shown as an amber status, not a separate banner.
     var waitingHint: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                if heard {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                        .help("Audio is being captured from this source.")
-                }
-                Spacer()
-            }
-            Waveform(level: level, tint: tint, honest: true)
-            if let waitingHint {
-                Text(waitingHint)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.caption)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(iconColor)
+                .frame(width: 15)
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+            levelBar
+            Text(statusText)
+                .font(.caption2)
+                .foregroundStyle(statusStyle)
+                .fixedSize()
         }
         .animation(.easeOut(duration: 0.3), value: heard)
+        .help(heard ? "Audio is being captured from this source." : (waitingHint ?? "Waiting for audio…"))
+    }
+
+    /// dB-mapped 0…1 fill. Range chosen so the idle noise floor (~−30 dB) reads
+    /// near-empty and normal speech (~−20 to −8 dB) fills it — the old −60 dB
+    /// floor put quiet room noise at ~half the bar.
+    private var fill: Double {
+        let db = 20 * log10(max(Double(level), 0.0001))
+        return max(0, min(1, (db + 30) / 24))
+    }
+    private var isActive: Bool { fill > 0.12 }
+
+    private var iconName: String {
+        if heard { return "checkmark.circle.fill" }
+        if waitingHint != nil { return "exclamationmark.triangle.fill" }
+        return isActive ? "waveform" : "waveform.slash"
+    }
+    private var iconColor: Color {
+        if heard { return .green }
+        if waitingHint != nil { return .orange }
+        return isActive ? tint : .secondary
+    }
+    private var statusText: String {
+        if heard { return "Hearing audio" }
+        if let hint = waitingHint { return hint }
+        return isActive ? "Picking up sound" : "Listening…"
+    }
+    private var statusStyle: AnyShapeStyle {
+        if heard { return AnyShapeStyle(.green) }
+        if waitingHint != nil { return AnyShapeStyle(.orange) }
+        return AnyShapeStyle(.secondary)
+    }
+    private var levelBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.15))
+                Capsule()
+                    .fill(heard ? Color.green : tint)
+                    .frame(width: max(3, geo.size.width * CGFloat(fill)))
+            }
+        }
+        .frame(height: 5)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -930,15 +959,17 @@ private struct LiveScreenCapturePanel: View {
     // Stretches the most recent frame to the full card width (height follows the
     // image's aspect) so it's as large as the column allows; click → Quick Look.
     private var preview: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.black.opacity(0.25))
+        // The frame caps live on the content (not an unbounded ZStack rectangle),
+        // and the fill is a `.background`, so the preview hugs its content and is
+        // safe inside the scrolling controls column (a greedy fill would expand
+        // to infinite height there).
+        Group {
             if let latestImage {
                 Image(nsImage: latestImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(maxHeight: 200)
             } else {
                 VStack(spacing: 4) {
                     Image(systemName: "rectangle.dashed")
@@ -948,10 +979,12 @@ private struct LiveScreenCapturePanel: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
+                .frame(maxWidth: .infinity)
                 .frame(height: 120)
             }
         }
-        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.25)))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.secondary.opacity(0.2)))
         .contentShape(Rectangle())
         .onTapGesture {

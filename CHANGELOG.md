@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- While recording a meeting, each audio source now shows a plain-language capture status — a green check and "Hearing audio" once it's actually picking up sound, an amber "No call audio yet" when the call side stays silent — instead of a bare waveform, and no longer reports a live-but-silent device as heard. The recording controls also scroll now so the Stop button stays reachable however much is on screen.
 
 ## v2026.6.5 — 2026-06-13
 

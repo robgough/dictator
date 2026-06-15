@@ -317,7 +317,9 @@ final class MeetingSession: Identifiable {
         recorder.onLevel = { [weak self] _, sys in
             guard let self else { return }
             self.lastSystemLevel = sys
-            if sys > 0.02 { self.systemHeard = true }
+            // Above the idle noise floor (~0.03 RMS), so a live-but-silent device
+            // doesn't false-positive as "heard" — only real audio latches it.
+            if sys > 0.05 { self.systemHeard = true }
             self.coachEngine?.ingestSystemLevel(sys)
         }
         recorder.onUnexpectedStop = { [weak self] reason in
@@ -362,7 +364,10 @@ final class MeetingSession: Identifiable {
         micRecorder.onLevel = { [weak self] mic in
             guard let self else { return }
             self.lastMicLevel = mic
-            if mic > 0.02 { self.micHeard = true }
+            // Above the idle noise floor (~0.03 RMS) — muting in a call app
+            // doesn't silence the OS mic device, so a lower bar would latch
+            // "heard" on the floor alone. Only real audio should latch it.
+            if mic > 0.05 { self.micHeard = true }
             self.coachEngine?.ingestMicLevel(mic)
         }
         micRecorder.onCaptureWarning = { [weak self] message in
