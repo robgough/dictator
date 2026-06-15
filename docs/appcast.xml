@@ -438,6 +438,22 @@
                 type="application/octet-stream"
                 sparkle:edSignature="JIREbdihMSeGoiHN/5bchtUszi7pqE0ffC2u2g/JyneQl9nSDnGnzs70FRdikPFKSE9S+j+4ZF2V2ZT9vGJDCw==" />
         </item>
+        <item>
+            <title>Version 2026.6.7</title>
+            <pubDate>Mon, 15 Jun 2026 23:34:36 +0000</pubDate>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>2026.6.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dictation sound cues no longer briefly dip or interrupt other audio (like YouTube or music) when Dictator launches or plays a cue, which was most noticeable on USB audio interfaces.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.7/Dictator.dmg"
+                length="31076846"
+                type="application/octet-stream"
+                sparkle:edSignature="+IlcNE8/5CCtPI69CDa7ZhlrkOjwuV+yuSS2SXzkEiRxYgtC5xkdgq8ASrQW7DTQw8XfeRAjRN0/XOoO8ZJYDA==" />
+        </item>
+    
     
     
     
