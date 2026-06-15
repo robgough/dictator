@@ -179,12 +179,12 @@ final class AppState {
         }
 
         AudioDeviceManager.shared.bootstrap()
-        // Bring the audio cue engine up off-main *now* so the first
-        // hotkey press doesn't pay first-touch start latency for the arm
-        // chime. Best-effort — if the engine refuses to start (no output
-        // device, weird state) the user just misses cues until the next
-        // output-device configuration change retries.
-        SoundEffects.shared.prewarm()
+        // Render + register the cue sounds off-main *now* so the first hotkey
+        // press's arm chime is instant. Unlike the old engine prewarm this
+        // opens no audio device IO (system sounds render inside coreaudiod),
+        // so it can't dip other audio or pin the mic indicator — and there's
+        // no point doing it when cues are switched off.
+        if settings.playSounds { SoundEffects.shared.prewarm() }
         pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
             self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)
         }

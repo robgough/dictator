@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Dictation sound cues no longer briefly dip or interrupt other audio (like YouTube or music) when Dictator launches or plays a cue, which was most noticeable on USB audio interfaces.
 
 ## v2026.6.6 — 2026-06-15
 

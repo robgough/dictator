@@ -1,230 +1,147 @@
 import Foundation
+import AudioToolbox
 @preconcurrency import AVFoundation
 
-/// Plays the arm / start / stop / done audio cues. Public methods are
-/// fire-and-forget and never block the caller: all `AVAudioEngine` and
-/// `AVAudioPlayerNode` work serialises through a private background
-/// queue.
+/// Plays the arm / start / stop / done audio cues as macOS *system sounds*.
 ///
-/// Why the queue? `AVAudioEngine.start()` can block on the calling thread
-/// for hundreds of milliseconds (occasionally seconds) immediately after
-/// an output-device reconfiguration — AirPods reconnect, USB DAC
-/// power-cycle, hub flap. The class used to be `@MainActor` and called
-/// `engine.start()` synchronously from the hotkey path; when that
-/// blocked, the main actor wedged, the `AudioRecorder` warmup watchdog
-/// couldn't fire, and the user was stuck staring at "Connecting
-/// microphone" until they killed the app. Marking the class
-/// `@unchecked Sendable` + serialising on `queue` guarantees the
-/// hotkey path returns to main in microseconds; if the engine is slow
-/// to come up the user just doesn't hear that one cue.
+/// Why system sounds rather than our own `AVAudioEngine`? Starting an
+/// `AVAudioEngine` opens a fresh IO context on the output device; coreaudiod
+/// then reconfigures the device's IO cycle to splice our stream in, and on a
+/// shared-clock duplex interface (Scarlett, most USB audio boxes) the output
+/// audibly *gaps for a beat* while it does — every app's playback dips the
+/// moment Dictator launches (prewarm) or plays its first cue after the engine
+/// had idle-stopped. `AudioServicesPlaySystemSound` renders the cue inside
+/// coreaudiod's already-running system-sound path, so our process never opens
+/// an IO context: no device reconfiguration, no dip.
 ///
-/// Why the idle-stop? A running AVAudioEngine holds a live IO context on
-/// the output device inside coreaudiod. On a duplex interface (Scarlett,
-/// most USB audio boxes) that context carries the device's *input*
-/// streams too, and macOS hosts the system mic-mode DSP (Voice Isolation
-/// et al.) inside it — at which point coreaudiod attributes *recording*
-/// to Dictator and the orange mic indicator stays lit indefinitely while
-/// the app sits idle (observed live: context pinned from one dictation's
-/// done-chime until app quit, hours later). The always-running engine is
-/// also standing churn inside coreaudiod on exactly the device family the
-/// dictation mic shares a USB clock with. So: cues keep the engine warm
-/// for `idleStopDelay` after the last play, then it's stopped and the
-/// context released. The next cue restarts it on `queue` — worst case
-/// that one cue arrives a beat late, same trade the config-change path
-/// has always made.
+/// It also retires the whole reason the old engine had to idle-stop. A
+/// persistent output engine on a duplex device pulled the device's *input*
+/// streams into its IO context, so coreaudiod attributed recording to us and
+/// pinned the orange mic indicator while the app sat idle. We never hold an IO
+/// context now, so that failure mode is structurally impossible — there's no
+/// prewarm engine, no idle-stop, and no configuration-change handler to get
+/// wrong.
+///
+/// The tones are still synthesised in-process (the bell / wood partial design
+/// below — that's the polish). They're rendered to small CAF files in
+/// Application Support once per synthesis version, registered as
+/// `SystemSoundID`s, and replayed from disk.
+///
+/// Trade-offs inherited from the system-sound path, all acceptable for short
+/// UI cues: playback uses the user's *alert* volume and the *"Play sound
+/// effects through"* output device (usually the same as the main output), and
+/// honours the system "play user-interface sound effects" toggle. Overlapping
+/// cues mix rather than interrupt — moot here, since cues are sequential and
+/// ≤0.4 s.
 final class SoundEffects: @unchecked Sendable {
     static let shared = SoundEffects()
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    /// Bump when the synthesis below changes so stale cached CAFs aren't
+    /// reused. Old-version files linger harmlessly (a few KB each).
+    private static let cacheVersion = 1
+
     private let format: AVAudioFormat
-    /// All reads + writes happen on `queue`.
-    private var started = false
-    private var configChangeObserver: NSObjectProtocol?
 
-    private let armBuffer: AVAudioPCMBuffer
-    private let startBuffer: AVAudioPCMBuffer
-    private let stopBuffer: AVAudioPCMBuffer
-    private let doneBuffer: AVAudioPCMBuffer
+    /// Registered system-sound handles. All access on `queue`.
+    private var armID: SystemSoundID = 0
+    private var startID: SystemSoundID = 0
+    private var stopID: SystemSoundID = 0
+    private var doneID: SystemSoundID = 0
+    /// True once the CAFs are rendered + registered. All access on `queue`.
+    private var prepared = false
 
-    /// Serial queue isolating `started` and ordering every
-    /// engine/player call. Anything that touches the audio graph hops
-    /// onto this queue first.
+    /// Serial queue ordering setup and playback. `AudioServicesPlaySystemSound`
+    /// is non-blocking (it hands the sound to the system sound server and
+    /// returns), so this never backs up; it exists purely to isolate the
+    /// one-time render/register from the cue calls without a lock. The first
+    /// launch renders four tiny files here off the main thread; later launches
+    /// just re-register the cached files.
     private let queue = DispatchQueue(label: "Dictator.SoundEffects", qos: .userInitiated)
 
-    /// How long the engine stays up after the last cue (or prewarm)
-    /// before we release its device IO context. Long enough that every
-    /// cue within one dictation (arm → start → stop → done) reuses the
-    /// running engine; short enough that the mic indicator clears
-    /// promptly once the user goes quiet.
-    private static let idleStopDelay: TimeInterval = 10
-
-    /// When the engine last had a reason to be running. Read by the
-    /// configuration-change handler to decide whether an eager restart
-    /// is warranted. All access on `queue`.
-    private var lastActivityAt = Date.distantPast
-
-    /// Invalidation token for pending idle-stop checks: each new cue
-    /// bumps it, so only the check scheduled by the *latest* activity
-    /// can actually stop the engine. All access on `queue`.
-    private var idleGeneration = 0
-
     private init() {
-        // Mono player straight into mainMixerNode. mainMixer has a built-in
-        // sample-rate converter, so it tolerates the hardware output rate
-        // shifting (48k speaker → 24k AirPods → 192k external interface)
-        // without any reconfiguration on our side. Earlier we routed through
-        // AVAudioUnitReverb for a small-room tail, but the AU graph then
-        // required every node's sample rate to agree, and a mid-session
-        // hardware switch tripped kAudioUnitErr_FormatNotSupported (-10868).
-        // The bell-partial synthesis below carries the polish without it.
-        let fmt = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
-        format = fmt
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: fmt)
-
-        // Real bells have inharmonic partials (non-integer overtones) and each
-        // partial decays at its own rate — the higher you go, the faster it
-        // fades. That's the single biggest difference between "synth tone"
-        // and "real bell". `bellPartials` encodes that physical reality.
-        //
-        // The arm cue uses `woodPartials` instead — fewer and lower partials,
-        // softer attack — so it reads as a different *category* of event
-        // (preparing) rather than just a quieter version of the bells (ready
-        // / done).
-        //
-        // Pitch design: rising F#4 → D5 from arm → start reads as
-        // "preparing → go". Stop drops to A4 (a 4th below start) for clear
-        // "finished capturing" closure. Done climbs to A5 — bright but no
-        // longer piercing — for "transcription delivered".
-        armBuffer   = Self.makeTone(format: fmt, frequency: 370, partials: Self.woodPartials,  attackSeconds: 0.025, durationMS: 180, amplitude: 0.12)  // F#4, woody
-        startBuffer = Self.makeTone(format: fmt, frequency: 587, partials: Self.chimePartials, attackSeconds: 0.020, durationMS: 400, amplitude: 0.16)  // D5
-        stopBuffer  = Self.makeTone(format: fmt, frequency: 440, partials: Self.chimePartials, attackSeconds: 0.018, durationMS: 400, amplitude: 0.16)  // A4
-        doneBuffer  = Self.makeTone(format: fmt, frequency: 880, partials: Self.chimePartials, attackSeconds: 0.014, durationMS: 320, amplitude: 0.11)  // A5, quieter
-
-        // mainMixer routes our 44.1 kHz mono through to whatever output rate
-        // the active hardware uses. When the user swaps speakers / headphones
-        // / external interface, AVAudioEngine stops itself and fires this
-        // notification (per Apple's spec). Without handling it, our `started`
-        // flag goes stale and every subsequent play() silently no-ops.
-        // AudioRecorder follows the same pattern.
-        //
-        // `queue: nil` means the callback runs on whichever thread posts
-        // the notification — we don't care, because we immediately hop
-        // onto our serial queue from inside the block.
-        configChangeObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            self?.queue.async {
-                self?.handleConfigurationChangeLocked()
-            }
-        }
+        format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
     }
 
-    /// Start the output engine ahead of the first cue so the user doesn't
-    /// miss the arm tone on the very first dictation. Best-effort; if the
-    /// engine refuses to start (no output device, weird state) we just
-    /// silently skip cues until the next configuration change retries.
+    /// Render + register the cues ahead of the first hotkey press so the arm
+    /// chime is instant. Unlike the old engine prewarm this opens no audio
+    /// device IO — system sounds render in coreaudiod — so it can neither dip
+    /// other audio nor pin the mic indicator. Best-effort; play() prepares
+    /// lazily too, so a missed prewarm only costs the first cue a beat.
     func prewarm() {
+        queue.async { [weak self] in self?.prepareLocked() }
+    }
+
+    func playArm()   { play(\.armID) }
+    func playStart() { play(\.startID) }
+    func playStop()  { play(\.stopID) }
+    func playDone()  { play(\.doneID) }
+
+    private func play(_ id: KeyPath<SoundEffects, SystemSoundID>) {
+        // Hop onto the serial queue so the caller (the hotkey path) returns
+        // immediately and we never touch `prepared` / the IDs off-queue.
         queue.async { [weak self] in
             guard let self else { return }
-            self.startEngineLocked()
-            self.noteActivityLocked()
+            self.prepareLocked()
+            guard self.prepared else { return }
+            AudioServicesPlaySystemSound(self[keyPath: id])
         }
     }
 
-    func playArm()   { play(armBuffer)   }
-    func playStart() { play(startBuffer) }
-    func playStop()  { play(stopBuffer)  }
-    func playDone()  { play(doneBuffer)  }
-
-    private func play(_ buffer: AVAudioPCMBuffer) {
-        // Hop onto the engine queue. Returns to the caller immediately —
-        // critical for the hotkey path, which must not block on engine
-        // startup regardless of how slow CoreAudio is being.
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.startEngineLocked()
-            self.noteActivityLocked()
-            guard self.started else { return }
-            self.player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
-            if !self.player.isPlaying { self.player.play() }
-        }
-    }
-
-    /// Record that the engine is in active use and (re)arm the idle-stop
-    /// check. Must run on `queue`.
-    private func noteActivityLocked() {
-        lastActivityAt = Date()
-        idleGeneration &+= 1
-        let generation = idleGeneration
-        queue.asyncAfter(deadline: .now() + Self.idleStopDelay) { [weak self] in
-            self?.stopIfIdleLocked(generation: generation)
-        }
-    }
-
-    /// Stop the engine if no newer activity superseded the check that
-    /// scheduled us. Cues are ≤0.4 s and the delay is 10 s, so nothing
-    /// can still be audibly playing here. Must run on `queue`.
-    private func stopIfIdleLocked(generation: Int) {
-        guard generation == idleGeneration, started else { return }
-        player.stop()
-        engine.stop()
-        started = false
-    }
-
-    /// Bring the engine up if it isn't already. Must run on `queue`.
-    /// Retries once with a fresh graph connection on first-attempt
-    /// failure — useful when AVAudioEngine has been invalidated by a
-    /// hardware change we didn't catch via the configuration-change
-    /// notification.
-    private func startEngineLocked() {
-        guard !started else { return }
-        engine.prepare()
+    /// Render any missing CAFs and register every cue. Idempotent — runs its
+    /// work once and no-ops thereafter. Must run on `queue`.
+    private func prepareLocked() {
+        guard !prepared else { return }
+        let dir = Self.cueDirectory()
         do {
-            try engine.start()
-            started = true
+            armID   = try register("arm",   Self.makeTone(format: format, frequency: 370, partials: Self.woodPartials,  attackSeconds: 0.025, durationMS: 180, amplitude: 0.12), in: dir)  // F#4, woody
+            startID = try register("start", Self.makeTone(format: format, frequency: 587, partials: Self.chimePartials, attackSeconds: 0.020, durationMS: 400, amplitude: 0.16), in: dir)  // D5
+            stopID  = try register("stop",  Self.makeTone(format: format, frequency: 440, partials: Self.chimePartials, attackSeconds: 0.018, durationMS: 400, amplitude: 0.16), in: dir)  // A4
+            doneID  = try register("done",  Self.makeTone(format: format, frequency: 880, partials: Self.chimePartials, attackSeconds: 0.014, durationMS: 320, amplitude: 0.11), in: dir)  // A5, quieter
+            prepared = true
         } catch {
-            connectGraphLocked()
-            do {
-                try engine.start()
-                started = true
-            } catch {
-                started = false
-            }
+            // No output device, unwritable cache, or registration refusal:
+            // skip cues silently, same best-effort contract the engine had.
+            prepared = false
         }
     }
 
-    /// (Re)builds the `player → mainMixerNode` connection. Idempotent —
-    /// disconnects any existing input on the mixer first. Must run on
-    /// `queue`. Called from `startEngineLocked()`'s retry path and from
-    /// the configuration-change handler.
-    private func connectGraphLocked() {
-        if player.engine == nil { engine.attach(player) }
-        engine.disconnectNodeInput(engine.mainMixerNode)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+    /// Write `buffer` to `<dir>/<name>.v<cacheVersion>.caf` if it isn't already
+    /// there, then create a `SystemSoundID` for it. Must run on `queue`.
+    private func register(_ name: String, _ buffer: AVAudioPCMBuffer, in dir: URL) throws -> SystemSoundID {
+        let url = dir.appendingPathComponent("\(name).v\(Self.cacheVersion).caf")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            // 16-bit LinearPCM CAF — ample for a UI cue. The buffer stays
+            // Float32 in memory; AVAudioFile converts on write.
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: format.sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ]
+            let file = try AVAudioFile(forWriting: url, settings: settings,
+                                       commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+        }
+        var id: SystemSoundID = 0
+        let status = AudioServicesCreateSystemSoundID(url as CFURL, &id)
+        guard status == noErr else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        return id
     }
 
-    /// AVAudioEngine stops itself before dispatching the configuration-
-    /// change notification. Drop `started` so the next play() restarts
-    /// the engine, and rebuild the connection because the mixer's
-    /// downstream format may have changed (its SRC will sort the rest).
-    /// Eagerly restart *only* while cues are plausibly imminent (within
-    /// the idle window) so we don't lose the next cue to first-touch
-    /// start latency — an unconditional restart here is what used to
-    /// resurrect an idle engine on every device-graph wobble and pin the
-    /// output device's IO context (= phantom mic indicator, see class
-    /// doc). Must run on `queue`.
-    private func handleConfigurationChangeLocked() {
-        started = false
-        if player.isPlaying { player.stop() }
-        connectGraphLocked()
-        if Date().timeIntervalSince(lastActivityAt) < Self.idleStopDelay {
-            startEngineLocked()
-            noteActivityLocked()
-        }
+    /// `~/Library/Application Support/Dictator/SoundCues/`. Mirrors the
+    /// resolution `MicLog` / `ModelStorage` use.
+    private static func cueDirectory() -> URL {
+        let fm = FileManager.default
+        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                appropriateFor: nil, create: true))
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let dir = base.appendingPathComponent("Dictator/SoundCues", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     // MARK: - Synthesis
