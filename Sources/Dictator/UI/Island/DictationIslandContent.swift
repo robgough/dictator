@@ -306,17 +306,27 @@ private struct ModeChip: View {
     }
 }
 
-/// Single-line scrolling preview of the in-flight streaming transcript.
-/// Latest words land on the right; older ones scroll off the left (via
-/// `.truncationMode(.head)` on a single-line, trailing-aligned Text).
-/// The whole row sits inside a subtle bordered well so it reads as a
-/// distinct "draft" zone rather than just another line of HUD text —
-/// the user shouldn't confuse it with the final transcript that will
-/// actually be pasted.
+/// Multi-line preview of the in-flight streaming transcript, shown in a
+/// fixed-height well (~3 lines) reserved for the whole recording so the HUD
+/// doesn't resize as text builds up. The transcript wraps and fills top-down;
+/// once it overflows three lines it scrolls, keeping the newest words pinned to
+/// the bottom while older lines slide up out of view. Filling a few stable
+/// lines reads far calmer than the old single-line view, where every snapshot
+/// re-decode slid the whole line sideways — worse the longer you spoke.
+///
+/// The well is styled as a subtle bordered "draft" zone so it isn't mistaken
+/// for the final transcript that actually gets pasted.
 private struct InterimPreview: View {
     let text: String
+
+    /// Vertical room per line of the preview font (~11 pt SF Rounded). Three
+    /// slots → the well shows three lines; beyond that the ScrollView scrolls.
+    private static let lineSlot: CGFloat = 14.5
+    private static let visibleLines: CGFloat = 3
+    private static let bottomAnchor = "interim-preview-bottom"
+
     var body: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Image(systemName: "ellipsis.bubble")
                     .font(.system(size: 9, weight: .semibold))
@@ -326,23 +336,36 @@ private struct InterimPreview: View {
                     .foregroundStyle(.tertiary)
                     .tracking(0.4)
             }
-            Rectangle()
-                .fill(Color.secondary.opacity(0.22))
-                .frame(width: 1, height: 11)
-            // Same streaming treatment as the meeting live transcript, tuned
-            // for the realtime engine's constant re-decodes: revisions SNAP
-            // back and retype (word-by-word deletion here read as churn),
-            // and a blinking cursor doubles as the "listening" placeholder
-            // before the first words land. Mounted for the whole recording
-            // so the first utterance types rather than jumping in.
-            TypewriterText(target: text, idleIndicator: .blinkingCursor, revisionStyle: .snap)
-                .font(.system(size: 11, weight: .regular, design: .rounded).italic())
-                .lineLimit(1)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: text.isEmpty ? .leading : .trailing)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Word-level animated transcript, tuned for the realtime
+                        // engine's constant whole-buffer re-decodes: unchanged
+                        // words slide, replaced words cross-fade, new words fade
+                        // in — only what changed moves. The trailing cursor
+                        // doubles as the "listening" placeholder before the
+                        // first words land.
+                        StreamingTranscript(target: text)
+                            .font(.system(size: 11, weight: .regular, design: .rounded).italic())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Bottom inset so the newest (bottom-pinned) line clears
+                        // the well's border instead of sitting flush against it,
+                        // and so italic descenders don't clip at the scroll edge.
+                        Color.clear
+                            .frame(height: 5)
+                            .id(Self.bottomAnchor)
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(height: Self.lineSlot * Self.visibleLines)
+                .onChange(of: text) { _, _ in
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            }
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .background(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))

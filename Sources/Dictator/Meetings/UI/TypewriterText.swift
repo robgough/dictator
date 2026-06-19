@@ -33,22 +33,8 @@ struct TypewriterText: View {
         case blinkingCursor
     }
 
-    /// How a revision (target diverging from what's shown) plays out.
-    enum RevisionStyle {
-        /// Delete the divergent tail word-by-word, then retype — the
-        /// "rethinking" effect. Right where revisions are rare and
-        /// meaningful (the meeting transcript's settle commits).
-        case typewriter
-        /// Snap straight back to the common prefix and only animate the
-        /// retype. Right where revisions are constant (the dictation
-        /// preview's realtime re-decodes) and watching deletions reads as
-        /// churn.
-        case snap
-    }
-
     let target: String
     var idleIndicator: IdleIndicator = .none
-    var revisionStyle: RevisionStyle = .typewriter
     var baseColor: NSColor = .secondaryLabelColor
     /// Fired on every published step — the live pane uses it to keep the
     /// scroll pinned to the bottom while words land.
@@ -147,18 +133,9 @@ struct TypewriterText: View {
         }
 
         let commonCount = common
-        let style = revisionStyle
         animator = Task { @MainActor in
             streaming = true
             defer { streaming = false }
-
-            // Snap style: no deletion theatre — straight back to the common
-            // prefix, then the retype animates as usual.
-            if style == .snap, displayed.count > commonCount {
-                displayed = String(oldChars.prefix(commonCount))
-                fades.removeAll { $0.start >= commonCount }
-                onTick?()
-            }
 
             // Delete the divergent tail, word by word.
             while !Task.isCancelled, displayed.count > commonCount {

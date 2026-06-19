@@ -154,7 +154,7 @@ struct IslandView: View {
     private var dictationHeight: CGFloat {
         if case .recording = state.pipeline.state,
            state.settings.realtimeInterimEnabled {
-            return 134
+            return 150
         }
         return 96
     }

@@ -317,14 +317,14 @@ final class Pipeline {
         // start(); the matching stop() restores whatever was applied.
         audioInterrupter.start(mode: settings.audioInterruption)
 
-        // HUD preview. Dictation-only (the Assistant flow doesn't show a
-        // draft) and Parakeet-only (Whisper is too slow to re-transcribe a
-        // growing buffer every second). When enabled we periodically
-        // snapshot the recorder's buffer and run the same offline transcribe
-        // path the final result uses — no streaming-config edge cases, and
-        // the preview quality matches what the user will eventually see.
-        if !isAssistant,
-           settings.realtimeInterimEnabled,
+        // HUD preview — for dictation and the Assistant instruction alike (a
+        // live draft of what you're saying; the well shows in both flows).
+        // Parakeet-only (Whisper is too slow to re-transcribe a growing buffer
+        // every second). When enabled we periodically snapshot the recorder's
+        // buffer and run the same offline transcribe path the final result uses
+        // — no streaming-config edge cases, and the preview quality matches
+        // what the user will eventually see.
+        if settings.realtimeInterimEnabled,
            settings.transcriptionEngine == .parakeet {
             startInterimSnapshots()
         }

@@ -13,7 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- The live preview in the recording HUD is much calmer: it now fills and scrolls a few lines as you speak, animating each change word by word — new words fade in, corrections cross-fade, and the surrounding text glides to make room — instead of a single line that hard-cut and jumped sideways every time the transcription was refined, which was worst during longer dictations.
+- Assistant Mode now shows the same live preview of what you're saying as dictation does, instead of leaving the preview area empty.
 
 ## v2026.6.7 — 2026-06-15
 
