@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Mirror of the mic-start NSLog lines, persisted to
 /// `~/Library/Application Support/Dictator/mic-diagnostics.log`.
@@ -64,6 +65,52 @@ enum MicLog {
             if end + UInt64(data.count) > maxBytes { trim() }
         } catch {
             // Diagnostics must never take the app down.
+        }
+    }
+
+    // MARK: - Stall sampling
+
+    private static let sampleQueue = DispatchQueue(label: "Dictator.MicLog.sample", qos: .userInitiated)
+    private static let sampling = OSAllocatedUnfairLock(initialState: false)
+
+    /// Best-effort capture of THIS process's *main-thread* call stack while it's
+    /// wedged. Shells out to `/usr/bin/sample` (full symbolication, no fragile
+    /// in-process stack-walking) and writes `dictator-stall-sample.txt` next to
+    /// the log. Called off-main from the pipeline's stall detector so it runs
+    /// *during* the freeze — the whole point is to capture WHAT main is stuck in
+    /// instead of inferring it from timings. One run at a time; silently no-ops
+    /// if `sample` can't attach.
+    nonisolated static func captureStallSample(reason: String) {
+        let go = sampling.withLock { busy -> Bool in
+            if busy { return false }
+            busy = true
+            return true
+        }
+        guard go else { return }
+        sampleQueue.async {
+            defer { sampling.withLock { $0 = false } }
+            let out = fileURL.deletingLastPathComponent()
+                .appendingPathComponent("dictator-stall-sample.txt")
+            let pid = ProcessInfo.processInfo.processIdentifier
+            log("Stall detected (\(reason)) — sampling main thread for 2s → \(out.lastPathComponent)")
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+            proc.arguments = [String(pid), "2", "-file", out.path]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            do {
+                try proc.run()
+                // `sample <pid> 2` normally finishes in ~3s. If it wedges (it's
+                // sampling a wedged process), don't let waitUntilExit pin this
+                // serial queue and the `busy` flag forever — terminate after 15s.
+                let watchdog = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15, execute: watchdog)
+                proc.waitUntilExit()
+                watchdog.cancel()
+                log("Stall sample written (sample exited \(proc.terminationStatus)). Send me \(out.lastPathComponent).")
+            } catch {
+                log("Stall sample couldn't launch /usr/bin/sample (\(error.localizedDescription)). Capture manually during a stall: sample \(pid) 3 -file /tmp/dictator-stall.txt")
+            }
         }
     }
 

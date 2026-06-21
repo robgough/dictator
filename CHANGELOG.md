@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictation no longer freezes on "Connecting microphone" for several seconds before recording starts (worst with external USB mics like the Yeti). The recording overlay's animated indicators were forcing a slow GPU render on every start that could stall the whole app; they've been rebuilt to avoid it, so dictation begins promptly.
 - Settings → Input no longer fills up with leftover "Dictator Meeting Tap" entries from meeting recordings, and now forgets any input device it hasn't seen in over a week (unless you've ranked it above System default), so the priority list stays tidy.
 - Settings has a fresh look: the row of tabs across the top is now a sidebar down the left, matching the modern macOS System Settings style, and the window can now be resized.
 - The live preview in the recording HUD is much calmer: it now fills and scrolls a few lines as you speak, animating each change word by word — new words fade in, corrections cross-fade, and the surrounding text glides to make room — instead of a single line that hard-cut and jumped sideways every time the transcription was refined, which was worst during longer dictations.

@@ -90,7 +90,12 @@ struct DictationIslandContent: View {
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(isAssistant ? Color.hudIndigo : Color.brandBlue)
                     .font(.system(size: 22, weight: .semibold))
-                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
+                    // NO `.symbolEffect(.variableColor … .repeating)` here: animated
+                    // symbol effects render into an offscreen Metal surface, and
+                    // allocating it during the warmup reveal made the main thread
+                    // block in CA::Transaction::commit → wait_for_allocations →
+                    // waitForCommitId for seconds (captured in dictator-stall-sample.txt).
+                    // The ProgressView below already signals activity.
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Connecting microphone")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -380,11 +385,17 @@ private struct InterimPreview: View {
 private struct RecordingDot: View {
     @State private var on = false
     var body: some View {
+        // Pulse via scale + opacity, NOT an animated `.shadow(radius:)`. A
+        // shadow whose radius animates forces SwiftUI to re-rasterize an
+        // offscreen Metal surface every frame for the whole recording —
+        // continuous render-server churn that compounds the reveal-time
+        // surface-allocation stall (see dictator-stall-sample.txt). Scale and
+        // opacity animate on the layer itself, no offscreen pass.
         Circle()
             .fill(Color.brandBlue)
             .frame(width: 10, height: 10)
-            .shadow(color: Color.brandBlue.opacity(0.6), radius: on ? 10 : 2)
-            .opacity(on ? 1 : 0.6)
+            .scaleEffect(on ? 1.0 : 0.78)
+            .opacity(on ? 1 : 0.5)
             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }
     }

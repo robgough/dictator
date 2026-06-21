@@ -187,6 +187,18 @@ final class Pipeline {
     /// from a GCD utility queue.
     @ObservationIgnored private let watchdogHeartbeat = OSAllocatedUnfairLock(initialState: 0)
 
+    /// Highest warmup attempt whose `.warmingUp → .recording` transition has
+    /// actually run on the main actor (set in `handleRecorderReady`). Read
+    /// off-main by the stall sampler: if the recorder reports the mic is
+    /// physically live but this hasn't advanced, the main actor is wedged and
+    /// it's worth sampling the real stack. Lock-protected for the off-main read.
+    @ObservationIgnored private let readyConfirmedAttempt = OSAllocatedUnfairLock(initialState: 0)
+
+    /// How long after arming to check for a wedge worth sampling. Much shorter
+    /// than `warmupWatchdogSeconds` (12 s) because everyday stalls are 1–5 s and
+    /// the 14 s starvation sentinel misses them entirely.
+    private static let stallSampleSeconds: Double = 2
+
     /// Hard ceiling over the recorder's own per-phase watchdogs: their
     /// worst legitimate chain (resolution timeout → default fallback →
     /// Bluetooth warmup budget) sums to ~10 s, so anything past this means
@@ -229,14 +241,39 @@ final class Pipeline {
             self.inFlightAssistant = nil
             self.fail("Mic didn't start. Try again — if it keeps happening, pick a different input in Settings.")
         }
+        // Fast stall sampler: ~2 s after arming, if the recorder reports the
+        // mic is physically live but the main actor never promoted us to
+        // .recording for this attempt, main is wedged — dump its real stack
+        // via `/usr/bin/sample` instead of guessing. Gated on the mic being up
+        // so a genuinely slow device (BT warmup) doesn't trip it.
+        let micLiveForSample = recorder.sessionPhysicallyLive
+        let confirmed = readyConfirmedAttempt
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + Self.stallSampleSeconds
+        ) {
+            guard confirmed.withLock({ $0 }) < attempt else { return }
+            guard micLiveForSample.withLock({ $0 }) else { return }
+            MicLog.captureStallSample(reason: "warmup attempt \(attempt): mic physically live but main actor hasn't promoted to .recording after \(Int(Self.stallSampleSeconds))s")
+        }
+
         // Give the main-actor watchdog 2 s of grace past its deadline
         // before declaring starvation.
         let heartbeat = watchdogHeartbeat
+        // Read off-main so we can report the *honest* state: if the mic is
+        // physically capturing (flag set on the audio thread after
+        // startRunning) while this watchdog is starved, the audio is fine and
+        // only the main-actor UI update is wedged — a WindowServer stall, not
+        // an audio failure. The lock is Sendable; capture it, not `self`.
+        let micLive = recorder.sessionPhysicallyLive
         DispatchQueue.global(qos: .utility).asyncAfter(
             deadline: .now() + Self.warmupWatchdogSeconds + 2
         ) {
             guard heartbeat.withLock({ $0 }) < attempt else { return }
-            MicLog.log("Main thread starved: warmup watchdog for attempt \(attempt) hasn't run \(Int(Self.warmupWatchdogSeconds) + 2)s after arming — UI is frozen (mic + watchdogs are fine, their main-actor tasks can't get scheduled). Suspect render/WindowServer health, not audio.")
+            if micLive.withLock({ $0 }) {
+                MicLog.log("Main thread starved: warmup watchdog for attempt \(attempt) hasn't run \(Int(Self.warmupWatchdogSeconds) + 2)s after arming — but the mic IS physically live and capturing. Only the main-actor UI update is stuck. This is a macOS WindowServer/render-commit wedge (the sensor-indicator-layer bug), not an audio failure — it usually clears on logout/reboot.")
+            } else {
+                MicLog.log("Main thread starved: warmup watchdog for attempt \(attempt) hasn't run \(Int(Self.warmupWatchdogSeconds) + 2)s after arming, and the mic isn't confirmed live yet — UI is frozen (main-actor tasks can't get scheduled). Suspect render/WindowServer health, not audio.")
+            }
         }
     }
 
@@ -310,6 +347,11 @@ final class Pipeline {
     /// has already been told to stop; nothing to do here.
     private func handleRecorderReady() {
         guard case .warmingUp(let isAssistant) = state else { return }
+        // Mark this attempt confirmed so the off-main stall sampler knows the
+        // main actor got here (and doesn't fire on a healthy start). Read into
+        // a local first — the `withLock` closure is @Sendable.
+        let confirmedAttempt = warmupAttempt
+        readyConfirmedAttempt.withLock { $0 = max($0, confirmedAttempt) }
         state = .recording(level: 0, isAssistant: isAssistant, interim: "")
         if settings.playSounds { SoundEffects.shared.playStart() }
         // Engaged after the start sound so the chime itself isn't dipped

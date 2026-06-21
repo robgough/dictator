@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
 import CoreMedia
+import os
 
 /// Thin NSObject shim that bridges AVCaptureAudioDataOutput's
 /// Objective-C delegate protocol to a Swift closure. Lets `AudioRecorder`
@@ -48,6 +49,15 @@ final class AudioRecorder {
     private var nativeSampleRate: Double = 0    // populated from the first CMSampleBuffer
     private var running = false
     private var startInFlight = false
+
+    /// Thread-safe "a capture session is physically running right now" flag.
+    /// Flipped true off-main the instant `startRunning()` returns — *before*
+    /// the main-actor hop that publishes readiness to the pipeline — so the
+    /// off-main starvation sentinel can tell "the mic is live and capturing,
+    /// only the main-actor UI update is wedged behind a WindowServer stall"
+    /// apart from "the mic genuinely hasn't started yet". Diagnostic only;
+    /// minor staleness across teardown paths doesn't matter.
+    let sessionPhysicallyLive = OSAllocatedUnfairLock(initialState: false)
 
     /// Which leg of the startup pipeline the in-flight attempt is on.
     /// Drives two things: the resolution watchdog's "are we still stuck
@@ -172,6 +182,7 @@ final class AudioRecorder {
         rawBuffer.removeAll(keepingCapacity: true)
         nativeSampleRate = 0
         lastBufferTime = nil
+        sessionPhysicallyLive.withLock { $0 = false }
 
         startInFlight = true
         startGeneration &+= 1
@@ -355,6 +366,7 @@ final class AudioRecorder {
         startGeneration &+= 1
         startInFlight = false
         startPhase = .idle
+        sessionPhysicallyLive.withLock { $0 = false }
         if running {
             teardownSession()
             running = false
@@ -408,6 +420,7 @@ final class AudioRecorder {
             }
         }
         let queue = outputQueue
+        let liveFlag = sessionPhysicallyLive
 
         // GCD global queue, not Task.detached: `AVCaptureDeviceInput(device:)`
         // and `startRunning()` both block in CoreAudio/CMIO when the HAL is
@@ -464,6 +477,11 @@ final class AudioRecorder {
                 // another app — that case is what the watchdog below
                 // catches.
                 session.startRunning()
+                // The mic is now physically capturing. Record that here, off-main,
+                // before the main-actor hop below — which can sit starved for
+                // seconds behind a WindowServer wedge. The starvation sentinel
+                // reads this to report the honest state ("mic live, UI frozen").
+                liveFlag.withLock { $0 = true }
             } catch {
                 Task { @MainActor [weak self] in
                     self?.handleStartFailure(
@@ -527,6 +545,11 @@ final class AudioRecorder {
         generation: Int
     ) {
         guard generation == startGeneration else {
+            // Superseded mid-warmup (user released, or a retry/fallback bumped
+            // the generation). `startRunning()` set `sessionPhysicallyLive` true
+            // off-main on this now-stale session; clear it so the stall sampler
+            // and starvation sentinel don't read a false "mic live".
+            sessionPhysicallyLive.withLock { $0 = false }
             stopSessionAsync(newSession)
             return
         }
@@ -665,6 +688,9 @@ final class AudioRecorder {
         }
         session = nil
         sampleForwarder = nil
+        // The session is gone — keep the diagnostic flag honest (covers
+        // stop() and the unexpected-stop / device-loss path).
+        sessionPhysicallyLive.withLock { $0 = false }
     }
 
     /// `stopRunning()` can block briefly when tearing down a Bluetooth
