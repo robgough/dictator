@@ -1688,10 +1688,14 @@ struct DictatorSettings: Codable, Equatable {
         }
     }
 
-    /// Whether the meetings feature's LLM requirement is met: the MLX
-    /// engine with `ModelCatalog.meetingsRequiredLLMID` selected. Meetings
-    /// are gated on this — see the catalog constant for the rationale.
-    var meetingsLLMSatisfied: Bool {
-        llmEngine == .mlx && llmModelID == ModelCatalog.meetingsRequiredLLMID
+    /// Whether meetings are running the LLM the notes were tuned for: the
+    /// MLX engine with `ModelCatalog.meetingsRecommendedLLMID` selected.
+    /// Meetings no longer *require* this — any configured engine writes
+    /// notes — but anything else surfaces a non-blocking quality warning
+    /// (`MeetingsFeature.llmQualityNote`). See the catalog constant for the
+    /// rationale; the hard "is there any usable note-writing LLM?" gate
+    /// lives in `MeetingsFeature.llmRequirementMessage`.
+    var meetingsUsingRecommendedLLM: Bool {
+        llmEngine == .mlx && llmModelID == ModelCatalog.meetingsRecommendedLLMID
     }
 }

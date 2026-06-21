@@ -16,6 +16,60 @@ enum AppleFoundationAvailability {
         return false
     }
 
+    /// Smallest on-device context window we'll let power Meetings. As of
+    /// macOS 27 (verified by probing the framework) third-party apps only get
+    /// Apple's ~3B "Core" model with a fixed 4096-token window — the larger
+    /// on-device model (AFM 3 Core Advanced, ~20B) is NOT exposed via
+    /// `SystemLanguageModel`, and the big cloud model is PCC. So today this
+    /// gate is always false and Apple is blocked for Meetings (the 4K model
+    /// drifts and runs out of room on a full transcript, like the small MLX
+    /// models). It's kept as a forward-compat guard: if a future build ever
+    /// hands apps a bigger on-device window, Meetings auto-enable for Apple.
+    /// Sits comfortably above 4096 and above the meeting chunker's ~6K-token
+    /// window + prompt/reply overhead. Tune against the logged value.
+    static let meetingsMinContextSize = 16_384
+
+    /// The on-device model's context window in tokens, or nil when the model
+    /// isn't available at all. macOS 27+ reports the real size; 26.x backstops
+    /// to 4096. Logged once so the actual per-machine value is visible (the
+    /// big-model window isn't documented) and the threshold can be tuned.
+    static var contextSize: Int? {
+        guard isUsable else { return nil }
+        let size = SystemLanguageModel.default.contextSize
+        if !didLogContextSize {
+            didLogContextSize = true
+            NSLog("[Dictator] Apple on-device model contextSize=\(size) tokens (meetings need ≥\(meetingsMinContextSize))")
+        }
+        return size
+    }
+    private static var didLogContextSize = false
+
+    /// True when the on-device model is the larger variant capable of meeting
+    /// notes — judged by its context window clearing `meetingsMinContextSize`.
+    /// Meetings only accept Apple in this case; see `MeetingsFeature`.
+    static var isMeetingsCapable: Bool {
+        guard let size = contextSize else { return false }
+        return size >= meetingsMinContextSize
+    }
+
+    /// One-line, honest description of the on-device model's context window
+    /// and what it means for Meetings. Apple exposes only the ~3B "Core"
+    /// model (4K context) to third-party apps; macOS 27's larger on-device
+    /// model (AFM 3 Core Advanced, ~20B) and the cloud models aren't reachable
+    /// through `SystemLanguageModel`, verified by probing the framework. So we
+    /// don't imply a tier the user can switch to — we state the window and the
+    /// Meetings consequence. Phrased off `contextSize` so it flips
+    /// automatically if Apple ever raises the window we're handed. Nil when
+    /// the model isn't available.
+    static var contextSummary: String? {
+        guard let ctx = contextSize else { return nil }
+        let tokens = "\(ctx.formatted()) tokens"
+        if ctx >= meetingsMinContextSize {
+            return "On-device context window: \(tokens) — large enough for Meetings."
+        }
+        return "On-device context window: \(tokens). Fine for dictation and Assistant, but too small for Meetings — macOS 27's larger on-device model isn't available to third-party apps."
+    }
+
     /// Human-readable explanation when the engine is not usable. Surfaced in the
     /// Settings + Onboarding views right under the engine picker.
     static var unavailableMessage: String? {

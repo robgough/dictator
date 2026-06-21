@@ -47,12 +47,16 @@ struct MeetingsRootView: View {
     /// off a multi-hundred-MB download in the middle of a live recording.
     @State private var showingParakeetGate = false
 
-    /// Raised when the user tries to record/import without the one LLM that
-    /// writes acceptable meeting notes selected (see
-    /// `ModelCatalog.meetingsRequiredLLMID`). Blocking up front beats
-    /// recording an hour of audio and handing the transcript to a model
-    /// whose notes the user will just throw away.
+    /// Raised when the user tries to record/import with no usable LLM to
+    /// write notes (no engine selected, Apple Intelligence unavailable, or
+    /// the chosen MLX model not downloaded — see
+    /// `MeetingsFeature.llmRequirementMessage`). Blocking up front beats
+    /// recording an hour of audio we then can't turn into notes. A merely
+    /// *non-recommended* model doesn't block — it's the user's call.
     @State private var showingMeetingLLMGate = false
+    /// The specific reason captured when `showingMeetingLLMGate` fires, so
+    /// the alert can explain exactly what's missing.
+    @State private var meetingLLMGateMessage = ""
 
     /// True while a file is dragged over the window — drives the glass drop
     /// overlay that replaced the always-visible dashed sidebar drop-zone.
@@ -141,13 +145,13 @@ struct MeetingsRootView: View {
         } message: {
             Text("Meetings transcribe on-device with Parakeet, which isn’t downloaded yet. Download it (about a minute on a fast connection) and you can watch progress in Settings → Models, then start your meeting.")
         }
-        .alert("Meetings need \(ModelCatalog.meetingsRequiredLLMName)", isPresented: $showingMeetingLLMGate) {
+        .alert("Meetings need a model to write notes", isPresented: $showingMeetingLLMGate) {
             Button("Open Settings") {
                 state.openSettingsAction?()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Writing useful notes from a long transcript is the hardest job in the app, and \(ModelCatalog.meetingsRequiredLLMName) is the only model that does it reliably — smaller models drift off the transcript. Select it under Settings → Models, then start your meeting.")
+            Text(meetingLLMGateMessage)
         }
         // Whole-window drop target — drop an audio file anywhere over the
         // Meetings window to import it. A glass card surfaces only while a drag
@@ -167,11 +171,13 @@ struct MeetingsRootView: View {
         .animation(.easeOut(duration: 0.15), value: isDropTargeted)
     }
 
-    /// Block a record/import attempt unless the one LLM that writes decent
-    /// meeting notes is the selected model. Returns true when it's safe to
-    /// proceed.
+    /// Block a record/import attempt only when there's no usable LLM to
+    /// write notes at all (`MeetingsFeature.llmRequirementMessage`). A
+    /// non-recommended model still proceeds — the quality trade-off is the
+    /// user's to make. Returns true when it's safe to proceed.
     private func ensureMeetingLLMReady() -> Bool {
-        guard state.settings.meetingsLLMSatisfied else {
+        if let message = MeetingsFeature.llmRequirementMessage {
+            meetingLLMGateMessage = message
             showingMeetingLLMGate = true
             return false
         }

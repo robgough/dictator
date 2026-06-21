@@ -922,22 +922,22 @@ private struct NotesPanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if state.settings.meetingsLLMSatisfied {
-                NotesGenerationControls(session: session)
-                    .controlSize(.large)
-                    .padding(.top, 2)
-            } else if state.settings.activeLLMEngine() == nil {
-                Text("Turn on an LLM in Settings → Models to write notes.")
+            if let requirement = MeetingsFeature.llmRequirementMessage {
+                Text(requirement)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Open Settings → Models") { state.openSettingsAction?() }
                     .controlSize(.small)
             } else {
-                Text("Meeting notes need \(ModelCatalog.meetingsRequiredLLMName) selected in Settings → Models — it's the only model that writes reliable notes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Open Settings → Models") { state.openSettingsAction?() }
-                    .controlSize(.small)
+                NotesGenerationControls(session: session)
+                    .controlSize(.large)
+                    .padding(.top, 2)
+                if let note = MeetingsFeature.llmQualityNote {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -951,9 +951,10 @@ private struct NotesPanel: View {
 /// both the Details inspector (its primary home) and the Notes-tab call to
 /// action, with the generation + persistence logic in one place. Reads
 /// settings from the environment; drives `session.generateNotes` /
-/// `session.setOneOffPrompt`. Disabled while a pass is in flight or when the
-/// required meetings LLM isn't selected — note quality from smaller models
-/// isn't worth keeping (`ModelCatalog.meetingsRequiredLLMID`).
+/// `session.setOneOffPrompt`. Disabled while a pass is in flight or when
+/// there's no usable LLM to write notes at all
+/// (`MeetingsFeature.llmRequirementMessage`); a non-recommended model still
+/// enables the control (with a quality caveat shown nearby).
 struct NotesGenerationControls: View {
     @Environment(AppState.self) private var state
     @Bindable var session: MeetingSession
@@ -966,7 +967,8 @@ struct NotesGenerationControls: View {
             if case .summarising = session.state { return true }
             return false
         }()
-        let isEnabled = state.settings.meetingsLLMSatisfied && !isSummarising
+        let llmRequirement = MeetingsFeature.llmRequirementMessage
+        let isEnabled = llmRequirement == nil && !isSummarising
         // "Re-run" only once the polished notes (or a legacy summary) exist; a
         // bare transcript or a live draft still reads as the first "Generate".
         let hasFinal = meta.notes?.isFinal == true || meta.summary != nil
@@ -1002,9 +1004,8 @@ struct NotesGenerationControls: View {
         .menuIndicator(.visible)
         .fixedSize()
         .disabled(!isEnabled)
-        .help(state.settings.meetingsLLMSatisfied
-              ? "Write the notes for this meeting. Use the menu to pick a style or tune the run."
-              : "Meeting notes need \(ModelCatalog.meetingsRequiredLLMName) — select it in Settings → Models.")
+        .help(llmRequirement
+              ?? "Write the notes for this meeting. Use the menu to pick a style or tune the run.")
         .sheet(isPresented: $showTuneSheet) {
             TuneRunSheet(session: session)
         }

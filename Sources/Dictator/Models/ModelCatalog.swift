@@ -27,6 +27,14 @@ struct LLMModel: Identifiable, Hashable, Sendable {
     /// any YaRN-extended ceiling — so we don't have to keep RoPE scaling
     /// configs in sync with the model.
     let contextWindowTokens: Int
+    /// Whether this model is good enough to power Meetings. Long-transcript
+    /// note writing is the hardest LLM job in the app, and the smallest
+    /// models drift off the transcript / invent structure badly enough that
+    /// the notes aren't worth keeping — so meetings hard-block them rather
+    /// than let users ship rubbish and then complain. `meetingsRecommendedLLMID`
+    /// is the best of these; the others run with a quality caveat. Defaults
+    /// to false so a new catalog entry is opt-in, not silently allowed.
+    var meetingsCapable: Bool = false
 }
 
 /// Catalogue entry for a Parakeet ASR variant. The `id` is also FluidAudio's
@@ -90,7 +98,7 @@ enum ModelCatalog {
         .init(id: "mlx-community/Llama-3.2-1B-Instruct-4bit", displayName: "Llama 3.2 1B (4-bit)", approxSizeMB: 760, approxRAMMB: 1500, note: "Snappy, decent formatting", contextWindowTokens: 131_072),
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B (4-bit)", approxSizeMB: 1900, approxRAMMB: 2500, note: "Recommended", contextWindowTokens: 131_072),
         .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen 2.5 3B (4-bit)", approxSizeMB: 1800, approxRAMMB: 2500, note: "Alt 3B option", contextWindowTokens: 32_768),
-        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, approxRAMMB: 5500, note: "Higher quality, slower", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, approxRAMMB: 5500, note: "Higher quality, slower", contextWindowTokens: 131_072, meetingsCapable: true),
         // Gemma 4 runs on the vendored architecture in LLM/Gemma4/ (no native
         // mlx-swift-lm support yet). The checkpoints are multimodal — download
         // size includes vision/audio towers that are dropped at load, so
@@ -102,8 +110,8 @@ enum ModelCatalog {
         // E2B's MXFP4 repo was empty at the time of adding, so it ships the
         // affine 4-bit QAT. If MXFP4 misbehaves, gemma-4-E4B-it-qat-4bit is
         // the like-for-like affine fallback.
-        .init(id: "mlx-community/gemma-4-E2B-it-qat-4bit", displayName: "Gemma 4 E2B QAT (4-bit)", approxSizeMB: 4400, approxRAMMB: 4000, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072),
-        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; required for Meetings", contextWindowTokens: 131_072),
+        .init(id: "mlx-community/gemma-4-E2B-it-qat-4bit", displayName: "Gemma 4 E2B QAT (4-bit)", approxSizeMB: 4400, approxRAMMB: 4000, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072, meetingsCapable: true),
+        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; recommended for Meetings", contextWindowTokens: 131_072, meetingsCapable: true),
     ]
 
     /// Fallback context size when the active model id isn't in the catalog
@@ -116,20 +124,22 @@ enum ModelCatalog {
     static let defaultParakeet     = parakeetModels[0]      // v3 (multilingual)
     static let defaultLLM          = llmModels[1]           // Llama 3.2 3B
 
-    /// The one LLM meetings are allowed to run with. Long-transcript note
-    /// writing is the hardest LLM job in the app — every smaller catalog
-    /// entry drifts off the transcript, invents structure, or mangles
-    /// attribution somewhere across an hour of audio. Rather than let the
-    /// feature quietly produce notes that aren't worth keeping, recording,
-    /// importing, and (re)generating notes are gated on this exact model
-    /// being the selected MLX LLM (`DictatorSettings.meetingsLLMSatisfied`).
-    static let meetingsRequiredLLMID = "mlx-community/gemma-4-E4B-it-qat-mxfp4"
+    /// The LLM meetings are tuned for and recommend. Long-transcript note
+    /// writing is the hardest LLM job in the app — smaller models drift off
+    /// the transcript, invent structure, or mangle attribution somewhere
+    /// across an hour of audio. Meetings no longer *require* this model:
+    /// the user can record/import with any configured engine (including the
+    /// Apple Foundation model) and gets a non-blocking quality warning for
+    /// anything else — see `DictatorSettings.meetingsUsingRecommendedLLM`
+    /// and `MeetingsFeature.llmQualityNote`. It stays the default
+    /// recommendation and the one model whose note quality we vouch for.
+    static let meetingsRecommendedLLMID = "mlx-community/gemma-4-E4B-it-qat-mxfp4"
 
-    /// Display name for the meetings requirement, for user-facing copy.
+    /// Display name for the recommended meetings model, for user-facing copy.
     /// Falls back to the raw id defensively — the entry is in the catalog
-    /// above, but a future catalog edit shouldn't crash the alert text.
-    static var meetingsRequiredLLMName: String {
-        llm(id: meetingsRequiredLLMID)?.displayName ?? meetingsRequiredLLMID
+    /// above, but a future catalog edit shouldn't crash the warning text.
+    static var meetingsRecommendedLLMName: String {
+        llm(id: meetingsRecommendedLLMID)?.displayName ?? meetingsRecommendedLLMID
     }
     static let defaultDiarization  = diarizationModels[0]   // only option in v0.2
 

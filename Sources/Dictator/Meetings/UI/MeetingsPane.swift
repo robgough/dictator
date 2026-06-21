@@ -18,6 +18,9 @@ struct MeetingsPane: View {
         // Nil when a usable LLM is configured. A missing LLM disables the
         // whole feature (toggle included) — the notes pass is the product.
         let llmMessage = MeetingsFeature.llmRequirementMessage
+        // Non-blocking: set when meetings *can* run but not on the model the
+        // notes were tuned for. Shown as a milder caution; the toggle stays on.
+        let llmQualityNote = MeetingsFeature.llmQualityNote
         let effectivelyEnabled = s.settings.meetingsEnabled && llmMessage == nil
         Form {
             Section {
@@ -55,6 +58,19 @@ struct MeetingsPane: View {
                     .toggleStyle(.switch)
                     .controlSize(.large)
                     .disabled(llmMessage != nil)
+                    if let llmQualityNote {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.yellow)
+                            Text(llmQualityNote)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    }
                 }
                 .padding(.vertical, 4)
             } footer: {
@@ -130,7 +146,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                Text("Meetings write their notes with \(ModelCatalog.meetingsRequiredLLMName) — it's the only model that does it reliably, so it must be the selected model in Settings → Models before you record or import. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes.")
+                Text("Meetings write their notes with whichever downloaded MLX formatting model you've selected in Settings → Models, as long as it's capable enough — the smallest models are turned off for meetings because they drift on a full transcript, and Apple's on-device model is too small (apps only get its 4K-token model). Notes are tuned for \(ModelCatalog.meetingsRecommendedLLMName), which handles a long transcript most reliably; other capable models still work, but notes can be weaker on long calls. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

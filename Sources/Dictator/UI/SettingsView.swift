@@ -2480,7 +2480,7 @@ private struct FormattingModelsPane: View {
                 } header: {
                     Text("Apple Foundation Model")
                 } footer: {
-                    SectionFootnote("Apple Intelligence's ~3 B on-device model. Shared across every app that uses the framework — no per-app download, no in-process weight cost. Apple applies safety filtering you don't control.")
+                    SectionFootnote("Apple Intelligence's on-device model — about 3B parameters with a 4K-token context, shared across every app that uses the framework (no per-app download, no in-process weight cost). macOS 27 also has a larger on-device model, but Apple doesn't expose it to third-party apps, so dictation and Assistant use the compact one. Apple applies safety filtering you don't control.")
                 }
             case .mlx:
                 Section {
@@ -2544,6 +2544,17 @@ private struct AppleFoundationStatusRow: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if availability == .ready, let contextSummary = AppleFoundationAvailability.contextSummary {
+                    Divider().padding(.vertical, 2)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "memorychip")
+                            .foregroundStyle(.secondary)
+                        Text(contextSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             Spacer(minLength: 0)
             if availability == .appleIntelligenceOff {
