@@ -15,6 +15,14 @@ final class AudioDeviceManager {
     private(set) var knownDevices: [AudioDevice] = []
 
     private static let storageKey = "AudioDeviceManager.knownDevices.v1"
+
+    /// How long a device may go unseen before it's dropped from the priority
+    /// list — unless the user has ranked it above the "System default" sentinel,
+    /// which marks it as one they deliberately prefer (a mic that's merely
+    /// unplugged right now, say). Stops the list silently accreting every
+    /// transient device the machine has ever exposed.
+    private static let staleDeviceTTL: TimeInterval = 7 * 24 * 60 * 60
+
     private var listenerToken: AudioDevicesListenerToken?
 
     private init() {
@@ -54,9 +62,34 @@ final class AudioDeviceManager {
         if !merged.contains(where: { $0.isSystemDefault }) {
             merged.append(AudioDevice.systemDefault)
         }
+        // Drop leaked meeting-tap aggregates and devices that have aged out (see
+        // `cleaned`). Currently-connected devices were just stamped with `now`
+        // above, so they're never the ones pruned here.
+        merged = Self.cleaned(merged, now: now)
         if merged != knownDevices {
             knownDevices = merged
             persist()
+        }
+    }
+
+    /// Removes entries that shouldn't linger in the priority list:
+    ///
+    /// - Our own meeting-capture aggregates (`Dictator Meeting Tap` and the
+    ///   `CADefaultDeviceAggregate` shims). These are private devices we leak
+    ///   into our own enumeration; they're never user-facing hardware.
+    /// - Devices unseen for longer than `staleDeviceTTL`, **unless** the user
+    ///   ranked them above the "System default" sentinel — anything above the
+    ///   sentinel is a deliberate preference and is kept even while unplugged.
+    ///
+    /// The sentinel itself is always preserved. `now` is threaded in (rather
+    /// than read here) so the caller controls the clock for the whole pass.
+    private static func cleaned(_ devices: [AudioDevice], now: Date) -> [AudioDevice] {
+        let sentinelIndex = devices.firstIndex(where: { $0.isSystemDefault }) ?? devices.count
+        return devices.enumerated().compactMap { offset, device -> AudioDevice? in
+            if device.isSystemDefault { return device }
+            if AudioDeviceEnumerator.looksLikePrivateAggregate(name: device.name, uid: device.uid) { return nil }
+            if offset < sentinelIndex { return device }   // user-prioritised → keep regardless of age
+            return now.timeIntervalSince(device.lastSeen) < staleDeviceTTL ? device : nil
         }
     }
 
@@ -160,17 +193,23 @@ final class AudioDeviceManager {
             knownDevices = [AudioDevice.systemDefault]
             return
         }
-        // Earlier versions persisted CoreAudio's transient private-aggregate shims
-        // (one new UID per session). Sweep them out so the user sees a clean list.
-        var cleaned = decoded.filter { !AudioDeviceEnumerator.looksLikePrivateAggregate(name: $0.name, uid: $0.uid) }
-        // Pre-existing users won't have the sentinel persisted yet. Append it
-        // at the bottom so behaviour matches before the upgrade — real devices
-        // win first; system default only kicks in when none are connected.
-        if !cleaned.contains(where: { $0.isSystemDefault }) {
-            cleaned.append(AudioDevice.systemDefault)
+        // Sweep leaked meeting-tap aggregates (older builds persisted one new
+        // UID per meeting). Deliberately do NOT TTL-prune here: `loadKnown` runs
+        // in `init`, before any `refresh()`, so it has no live-connectivity info
+        // and would wrongly drop a connected-but-stale device (then re-append it
+        // out of order). `refresh()` — which stamps connected devices with `now`
+        // first — owns TTL pruning. See `cleaned(_:now:)`.
+        var sanitised = decoded.filter {
+            !AudioDeviceEnumerator.looksLikePrivateAggregate(name: $0.name, uid: $0.uid)
         }
-        knownDevices = cleaned
-        if cleaned != decoded {
+        // Pre-existing users won't have the sentinel persisted yet. Append it at
+        // the bottom so behaviour matches before the upgrade — real devices win
+        // first; system default only kicks in when none are connected.
+        if !sanitised.contains(where: { $0.isSystemDefault }) {
+            sanitised.append(AudioDevice.systemDefault)
+        }
+        knownDevices = sanitised
+        if sanitised != decoded {
             persist()
         }
     }

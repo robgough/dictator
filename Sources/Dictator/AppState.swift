@@ -179,6 +179,16 @@ final class AppState {
         }
 
         AudioDeviceManager.shared.bootstrap()
+        // Reap any meeting-capture aggregate devices a previous session leaked
+        // (a crash, or teardown that didn't complete) so they don't linger in
+        // CoreAudio. The enumerator already hides them from the input list, but
+        // this actually destroys them — matching sweepStaleAggregates' documented
+        // intent of not accumulating across launches. No-op when there are none.
+        // Off-main: it's blocking CoreAudio IPC and must not stall launch on the
+        // main thread (the exact failure class the mic-stall work targets).
+        DispatchQueue.global(qos: .utility).async {
+            MeetingAudioRecorder.sweepStaleAggregates()
+        }
         // Render + register the cue sounds off-main *now* so the first hotkey
         // press's arm chime is instant. Unlike the old engine prewarm this
         // opens no audio device IO (system sounds render inside coreaudiod),

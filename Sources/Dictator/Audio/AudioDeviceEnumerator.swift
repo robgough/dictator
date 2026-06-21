@@ -4,6 +4,14 @@ import CoreAudio
 /// Thin CoreAudio wrapper. Lists input devices, resolves UID → AudioDeviceID,
 /// installs / removes the hardware-devices-changed property listener.
 enum AudioDeviceEnumerator {
+    /// Identifiers `MeetingAudioRecorder` stamps onto its system-capture
+    /// aggregate device. These are private capture devices we create ourselves
+    /// — never user-facing input hardware — so they're filtered out of the
+    /// priority list wherever it's built. Kept here, the device-identity layer,
+    /// as the single source of truth; the meeting recorder reads them back.
+    static let meetingTapUIDPrefix = "net.robgough.Dictator.meetingTap-"
+    static let meetingTapDeviceName = "Dictator Meeting Tap"
+
     static func listInputDevices() -> [AudioDevice] {
         let ids = allDeviceIDs()
         let now = Date()
@@ -15,16 +23,24 @@ enum AudioDeviceEnumerator {
             if isPrivateAggregateDevice(deviceID: id) { return nil }
             guard let uid = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal) else { return nil }
             let name = stringProperty(deviceID: id, selector: kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal) ?? "Unknown"
+            // Belt-and-braces over the runtime priv-flag check above: our own
+            // meeting-capture aggregates are private, but if the flag ever fails
+            // to read we still recognise them by name / UID and keep them out.
+            if looksLikePrivateAggregate(name: name, uid: uid) { return nil }
             let manufacturer = stringProperty(deviceID: id, selector: kAudioObjectPropertyManufacturer, scope: kAudioObjectPropertyScopeGlobal)
             return AudioDevice(uid: uid, name: name, manufacturer: manufacturer, lastSeen: now)
         }
     }
 
-    /// Recognises a saved device that looks like a CoreAudio private aggregate by name.
-    /// Used to sweep stale entries out of persisted `knownDevices` from before the
-    /// enumerator-level filter existed.
+    /// Recognises a device that should never sit in the user's input list:
+    /// CoreAudio's transient `CADefaultDeviceAggregate-…` shims, and our own
+    /// meeting-capture aggregates (`Dictator Meeting Tap`). Used both to sweep
+    /// stale persisted `knownDevices` and to filter the live enumeration.
     static func looksLikePrivateAggregate(name: String, uid: String) -> Bool {
-        name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("CADefaultDeviceAggregate")
+        name.hasPrefix("CADefaultDeviceAggregate")
+            || uid.hasPrefix("CADefaultDeviceAggregate")
+            || uid.hasPrefix(meetingTapUIDPrefix)
+            || name == meetingTapDeviceName
     }
 
     /// Reads the device's display name. Used when we already have an

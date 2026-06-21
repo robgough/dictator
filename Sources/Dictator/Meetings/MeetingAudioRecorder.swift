@@ -30,10 +30,10 @@ import os
 final class MeetingAudioRecorder {
     /// Stable UID prefix for our private aggregate devices. The full UID is
     /// `\(aggregateUIDPrefix)\(uuid)`; the prefix is what `sweepStaleAggregates()`
-    /// uses to recognise our own leaked devices and reap them on launch.
-    /// Bundle ID is in there so a future re-namespacing of the app doesn't
-    /// accidentally inherit some other product's leaked UIDs.
-    private static let aggregateUIDPrefix = "net.robgough.Dictator.meetingTap-"
+    /// uses to recognise our own leaked devices and reap them on launch, and what
+    /// `AudioDeviceEnumerator` uses to keep them out of the user's input list.
+    /// Defined there (the device-identity layer) so both sides stay in sync.
+    private nonisolated static let aggregateUIDPrefix = AudioDeviceEnumerator.meetingTapUIDPrefix
 
     @ObservationIgnored private var processTapID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var aggregateDeviceID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
@@ -179,7 +179,7 @@ final class MeetingAudioRecorder {
         let aggregateUID = "\(Self.aggregateUIDPrefix)\(UUID().uuidString)"
 
         let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Dictator Meeting Tap",
+            kAudioAggregateDeviceNameKey: AudioDeviceEnumerator.meetingTapDeviceName,
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -785,7 +785,7 @@ final class MeetingAudioRecorder {
         return rate
     }
 
-    private static func readDeviceUID(deviceID: AudioDeviceID) throws -> String {
+    private nonisolated static func readDeviceUID(deviceID: AudioDeviceID) throws -> String {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -810,7 +810,11 @@ final class MeetingAudioRecorder {
     /// macOS does eventually reap orphaned aggregates on logout, but if a
     /// crashed Dictator session leaks one we want it gone the next time the
     /// recorder spins up, not accumulating across launches.
-    static func sweepStaleAggregates() {
+    ///
+    /// `nonisolated` so callers can run it off the main thread — it's pure
+    /// CoreAudio HAL IPC (blocking Mach round-trips to coreaudiod) and must not
+    /// sit on the main actor at launch.
+    nonisolated static func sweepStaleAggregates() {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,

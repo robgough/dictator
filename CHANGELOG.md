@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Settings → Input no longer fills up with leftover "Dictator Meeting Tap" entries from meeting recordings, and now forgets any input device it hasn't seen in over a week (unless you've ranked it above System default), so the priority list stays tidy.
 - Settings has a fresh look: the row of tabs across the top is now a sidebar down the left, matching the modern macOS System Settings style, and the window can now be resized.
 - The live preview in the recording HUD is much calmer: it now fills and scrolls a few lines as you speak, animating each change word by word — new words fade in, corrections cross-fade, and the surrounding text glides to make room — instead of a single line that hard-cut and jumped sideways every time the transcription was refined, which was worst during longer dictations.
 - Assistant Mode now shows the same live preview of what you're saying as dictation does, instead of leaving the preview area empty.
