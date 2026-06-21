@@ -52,24 +52,6 @@ enum AppleFoundationAvailability {
         return size >= meetingsMinContextSize
     }
 
-    /// One-line, honest description of the on-device model's context window
-    /// and what it means for Meetings. Apple exposes only the ~3B "Core"
-    /// model (4K context) to third-party apps; macOS 27's larger on-device
-    /// model (AFM 3 Core Advanced, ~20B) and the cloud models aren't reachable
-    /// through `SystemLanguageModel`, verified by probing the framework. So we
-    /// don't imply a tier the user can switch to — we state the window and the
-    /// Meetings consequence. Phrased off `contextSize` so it flips
-    /// automatically if Apple ever raises the window we're handed. Nil when
-    /// the model isn't available.
-    static var contextSummary: String? {
-        guard let ctx = contextSize else { return nil }
-        let tokens = "\(ctx.formatted()) tokens"
-        if ctx >= meetingsMinContextSize {
-            return "On-device context window: \(tokens) — large enough for Meetings."
-        }
-        return "On-device context window: \(tokens). Fine for dictation and Assistant, but too small for Meetings — macOS 27's larger on-device model isn't available to third-party apps."
-    }
-
     /// Human-readable explanation when the engine is not usable. Surfaced in the
     /// Settings + Onboarding views right under the engine picker.
     static var unavailableMessage: String? {
