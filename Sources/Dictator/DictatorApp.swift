@@ -40,8 +40,15 @@ struct DictatorApp: App {
         Settings {
             SettingsView(updater: updaterController.updater)
                 .environment(appState)
-                .frame(width: 560, height: 520)
+                // Wider than the old single-column window to seat the sidebar
+                // (~215pt) beside a comfortable detail column. `maxWidth/Height:
+                // .infinity` lets the content grow, and `.windowResizability
+                // (.contentSize)` below lets the window follow it — without the
+                // flexible max the Settings scene pins to a fixed size.
+                .frame(minWidth: 720, idealWidth: 760, maxWidth: .infinity,
+                       minHeight: 520, idealHeight: 560, maxHeight: .infinity)
         }
+        .windowResizability(.contentSize)
         .handlesExternalEvents(matching: ["settings"])
 
         // Meetings ships as a runtime-gated early preview (see

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import KeyboardShortcuts
 import AVFoundation
 import MLX
@@ -9,29 +10,171 @@ struct SettingsView: View {
 
     @Environment(AppState.self) private var state
 
+    // Sidebar selection. Optional because `List`'s single-selection binding is
+    // `SelectionValue?`; we coalesce to `.general` when rendering the detail so
+    // the pane is never blank.
+    @State private var selection: SettingsSection? = .general
+
     var body: some View {
-        TabView {
-            GeneralPane()
-                .tabItem { Label("General", systemImage: "slider.horizontal.3") }
-            InputPane()
-                .tabItem { Label("Input", systemImage: "mic") }
-            ModelsPane()
-                .tabItem { Label("Models", systemImage: "cpu") }
-            ModesPane()
-                .tabItem { Label("Modes", systemImage: "rectangle.stack") }
-            MeetingsPane()
-                .tabItem { Label("Meetings", systemImage: "person.2.wave.2") }
-            AssistantPromptPane()
-                .tabItem { Label("Assistant", systemImage: "wand.and.stars") }
-            DictionaryPane()
-                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
-            HistoryPane()
-                .tabItem { Label("History", systemImage: "clock") }
-            AboutPane(updater: updater)
-                .tabItem { Label("About", systemImage: "info.circle") }
+        // Built as a plain HStack rather than a `NavigationSplitView`: that
+        // container mis-propagates safe area on this macOS (rdar://122947424,
+        // the same bug that forced live meeting recording out of a split view),
+        // which renders the sidebar rows invisible and lets the detail column's
+        // inner lists overflow the window unbounded. A sidebar-styled `List`
+        // beside an explicitly-bounded detail gives the same System Settings
+        // look without tripping it.
+        HStack(spacing: 0) {
+            List(SettingsSection.allCases, selection: $selection) { section in
+                Label {
+                    Text(section.title)
+                } icon: {
+                    SettingsSidebarIcon(systemImage: section.systemImage, tint: section.tint)
+                }
+            }
+            .listStyle(.sidebar)
+            .frame(width: 215)
+
+            Divider()
+
+            detail(for: selection ?? .general)
+                // Bound the detail to the window so panes whose body is a `List`
+                // (Input device priority, Modes) scroll internally instead of
+                // growing to their full intrinsic height and pushing the window
+                // open.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .padding(20)
+        // The `Settings` scene builds its window without the `.resizable` style
+        // mask and ignores `.windowResizability`, so neither the flexible content
+        // frame nor the scene modifier makes it draggable. Reach the NSWindow and
+        // add the mask directly.
+        .background(SettingsWindowConfigurator())
         .environment(state)
+    }
+
+    @ViewBuilder
+    private func detail(for section: SettingsSection) -> some View {
+        switch section {
+        // Grouped-`Form` panes supply their own section insets — no extra
+        // padding, they sit edge-to-edge in the detail column like System
+        // Settings. The list / master-detail / card panes relied on the old
+        // TabView's outer `.padding(20)`, so they get it back here.
+        case .general:    GeneralPane()
+        case .input:      InputPane().settingsDetailPadding()
+        case .models:     ModelsPane()
+        case .modes:      ModesPane().settingsDetailPadding()
+        case .meetings:   MeetingsPane()
+        case .assistant:  AssistantPromptPane().settingsDetailPadding()
+        case .dictionary: DictionaryPane().settingsDetailPadding()
+        case .history:    HistoryPane().settingsDetailPadding()
+        case .about:      AboutPane(updater: updater).settingsDetailPadding()
+        }
+    }
+}
+
+/// The nine settings sections, in sidebar order. Identity is the case itself so
+/// `List`'s data-driven selection binds straight to `SettingsSection?`.
+enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
+    case general, input, models, modes, meetings, assistant, dictionary, history, about
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general:    "General"
+        case .input:      "Input"
+        case .models:     "Models"
+        case .modes:      "Modes"
+        case .meetings:   "Meetings"
+        case .assistant:  "Assistant"
+        case .dictionary: "Dictionary"
+        case .history:    "History"
+        case .about:      "About"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general:    "gearshape.fill"
+        case .input:      "mic.fill"
+        case .models:     "cpu"
+        case .modes:      "rectangle.stack.fill"
+        case .meetings:   "person.2.wave.2.fill"
+        case .assistant:  "wand.and.stars"
+        case .dictionary: "character.book.closed.fill"
+        case .history:    "clock.fill"
+        case .about:      "info.circle.fill"
+        }
+    }
+
+    /// Badge tint behind the white glyph. Picked to read as distinct, vaguely
+    /// semantic chips (mic = blue, AI passes = purple/pink, meetings = teal…)
+    /// rather than to match any system convention.
+    var tint: Color {
+        switch self {
+        case .general:    .gray
+        case .input:      .blue
+        case .models:     .purple
+        case .modes:      .orange
+        case .meetings:   .teal
+        case .assistant:  .pink
+        case .dictionary: .green
+        case .history:    .indigo
+        case .about:      .cyan
+        }
+    }
+}
+
+/// The System-Settings-style sidebar badge: a white SF Symbol on a small
+/// colour-filled rounded square.
+private struct SettingsSidebarIcon: View {
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(tint.gradient)
+            )
+    }
+}
+
+private extension View {
+    /// Outer inset for detail panes that aren't grouped `Form`s. Grouped forms
+    /// bring their own insets; the list / card panes used to inherit this from
+    /// the old TabView's `.padding(20)`.
+    func settingsDetailPadding() -> some View {
+        padding(20)
+    }
+}
+
+/// Inserts `.resizable` into the host `Settings` window's style mask. SwiftUI's
+/// `Settings` scene creates a fixed-size window and offers no API to make it
+/// resizable (`.windowResizability` is ignored), so we reach the `NSWindow`
+/// once it's attached and flip the bit ourselves. Lives as a zero-size
+/// background view; the async hop is because `window` is nil until the view is
+/// in the hierarchy.
+private struct SettingsWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { configure(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(nsView.window) }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window else { return }
+        window.styleMask.insert(.resizable)
+        // Floor the resize: the SwiftUI content frame's minWidth/Height isn't
+        // reliably enforced once we force `.resizable` on, so pin it here too —
+        // otherwise the sidebar + detail can be dragged narrower than usable.
+        window.contentMinSize = NSSize(width: 720, height: 520)
     }
 }
 
@@ -1236,12 +1379,14 @@ private struct HistoryRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: toggle) {
                 HStack(alignment: .top, spacing: 10) {
+                    // Clipboard-only is a normal outcome, not a problem — keep it
+                    // neutral. Orange is reserved for things that actually went wrong.
                     Image(systemName: record.pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
-                        .foregroundStyle(record.pasted ? Color.accentColor : .orange)
+                        .foregroundStyle(record.pasted ? Color.accentColor : Color.secondary)
                         .font(.system(size: 14))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(record.final)
-                            .font(.system(size: 13, design: .rounded))
+                            .font(.system(size: 13))
                             .foregroundStyle(.primary)
                             .lineLimit(isExpanded ? nil : 2)
                             .multilineTextAlignment(.leading)
@@ -1325,7 +1470,7 @@ private struct HistoryRow: View {
                 .controlSize(.small)
             }
             Text(text)
-                .font(.system(size: 12, design: .rounded))
+                .font(.system(size: 12))
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1379,7 +1524,9 @@ private struct InputPane: View {
                         systemImage: "mic.slash",
                         description: Text("Plug in a microphone, then click Refresh.")
                     )
-                    .frame(maxWidth: .infinity, minHeight: 220)
+                    // Matches the populated list's minHeight (260) so the pane
+                    // doesn't jump when the first device appears.
+                    .frame(maxWidth: .infinity, minHeight: 260)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor).opacity(0.4))
@@ -1446,9 +1593,9 @@ private struct BluetoothAdvisoryNote: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Bluetooth mic active")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold))
                 Text("macOS switches Bluetooth headphones into a phone-call profile while recording. Expect a 2–5 s warmup at the start of each dictation, and music or system audio will sound thin and mono for as long as the recording is in flight. For snappier dictation and full-fidelity playback, promote the MacBook microphone (or any wired input) above your headphones in the list below.")
-                    .font(.system(size: 11))
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2182,13 +2329,17 @@ private enum ModelsSubPane: String, CaseIterable, Identifiable {
 /// and wraps at roughly half the section. Pinning `maxWidth: .infinity`
 /// claims the actual row width; `.fixedSize(vertical:)` then lets it grow
 /// vertically to fit the wrapped lines.
-private struct SectionFootnote: View {
+/// The one footer style for the whole Settings window. `.footnote` (not
+/// `.callout`) so it sits clearly below the body-sized control labels above it,
+/// matching System Settings' quiet section footers. Not `private` so panes in
+/// other files (e.g. MeetingsPane) route their footers through it too.
+struct SectionFootnote: View {
     private let text: LocalizedStringKey
     init(_ text: LocalizedStringKey) { self.text = text }
 
     var body: some View {
         Text(text)
-            .font(.callout)
+            .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2207,7 +2358,7 @@ private struct ThisMacHeader: View {
         HStack(spacing: 6) {
             Text(title)
             Text("This Mac")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
@@ -2244,7 +2395,7 @@ private struct ModelsPane: View {
             case .stats: StatsModelsPane()
             }
 
-            SyncFootnote(text: "Model selection is stored per-Mac — different Macs have different RAM and may suit different model tiers.")
+            SectionFootnote("Model selection is stored per-Mac — different Macs have different RAM and may suit different model tiers.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }
@@ -2255,20 +2406,6 @@ private struct ModelsPane: View {
     }
 }
 
-/// Small italicised footnote used at the bottom of tabs whose contents all
-/// live on one side of the sync/local split. Lighter weight than a chip in
-/// the title — it's a footer note, not a per-section badge.
-private struct SyncFootnote: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .italic()
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
 
 /// Transcription sub-pane: engine picker, Parakeet variant list, Whisper
 /// variant list. The engine picker lives at the top because flipping
@@ -3010,7 +3147,7 @@ private struct ModesPane: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            SyncFootnote(text: "Modes — names, prompts, app bindings, pass toggles — sync via your Synced folder (see Settings → General).")
+            SectionFootnote("Modes — names, prompts, app bindings, pass toggles — sync via your Synced folder (see Settings → General).")
         }
         .frame(minHeight: 480)
     }
@@ -3214,31 +3351,31 @@ private struct ModeListRow: View {
         HStack(spacing: 8) {
             if mode.isLocked {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .frame(width: 12)
             } else {
                 Spacer().frame(width: 12)
             }
             Text(mode.name)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             if isDefault {
                 Text("default")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.brandBlue)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
+                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.brandBlue.opacity(0.18) : Color.clear)
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
         )
         .padding(.horizontal, 4)
     }
@@ -3253,6 +3390,13 @@ private struct ModeDetail: View {
     let onChange: () -> Void
 
     @Environment(AppState.self) private var state
+
+    // The three pass sections are long; let them collapse. Expanded by default
+    // so nothing is hidden on first open. (They were previously
+    // `.constant(true)` — a disclosure triangle that did nothing.)
+    @State private var pass1Expanded = true
+    @State private var pass2Expanded = true
+    @State private var pass3Expanded = true
 
     var body: some View {
         ScrollView {
@@ -3302,10 +3446,10 @@ private struct ModeDetail: View {
                 } else {
                     Text("Default mode")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.brandBlue)
+                        .foregroundStyle(Color.accentColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.brandBlue.opacity(0.15)))
+                        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                 }
             }
         }
@@ -3453,7 +3597,7 @@ private struct ModeDetail: View {
 
         return VStack(alignment: .leading, spacing: 16) {
             // Pass 1
-            DisclosureGroup(isExpanded: .constant(true)) {
+            DisclosureGroup(isExpanded: $pass1Expanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Run Pass 1 (Formatting)", isOn: $mode.formattingPassEnabled)
                         .onChange(of: mode.formattingPassEnabled) { _, _ in onChange() }
@@ -3476,7 +3620,7 @@ private struct ModeDetail: View {
             }
 
             // Pass 2
-            DisclosureGroup(isExpanded: .constant(true)) {
+            DisclosureGroup(isExpanded: $pass2Expanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("Grammar pass", selection: $mode.grammarPassMode) {
                         Text("Off").tag(GrammarPassMode.off)
@@ -3527,7 +3671,7 @@ private struct ModeDetail: View {
             }
 
             // Pass 3
-            DisclosureGroup(isExpanded: .constant(true)) {
+            DisclosureGroup(isExpanded: $pass3Expanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Restructure long dictations into paragraphs / lists", isOn: $mode.structuralPassEnabled)
                         .onChange(of: mode.structuralPassEnabled) { _, _ in onChange() }
@@ -3746,7 +3890,9 @@ struct PromptCustomiser: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
-                .frame(height: 220)
+                // Same height as the override editor so flipping between addendum
+                // and override mode doesn't reflow the pane.
+                .frame(height: 300)
                 .onChange(of: addendum) { _, _ in onChange() }
             if !addendum.isEmpty {
                 HStack {
@@ -3798,7 +3944,7 @@ struct PromptCustomiser: View {
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.4)))
-            .frame(height: 360)
+            .frame(height: 300)
         }
     }
 }

@@ -75,9 +75,7 @@ struct MeetingsPane: View {
                 .padding(.vertical, 4)
             } footer: {
                 if !effectivelyEnabled {
-                    Text("While Meetings is off, the menu bar entries stay hidden and the settings below are disabled.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    SectionFootnote("While Meetings is off, the menu bar entries stay hidden and the settings below are disabled.")
                 }
             }
 
@@ -106,9 +104,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Storage")
             } footer: {
-                Text("Meeting audio is large — roughly 800 MB per hour combined across both tracks — but transcripts are tiny. \"Delete audio\" prunes the .caf files but keeps the transcript so you can still search and re-read older meetings without paying for the audio. \"Delete entire meeting\" drops everything including the transcript. Both sweeps run when the Meetings window opens.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Meeting audio is large (~800 MB/hour across both tracks); transcripts are tiny. \"Delete audio\" prunes the .caf files but keeps the transcript, so you can still search older meetings. \"Delete entire meeting\" drops everything. Both sweeps run when the Meetings window opens.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -117,12 +113,14 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingLiveTranscriptEnabled },
                     set: { s.settings.meetingLiveTranscriptEnabled = $0; state.save() }
                 ))
+                .help("Shows a running draft of the conversation as you record. Turning it off skips that work on long calls; the full transcript is still produced after the meeting ends.")
                 Toggle("Build a first pass while recording", isOn: Binding(
                     get: { s.settings.meetingLiveNotesEnabled },
                     set: { s.settings.meetingLiveNotesEnabled = $0; state.save() }
                 ))
                 .disabled(!s.settings.meetingLiveTranscriptEnabled)
                 .padding(.leading, 18)
+                .help("Quietly drafts notes live during the call (runs the LLM on the GPU, so more battery). Builds on the live transcript, so that must be on; the draft is kept until you generate the final notes.")
                 Toggle("Correct live notes as the conversation moves on", isOn: Binding(
                     get: { s.settings.meetingLiveNotesSelfCorrectEnabled },
                     set: { s.settings.meetingLiveNotesSelfCorrectEnabled = $0; state.save() }
@@ -146,9 +144,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                Text("Meetings write their notes with whichever downloaded MLX formatting model you've selected in Settings → Models, as long as it's capable enough — the smallest models are turned off for meetings because they drift on a full transcript, and Apple's on-device model is too small (apps only get its 4K-token model). Notes are tuned for \(ModelCatalog.meetingsRecommendedLLMName), which handles a long transcript most reliably; other capable models still work, but notes can be weaker on long calls. Notes aren't written automatically: when a meeting finishes you get the transcript, and you press Generate on the meeting's page once you've checked who said what — now, or whenever's convenient. The default style biases the notes toward the structure people expect for that meeting type — stand-ups get per-person updates, retrospectives get what-went-well buckets, and so on. Auto-detect lets the model decide from the transcript. You can override the style for any individual meeting on its page via Re-run ▾. \"Show a live transcript\" displays a running draft of the conversation as you record; turning it off skips that work entirely, which lightens the load on long calls (the full transcript is still produced after the meeting ends). \"Build a first pass while recording\" quietly drafts notes live during the call (it runs the LLM on the GPU, so it uses more battery) — it builds on the live transcript, so it needs that switched on, and the draft is kept until you generate the final notes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Notes are written by your selected MLX formatting model (Settings → Models) — capable models only; the smallest are turned off here, and Apple's on-device model is too small. Tuned for \(ModelCatalog.meetingsRecommendedLLMName); others work but can be weaker on long calls. Notes aren't automatic: after a meeting you get the transcript and press Generate once you've checked who said what. The default style shapes the notes for that meeting type — Auto-detect lets the model decide; override per meeting via Re-run ▾.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -173,10 +169,12 @@ struct MeetingsPane: View {
                     get: { s.settings.meetingCalendarMatchingEnabled },
                     set: { s.settings.meetingCalendarMatchingEnabled = $0; state.save() }
                 ))
+                .help("Asks for calendar access the first time, then gives each recording its real title, attendees, and scheduled length (which powers the coach's wrapping-up reminder). Calendar data never leaves your Mac.")
                 Toggle("Recognise people across meetings", isOn: Binding(
                     get: { s.settings.peopleRecognitionEnabled },
                     set: { s.settings.peopleRecognitionEnabled = $0; state.save() }
                 ))
+                .help("Remembers each named speaker's voice on this Mac, so the same person is recognised and named automatically in future meetings. Edit people shows everything stored and lets you forget anyone, voice included.")
                 Button {
                     showingPeopleEditor = true
                 } label: {
@@ -185,9 +183,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Coach")
             } footer: {
-                Text("The coach watches how you handle a meeting while it records: live talk balance and pace, occasional one-line nudges on the island (monologuing, interrupting, dominating), a key-points checklist it ticks off as the conversation covers them, and a private written report afterwards. Everything is computed on this Mac from the recording itself, is visible only to you — never in the meeting's notes or exports — and switching the coach off here removes all of it. \"Match meetings to calendar events\" asks for calendar access the first time and gives each recording its real title, attendees, and scheduled length (which also powers the coach's wrapping-up reminder); calendar data never leaves your Mac. \"Recognise people across meetings\" remembers each named speaker's voice on this Mac, so the same person is recognised and named automatically in future meetings — Edit people shows everything stored and lets you forget anyone, voice included.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("The coach watches how you run a meeting as it records — live talk balance and pace, occasional one-line nudges on the island, a key-points checklist, and a private written report afterwards. Everything is computed on this Mac, visible only to you (never in the notes or exports), and turning the coach off removes all of it.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -199,9 +195,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Shared screens")
             } footer: {
-                Text("Captures still frames of shared content during a meeting — slides, demos, whatever's on the call window — and keeps only the ones that change, as images in the meeting's folder. Capture is scoped to the meeting window only: your other windows, notifications, and second screen are never seen. You can turn capture on or off at any point during a recording from the Shared screen panel (and grab a one-off frame with Capture now), so leave this off if you'd rather decide per meeting; turning it on just starts capture automatically. This needs macOS Screen Recording permission — the system shows a purple capture indicator while it's running, and you'll be asked to grant it the first time. Frames stay on this Mac and are deleted with the meeting.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Captures still frames of shared content — slides, demos — keeping only the ones that change, as images in the meeting's folder. Scoped to the meeting window only; your other windows and screens are never seen. Needs Screen Recording permission (a purple indicator shows while running). You can also toggle capture per-meeting from the Shared screen panel. Frames stay on this Mac and are deleted with the meeting.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -220,9 +214,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Note styles")
             } footer: {
-                Text("Each style is a template: ALL-CAPS lines name the sections the notes should have, and the text under each header tells the model what belongs there. Built-in styles can't be edited, but Duplicate gives you an editable copy to start from. Deleting a style is safe — meetings that used it keep their notes, and re-running them just falls back to the generic style.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("Each style is a template: ALL-CAPS lines name the sections, and the text under each tells the model what belongs there. Built-in styles can't be edited, but Duplicate gives you an editable copy. Deleting a style is safe — meetings that used it keep their notes.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -243,9 +235,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Echo cleanup")
             } footer: {
-                Text("When you're not wearing headphones, your mic picks up the remote speakers and the same words appear twice in the transcript. This drops the mic-track copies. Turn off if you suspect it's eating legitimate overlapping speech.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFootnote("When you're not wearing headphones, your mic picks up the remote speakers and the same words appear twice. This drops the mic-track copies. Turn off if you suspect it's eating legitimate overlapping speech.")
             }
             .disabled(!effectivelyEnabled)
         }

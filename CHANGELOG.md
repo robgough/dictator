@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Settings has a fresh look: the row of tabs across the top is now a sidebar down the left, matching the modern macOS System Settings style, and the window can now be resized.
 - The live preview in the recording HUD is much calmer: it now fills and scrolls a few lines as you speak, animating each change word by word — new words fade in, corrections cross-fade, and the surrounding text glides to make room — instead of a single line that hard-cut and jumped sideways every time the transcription was refined, which was worst during longer dictations.
 - Assistant Mode now shows the same live preview of what you're saying as dictation does, instead of leaving the preview area empty.
 - Meetings no longer require one specific model to write notes — any sufficiently capable downloaded MLX model now works. Gemma 4 E4B is still the recommended pick (and shows a gentle quality note when you choose a different capable model); the smallest models stay turned off for meetings because their notes aren't reliable on a full transcript.
