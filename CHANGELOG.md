@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- When dictation or Assistant Mode is triggered by holding a bare Option key, pressing a key combination like ⌥3 (the # on a British keyboard) no longer fires a stray dictation — Dictator recognises it as a normal keyboard shortcut and quietly cancels.
 - Dictation no longer freezes on "Connecting microphone" for several seconds before recording starts (worst with external USB mics like the Yeti). The recording overlay's animated indicators were forcing a slow GPU render on every start that could stall the whole app; they've been rebuilt to avoid it, so dictation begins promptly.
 - Settings → Input no longer fills up with leftover "Dictator Meeting Tap" entries from meeting recordings, and now forgets any input device it hasn't seen in over a week (unless you've ranked it above System default), so the priority list stays tidy.
 - Settings has a fresh look: the row of tabs across the top is now a sidebar down the left, matching the modern macOS System Settings style, and the window can now be resized.

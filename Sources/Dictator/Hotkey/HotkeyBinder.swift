@@ -30,6 +30,9 @@ final class HotkeyBinder {
     /// The "stop / commit" action — fires on release of a hold, or on the
     /// release of the second tap when latched.
     private var onRelease: (() -> Void)?
+    /// The "abandon" action — fires when a modifier trigger turns out to be a
+    /// chord (e.g. ⌥3). Should cancel, not commit, whatever the press started.
+    private var onCancel: (() -> Void)?
     /// Live read of the tap-to-toggle setting, so a settings change takes
     /// effect without rebinding.
     private var tapToToggle: () -> Bool = { false }
@@ -50,9 +53,11 @@ final class HotkeyBinder {
     func bind(mode: TriggerMode,
               onPress: @escaping () -> Void,
               onRelease: @escaping () -> Void,
+              onCancel: @escaping () -> Void = {},
               tapToToggle: @escaping () -> Bool = { false }) {
         self.onPress = onPress
         self.onRelease = onRelease
+        self.onCancel = onCancel
         self.tapToToggle = tapToToggle
         apply(mode: mode)
     }
@@ -89,6 +94,16 @@ final class HotkeyBinder {
         }
         isLatched = false
         onRelease()
+    }
+
+    /// The modifier trigger turned out to be a chord (⌥3 → "#"). Drop all
+    /// tap/latch state and cancel whatever the press kicked off, rather than
+    /// committing it on the (swallowed) release.
+    private func handleChordCancel() {
+        pressStartedAt = nil
+        isLatched = false
+        stopOnRelease = false
+        onCancel?()
     }
 
     func setMode(_ mode: TriggerMode) {
@@ -133,7 +148,8 @@ final class HotkeyBinder {
                 keyCode: keyCode,
                 modifierFlag: flag,
                 onPress: { [weak self] in self?.handlePress() },
-                onRelease: { [weak self] in self?.handleRelease() }
+                onRelease: { [weak self] in self?.handleRelease() },
+                onChordCancel: { [weak self] in self?.handleChordCancel() }
             )
         }
     }

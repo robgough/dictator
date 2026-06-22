@@ -108,6 +108,18 @@ final class AppState {
         }
     }
 
+    /// Assistant-hotkey chord-cancel — the trigger modifier was used as a chord
+    /// (e.g. ⌥3 → "#"), so abandon whichever flow the press started rather than
+    /// committing it.
+    private func assistantCancel() {
+        if let controller = inFlightMeetingAssistant {
+            inFlightMeetingAssistant = nil
+            controller.cancelListening()
+        } else {
+            pipeline.cancelInFlight()
+        }
+    }
+
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let assistantResultWindow = AssistantResultController()
@@ -179,16 +191,12 @@ final class AppState {
         }
 
         AudioDeviceManager.shared.bootstrap()
-        // Reap any meeting-capture aggregate devices a previous session leaked
-        // (a crash, or teardown that didn't complete) so they don't linger in
-        // CoreAudio. The enumerator already hides them from the input list, but
-        // this actually destroys them — matching sweepStaleAggregates' documented
-        // intent of not accumulating across launches. No-op when there are none.
-        // Off-main: it's blocking CoreAudio IPC and must not stall launch on the
-        // main thread (the exact failure class the mic-stall work targets).
-        DispatchQueue.global(qos: .utility).async {
-            MeetingAudioRecorder.sweepStaleAggregates()
-        }
+        // Deliberately NOT reaping leaked meeting-tap aggregates here: destroying
+        // aggregate devices interrupts whatever audio is playing (a brief pause at
+        // launch), and the leaked taps are already hidden from the input list by
+        // the enumerator filter + knownDevices pruning. They're reaped at the next
+        // meeting start (MeetingAudioRecorder.sweepStaleAggregates) or on logout —
+        // neither a moment when audio is actively playing.
         // Render + register the cue sounds off-main *now* so the first hotkey
         // press's arm chime is instant. Unlike the old engine prewarm this
         // opens no audio device IO (system sounds render inside coreaudiod),
@@ -218,12 +226,14 @@ final class AppState {
             mode: settings.triggerMode,
             onPress: { [weak self] in self?.pipeline.startRecording() },
             onRelease: { [weak self] in self?.pipeline.finishRecording() },
+            onCancel: { [weak self] in self?.pipeline.cancelInFlight() },
             tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
         assistantHotkey.bind(
             mode: settings.assistantTriggerMode,
             onPress: { [weak self] in self?.assistantPress() },
             onRelease: { [weak self] in self?.assistantRelease() },
+            onCancel: { [weak self] in self?.assistantCancel() },
             tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
         // Scratchpad: a plain tap-to-toggle combo, no push-to-talk semantics, so

@@ -71,6 +71,15 @@ final class MeetingAssistantController {
         stopListening(thenRun: true)
     }
 
+    /// Hotkey chord-cancel (e.g. ⌥3 to type "#"): abandon the listen without
+    /// transcribing or running, and dismiss — as if the press never happened.
+    func cancelListening() {
+        _ = recorder?.stop()
+        recorder = nil
+        isListening = false
+        isPresented = false
+    }
+
     /// The in-dialog mic button.
     func toggleListening() {
         isListening ? stopListening(thenRun: false) : startListening()
