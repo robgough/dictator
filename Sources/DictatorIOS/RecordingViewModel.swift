@@ -50,6 +50,14 @@ final class RecordingViewModel {
     enum RecordingMode: Equatable {
         case dictation
         case assist
+        /// The Scratchpad tab's mic — output is merged into the synced
+        /// `ScratchpadModel.shared` note (cursor/selection-aware) instead of
+        /// the transcript editor.
+        case scratchpad
+        /// The Scratchpad tab's assist button — a spoken instruction
+        /// transforms the selected note text (or the whole note when nothing
+        /// is selected).
+        case scratchpadAssist
     }
 
     /// Disk presence of the Parakeet model files. Independent of the
@@ -722,6 +730,203 @@ final class RecordingViewModel {
         }
     }
 
+    /// The deterministic + optional-AI post-transcription pipeline, shared by
+    /// dictation and the Scratchpad mic so both treat spoken cues, custom
+    /// vocabulary, and filler-word cleanup identically.
+    ///
+    /// SpokenCues handles all the deterministic substitutions —
+    /// punctuation/number/time/currency/emoji passes that the macOS app runs
+    /// out of the box. Then Vocabulary runs LAST so a user's custom entry can
+    /// override anything SpokenCues produced (e.g. mapping "fire emoji" to a
+    /// wildfire alert text instead of 🔥). tidyDelivery cleans up the stray
+    /// soft punctuation Whisper sometimes leaves around emojis. The optional
+    /// Apple-Intelligence filler-word cleanup runs AFTER the deterministic
+    /// substitutions so the model sees cue-resolved text; failures swallow
+    /// silently — the user already has a working transcript and we don't want
+    /// a cleanup hiccup to error out the whole recording.
+    private func processTranscript(_ raw: String) async -> String {
+        var processed = SpokenCues.apply(to: raw, options: DictatorIOSSettings.cueOptions)
+        processed = Vocabulary.apply(VocabularyStore.shared.entries, to: processed)
+        processed = SpokenCues.tidyDelivery(processed)
+        if UserDefaults.standard.bool(forKey: DictatorIOSSettings.foundationCleanupKey) {
+            do {
+                processed = try await AppleFoundationCleanup.tidy(processed)
+            } catch {
+                NSLog("[DictatorIOS] Foundation cleanup skipped: \(error.localizedDescription)")
+            }
+        }
+        return processed
+    }
+
+    /// Hold-to-talk / tap-to-toggle handler for the Scratchpad tab's mic.
+    /// Records into the synced note rather than the transcript editor — same
+    /// engine, same prewarm, different destination. The transcript field is
+    /// left untouched so a dictation in progress on the Dictation tab isn't
+    /// disturbed by jotting into the Scratchpad.
+    func startScratchpadRecording() {
+        guard permission == .granted else { return }
+        guard case .downloaded = modelDiskStatus else { return }
+        switch status {
+        case .idle, .ready, .error:
+            recordingMode = .scratchpad
+            recordingStartCount &+= 1
+            lastTranscriptionDuration = nil
+            status = .warmingUp
+            pressFeedback.impactOccurred()
+            prewarmModelIfNeeded()
+            recorder.start()
+        default:
+            return
+        }
+    }
+
+    /// Counterpart to `startScratchpadRecording`. Drains the recorder,
+    /// transcribes, runs the shared post-processing, then merges the result
+    /// into `ScratchpadModel.shared` at the note's caret / selection (via the
+    /// shared `TranscriptMerge`, same as the Dictation transcript), autosaves,
+    /// and records a history + usage entry.
+    func stopScratchpadRecording() async {
+        guard status.isCapturing else { return }
+        let samples = recorder.stop()
+        pressFeedback.impactOccurred()
+        guard !samples.isEmpty else {
+            status = .idle
+            recordingMode = .dictation
+            return
+        }
+        status = .transcribing
+        transcribingStartedAt = Date()
+        do {
+            let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
+            let processed = await processTranscript(raw)
+            let pad = ScratchpadModel.shared
+            pad.ensureLoaded()
+            pad.snapshotForUndo()
+            pad.revealCaretOnNextUpdate = true   // gently scroll to the new text
+            let merged = TranscriptMerge.insert(processed, into: pad.text, at: pad.selection)
+            pad.text = merged.text
+            pad.selection = merged.selection
+            pad.scheduleSave()
+            DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
+            UsageStatsStore.shared.record(
+                mode: .dictation,
+                wordsIn: UsageStatsStore.wordCount(raw),
+                wordsOut: UsageStatsStore.wordCount(processed)
+            )
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
+            status = .ready
+            resultFeedback.notificationOccurred(.success)
+        } catch {
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
+            status = .error(error.localizedDescription)
+            resultFeedback.notificationOccurred(.error)
+        }
+        recordingMode = .dictation
+    }
+
+    /// Hold-to-talk handler for the Scratchpad tab's assist button — a spoken
+    /// instruction transforms the note. No-op if there's nothing to transform
+    /// (empty note) or Apple Intelligence isn't available. The UI gates this
+    /// too, but the guards cover races.
+    func startScratchpadAssist() {
+        guard permission == .granted else { return }
+        guard case .downloaded = modelDiskStatus else { return }
+        guard AppleFoundationAssist.isAvailable else { return }
+        guard !ScratchpadModel.shared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        switch status {
+        case .idle, .ready, .error:
+            recordingMode = .scratchpadAssist
+            recordingStartCount &+= 1
+            lastTranscriptionDuration = nil
+            status = .warmingUp
+            pressFeedback.impactOccurred()
+            prewarmModelIfNeeded()
+            recorder.start()
+        default:
+            return
+        }
+    }
+
+    /// Counterpart to `startScratchpadAssist`. Transcribes the spoken
+    /// instruction, then feeds it to Apple Foundation Models with the target
+    /// text — the selected range when there is one (replaced in place), or the
+    /// whole note otherwise. Mirrors the Dictation assist flow but scoped to
+    /// the selection so you can reword just a paragraph.
+    func stopScratchpadAssist() async {
+        guard status.isCapturing else { return }
+        let samples = recorder.stop()
+        pressFeedback.impactOccurred()
+        guard !samples.isEmpty else {
+            status = .idle
+            recordingMode = .dictation
+            return
+        }
+        status = .transcribing
+        transcribingStartedAt = Date()
+        let pad = ScratchpadModel.shared
+        pad.ensureLoaded()
+        let fullText = pad.text
+        let sel = pad.selection
+        let hasSelection = (sel?.length ?? 0) > 0 && (sel!.location + sel!.length) <= (fullText as NSString).length
+        let targetText = hasSelection ? (fullText as NSString).substring(with: sel!) : fullText
+        do {
+            let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
+            // Resolve spoken cues in the instruction (so "comma" etc. read as
+            // glyphs) but skip Vocabulary — that's for dictated output, not
+            // transform instructions. Matches the Dictation assist path.
+            let instruction = SpokenCues.apply(to: rawInstruction, options: DictatorIOSSettings.cueOptions)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instruction.isEmpty, !targetText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                transcribingStartedAt = nil
+                status = .ready
+                recordingMode = .dictation
+                return
+            }
+            let result = try await AppleFoundationAssist.transform(text: targetText, instruction: instruction)
+            pad.snapshotForUndo()
+            pad.revealCaretOnNextUpdate = true   // gently scroll to the reworded text
+            if hasSelection {
+                pad.text = (fullText as NSString).replacingCharacters(in: sel!, with: result)
+                // Keep the transformed text selected so it's easy to re-assist.
+                pad.selection = NSRange(location: sel!.location, length: (result as NSString).length)
+            } else {
+                pad.text = result
+                pad.selection = nil
+            }
+            pad.scheduleSave()
+            DictationHistoryStore.shared.append(pad.text, raw: targetText, mode: .assist)
+            UsageStatsStore.shared.record(
+                mode: .assistant,
+                wordsIn: UsageStatsStore.wordCount(instruction),
+                wordsOut: UsageStatsStore.wordCount(result)
+            )
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
+            status = .ready
+            resultFeedback.notificationOccurred(.success)
+        } catch {
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
+            status = .error(error.localizedDescription)
+            resultFeedback.notificationOccurred(.error)
+        }
+        recordingMode = .dictation
+    }
+
     /// Called when the user releases the mic button. Drains the recorder,
     /// awaits the (possibly already-running) model load via transcribe's
     /// internal ensureLoaded, runs the samples through Parakeet, applies
@@ -752,30 +957,7 @@ final class RecordingViewModel {
                 isModelLoaded = true
                 publishModelReadiness()
             }
-            // SpokenCues handles all the deterministic substitutions —
-            // punctuation/number/time/currency/emoji passes that the
-            // macOS app runs out of the box. Then Vocabulary runs LAST
-            // so a user's custom entry can override anything SpokenCues
-            // produced (e.g. mapping "fire emoji" to a wildfire alert
-            // text instead of 🔥). tidyDelivery cleans up the stray
-            // soft punctuation Whisper sometimes leaves around emojis.
-            var processed = SpokenCues.apply(to: raw, options: DictatorIOSSettings.cueOptions)
-            processed = Vocabulary.apply(VocabularyStore.shared.entries, to: processed)
-            processed = SpokenCues.tidyDelivery(processed)
-
-            // Optional Apple-Intelligence-backed filler-word cleanup.
-            // Runs AFTER deterministic substitutions so the LLM sees
-            // the cue-resolved text (no "comma" lingering as filler).
-            // Failures swallow silently — the user already has a
-            // working transcript and we don't want to error out the
-            // whole recording over a cleanup hiccup.
-            if UserDefaults.standard.bool(forKey: DictatorIOSSettings.foundationCleanupKey) {
-                do {
-                    processed = try await AppleFoundationCleanup.tidy(processed)
-                } catch {
-                    NSLog("[DictatorIOS] Foundation cleanup skipped: \(error.localizedDescription)")
-                }
-            }
+            let processed = await processTranscript(raw)
 
             mergeTranscribed(processed)
             // Auto-copy the (possibly-built-up) transcript and stash
@@ -951,10 +1133,11 @@ final class RecordingViewModel {
             }
         }
         Task { @MainActor in
-            if mode == .assist {
-                await stopAssistRecording()
-            } else {
-                await stopRecording()
+            switch mode {
+            case .assist:          await stopAssistRecording()
+            case .scratchpad:      await stopScratchpadRecording()
+            case .scratchpadAssist: await stopScratchpadAssist()
+            case .dictation:       await stopRecording()
             }
             if taskID != .invalid {
                 app.endBackgroundTask(taskID)
@@ -1041,120 +1224,13 @@ final class RecordingViewModel {
         pressFeedback.impactOccurred()
     }
 
-    /// Merge a freshly transcribed chunk into the transcript using the
-    /// current selection as the insertion site:
-    ///   - Non-empty selection → replace the selected range
-    ///   - Empty selection (caret) → insert at the caret with smart
-    ///     space padding (skipped when the neighbouring char is
-    ///     already whitespace / a closing punctuation mark)
-    ///   - No selection at all (field never focused) → append at the
-    ///     end, with a single-space separator (or newline after a
-    ///     sentence terminator)
-    /// Empty / whitespace-only chunks are dropped — there's nothing
-    /// meaningful to add and we don't want a stray space appearing.
+    /// Merge a freshly transcribed chunk into the transcript at the current
+    /// selection/caret (or append). Delegates to the shared `TranscriptMerge`
+    /// so the Dictation transcript and the Scratchpad note insert identically.
     private func mergeTranscribed(_ chunk: String) {
-        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let ns = transcript as NSString
-        let total = ns.length
-
-        // Empty transcript → take the chunk verbatim, place the caret
-        // at the end so a subsequent edit lands naturally.
-        guard total > 0 else {
-            transcript = trimmed
-            transcriptSelection = NSRange(location: (trimmed as NSString).length, length: 0)
-            return
-        }
-
-        // Cursor / selection path — guard against a stale range that
-        // doesn't fit the current text (e.g. after a manual edit the
-        // view model didn't observe yet).
-        if let sel = transcriptSelection,
-           sel.location >= 0,
-           sel.location + sel.length <= total {
-            let lead: String
-            let trail: String
-            if sel.length == 0 {
-                // Inserting at a caret — pad to avoid concatenation
-                // when the neighbouring character isn't already a
-                // space or a closing punctuation glyph.
-                lead = needsLeadingSpace(in: ns, before: sel.location) ? " " : ""
-                trail = needsTrailingSpace(in: ns, after: sel.location + sel.length) ? " " : ""
-            } else {
-                // Replacing the user's explicit selection — their
-                // boundaries are intentional, padding would corrupt
-                // them. "Helloworld" with "world" selected and
-                // dictation "people" should yield "Hellopeople", not
-                // "Hello people".
-                lead = ""
-                trail = ""
-            }
-            let insertion = lead + trimmed + trail
-            transcript = ns.replacingCharacters(in: sel, with: insertion)
-            let leadLength = (lead as NSString).length
-            let trimmedLength = (trimmed as NSString).length
-            let insertedLength = (insertion as NSString).length
-
-            if sel.length > 0 {
-                // Replaced a selection — keep the new content
-                // selected (sans any padding, which is empty in this
-                // branch) so the user can immediately re-dictate to
-                // try a different replacement.
-                transcriptSelection = NSRange(
-                    location: sel.location + leadLength,
-                    length: trimmedLength
-                )
-            } else {
-                // Pure caret insertion — drop the caret at the end
-                // of the inserted text so the user can continue
-                // dictating to extend it.
-                transcriptSelection = NSRange(
-                    location: sel.location + insertedLength,
-                    length: 0
-                )
-            }
-            return
-        }
-
-        // Fallback: append at end with a sentence-aware separator.
-        let separator = endOfTranscriptSeparator()
-        transcript += separator + trimmed
-        let newLength = (transcript as NSString).length
-        transcriptSelection = NSRange(location: newLength, length: 0)
-    }
-
-    /// True when inserting before `loc` would butt up against a
-    /// non-space character. The closing-punctuation set is *not*
-    /// included here — they live on the trailing side.
-    private func needsLeadingSpace(in ns: NSString, before loc: Int) -> Bool {
-        guard loc > 0, loc <= ns.length else { return false }
-        let ch = ns.substring(with: NSRange(location: loc - 1, length: 1))
-        guard let c = ch.first else { return false }
-        return !c.isWhitespace && !c.isNewline
-    }
-
-    /// True when inserting after `loc` would butt up against a
-    /// non-space character and that character isn't a closing
-    /// punctuation glyph (we don't want " ." or " ,").
-    private func needsTrailingSpace(in ns: NSString, after loc: Int) -> Bool {
-        guard loc >= 0, loc < ns.length else { return false }
-        let ch = ns.substring(with: NSRange(location: loc, length: 1))
-        guard let c = ch.first else { return false }
-        if c.isWhitespace || c.isNewline { return false }
-        return !".,!?;:)]}".contains(c)
-    }
-
-    /// Separator used between the existing transcript and the new
-    /// chunk when no selection / caret is present. Sentence terminators
-    /// get a newline (treating each end-of-sentence dictation as a
-    /// fresh thought worth visually separating); everything else gets
-    /// a plain space.
-    private func endOfTranscriptSeparator() -> String {
-        guard let last = transcript.last else { return "" }
-        if last.isWhitespace || last.isNewline { return "" }
-        if ".!?".contains(last) { return "\n" }
-        return " "
+        let result = TranscriptMerge.insert(chunk, into: transcript, at: transcriptSelection)
+        transcript = result.text
+        transcriptSelection = result.selection
     }
 
     /// User-tapped Copy. Pushes the current transcript through the

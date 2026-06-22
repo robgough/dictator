@@ -9,11 +9,6 @@ import UniformTypeIdentifiers
 /// the one knob the prototype actually exposes today.
 struct SettingsView: View {
     @Bindable var viewModel: RecordingViewModel
-    /// Live entry count for the "Vocabulary" row's trailing subtitle.
-    /// Read directly off the shared store so a row added on another
-    /// device (via the shared folder) updates the row without any
-    /// extra plumbing here.
-    @Bindable var store: VocabularyStore = .shared
     /// Drives the same `KeyboardSetupSheet` the onboarding card on
     /// the main view uses, but reachable from Settings so the user
     /// can find the walkthrough again after dismissing the card.
@@ -174,20 +169,6 @@ struct SettingsView: View {
                     Label("Substitutions", systemImage: "arrow.left.arrow.right")
                 }
                 NavigationLink {
-                    VocabularyView()
-                } label: {
-                    Label {
-                        HStack {
-                            Text("Vocabulary")
-                            Spacer()
-                            Text("\(store.entries.count)")
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "character.book.closed")
-                    }
-                }
-                NavigationLink {
                     StatsView()
                 } label: {
                     Label("Stats", systemImage: "chart.bar")
@@ -297,6 +278,9 @@ struct SettingsView: View {
                 let existingEntries = VocabularyStore.shared.entries
                 VocabularyStore.shared.bootstrap(customDirectory: resolved, legacyEntries: existingEntries)
                 UsageStatsStore.shared.bootstrap(customDirectory: resolved)
+                // Re-point the Scratchpad note so it now reads/writes the
+                // shared folder and starts syncing with the Mac.
+                ScratchpadModel.shared.bootstrap(customDirectory: resolved)
                 sharedFolderError = nil
                 refreshSharedFolderState()
             } catch {
@@ -314,6 +298,8 @@ struct SettingsView: View {
         let existingEntries = VocabularyStore.shared.entries
         VocabularyStore.shared.bootstrap(customDirectory: nil, legacyEntries: existingEntries)
         UsageStatsStore.shared.bootstrap(customDirectory: nil)
+        // Drop the Scratchpad back to the sandbox copy too.
+        ScratchpadModel.shared.bootstrap(customDirectory: nil)
         refreshSharedFolderState()
     }
 }

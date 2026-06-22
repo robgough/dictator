@@ -17,6 +17,11 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- New bottom tab bar — Dictation, Scratchpad, History, Vocabulary, and Settings each get their own tab, with the iOS 26 Liquid Glass look throughout.
+- Added a Scratchpad: a quick notes tab that syncs with the Scratchpad on your Mac when you connect a shared folder, so notes you jot on your phone show up on your Mac and vice versa. Dictate into a note with the mic (it inserts at the cursor, replaces selected text, or adds to the end), reword selected text — or the whole note — with the assistant button, or tap the keyboard button to type. Quick space, return, and delete keys let you tidy a note without the full keyboard, and an undo button (which becomes redo) reverses a dictation or reword.
+- History and Vocabulary are now top-level tabs instead of being tucked inside Settings.
+- The Dictator keyboard now uses the iOS 26 Liquid Glass look.
+
 ## v2026.6.0 — 2026-06-04
 
 - Fixed the Parakeet v3 (multilingual) model download always failing at the end with "model layout looks incomplete" — the downloader was looking for the speech model under an old name and never fetched it. If you were stuck on this error, tap Try again after updating: your previous progress is kept and only the missing piece is downloaded.

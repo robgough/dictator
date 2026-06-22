@@ -2,55 +2,34 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
-    /// Optional keyboard-extension hand-off. When non-nil, the
-    /// granted-content view shows a "Keyboard mode" banner and the
-    /// view model will write the next successful transcript to the
-    /// shared App Group container for the keyboard to insert.
+    /// Optional keyboard-extension hand-off. When non-nil, the app jumps
+    /// to the Dictation tab and the view model writes the next successful
+    /// transcript to the shared App Group container for the keyboard.
     @Binding var keyboardRequest: KeyboardBridge.Request?
 
     @State private var viewModel = RecordingViewModel()
-    /// True while the transcript editor holds focus (i.e. the user has
-    /// tapped into the field). A plain `@State Bool` (not `@FocusState`)
-    /// because the editor is UIKit-backed and pushes focus changes
-    /// through the bridged binding instead of SwiftUI's focus subsystem.
-    /// Note: focus alone doesn't necessarily mean the system keyboard
-    /// is up — see `transcriptKeyboardEnabled` for that.
-    @State private var transcriptFocused: Bool = false
-    /// True when the user has explicitly requested the system keyboard
-    /// via the bottom-center toggle on the transcript card. Default is
-    /// false: the editor is selection-only (no keyboard) so iOS doesn't
-    /// summon Dictator's own keyboard inside Dictator. When true, the
-    /// UI flips to a focused edit mode — system keyboard at the
-    /// bottom, transcript above, with the eraser / undo / mic / assist
-    /// / copy chrome hidden so nothing competes with typing.
-    @State private var transcriptKeyboardEnabled: Bool = false
-    /// Mirrored to the bridge so the keyboard extension can both
-    /// self-dismiss inside the Dictator app and freshness-check the
-    /// model readiness chip (we only trust `loaded` while the host
-    /// is actively heartbeating; a backgrounded or killed host ages
-    /// out of the "ready" state).
+    /// Selected bottom tab. Reset to `.dictation` when the keyboard
+    /// extension hands off a recording so the user lands on the mic.
+    @State private var selectedTab: AppTab = .dictation
     @Environment(\.scenePhase) private var scenePhase
-    /// Shows the model-info sheet (status, unload). Driven by a tap
-    /// on the persistent model-status chip in `grantedContent`.
-    @State private var showingModelSheet = false
-    /// Shows the keyboard-setup walkthrough sheet from the onboarding
-    /// card on the main view.
-    @State private var showingKeyboardSetup = false
-    /// Persistent dismissal of the onboarding card. Flips to true
-    /// once the user either taps the card's X or — handled in the
-    /// onChange handler — actually uses the keyboard.
-    @AppStorage(DictatorIOSSettings.keyboardOnboardingDismissedKey) private var keyboardOnboardingDismissed = false
-    /// Drives the unified first-launch sheet. Flipped to true when
-    /// the user either walks through every step (auto-dismisses on
-    /// step 4 completion) or taps "Skip for now". Supersedes the
-    /// older keyboard-card flag — the existing scattered cards stay
-    /// around as fallback re-prompts, but the sheet is one-and-done.
+    /// Drives the unified first-launch sheet over the whole TabView.
     @AppStorage(DictatorIOSSettings.onboardingCompletedKey) private var onboardingCompleted = false
+    /// Flipped true the first time a keyboard request arrives (clear
+    /// signal the user has the keyboard installed); the Dictation tab's
+    /// onboarding card reads it.
+    @AppStorage(DictatorIOSSettings.keyboardOnboardingDismissedKey) private var keyboardOnboardingDismissed = false
 
     /// Default initialiser for non-keyboard use — wraps a non-bound
     /// constant nil so existing call sites keep working.
     init(keyboardRequest: Binding<KeyboardBridge.Request?> = .constant(nil)) {
         self._keyboardRequest = keyboardRequest
+    }
+
+    /// The five bottom tabs. Moving to iOS-style tab navigation gives the
+    /// Scratchpad, History and Vocabulary first-class homes alongside
+    /// dictation — and the Scratchpad note syncs with the Mac.
+    enum AppTab: Hashable {
+        case dictation, scratchpad, history, vocabulary, settings
     }
 
     var body: some View {
@@ -63,10 +42,128 @@ struct ContentView: View {
             || CommandLine.arguments.contains("-DictatorScreenshotState_keyboard") {
             return AnyView(KeyboardShowcase())
         }
-        return AnyView(mainContent)
+        // The bottom accessory is only applied on the Scratchpad tab — an
+        // always-applied `tabViewBottomAccessory` renders its glass bar on
+        // every tab even when its content is empty (the stray empty row).
+        if selectedTab == .scratchpad {
+            return AnyView(tabs.tabViewBottomAccessory { ScratchpadQuickKeysAccessory() })
+        }
+        return AnyView(tabs)
     }
 
-    private var mainContent: some View {
+    private var tabs: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Dictation", systemImage: "mic.fill", value: AppTab.dictation) {
+                DictationTabView(viewModel: viewModel)
+            }
+            Tab("Scratchpad", systemImage: "note.text", value: AppTab.scratchpad) {
+                ScratchpadView(viewModel: viewModel) { selectedTab = .settings }
+            }
+            Tab("History", systemImage: "clock.arrow.circlepath", value: AppTab.history) {
+                NavigationStack { HistoryView() }
+            }
+            Tab("Vocabulary", systemImage: "character.book.closed", value: AppTab.vocabulary) {
+                NavigationStack { VocabularyView() }
+            }
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
+                NavigationStack { SettingsView(viewModel: viewModel) }
+            }
+        }
+        // Liquid Glass tab bar recedes while scrolling a list or
+        // editing the Scratchpad note. The Scratchpad quick-keys accessory is
+        // attached in `body` (only on that tab) so it doesn't leave an empty
+        // glass bar on the others.
+        .tabBarMinimizeBehavior(.onScrollDown)
+        // First-launch onboarding sheet, over the whole TabView.
+        // Suppressed in the permission-denied state since the Dictation
+        // tab's denial wall already says what to do.
+        .sheet(isPresented: onboardingSheetBinding) {
+            OnboardingSheet(viewModel: viewModel)
+        }
+        .task { await viewModel.requestPermissionIfNeeded() }
+        // Keyboard-extension hand-off (cold + warm launch). Jump to the
+        // Dictation tab, then auto-start the recording the user already
+        // initiated from the keyboard. `.task(id:)` rather than
+        // `.onChange(initial:)` so a cold launch via `dictator://…`
+        // doesn't mutate observed state during SwiftUI's first update.
+        .task(id: keyboardRequest) {
+            guard let req = keyboardRequest else { return }
+            selectedTab = .dictation
+            keyboardOnboardingDismissed = true
+            if viewModel.permission == .granted {
+                viewModel.beginKeyboardRecording(
+                    mode: req.mode,
+                    surroundingText: req.surroundingText
+                )
+            }
+            keyboardRequest = nil
+            KeyboardBridge.clearRequest()
+        }
+        // App-lifecycle wiring that must run regardless of the active
+        // tab: keep the keyboard's host-active flag fresh, and finish a
+        // recording gracefully if the app is backgrounded mid-capture
+        // (no `audio` background mode — iOS would otherwise drop the
+        // tail). `.background` only: `.inactive` fires for transient
+        // interruptions where the user hasn't actually left.
+        .onChange(of: scenePhase, initial: true) { _, new in
+            viewModel.applyForegroundState(new == .active)
+            if new == .background {
+                viewModel.handleEnteredBackground()
+            }
+        }
+    }
+
+    /// Hoisted out of `body` to keep the type-checker happy — Swift
+    /// gets sluggish when a `Binding(get:set:)` lives inline next to
+    /// other view modifiers.
+    private var onboardingSheetBinding: Binding<Bool> {
+        Binding(
+            get: {
+                let denied = viewModel.permission == .denied
+                return !onboardingCompleted && !denied
+            },
+            set: { newValue in
+                // Mirror dismiss into persistence so a swipe-down treats
+                // the sheet as "Skip for now" rather than re-presenting.
+                if newValue == false { onboardingCompleted = true }
+            }
+        )
+    }
+
+    /// Resigns first responder app-wide. Used by the Scratchpad tab to
+    /// drop the keyboard before showing the dictation waveform.
+    static func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+}
+
+/// The Dictation tab — the original single-screen recording UI: permission
+/// gating, the one-time model download, the transcript card, and the
+/// hold-to-talk mic / assist controls. Permission + model-download gating
+/// lives here (not app-wide) so the Scratchpad, History and Vocabulary tabs
+/// stay usable before the model is downloaded or if the mic is denied.
+struct DictationTabView: View {
+    @Bindable var viewModel: RecordingViewModel
+    /// True while the transcript editor holds focus. A plain `@State Bool`
+    /// (not `@FocusState`) because the editor is UIKit-backed and pushes
+    /// focus changes through the bridged binding.
+    @State private var transcriptFocused: Bool = false
+    /// True when the user has explicitly requested the system keyboard via
+    /// the bottom-center toggle on the transcript card.
+    @State private var transcriptKeyboardEnabled: Bool = false
+    /// Shows the model-info sheet (status, unload).
+    @State private var showingModelSheet = false
+    /// Shows the keyboard-setup walkthrough sheet from the onboarding card.
+    @State private var showingKeyboardSetup = false
+    /// Persistent dismissal of the onboarding card.
+    @AppStorage(DictatorIOSSettings.keyboardOnboardingDismissedKey) private var keyboardOnboardingDismissed = false
+
+    var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
                 switch viewModel.permission {
@@ -83,135 +180,9 @@ struct ContentView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
-            // Arrival from the keyboard URL launch is a one-shot
-            // trigger: pre-populate the transcript, auto-start the
-            // recording, dismiss the keyboard-onboarding card (clear
-            // signal the user has it installed), then clear the
-            // binding so we don't re-fire.
-            //
-            // Driven by `.task(id:)` rather than `.onChange(initial:)`
-            // on purpose: on a cold launch via `dictator://…`,
-            // `onOpenURL` sets `keyboardRequest` before the first
-            // render, so an `initial: true` onChange would run
-            // `beginKeyboardRecording` *during* SwiftUI's initial
-            // update — and that mutates observed state the view reads
-            // (status, recordingMode, transcript, …), tripping the
-            // "Modifying state during view update" runtime warning.
-            // `.task(id:)` runs after the view is installed, off the
-            // update pass; it also re-fires on each id change, so the
-            // `keyboardRequest = nil` write below just runs the guard
-            // and returns.
-            .task(id: keyboardRequest) {
-                guard let req = keyboardRequest else { return }
-                keyboardOnboardingDismissed = true
-                if viewModel.permission == .granted {
-                    viewModel.beginKeyboardRecording(
-                        mode: req.mode,
-                        surroundingText: req.surroundingText
-                    )
-                }
-                keyboardRequest = nil
-                KeyboardBridge.clearRequest()
-            }
-            .onChange(of: scenePhase, initial: true) { _, new in
-                // Drives two pieces of state at once:
-                //   1. The keyboard's auto-dismiss check (don't summon
-                //      the Dictator keyboard inside the Dictator app).
-                //   2. The keyboard's model-readiness freshness gate —
-                //      the view model heartbeats readiness while
-                //      foregrounded so a stale `loaded: true` claim
-                //      can't outlive the host.
-                viewModel.applyForegroundState(new == .active)
-                // We don't run a background audio mode, so a recording
-                // in flight can't survive a real backgrounding. Finish
-                // it gracefully — stop and transcribe what we've got —
-                // rather than letting iOS suspend us mid-capture and
-                // drop the tail. Gate on `.background` specifically:
-                // `.inactive` also fires for transient interruptions
-                // (Control Center, a notification banner, the app
-                // switcher) where the user hasn't actually left and we
-                // shouldn't cut their recording short.
-                if new == .background {
-                    viewModel.handleEnteredBackground()
-                }
-            }
-            // No global tap-to-dismiss handler here. We used to have
-            // `.contentShape(Rectangle()) + .onTapGesture` for that,
-            // but SwiftUI's tap recognizer claims touches during its
-            // detection window and that fought with the UITextView's
-            // scroll gesture — swipes felt "swallowed" while the tap
-            // recognizer waited to fail. Keyboard dismissal now goes
-            // through the explicit toggle button on the transcript
-            // card (and the system's swipe-down via
-            // `keyboardDismissMode = .interactive`), so we don't need
-            // a global handler at all.
             .navigationTitle("Dictator")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        SettingsView(viewModel: viewModel)
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        HistoryView()
-                    } label: {
-                        Label("History", systemImage: "clock.arrow.circlepath")
-                    }
-                }
-            }
         }
-        // First-launch onboarding sheet. Full-screen on iPhone via
-        // the default sheet behaviour at the root of the
-        // NavigationStack. Suppressed when the host was opened by
-        // the keyboard extension — the user is mid-dictation flow,
-        // not in setup-mode, and a sheet would block the recording
-        // UI underneath. They'll see the sheet on the next plain
-        // launch instead. Suppressed in the permission-denied state
-        // too, since the denial wall already tells them what to do
-        // and the sheet's first step would be unactionable.
-        .sheet(isPresented: onboardingSheetBinding) {
-            OnboardingSheet(viewModel: viewModel)
-        }
-        .task { await viewModel.requestPermissionIfNeeded() }
-    }
-
-    /// Hoisted out of `body` to keep the type-checker happy — Swift
-    /// gets sluggish when a `Binding(get:set:)` lives inline next to
-    /// half a dozen other view modifiers, and times out on the
-    /// surrounding expression rather than this one. Putting it here
-    /// also makes the suppression rules easier to read at a glance.
-    private var onboardingSheetBinding: Binding<Bool> {
-        Binding(
-            get: {
-                let denied = viewModel.permission == .denied
-                return !onboardingCompleted && !denied
-            },
-            set: { newValue in
-                // Mirror dismiss into persistence so a swipe-down
-                // (if iOS ever bypasses interactiveDismissDisabled)
-                // treats the sheet as "Skip for now" rather than
-                // re-presenting on next launch.
-                if newValue == false { onboardingCompleted = true }
-            }
-        )
-    }
-
-    /// Resigns first responder app-wide. Cheaper than threading a
-    /// `@FocusState` binding through every view that hosts the
-    /// `TextEditor`; the system's `resignFirstResponder` action walks
-    /// the responder chain and tells whichever field currently has
-    /// focus to give it up.
-    static func dismissKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
     }
 
     /// One-line tradeoff blurb for the selected Parakeet model. Shown
@@ -269,7 +240,7 @@ struct ContentView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Capsule().fill(Color(.secondarySystemBackground)))
+            .glassEffect(.regular, in: .capsule)
         }
         .buttonStyle(.plain)
     }
@@ -332,7 +303,7 @@ struct ContentView: View {
                     .padding(.vertical, 14)
                     .font(.body.weight(.semibold))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .padding(.horizontal)
             Spacer()
         }
@@ -428,7 +399,7 @@ struct ContentView: View {
                             .padding(.vertical, 12)
                             .font(.body.weight(.semibold))
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 } else {
                     Button {
                         Task { await viewModel.pauseDownload() }
@@ -438,7 +409,7 @@ struct ContentView: View {
                             .padding(.vertical, 12)
                             .font(.body.weight(.semibold))
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
                 Button(role: .destructive) {
                     Task { await viewModel.cancelDownload() }
@@ -448,7 +419,7 @@ struct ContentView: View {
                         .padding(.vertical, 12)
                         .font(.body.weight(.semibold))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
             }
             .padding(.horizontal)
             Spacer()
@@ -488,7 +459,7 @@ struct ContentView: View {
                     .padding(.vertical, 14)
                     .font(.body.weight(.semibold))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .padding(.horizontal)
             Button {
                 viewModel.resetDownload()
@@ -498,7 +469,7 @@ struct ContentView: View {
                     .padding(.vertical, 12)
                     .font(.body)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .padding(.horizontal)
             Spacer()
         }
@@ -520,7 +491,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             Spacer()
         }
     }
@@ -550,7 +521,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .padding(.horizontal)
             Spacer()
         }
@@ -728,10 +699,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -765,7 +733,7 @@ struct ContentView: View {
                     .padding(.vertical, 14)
                     .font(.body.weight(.semibold))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(viewModel.transcript.isEmpty)
 
             HStack(spacing: 28) {
@@ -931,7 +899,7 @@ struct ContentView: View {
             .opacity(isTranscribingStatus ? 1 : 0)
         }
         .frame(width: 150, height: 30)
-        .background(Capsule().fill(Color(.secondarySystemBackground)))
+        .glassEffect(.regular, in: .capsule)
         .animation(.easeInOut(duration: 0.18), value: showsRecordingWaveform)
         .animation(.easeInOut(duration: 0.18), value: isTranscribingStatus)
         .animation(.easeInOut(duration: 0.18), value: isIdleStatus)
@@ -1079,15 +1047,58 @@ private struct TranscriptCard: View {
 /// behaviour (long-press loupe, double-tap word, drag handles) all
 /// work as expected, and we still get the selection plumbing the
 /// cursor-aware merge needs.
-private struct EditableTranscript: UIViewRepresentable {
+/// `UITextView` that can suppress its automatic scroll-to-caret. UIKit scrolls
+/// to the caret whenever text or selection changes — great while *typing*, but
+/// it makes the view lurch when text is inserted programmatically (a dictation
+/// appended at the end, or a quick-keys edit). We flip `suppressAutoScroll` on
+/// only around those programmatic edits; normal typing leaves it off and keeps
+/// the natural caret-follow.
+final class EditorTextView: UITextView {
+    var suppressAutoScroll = false
+    override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {
+        guard !suppressAutoScroll else { return }
+        super.scrollRectToVisible(rect, animated: animated)
+    }
+}
+
+/// Weak handle to the Scratchpad's text view so the quick-keys accessory can
+/// insert / delete at the real caret — like keyboard keys — rather than
+/// round-tripping through the model's selection (which could be stale or nil and
+/// made edits jump to the end of the note).
+@MainActor
+enum ScratchpadEditor {
+    static weak var activeTextView: EditorTextView?
+}
+
+struct EditableTranscript: UIViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange?
     @Binding var isFocused: Bool
     @Binding var keyboardEnabled: Bool
+    /// Scratchpad mode: keep the editor editable so a blinking caret is always
+    /// visible and taps reposition it — but suppress the system keyboard (via a
+    /// dummy `inputView`) until `keyboardEnabled` is set, so the user can see /
+    /// place the cursor for dictation without the keyboard in the way. Off for
+    /// the Dictation page, which stays selection-only until its card toggle.
+    var caretVisibleWithoutKeyboard: Bool = false
+    /// Bottom padding inside the text container. The Dictation card reserves
+    /// 50pt for its floating buttons; the Scratchpad lets content scroll under
+    /// a `safeAreaBar`, which provides its own clearance, so it wants very
+    /// little here (otherwise the last line sits far above the controls).
+    var bottomTextInset: CGFloat = 50
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = EditorTextView()
         view.delegate = context.coordinator
+        if caretVisibleWithoutKeyboard {
+            // Editable from the start so tapping shows a caret; the dummy
+            // inputView keeps the keyboard down until explicitly raised.
+            view.isEditable = true
+            view.inputView = context.coordinator.dummyInputView
+            // Expose this text view so the quick-keys accessory can edit at the
+            // real caret (insertText / deleteBackward), like keyboard keys.
+            ScratchpadEditor.activeTextView = view
+        }
         view.font = .preferredFont(forTextStyle: .body)
         view.backgroundColor = .clear
         // Match the visual padding the old TextEditor had — the parent
@@ -1097,7 +1108,7 @@ private struct EditableTranscript: UIViewRepresentable {
         // keyboard / undo buttons can sit on without overlapping the
         // last lines of text. 50pt = 36pt button + 6pt overlay
         // padding + a small breathing gap.
-        view.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 50, right: 8)
+        view.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: bottomTextInset, right: 8)
         view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
         view.alwaysBounceVertical = true
@@ -1127,6 +1138,16 @@ private struct EditableTranscript: UIViewRepresentable {
         defer { context.coordinator.suppressDelegateMirror = false }
 
         let textChanged = uiView.text != text
+        // For the Scratchpad, a programmatic text change (dictation merge /
+        // undo) must NOT lurch the scroll: setting `.text` resets the offset to
+        // the top and then UIKit scrolls to the (possibly far-off) caret. Pin
+        // the offset and suppress the scroll-to-caret across the change. Typing
+        // doesn't hit this branch (textChanged is false — the view already has
+        // the typed text), so the natural caret-follow is preserved there.
+        let editorView = uiView as? EditorTextView
+        let pinScroll = caretVisibleWithoutKeyboard && textChanged
+        let savedOffset = uiView.contentOffset
+        if pinScroll { editorView?.suppressAutoScroll = true }
         if textChanged {
             uiView.text = text
         }
@@ -1155,6 +1176,28 @@ private struct EditableTranscript: UIViewRepresentable {
             uiView.selectedRange = target
         }
 
+        // Restore the pinned offset (clamped) so the `.text` reset-to-top and
+        // the instant scroll-to-caret don't lurch the view. Then, on the next
+        // runloop, release the suppression — and for a dictation / assist
+        // result, gently ANIMATE to reveal the new text (other programmatic
+        // changes like undo / quick keys leave the view where it was).
+        if pinScroll {
+            let maxY = max(-uiView.adjustedContentInset.top,
+                           uiView.contentSize.height + uiView.adjustedContentInset.bottom - uiView.bounds.height)
+            uiView.contentOffset = CGPoint(x: savedOffset.x, y: min(savedOffset.y, maxY))
+            let reveal = ScratchpadModel.shared.revealCaretOnNextUpdate
+            ScratchpadModel.shared.revealCaretOnNextUpdate = false
+            DispatchQueue.main.async {
+                editorView?.suppressAutoScroll = false
+                if reveal, let editorView {
+                    editorView.layoutIfNeeded()
+                    UIView.animate(withDuration: 0.3) {
+                        editorView.scrollRangeToVisible(editorView.selectedRange)
+                    }
+                }
+            }
+        }
+
         // `isEditable` IS the keyboard toggle. Standard UITextView
         // semantics: editable view summons the system keyboard on
         // first-responder; non-editable view doesn't. With
@@ -1164,25 +1207,50 @@ private struct EditableTranscript: UIViewRepresentable {
         // default mode keeps full selection / cursor-positioning
         // gesture support without iOS summoning the system (and
         // therefore Dictator's own) keyboard on tap.
-        uiView.isEditable = keyboardEnabled && !text.isEmpty
         uiView.isSelectable = true
 
-        // Drive focus from the toggle, but ONLY on actual transitions
-        // of `keyboardEnabled`. Polling every updateUIView was racing
-        // with the user's gestures: long-press for selection makes
-        // the view first responder (it has to, for the selection
-        // menu to appear), then the next SwiftUI re-render saw
-        // "keyboardEnabled=false && isFirstResponder=true" and
-        // queued an async `resignFirstResponder` — which could fire
-        // mid-scroll and cancel the gesture. Comparing against the
-        // coordinator's last-seen value means we only act when the
-        // toggle is the actual cause.
-        if keyboardEnabled != context.coordinator.lastKeyboardEnabled {
-            context.coordinator.lastKeyboardEnabled = keyboardEnabled
+        if caretVisibleWithoutKeyboard {
+            // Scratchpad: always editable so the caret shows and taps
+            // reposition it. The keyboard is swapped in/out via `inputView`
+            // (dummy = no keyboard, nil = system keyboard) rather than
+            // resigning, so dismissing the keyboard keeps the caret visible.
+            uiView.isEditable = true
+            let coordinator = context.coordinator
             if keyboardEnabled {
-                DispatchQueue.main.async { uiView.becomeFirstResponder() }
-            } else if uiView.isFirstResponder {
-                DispatchQueue.main.async { uiView.resignFirstResponder() }
+                if uiView.inputView != nil {
+                    uiView.inputView = nil
+                    if uiView.isFirstResponder { uiView.reloadInputViews() }
+                }
+            } else if uiView.inputView !== coordinator.dummyInputView {
+                uiView.inputView = coordinator.dummyInputView
+                if uiView.isFirstResponder { uiView.reloadInputViews() }
+            }
+            // Raising the keyboard needs first responder; lowering it keeps it
+            // (caret stays). inputView is already correct above, so a fresh
+            // becomeFirstResponder picks up the system keyboard.
+            if keyboardEnabled != coordinator.lastKeyboardEnabled {
+                coordinator.lastKeyboardEnabled = keyboardEnabled
+                if keyboardEnabled, !uiView.isFirstResponder {
+                    DispatchQueue.main.async { uiView.becomeFirstResponder() }
+                }
+            }
+        } else {
+            // Dictation: `isEditable` IS the keyboard toggle — selection-only
+            // until the card toggle flips it. The old `&& !text.isEmpty` guard
+            // is implicit here since that toggle only appears with text.
+            uiView.isEditable = keyboardEnabled
+            // Drive focus from the toggle, but ONLY on actual transitions of
+            // `keyboardEnabled`. Polling every updateUIView raced the user's
+            // gestures: long-press for selection makes the view first
+            // responder, then a re-render saw "keyboardEnabled=false &&
+            // isFirstResponder=true" and queued an async resign mid-gesture.
+            if keyboardEnabled != context.coordinator.lastKeyboardEnabled {
+                context.coordinator.lastKeyboardEnabled = keyboardEnabled
+                if keyboardEnabled {
+                    DispatchQueue.main.async { uiView.becomeFirstResponder() }
+                } else if uiView.isFirstResponder {
+                    DispatchQueue.main.async { uiView.resignFirstResponder() }
+                }
             }
         }
     }
@@ -1207,6 +1275,13 @@ private struct EditableTranscript: UIViewRepresentable {
         /// for some unrelated reason (selection delegate fired, parent
         /// state changed) doesn't keep yanking the responder around.
         var lastKeyboardEnabled = false
+        /// Zero-size view used as the text view's `inputView` to suppress the
+        /// system keyboard while still showing a caret (Scratchpad mode).
+        lazy var dummyInputView: UIView = {
+            let v = UIView(frame: .zero)
+            v.isUserInteractionEnabled = false
+            return v
+        }()
 
         init(parent: EditableTranscript) { self.parent = parent }
 
@@ -1264,6 +1339,9 @@ private struct UndoButton: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .frame(height: 36)
+                // `.thinMaterial`, NOT `.glassEffect`: these float over the
+                // UITextView, and a glassEffect layered over a representable
+                // swallows its own taps. Keep material here.
                 .background(.thinMaterial, in: Capsule())
                 .overlay(
                     Capsule()
@@ -1289,6 +1367,7 @@ private struct ClearButton: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .frame(height: 36)
+                // See UndoButton — material, not glassEffect, over the editor.
                 .background(.thinMaterial, in: Capsule())
                 .overlay(
                     Capsule()
@@ -1308,7 +1387,7 @@ private struct ClearButton: View {
 /// experience the user wanted to avoid. Tap to bring up the keyboard
 /// for typing; tap again (or swipe down on the keyboard) to put it
 /// away again.
-private struct KeyboardToggleButton: View {
+struct KeyboardToggleButton: View {
     let enabled: Bool
     let action: () -> Void
 
@@ -1324,6 +1403,9 @@ private struct KeyboardToggleButton: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(enabled ? Color.accentColor : .secondary)
                 .frame(width: 36, height: 36)
+                // Material, not glassEffect: this floats over the UITextView
+                // and a glassEffect over a representable eats its own taps —
+                // that's what broke this button. Keep material here.
                 .background(.thinMaterial, in: Circle())
                 .overlay(
                     Circle()
@@ -1438,20 +1520,17 @@ private struct TapStopButton: View {
                 if status.isCapturing {
                     ActiveListeningRing(tint: tint, diameter: 120)
                 }
-                Circle()
-                    .fill(tint)
+                // Glass face + tinted icon, matching the rest of the controls.
+                Image(systemName: icon)
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(tint.opacity(disabled ? 0.4 : 1))
                     .frame(width: 96, height: 96)
-                    .overlay(
-                        Image(systemName: icon)
-                            .font(.system(size: 32, weight: .semibold))
-                            .foregroundStyle(.white)
-                    )
+                    .glassEffect(.regular, in: .circle)
             }
             .frame(width: 96 + 60, height: 96 + 60)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .opacity(disabled ? 0.7 : 1)
     }
 }
 
@@ -1483,7 +1562,7 @@ private struct TapStopButton: View {
 /// the other button stays still. The active button also swaps its
 /// icon to "hourglass" during the transcribing/transforming stage so
 /// the user knows which button's flow is in progress.
-private struct HoldButton: View {
+struct HoldButton: View {
     let status: RecordingViewModel.Status
     let tint: Color
     let restingIcon: String
@@ -1493,6 +1572,9 @@ private struct HoldButton: View {
     let onRelease: () -> Void
 
     @State private var isPressed = false
+    /// Reflects `.disabled()`. The face is glass (`.opacity` can't fade a
+    /// glassEffect), so we fade the icon to signal the disabled state.
+    @Environment(\.isEnabled) private var isEnabled
     /// True after a tap-and-release shorter than `holdThreshold` — the
     /// button is now in "toggle on" mode and the next tap stops the
     /// recording. False during push-to-talk (held longer than the
@@ -1556,14 +1638,14 @@ private struct HoldButton: View {
                 ActiveListeningRing(tint: tint, diameter: ringDiameter, lineWidth: ringLineWidth)
             }
 
-            Circle()
-                .fill(tint)
+            // Glass face with a tinted icon (matches the Scratchpad controls),
+            // rather than a solid tinted fill. The faint tinted halo behind it
+            // (and the listening ring) carry the colour.
+            Image(systemName: displayedIcon)
+                .font(.system(size: iconSize, weight: .semibold))
+                .foregroundStyle(tint.opacity(isEnabled ? 1 : 0.3))
                 .frame(width: diameter, height: diameter)
-                .overlay(
-                    Image(systemName: displayedIcon)
-                        .font(.system(size: iconSize, weight: .semibold))
-                        .foregroundStyle(.white)
-                )
+                .glassEffect(.regular, in: .circle)
                 .scaleEffect(isPressed ? 0.96 : 1)
                 .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
                 .contentShape(Circle())

@@ -212,17 +212,13 @@ struct KeyboardRootView: View {
                     Text(canPaste ? "Paste" : "Nothing to paste")
                         .font(.footnote.weight(.semibold))
                 }
-                .foregroundStyle(canPaste ? .white : .secondary)
+                .foregroundStyle(canPaste ? Color.accentColor : .secondary)
                 .padding(.horizontal, 12)
                 .frame(height: chipHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
-                        .fill(canPaste ? Color.accentColor : Color(.tertiarySystemBackground))
-                )
+                .glassEffect(.regular, in: .rect(cornerRadius: chipCornerRadius))
             }
             .buttonStyle(.plain)
             .disabled(!canPaste)
-            .opacity(canPaste ? 1 : 0.6)
 
             // Always render the preview pill so the row has a stable
             // shape — an empty trailing Spacer made the right half of
@@ -273,10 +269,7 @@ struct KeyboardRootView: View {
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: height)
-        .background(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color(.tertiarySystemBackground))
-        )
+        .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
     }
 
     /// Single-line snippet for the preview pill — collapses
@@ -329,10 +322,7 @@ struct KeyboardRootView: View {
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(.tertiarySystemBackground))
-                )
+                .glassEffect(.regular, in: .rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Space")
@@ -352,10 +342,7 @@ struct KeyboardRootView: View {
             .font(.system(size: 20, weight: .medium))
             .foregroundStyle(.primary)
             .frame(width: 60, height: 44)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(.tertiarySystemBackground))
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 10))
             .scaleEffect(backspacePressed ? 0.95 : 1)
             .animation(.spring(response: 0.15, dampingFraction: 0.7), value: backspacePressed)
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -387,21 +374,19 @@ struct KeyboardRootView: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
                 Text(label)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white)
             }
+            // Glass face with a tinted label/icon (matches the app's record
+            // buttons). `.opacity` can't fade glass, so the tint carries the
+            // disabled state.
+            .foregroundStyle(tint.opacity(enabled ? 1 : 0.4))
             .frame(maxWidth: .infinity)
             .frame(height: 56)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(tint)
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 14))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
     }
 
     /// Icon-only tile. The previous label-and-text layout was
@@ -420,16 +405,14 @@ struct KeyboardRootView: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.primary)
+                // Fade the icon (not the glass — `.opacity` doesn't affect a
+                // glassEffect) to signal the disabled state.
+                .foregroundStyle(.primary.opacity(enabled ? 1 : 0.35))
                 .frame(width: 60, height: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(.tertiarySystemBackground))
-                )
+                .glassEffect(.regular, in: .rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.35)
         .accessibilityLabel(label)
     }
 }

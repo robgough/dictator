@@ -3,8 +3,8 @@ import XCTest
 /// App Store screenshot automation.
 ///
 /// Walks `DictatorIOS` through every UI state the App Store listing
-/// needs — welcome, idle, mid-dictation, history, settings, keyboard
-/// showcase — and attaches each screenshot to the test result bundle
+/// needs — welcome, idle, mid-dictation, history, scratchpad, settings,
+/// keyboard showcase — and attaches each screenshot to the test result bundle
 /// so `scripts/extract-screenshots.sh` can copy them into
 /// `screenshots/<size>/`.
 ///
@@ -41,21 +41,25 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         attach(name: "02-idle", from: app)
 
-        // 3. History — toolbar item on the trailing edge.
-        let historyButton = app.buttons["History"]
-        XCTAssertTrue(historyButton.waitForExistence(timeout: 4))
-        historyButton.tap()
+        // 3. History — now a bottom tab.
+        let historyTab = app.tabBars.buttons["History"]
+        XCTAssertTrue(historyTab.waitForExistence(timeout: 4))
+        historyTab.tap()
         sleep(1)
         attach(name: "04-history", from: app)
 
-        // Back to root.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // 4. Scratchpad — bottom tab; the note syncs with the Mac.
+        let scratchpadTab = app.tabBars.buttons["Scratchpad"]
+        XCTAssertTrue(scratchpadTab.waitForExistence(timeout: 4))
+        scratchpadTab.tap()
         sleep(1)
+        attach(name: "07-scratchpad", from: app)
 
-        // 4. Settings — toolbar item on the leading edge.
-        let settingsButton = app.buttons["Settings"]
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
-        settingsButton.tap()
+        // 5. Settings — bottom tab. (No back navigation needed between
+        // tabs; the next relaunch lands back on the Dictation tab.)
+        let settingsTab = app.tabBars.buttons["Settings"]
+        XCTAssertTrue(settingsTab.waitForExistence(timeout: 4))
+        settingsTab.tap()
         sleep(1)
         attach(name: "06-settings", from: app)
 

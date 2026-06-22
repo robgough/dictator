@@ -57,6 +57,11 @@ struct DictatorIOSApp: App {
         // already populated.
         VocabularyStore.shared.bootstrap(customDirectory: sharedFolder, legacyEntries: nil)
         UsageStatsStore.shared.bootstrap(customDirectory: sharedFolder)
+        // Point the Scratchpad note at the same folder so it syncs with the
+        // Mac (which writes scratchpad.md into its synced folder). Without a
+        // shared folder it lives device-local in the sandbox; the Scratchpad
+        // tab nudges the user to connect one. bootstrap() reloads from disk.
+        ScratchpadModel.shared.bootstrap(customDirectory: sharedFolder)
     }
 
     var body: some Scene {

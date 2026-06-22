@@ -2195,6 +2195,9 @@ private struct SyncedFolderRow: View {
         }
         state.save()
         store.relocate(to: newDirectory)
+        // Re-point the Scratchpad note too — its file was copied across by
+        // relocateContents above; this reloads the model from the new folder.
+        state.scratchpadController?.relocate(to: newDirectory)
     }
 }
 

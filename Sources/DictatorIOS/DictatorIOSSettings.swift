@@ -52,6 +52,12 @@ enum DictatorIOSSettings {
     /// already chose (and possibly already started downloading).
     static let modelChoiceConfirmedKey = "DictatorIOS.modelChoiceConfirmed"
 
+    /// True once the user has dismissed the Scratchpad's "not syncing with
+    /// your Mac" hint with its X button. Permanent — the hint never returns,
+    /// even if they later disconnect a shared folder. No registered default:
+    /// an un-set bool reads false, so the hint shows until explicitly closed.
+    static let scratchpadSyncHintDismissedKey = "DictatorIOS.scratchpadSyncHintDismissed"
+
     /// Best-guess default Parakeet variant based on the device's
     /// preferred language. English-locale users get v2 (English-only)
     /// — it's slightly tighter on English accuracy because the model

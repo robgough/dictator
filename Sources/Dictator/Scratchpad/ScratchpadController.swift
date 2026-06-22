@@ -18,6 +18,11 @@ final class ScratchpadController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
+        // Point the model at the synced folder before anything reads it. The
+        // store used to resolve `SyncedStorage.fileURL` on every load/save;
+        // now (shared with iOS) it's bootstrapped with an explicit directory,
+        // re-pointed via `relocate(to:)` when the user changes synced folders.
+        model.bootstrap(customDirectory: SyncedStorage.directory)
         let host = NSHostingView(
             rootView: ScratchpadView(model: model, onClose: { [weak self] in self?.hide() })
         )
@@ -113,6 +118,14 @@ final class ScratchpadController: NSObject, NSWindowDelegate {
     /// debounce nor resign-key is guaranteed to have fired.
     func flush() {
         model.saveNow()
+    }
+
+    /// Re-point the note at a new synced folder. Called from Settings when the
+    /// user picks a different synced directory; `SyncedStorage.relocateContents`
+    /// has already copied `scratchpad.md` across, so bootstrap flushes any
+    /// pending edit to the old location, then reloads from the new one.
+    func relocate(to directory: URL) {
+        model.bootstrap(customDirectory: directory)
     }
 
     // The panel losing key focus (the user clicked into another app) is a good
