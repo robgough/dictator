@@ -1150,6 +1150,14 @@ final class Pipeline {
             text = Self.relaxShortMessage(text)
             text = Self.withTrailingSpace(text)
         }
+        // Per-mode override: guarantee a trailing space even when the
+        // context-aware joiner decided against one (caret at the end of a
+        // terminal/chat line, nothing after it). Lets back-to-back dictation
+        // flow without manually typing a leading space. Idempotent with the
+        // else-branch call above.
+        if currentMode.appendTrailingSpace {
+            text = Self.withTrailingSpace(text)
+        }
         lastResult = text
         var pasted = false
         var note: String? = warning

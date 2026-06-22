@@ -69,12 +69,14 @@ enum GrammarPassMode: String, Codable, Sendable, Hashable, CaseIterable {
 ///   The escape hatch for users on external interfaces.
 enum AudioInterruption: String, Codable, Sendable, Hashable, CaseIterable {
     case off
+    case auto
     case lowerVolume
     case pauseMedia
 
     var label: String {
         switch self {
         case .off: return "Don't change"
+        case .auto: return "Auto"
         case .lowerVolume: return "Lower volume"
         case .pauseMedia: return "Pause"
         }

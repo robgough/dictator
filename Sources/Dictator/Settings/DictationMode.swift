@@ -74,6 +74,13 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// email body) Return is just an unwanted blank line.
     var pressReturnAfterPaste: Bool
 
+    /// When true, every delivered dictation ends with a single trailing space —
+    /// even when context-aware joining would otherwise omit it (the caret sits
+    /// at the end of a terminal or chat line with nothing after it). Lets you
+    /// fire off back-to-back dictations without manually typing a leading space
+    /// between them. Off by default; independent of `pressReturnAfterPaste`.
+    var appendTrailingSpace: Bool
+
     /// Whether dictations in this mode read the text surrounding the
     /// insertion point (via the existing Accessibility permission) and use
     /// it in two places: the formatter pass sees it so names and terminology
@@ -111,7 +118,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case formattingPromptAddendum, formattingPromptOverride
         case grammarPromptAddendum, grammarPromptOverride
         case structuralPromptAddendum, structuralPromptOverride
-        case pressReturnAfterPaste, contextAwarenessEnabled
+        case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
@@ -162,6 +169,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride)
         self.pressReturnAfterPaste = try c.decodeIfPresent(Bool.self, forKey: .pressReturnAfterPaste) ?? false
         self.contextAwarenessEnabled = try c.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? true
+        self.appendTrailingSpace = try c.decodeIfPresent(Bool.self, forKey: .appendTrailingSpace) ?? false
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -191,7 +199,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         structuralPromptAddendum: String,
         structuralPromptOverride: String?,
         pressReturnAfterPaste: Bool = false,
-        contextAwarenessEnabled: Bool = true
+        contextAwarenessEnabled: Bool = true,
+        appendTrailingSpace: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -217,6 +226,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.structuralPromptOverride = structuralPromptOverride
         self.pressReturnAfterPaste = pressReturnAfterPaste
         self.contextAwarenessEnabled = contextAwarenessEnabled
+        self.appendTrailingSpace = appendTrailingSpace
     }
 
     // MARK: - Effective prompts

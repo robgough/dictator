@@ -28,6 +28,28 @@ enum SystemOutputVolume {
         return writeVolume(deviceID: device, value: clamped)
     }
 
+    /// True when the default output device exposes a *settable* scalar volume —
+    /// the same `HasProperty` + `IsPropertySettable` gate `writeVolume` uses, over
+    /// the same elements, so "can duck" and "did duck" can never disagree. False
+    /// for interfaces whose driver owns the gain stage (the macOS slider greys out
+    /// for the same reason) — the signal Auto mode uses to fall back to pausing.
+    static func isSettable() -> Bool {
+        guard let device = defaultOutputDevice() else { return false }
+        for element in [kAudioObjectPropertyElementMain, AudioObjectPropertyElement(1), AudioObjectPropertyElement(2)] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: element
+            )
+            guard AudioObjectHasProperty(device, &addr) else { continue }
+            var settable: DarwinBoolean = false
+            if AudioObjectIsPropertySettable(device, &addr, &settable) == noErr, settable.boolValue {
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: - Private
 
     private static func defaultOutputDevice() -> AudioDeviceID? {

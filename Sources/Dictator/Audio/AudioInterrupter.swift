@@ -38,32 +38,44 @@ final class AudioInterrupter {
         case .off:
             return
         case .lowerVolume:
-            guard let original = SystemOutputVolume.current() else {
-                // Device doesn't expose settable volume (typical for
-                // external audio interfaces). The user can pick the
-                // .pauseMedia option in Settings instead — bailing
-                // here is the right call rather than synthesising a
-                // fake "restore" value.
-                return
-            }
-            // No point dropping if the user's already below our target —
-            // restoring would push the volume *up* on stop, which is
-            // worse than doing nothing.
-            guard original > Self.lowerVolumeTarget else { return }
-            if SystemOutputVolume.set(Self.lowerVolumeTarget) {
-                active = .loweredVolume(restoreTo: original)
-            }
+            engageDuck()
         case .pauseMedia:
-            // Only pause if something is actually playing. The alternative
-            // (blanket pause on start, blanket play on stop) would
-            // spuriously *start* music after a quiet dictation — exactly
-            // the surprise the player-state probe is here to prevent.
-            // Currently scoped to Spotify and Music; see MediaController
-            // for why broader coverage isn't free on macOS 15.4+.
-            if let app = MediaController.appCurrentlyPlaying() {
-                MediaController.pause(app: app)
-                active = .pausedMedia(app: app)
+            engagePause()
+        case .auto:
+            // Duck when this Mac's current output supports it (built-in, wired,
+            // Bluetooth); fall back to pausing when it doesn't (USB / Thunderbolt
+            // interfaces whose driver owns the gain, HDMI, AirPlay, aggregates).
+            // Probed every recording, so swapping output devices is handled
+            // automatically. Picks exactly one branch, so restore stays simple.
+            if SystemOutputVolume.isSettable() {
+                engageDuck()
+            } else {
+                engagePause()
             }
+        }
+    }
+
+    /// Drop the system output volume to the target, recording the original for
+    /// restore. Bails (no `active` recorded) when the device exposes no settable
+    /// volume — typical for external interfaces — rather than synthesising a fake
+    /// restore value, and when the user is already below the target (restoring
+    /// would push the volume *up* on stop, worse than doing nothing).
+    private func engageDuck() {
+        guard let original = SystemOutputVolume.current() else { return }
+        guard original > Self.lowerVolumeTarget else { return }
+        if SystemOutputVolume.set(Self.lowerVolumeTarget) {
+            active = .loweredVolume(restoreTo: original)
+        }
+    }
+
+    /// Pause media, but only if something is actually playing — a blanket
+    /// pause/play would spuriously *start* music after a quiet dictation. Scoped
+    /// to Spotify and Music; see MediaController for why broader coverage isn't
+    /// free on macOS 15.4+.
+    private func engagePause() {
+        if let app = MediaController.appCurrentlyPlaying() {
+            MediaController.pause(app: app)
+            active = .pausedMedia(app: app)
         }
     }
 
