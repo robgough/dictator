@@ -453,6 +453,32 @@
                 type="application/octet-stream"
                 sparkle:edSignature="+IlcNE8/5CCtPI69CDa7ZhlrkOjwuV+yuSS2SXzkEiRxYgtC5xkdgq8ASrQW7DTQw8XfeRAjRN0/XOoO8ZJYDA==" />
         </item>
+        <item>
+            <title>Version 2026.6.8</title>
+            <pubDate>Mon, 22 Jun 2026 11:43:14 +0000</pubDate>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>2026.6.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>The Modes settings have a new layout: a clearer list that shows what each mode does and how it activates, opening into a roomier full-width editor with switch toggles instead of the old cramped two-column view.</li>
+  <li>You can now cancel a recording by clicking the top-right corner of the dictation HUD, as well as by pressing Escape.</li>
+  <li>New &quot;Auto&quot; choice for what happens to other audio while you dictate (Settings → General → While dictating): it lowers the system volume when your output device allows it, and falls back to pausing Spotify or Music when it can&#x27;t — typically on USB or Thunderbolt audio interfaces whose driver owns the volume.</li>
+  <li>A mode can now always end a dictation with a single trailing space (a new per-mode option in the mode editor), so you can run dictations back-to-back into a terminal or chat without typing a space between them.</li>
+  <li>When dictation or Assistant Mode is triggered by holding a bare Option key, pressing a key combination like ⌥3 (the # on a British keyboard) no longer fires a stray dictation — Dictator recognises it as a normal keyboard shortcut and quietly cancels.</li>
+  <li>Dictation no longer freezes on &quot;Connecting microphone&quot; for several seconds before recording starts (worst with external USB mics like the Yeti). The recording overlay&#x27;s animated indicators were forcing a slow GPU render on every start that could stall the whole app; they&#x27;ve been rebuilt to avoid it, so dictation begins promptly.</li>
+  <li>Settings → Input no longer fills up with leftover &quot;Dictator Meeting Tap&quot; entries from meeting recordings, and now forgets any input device it hasn&#x27;t seen in over a week (unless you&#x27;ve ranked it above System default), so the priority list stays tidy.</li>
+  <li>Settings has a fresh look: the row of tabs across the top is now a sidebar down the left, matching the modern macOS System Settings style, and the window can now be resized.</li>
+  <li>The live preview in the recording HUD is much calmer: it now fills and scrolls a few lines as you speak, animating each change word by word — new words fade in, corrections cross-fade, and the surrounding text glides to make room — instead of a single line that hard-cut and jumped sideways every time the transcription was refined, which was worst during longer dictations.</li>
+  <li>Assistant Mode now shows the same live preview of what you&#x27;re saying as dictation does, instead of leaving the preview area empty.</li>
+  <li>Meetings no longer require one specific model to write notes — any sufficiently capable downloaded MLX model now works. Gemma 4 E4B is still the recommended pick (and shows a gentle quality note when you choose a different capable model); the smallest models stay turned off for meetings because their notes aren&#x27;t reliable on a full transcript.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.8/Dictator.dmg"
+                length="31171329"
+                type="application/octet-stream"
+                sparkle:edSignature="9vYHHj3H2X8Oi8VQ2zR3xVAbKBjFg2L8FVvUXrXChlbY/MgJh7fibNA3ls6pv+TcDIaI5Swbx6yRhQL+Dl/fAA==" />
+        </item>
+    
     
     
     
