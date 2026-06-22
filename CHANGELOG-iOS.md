@@ -18,6 +18,8 @@ listing — keep entries as plain bullet lines.
 ## Unreleased
 
 - New bottom tab bar — Dictation, Scratchpad, History, Vocabulary, and Settings each get their own tab, with the iOS 26 Liquid Glass look throughout.
+- Dictation screen: the Copy to Clipboard button now uses the same translucent glass as the rest of the controls, and the mic, assist, and copy buttons are a little smaller so the screen feels less cramped.
+- Dictation screen: the "can make mistakes" note moved out of the button area and now shows as an amber warning near the bottom of the empty transcript box, keeping the controls uncluttered.
 - Added a Scratchpad: a quick notes tab that syncs with the Scratchpad on your Mac when you connect a shared folder, so notes you jot on your phone show up on your Mac and vice versa. Dictate into a note with the mic (it inserts at the cursor, replaces selected text, or adds to the end), reword selected text — or the whole note — with the assistant button, or tap the keyboard button to type. Quick space, return, and delete keys let you tidy a note without the full keyboard, and an undo button (which becomes redo) reverses a dictation or reword.
 - History and Vocabulary are now top-level tabs instead of being tucked inside Settings.
 - The Dictator keyboard now uses the iOS 26 Liquid Glass look.

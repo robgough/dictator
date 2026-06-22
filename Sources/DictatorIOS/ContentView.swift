@@ -714,29 +714,39 @@ struct DictationTabView: View {
     /// clipboard now."
     private var fullControls: some View {
         VStack(spacing: 12) {
-            // Warning / error caption sits ABOVE the action buttons
-            // now, in the slot the dynamic StatusLabel used to fill.
-            // The status pill at the top of the screen already shows
-            // the dictation lifecycle (Idle / Waiting / Transcribing),
-            // so a second copy here was redundant — replacing it with
-            // the standing warning frees vertical space and reads
-            // calmer. Error state flips the same line red so a
-            // failure still surfaces in the place the user's eye is
-            // drawn during action.
-            warningOrError
+            // Error caption only — on a failure a red line surfaces
+            // above the action buttons where the user's eye is drawn.
+            // The standing "can make mistakes" disclaimer no longer
+            // lives here; it's moved into the empty transcript card
+            // (see TranscriptCard) so the resting button cluster stays
+            // uncluttered. When there's no error this renders nothing
+            // and the VStack spacing collapses cleanly.
+            errorCaption
 
             Button {
                 viewModel.copyTranscriptToClipboard()
             } label: {
                 Label("Copy to Clipboard", systemImage: "doc.on.doc")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .font(.body.weight(.semibold))
+                    .padding(.vertical, 11)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white.opacity(viewModel.transcript.isEmpty ? 0.4 : 1))
+                    // Tint the whole glass capsule blue (not just the
+                    // label) so Copy reads as the primary action while
+                    // staying translucent rather than a solid fill. The
+                    // tint eases off when disabled since `.opacity` can't
+                    // fade a glassEffect on its own.
+                    .glassEffect(
+                        .regular
+                            .tint(.blue.opacity(viewModel.transcript.isEmpty ? 0.2 : 0.55))
+                            .interactive(),
+                        in: .capsule
+                    )
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.plain)
             .disabled(viewModel.transcript.isEmpty)
 
-            HStack(spacing: 28) {
+            HStack(spacing: 24) {
                 if viewModel.autoStartedRecordingActive {
                     // Recording was started for the user (keyboard URL
                     // launch path), not by a button press — a hold-to-
@@ -795,25 +805,18 @@ struct DictationTabView: View {
         .transition(.opacity)
     }
 
-    /// Standing footer that doubles as the error surface. Renders the
-    /// on-device-assistant best-effort warning by default; on a
-    /// `.error` status it swaps in the failure message in red. The
-    /// status pill at the top of the screen handles the rest of the
-    /// lifecycle (idle / recording / transcribing), so we don't
-    /// duplicate any of that here.
+    /// Error surface above the action buttons. Renders the failure
+    /// message in red on a `.error` status and nothing otherwise — the
+    /// standing "can make mistakes" disclaimer now lives in the empty
+    /// transcript card, and the status pill at the top handles the rest
+    /// of the lifecycle (idle / recording / transcribing), so there's
+    /// nothing to show here when things are going fine.
     @ViewBuilder
-    private var warningOrError: some View {
+    private var errorCaption: some View {
         if case .error(let message) = viewModel.status {
             Text(message)
                 .font(.caption2)
                 .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text("The on-device assistant runs locally and can make mistakes. Always read the result back before relying on it.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1025,6 +1028,31 @@ private struct TranscriptCard: View {
                     .padding(20)
                     .allowsHitTesting(false)
             }
+
+            // "Can make mistakes" disclaimer, relocated here from the
+            // button cluster so the resting controls stay clean. Sits near
+            // the bottom of the empty card as an amber warning with a
+            // triangle glyph — distinct from the top placeholder, which
+            // carries the actual instructions. Suppressed while
+            // transcribing or on an error, where the placeholder
+            // repurposes the card for live status instead.
+            if showsDisclaimer {
+                Label {
+                    Text("The on-device assistant runs locally and can make mistakes. Always read the result back before relying on it.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 20)
+                // Lifted clear of the floating undo button (36pt tall +
+                // 6pt inset), which can sit bottom-trailing after a clear
+                // even while the transcript itself is empty.
+                .padding(.bottom, 50)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .allowsHitTesting(false)
+            }
         }
     }
 
@@ -1033,6 +1061,17 @@ private struct TranscriptCard: View {
         case .transcribing: "Working on it…"
         case .error(let message): message
         default: "Hold the mic button and start talking. Release to transcribe."
+        }
+    }
+
+    /// Show the disclaimer only in the resting empty state. While
+    /// transcribing or on an error the placeholder takes over the card
+    /// with live status, so the fine print would just compete with it.
+    private var showsDisclaimer: Bool {
+        guard text.isEmpty else { return false }
+        switch status {
+        case .transcribing, .error: return false
+        default: return true
         }
     }
 }
@@ -1512,22 +1551,22 @@ private struct TapStopButton: View {
             ZStack {
                 Circle()
                     .fill(tint.opacity(0.18))
-                    .frame(width: 96 + CGFloat(level) * 60, height: 96 + CGFloat(level) * 60)
+                    .frame(width: 84 + CGFloat(level) * 60, height: 84 + CGFloat(level) * 60)
                     .animation(.easeOut(duration: 0.08), value: level)
                 // Spinning dashed ring sits just outside the button
                 // face so it stays visible under a thumb — the pulse
                 // is too soft to read while held.
                 if status.isCapturing {
-                    ActiveListeningRing(tint: tint, diameter: 120)
+                    ActiveListeningRing(tint: tint, diameter: 108)
                 }
                 // Glass face + tinted icon, matching the rest of the controls.
                 Image(systemName: icon)
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(tint.opacity(disabled ? 0.4 : 1))
-                    .frame(width: 96, height: 96)
+                    .frame(width: 84, height: 84)
                     .glassEffect(.regular, in: .circle)
             }
-            .frame(width: 96 + 60, height: 96 + 60)
+            .frame(width: 84 + 60, height: 84 + 60)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -1590,7 +1629,7 @@ struct HoldButton: View {
     /// misread as the toggle path.
     private static let holdThreshold: TimeInterval = 0.35
 
-    private var diameter: CGFloat { compact ? 52 : 96 }
+    private var diameter: CGFloat { compact ? 52 : 84 }
 
     /// Level-driven ring only shown around the button whose press is
     /// currently driving the recording. Without the `isMyTurn` gate
@@ -1618,7 +1657,7 @@ struct HoldButton: View {
 
     var body: some View {
         let ringMax: CGFloat = compact ? 14 : 60
-        let iconSize: CGFloat = compact ? 22 : 36
+        let iconSize: CGFloat = compact ? 22 : 32
         let ringDiameter: CGFloat = diameter + (compact ? 14 : 24)
         let ringLineWidth: CGFloat = compact ? 2 : 3
         ZStack {
