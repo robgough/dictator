@@ -36,7 +36,7 @@ struct SettingsView: View {
 
             Divider()
 
-            detail(for: selection ?? .general)
+            detailColumn(for: selection ?? .general)
                 // Bound the detail to the window so panes whose body is a `List`
                 // (Input device priority, Modes) scroll internally instead of
                 // growing to their full intrinsic height and pushing the window
@@ -51,6 +51,26 @@ struct SettingsView: View {
         .environment(state)
     }
 
+    /// The detail column for a section: a fixed System-Settings-style page title
+    /// at the top (it sat empty before), then the pane content scrolling below.
+    @ViewBuilder
+    private func detailColumn(for section: SettingsSection) -> some View {
+        // Modes manages its own title + back navigation via a NavigationStack,
+        // so it skips the fixed page-title wrapper the other panes use.
+        if section == .modes {
+            detail(for: section)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(section.title)
+                    .font(.system(size: 22, weight: .bold))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .padding(.bottom, 6)
+                detail(for: section)
+            }
+        }
+    }
+
     @ViewBuilder
     private func detail(for section: SettingsSection) -> some View {
         switch section {
@@ -61,7 +81,7 @@ struct SettingsView: View {
         case .general:    GeneralPane()
         case .input:      InputPane().settingsDetailPadding()
         case .models:     ModelsPane()
-        case .modes:      ModesPane().settingsDetailPadding()
+        case .modes:      ModesPane()
         case .meetings:   MeetingsPane()
         case .assistant:  AssistantPromptPane().settingsDetailPadding()
         case .dictionary: DictionaryPane().settingsDetailPadding()
@@ -98,7 +118,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .input:      "mic.fill"
         case .models:     "cpu"
         case .modes:      "rectangle.stack.fill"
-        case .meetings:   "person.2.wave.2.fill"
+        case .meetings:   "person.2.fill"
         case .assistant:  "wand.and.stars"
         case .dictionary: "character.book.closed.fill"
         case .history:    "clock.fill"
@@ -115,11 +135,11 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .input:      .blue
         case .models:     .purple
         case .modes:      .orange
-        case .meetings:   .teal
+        case .meetings:   Color(red: 0.10, green: 0.52, blue: 0.50)   // deep teal — bright .teal washes out the white glyph
         case .assistant:  .pink
         case .dictionary: .green
         case .history:    .indigo
-        case .about:      .cyan
+        case .about:      Color(red: 0.28, green: 0.46, blue: 0.62)   // slate blue — bright .cyan washes out the white glyph
         }
     }
 }
@@ -132,11 +152,19 @@ private struct SettingsSidebarIcon: View {
 
     var body: some View {
         Image(systemName: systemImage)
-            .font(.system(size: 12, weight: .semibold))
+            // Scale-to-fit a fixed inner box rather than sizing by font: SF
+            // Symbols have different aspect ratios, and wide glyphs (Meetings'
+            // person.2.wave.2.fill especially) overflow a font-sized frame
+            // horizontally and spill past the badge. A 13×13 fit box keeps every
+            // icon inside the 20×20 badge with margin.
+            .resizable()
+            .scaledToFit()
+            .fontWeight(.semibold)
             .foregroundStyle(.white)
-            .frame(width: 20, height: 20)
+            .frame(width: 16, height: 16)
+            .frame(width: 22, height: 22)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(tint.gradient)
             )
     }
@@ -171,10 +199,9 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
     private func configure(_ window: NSWindow?) {
         guard let window else { return }
         window.styleMask.insert(.resizable)
-        // Floor the resize: the SwiftUI content frame's minWidth/Height isn't
-        // reliably enforced once we force `.resizable` on, so pin it here too —
-        // otherwise the sidebar + detail can be dragged narrower than usable.
-        window.contentMinSize = NSSize(width: 720, height: 520)
+        // NB: do NOT set window.contentMinSize here — it fights SwiftUI's
+        // content-size resizing and froze the window. The frame's minWidth/Height
+        // in DictatorApp already floors it.
     }
 }
 
@@ -2081,7 +2108,7 @@ private struct GeneralPane: View {
                     }
                 }
                 .onChange(of: s.settings.audioInterruption) { _, _ in state.save() }
-                SectionFootnote("**Lower volume** dips the system output for the length of each dictation, then restores. Doesn't work on USB / Thunderbolt audio interfaces whose driver owns the volume (the macOS slider is greyed out for those) — use **Pause** instead, which tells Spotify or Music to pause regardless of how audio is routed. Pause asks for one-time Automation permission the first time it fires for each app. Per-Mac because the right choice depends on this machine's output device.")
+                SectionFootnote("**Auto** ducks the output when this Mac's current output device supports it, and pauses Spotify or Music when it can't. **Lower volume** dips the system output for the length of each dictation, then restores — but doesn't work on USB / Thunderbolt audio interfaces whose driver owns the volume (the macOS slider is greyed out for those). **Pause** tells Spotify or Music to pause regardless of how audio is routed. Pausing (including Auto's fallback) asks for one-time Automation permission the first time it fires for each app. Per-Mac because the right choice depends on this machine's output device.")
             } header: { ThisMacHeader("Other audio") }
             Section {
                 SyncedFolderRow()
@@ -3117,133 +3144,114 @@ private struct TrashTapGlyph: View {
 
 private struct ModesPane: View {
     @Environment(AppState.self) private var state
+    // Manual drill-in (NOT NavigationStack — embedded in the settings detail
+    // column it renders a junk nav bar: floating back button + dead space).
+    @State private var editingID: UUID?
     @State private var selectedID: UUID?
 
     var body: some View {
         @Bindable var s = state
-        VStack(alignment: .leading, spacing: 10) {
-            CycleAXBanner()
-            HStack(alignment: .top, spacing: 12) {
-                modeList
-                    .frame(width: 200)
-                Divider()
-                Group {
-                    if let id = effectiveSelection,
-                       let idx = state.settings.modes.firstIndex(where: { $0.id == id }) {
-                        ModeDetail(
-                            mode: $s.settings.modes[idx],
-                            isDefault: state.settings.defaultModeID == id,
-                            onMakeDefault: {
-                                state.settings.defaultModeID = id
-                                state.save()
-                            },
-                            onChange: { state.save() }
-                        )
-                    } else {
-                        Text("Select a mode")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if let id = editingID, let idx = state.settings.modes.firstIndex(where: { $0.id == id }) {
+            editor(mode: $s.settings.modes[idx], id: id)
+        } else {
+            selector
+        }
+    }
+
+    private var selector: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Modes")
+                    .font(.system(size: 22, weight: .bold))
+                Spacer()
+                Button { addMode() } label: { Image(systemName: "plus") }
+                    .help("Add a new mode (cloned from the default)")
             }
-            SectionFootnote("Modes — names, prompts, app bindings, pass toggles — sync via your Synced folder (see Settings → General).")
-        }
-        .frame(minHeight: 480)
-    }
-
-    /// Falls back to the default mode when no selection has been recorded yet
-    /// (first open of the tab) or when the previously-selected id was deleted.
-    private var effectiveSelection: UUID? {
-        if let id = selectedID, state.settings.modes.contains(where: { $0.id == id }) {
-            return id
-        }
-        return state.settings.defaultModeID
-    }
-
-    @ViewBuilder
-    private var modeList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Selection is bound through List itself rather than a custom tap
-            // gesture. With our own .onTapGesture on the row, the gesture ate
-            // drags anywhere inside the row's content shape and only the
-            // outer padding worked as a drag pickup zone. Letting List own
-            // selection means it can coordinate click-to-select and
-            // press-drag-to-reorder across the entire row — the standard
-            // macOS list interaction model.
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 6)
+            CycleAXBanner()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
+            // List(selection:) + onChange (not a Button row): the List coordinates
+            // click-to-select with press-drag-to-reorder; a tap gesture eats drags.
             List(selection: $selectedID) {
                 ForEach(state.settings.modes) { mode in
-                    ModeListRow(
-                        mode: mode,
-                        isSelected: effectiveSelection == mode.id,
-                        isDefault: state.settings.defaultModeID == mode.id
-                    )
-                    .tag(mode.id)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
-                    .listRowBackground(Color.clear)
+                    ModeCard(mode: mode, isDefault: state.settings.defaultModeID == mode.id)
+                        .tag(mode.id)
+                        .contextMenu {
+                            if state.settings.defaultModeID != mode.id {
+                                Button("Make Default") { makeDefault(mode) }
+                            }
+                            Button("Duplicate") { duplicateMode(mode) }
+                            if canDelete(mode) {
+                                Divider()
+                                Button("Delete", role: .destructive) { deleteMode(mode) }
+                            }
+                        }
                 }
                 .onMove { offsets, destination in
                     state.settings.modes.move(fromOffsets: offsets, toOffset: destination)
                     state.save()
                 }
             }
-            .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.15)))
-
-            HStack(spacing: 6) {
-                Button {
-                    addMode()
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 18, height: 18)
-                }
-                .help("Add a new mode (cloned from the selected mode)")
-                Button {
-                    duplicateMode()
-                } label: {
-                    Image(systemName: "plus.square.on.square")
-                        .frame(width: 18, height: 18)
-                }
-                .disabled(currentMode == nil)
-                .help("Duplicate the selected mode")
-                Button {
-                    deleteMode()
-                } label: {
-                    Image(systemName: "minus")
-                        .frame(width: 18, height: 18)
-                }
-                .disabled(!canDeleteCurrent)
-                .help(canDeleteCurrent ? "Delete the selected mode" : "This mode is locked or is the only one remaining")
-                Spacer()
+            .onChange(of: selectedID) { _, new in
+                if let new { editingID = new }
             }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
+            SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, prompts, bindings, pass toggles) sync via your Synced folder.")
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
         }
     }
 
-    // MARK: - List actions
-
-    private var currentMode: DictationMode? {
-        guard let id = selectedID ?? state.settings.modes.first(where: { $0.id == state.settings.defaultModeID })?.id else { return nil }
-        return state.settings.modes.first(where: { $0.id == id })
+    private func editor(mode: Binding<DictationMode>, id: UUID) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Button {
+                    editingID = nil
+                    selectedID = nil   // so re-selecting the same mode drills in again
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                        Text("Modes")
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+            ModeDetail(
+                mode: mode,
+                isDefault: state.settings.defaultModeID == id,
+                onMakeDefault: {
+                    state.settings.defaultModeID = id
+                    state.save()
+                },
+                onChange: { state.save() }
+            )
+        }
     }
 
-    private var canDeleteCurrent: Bool {
-        guard let mode = currentMode else { return false }
-        if mode.isLocked { return false }
-        // Don't let the list collapse to empty.
-        return state.settings.modes.count > 1
+    // MARK: - Actions
+
+    private func canDelete(_ mode: DictationMode) -> Bool {
+        // Don't let the list collapse to empty, and Quick is locked.
+        !mode.isLocked && state.settings.modes.count > 1
+    }
+
+    private func makeDefault(_ mode: DictationMode) {
+        state.settings.defaultModeID = mode.id
+        state.save()
     }
 
     private func addMode() {
-        // Clone the current selection as the seed — a fresh mode rarely makes
-        // sense (the user has to recreate the same pass settings), but a tweak
-        // of an existing one is the common case. Falls back to Write if
-        // nothing's selected.
-        let template = currentMode ?? state.settings.defaultMode
+        // Clone the default as the seed — a blank mode rarely makes sense (you'd
+        // recreate the same pass setup), so tweaking a copy is the common case.
+        let template = state.settings.defaultMode
         var copy = template
         copy.id = UUID()
         copy.name = uniqueName(basedOn: template.name)
@@ -3251,12 +3259,11 @@ private struct ModesPane: View {
         copy.includeInCycle = true
         copy.appBundleIDs = []
         state.settings.modes.append(copy)
-        selectedID = copy.id
         state.save()
+        editingID = copy.id   // drill straight into the new mode
     }
 
-    private func duplicateMode() {
-        guard let mode = currentMode else { return }
+    private func duplicateMode(_ mode: DictationMode) {
         var copy = mode
         copy.id = UUID()
         copy.name = uniqueName(basedOn: mode.name)
@@ -3267,12 +3274,11 @@ private struct ModesPane: View {
         } else {
             state.settings.modes.append(copy)
         }
-        selectedID = copy.id
         state.save()
     }
 
-    private func deleteMode() {
-        guard let mode = currentMode, canDeleteCurrent else { return }
+    private func deleteMode(_ mode: DictationMode) {
+        guard canDelete(mode) else { return }
         let wasDefault = state.settings.defaultModeID == mode.id
         state.settings.modes.removeAll(where: { $0.id == mode.id })
         if wasDefault {
@@ -3280,7 +3286,6 @@ private struct ModesPane: View {
             // Quick, since it's seeded first.
             state.settings.defaultModeID = state.settings.modes.first?.id ?? DictationMode.quickID
         }
-        selectedID = state.settings.defaultModeID
         state.save()
     }
 
@@ -3336,48 +3341,75 @@ private struct CycleAXBanner: View {
     }
 }
 
-/// Single-line entry in the modes list. Shows the mode name, an optional
-/// "default" pip, and a lock icon for the built-in Quick mode.
-private struct ModeListRow: View {
+/// A mode in the selector: name + badges, plus a one-line summary of what the
+/// mode does and how it activates. Drill in (the parent NavigationLink) to edit.
+private struct ModeCard: View {
     let mode: DictationMode
-    let isSelected: Bool
     let isDefault: Bool
 
     var body: some View {
-        // No gestures here — selection lives on the parent List via
-        // `.tag` + `List(selection:)`. Adding a tap gesture would compete
-        // with List's drag-to-reorder coordination and force users to grab
-        // the row from an edge.
-        HStack(spacing: 8) {
-            if mode.isLocked {
-                Image(systemName: "lock.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 12)
-            } else {
-                Spacer().frame(width: 12)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if mode.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(mode.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+                if isDefault {
+                    Text("default")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                }
             }
-            Text(mode.name)
-                .font(.system(size: 12, weight: .medium))
+            Text(summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 0)
-            if isDefault {
-                Text("default")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
-            }
         }
-        .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-        )
-        .padding(.horizontal, 4)
+    }
+
+    /// "Format · Grammar · Structure  ·  2 apps · Tab cycle" — what's on, and how
+    /// it's reached, so the selector is informative without drilling in.
+    private var summary: String {
+        var passes: [String] = []
+        if mode.formattingPassEnabled { passes.append("Format") }
+        switch mode.grammarPassMode {
+        case .off: break
+        case .tidy: passes.append("Grammar")
+        case .tighten: passes.append("Tighten")
+        }
+        if mode.structuralPassEnabled { passes.append("Structure") }
+        var s = passes.isEmpty ? "Raw transcript — no AI passes" : passes.joined(separator: " · ")
+        var extras: [String] = []
+        if !mode.appBundleIDs.isEmpty {
+            extras.append("\(mode.appBundleIDs.count) app\(mode.appBundleIDs.count == 1 ? "" : "s")")
+        }
+        if mode.includeInCycle { extras.append("Tab cycle") }
+        if !extras.isEmpty { s += "  ·  " + extras.joined(separator: " · ") }
+        return s
+    }
+}
+
+/// Settings-style toggle: label on the left, switch pinned to the right edge, so
+/// a column of them lines up instead of each switch sitting wherever its label
+/// happens to end (which read as "random placement").
+private struct SettingsToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.label
+            Spacer(minLength: 16)
+            Toggle(isOn: configuration.$isOn) { EmptyView() }
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
     }
 }
 
@@ -3418,8 +3450,13 @@ private struct ModeDetail: View {
                     deliverySection
                 }
             }
-            .padding(.trailing, 4)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+            .frame(maxWidth: 680, alignment: .leading)   // readable measure in the wide editor
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Label-left, switch-right toggles that line up — like a settings screen.
+        .toggleStyle(SettingsToggleStyle())
     }
 
     // MARK: - Sections
@@ -3586,6 +3623,11 @@ private struct ModeDetail: View {
                 Toggle("Press Return after pasting", isOn: $mode.pressReturnAfterPaste)
                     .onChange(of: mode.pressReturnAfterPaste) { _, _ in onChange() }
                 Text("Sends a Return keypress once the paste lands. Useful for chat apps (Slack, iMessage, Discord), search boxes, and form fields where Return submits. Pair with an app binding so it only fires where you actually want auto-send — in a multi-line editor (TextEdit, VS Code, an email body) this just inserts a blank line. Only fires when the text was actually pasted; if Accessibility permission is missing and the text fell back to clipboard-only, no Return is sent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Always end with a trailing space", isOn: $mode.appendTrailingSpace)
+                    .onChange(of: mode.appendTrailingSpace) { _, _ in onChange() }
+                Text("Adds a single space after the delivered text so you can start the next dictation without typing a space first. Handy when piping into a terminal or chat where each utterance lands at the end of the line — normally the spacing adapts to the cursor and leaves no trailing space there.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

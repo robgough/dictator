@@ -45,8 +45,8 @@ struct DictatorApp: App {
                 // .infinity` lets the content grow, and `.windowResizability
                 // (.contentSize)` below lets the window follow it — without the
                 // flexible max the Settings scene pins to a fixed size.
-                .frame(minWidth: 720, idealWidth: 760, maxWidth: .infinity,
-                       minHeight: 520, idealHeight: 560, maxHeight: .infinity)
+                .frame(minWidth: 720, idealWidth: 920, maxWidth: .infinity,
+                       minHeight: 540, idealHeight: 680, maxHeight: .infinity)
         }
         .windowResizability(.contentSize)
         .handlesExternalEvents(matching: ["settings"])

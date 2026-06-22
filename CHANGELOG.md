@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The Modes settings have a new layout: a clearer list that shows what each mode does and how it activates, opening into a roomier full-width editor with switch toggles instead of the old cramped two-column view.
 - You can now cancel a recording by clicking the top-right corner of the dictation HUD, as well as by pressing Escape.
 - New "Auto" choice for what happens to other audio while you dictate (Settings → General → While dictating): it lowers the system volume when your output device allows it, and falls back to pausing Spotify or Music when it can't — typically on USB or Thunderbolt audio interfaces whose driver owns the volume.
 - A mode can now always end a dictation with a single trailing space (a new per-mode option in the mode editor), so you can run dictations back-to-back into a terminal or chat without typing a space between them.
