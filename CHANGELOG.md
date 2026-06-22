@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- You can now cancel a recording by clicking the top-right corner of the dictation HUD, as well as by pressing Escape.
 - New "Auto" choice for what happens to other audio while you dictate (Settings → General → While dictating): it lowers the system volume when your output device allows it, and falls back to pausing Spotify or Music when it can't — typically on USB or Thunderbolt audio interfaces whose driver owns the volume.
 - A mode can now always end a dictation with a single trailing space (a new per-mode option in the mode editor), so you can run dictations back-to-back into a terminal or chat without typing a space between them.
 - When dictation or Assistant Mode is triggered by holding a bare Option key, pressing a key combination like ⌥3 (the # on a British keyboard) no longer fires a stray dictation — Dictator recognises it as a normal keyboard shortcut and quietly cancels.

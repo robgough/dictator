@@ -18,7 +18,6 @@ private extension Color {
 struct DictationIslandContent: View {
     @Environment(AppState.self) private var state
     @State private var deviceManager = AudioDeviceManager.shared
-    @State private var hovering = false
 
     /// The last non-idle pipeline state, kept so the retract has content to
     /// carry: when dictation finishes the pipeline snaps to `.idle` in the
@@ -44,25 +43,9 @@ struct DictationIslandContent: View {
             // there resolves .primary/.secondary light-on-black; the literal
             // accent colours above hold their values on black just as they
             // did over the old material.
-            .overlay(alignment: .topTrailing) {
-                if hovering && state.pipeline.state.canCancel {
-                    Button {
-                        state.pipeline.cancelInFlight()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Cancel")
-                    .padding(6)
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                }
-            }
-            .animation(.snappy(duration: 0.18), value: hovering)
+            // Cancel now lives in the island's right ear (IslandView.cancelEar),
+            // at notch level — out of the content area entirely.
             .animation(.snappy(duration: 0.25), value: stateKey)
-            .onHover { hovering = $0 }
             .onChange(of: liveStateKey) { _, _ in
                 let live = state.pipeline.state
                 if case .idle = live { return }

@@ -123,7 +123,25 @@ struct IslandView: View {
                     .fill(.black)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             )
+            .overlay(alignment: .topTrailing) {
+                // Cancel hotspot in the island's right "ear" — the empty black
+                // strip beside the notch (the island is wider than the notch), at
+                // notch level so it never pushes the content below. The whole
+                // corner is the click target; Esc still cancels too.
+                cancelEar(mode: mode, geo: geo)
+                    .padding(.top, Self.topBleed)          // drop below the parked bleed → screen-top / notch level
+                    .padding(.trailing, 10)
+            }
             .offset(y: -Self.topBleed)                     // park the bleed above the screen edge
+    }
+
+    @ViewBuilder
+    private func cancelEar(mode: Mode, geo: NotchGeometry) -> some View {
+        if case .dictation = mode, state.pipeline.state.canCancel {
+            CancelEarButton(topInset: geo.topInset) {
+                state.pipeline.cancelInFlight()
+            }
+        }
     }
 
     @ViewBuilder
@@ -170,6 +188,31 @@ struct IslandView: View {
         case .coach(nudging: true, _): max(geo.notchWidth + 56, 380)
         case .coach: max(geo.notchWidth + 56, 210)
         }
+    }
+}
+
+/// The cancel target that lives in the island's right "ear", at notch level.
+/// A roomy invisible hit-zone (the whole corner) around a faint ✕ that
+/// brightens on hover. Cancelling is also bound to Esc by `EscapeCancelMonitor`,
+/// so this is the pointer affordance for the same action.
+private struct CancelEarButton: View {
+    let topInset: CGFloat
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.45))
+                // Fill the notch-height strip and a slice of the ear so the
+                // whole top-right corner is an easy target, not just the glyph.
+                .frame(width: 40, height: max(22, topInset))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Cancel (Esc)")
     }
 }
 
