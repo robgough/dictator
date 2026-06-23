@@ -21,7 +21,7 @@ mkdir -p "$OUT_DIR"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer} \
     xcrun xcresulttool export attachments \
     --path "$XCRESULT" --output-path "$TMP" >/dev/null
 

@@ -730,15 +730,20 @@ struct DictationTabView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white.opacity(viewModel.transcript.isEmpty ? 0.4 : 1))
+                    // White label on the strong blue when active; a muted
+                    // secondary-label grey when disabled — a faded white
+                    // label vanishes against the light card, reading as
+                    // broken rather than inactive.
+                    .foregroundStyle(viewModel.transcript.isEmpty ? Color(.secondaryLabel) : .white)
                     // Tint the whole glass capsule blue (not just the
                     // label) so Copy reads as the primary action while
                     // staying translucent rather than a solid fill. The
                     // tint eases off when disabled since `.opacity` can't
-                    // fade a glassEffect on its own.
+                    // fade a glassEffect on its own, but stays present
+                    // enough to read as a real (inactive) button.
                     .glassEffect(
                         .regular
-                            .tint(.blue.opacity(viewModel.transcript.isEmpty ? 0.2 : 0.55))
+                            .tint(.blue.opacity(viewModel.transcript.isEmpty ? 0.28 : 0.55))
                             .interactive(),
                         in: .capsule
                     )

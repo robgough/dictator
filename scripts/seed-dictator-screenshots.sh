@@ -26,7 +26,7 @@ fi
 SIM="$1"
 APP_BUNDLE="net.robgough.DictatorIOS"
 GROUP_ID="group.net.robgough.DictatorIOS"
-XCRUN="DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl"
+XCRUN="DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer} xcrun simctl"
 
 CONTAINER=$(eval "$XCRUN get_app_container \"$SIM\" \"$APP_BUNDLE\" data")
 # `groups` exits non-zero (117 / usage) but still prints the path on stdout.
