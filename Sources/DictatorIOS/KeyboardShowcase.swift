@@ -11,6 +11,11 @@ import SwiftUI
 /// looks in-context — a faux compose surface up top, the keyboard
 /// down below.
 ///
+/// Mirrors `KeyboardRootView`'s Liquid Glass styling: every tile is a
+/// `.glassEffect` rounded rect with a tinted glyph, not a solid colour
+/// fill. Keep the two in sync — when the real keyboard's look changes,
+/// this mockup has to follow or the screenshot drifts out of date.
+///
 /// Gated behind the `DICTATOR_SCREENSHOT_STATE=keyboard` env var so
 /// only the UI test ever surfaces it.
 struct KeyboardShowcase: View {
@@ -48,9 +53,10 @@ struct KeyboardShowcase: View {
             // pasteboard string itself).
             pasteRow
 
-            // Primary action tiles — compact horizontal pills, not
-            // the big circular buttons the keyboard used to have.
-            HStack(spacing: 12) {
+            // Primary action tiles — glass faces with tinted glyphs,
+            // matching `KeyboardRootView.primaryButton` (24pt gap, as in
+            // its idle row).
+            HStack(spacing: 24) {
                 primary(tint: .red, icon: "mic.fill", label: "Dictate")
                 primary(tint: .purple, icon: "wand.and.stars", label: "Assist")
             }
@@ -61,20 +67,12 @@ struct KeyboardShowcase: View {
                 secondary(icon: "arrow.uturn.backward", label: "Undo")
                 Text("space")
                     .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(.tertiarySystemBackground))
-                    )
+                    .glassEffect(.regular, in: .rect(cornerRadius: 10))
                 secondary(icon: "return", label: "Return")
-                Image(systemName: "delete.left")
-                    .font(.system(size: 20, weight: .medium))
-                    .frame(width: 60, height: 44)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(.tertiarySystemBackground))
-                    )
+                secondary(icon: "delete.left", label: "Backspace")
             }
 
             // "Globe" hint mimicking the system keyboard-switcher row.
@@ -93,8 +91,10 @@ struct KeyboardShowcase: View {
     }
 
     /// Paste button + preview pill, matching `KeyboardRootView.pasteChip`.
-    /// Both render at cornerRadius 10 + fixed 36pt height so they share
-    /// the shape family of the secondary-row tiles below.
+    /// Both render as glass at cornerRadius 10 + fixed 36pt height so they
+    /// share the shape family of the secondary-row tiles below. The Paste
+    /// glyph carries the accent tint (its enabled state) rather than a
+    /// solid accent fill.
     private var pasteRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
@@ -103,13 +103,10 @@ struct KeyboardShowcase: View {
                 Text("Paste")
                     .font(.footnote.weight(.semibold))
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.accentColor)
             .padding(.horizontal, 12)
             .frame(height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor)
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 10))
 
             HStack(spacing: 6) {
                 Text("Pick up flowers on the way home, will swing by the place on Elm.")
@@ -123,41 +120,34 @@ struct KeyboardShowcase: View {
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(.tertiarySystemBackground))
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 10))
         }
     }
 
-    /// Compact tile matching `KeyboardRootView.primaryButton`. Icon +
-    /// label on a 56pt-tall coloured rounded rectangle.
+    /// Compact tile matching `KeyboardRootView.primaryButton`: a glass
+    /// face with a tinted icon + label, 56pt tall — not a solid colour
+    /// fill with a white glyph.
     private func primary(tint: Color, icon: String, label: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
             Text(label)
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(.white)
         }
+        .foregroundStyle(tint)
         .frame(maxWidth: .infinity)
         .frame(height: 56)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(tint)
-        )
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
+    /// Icon-only glass tile matching `KeyboardRootView.secondaryButton`
+    /// and `backspaceButton` — 60×44, cornerRadius 10.
     private func secondary(icon: String, label: String) -> some View {
         Image(systemName: icon)
-            .font(.system(size: 18, weight: .medium))
+            .font(.system(size: 20, weight: .medium))
             .foregroundStyle(.primary)
             .frame(width: 60, height: 44)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(.tertiarySystemBackground))
-            )
+            .glassEffect(.regular, in: .rect(cornerRadius: 10))
             .accessibilityLabel(label)
     }
 }
