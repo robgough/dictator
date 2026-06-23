@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Long meetings no longer make the app feel sluggish. The live transcript's word-by-word animation was doing steadily heavier work as the transcript grew, which could leave the whole app — the dictation HUD included — stuttering during a long meeting; it now stays light no matter how long the meeting runs.
 
 ## v2026.6.8 — 2026-06-22
 

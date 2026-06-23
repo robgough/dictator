@@ -66,7 +66,7 @@ struct TypewriterText: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: fades.isEmpty)) { timeline in
-            Text(attributedText(at: timeline.date))
+            streamedText(at: timeline.date)
         }
         .onChange(of: target) { _, new in retarget(to: new) }
         .onAppear { displayed = target }
@@ -88,26 +88,57 @@ struct TypewriterText: View {
         streaming || idleIndicator == .blinkingCursor
     }
 
-    private func attributedText(at now: Date) -> AttributedString {
-        var attr = AttributedString(displayed + (showsCursor ? "▍" : ""))
-        attr.foregroundColor = Color(nsColor: baseColor)
+    /// Compose the rendered line as a *stable head* (`Text` of a plain String —
+    /// no per-glyph attributes, so SwiftUI lays it out cheaply and can reuse it
+    /// across frames) plus a *short fading tail*. The tail spans only the active
+    /// fade set (≤24 recent words), so per-frame cost is O(tail), independent of
+    /// transcript length.
+    ///
+    /// The previous version built an `AttributedString` over the entire
+    /// `displayed` string (capped at ~12 k chars) and, for every fade, walked it
+    /// from `startIndex` via `offsetByCharacters` — ≈48 × O(n) grapheme walks,
+    /// *plus* a full O(n) AttributedString construction, every frame at 30 fps.
+    /// That was a steady main-thread render tax that scaled with the live
+    /// transcript and made the whole app (including the dictation HUD) stutter
+    /// during long meetings.
+    private func streamedText(at now: Date) -> Text {
         let count = displayed.count
-        for fade in fades {
-            guard fade.start < count else { continue }
-            let alpha = min(1, max(0, now.timeIntervalSince(fade.at) / Self.fadeDuration))
-            guard alpha < 1 else { continue }
-            let s = attr.index(attr.startIndex, offsetByCharacters: fade.start)
-            let e = attr.index(attr.startIndex, offsetByCharacters: min(fade.end, count))
-            attr[s..<e].foregroundColor = Color(nsColor: baseColor.withAlphaComponent(alpha))
+        // Fades still brightening (alpha < 1). They always sit at the tail, so
+        // the earliest active fade's start is where attributed rendering begins.
+        let active = fades.filter {
+            $0.start < count && now.timeIntervalSince($0.at) < Self.fadeDuration
         }
+        let split = min(active.map(\.start).min() ?? count, count)
+        let splitIdx = displayed.index(displayed.startIndex, offsetBy: split)
+
+        // Head: everything settled to the base colour — one plain Text, no
+        // per-character attributes.
+        var text = Text(verbatim: String(displayed[..<splitIdx]))
+            .foregroundColor(Color(nsColor: baseColor))
+
+        // Tail: the short, still-brightening region. Indexing is relative to the
+        // tail (a few hundred chars at most), never the whole string.
+        if split < count {
+            var tail = AttributedString(String(displayed[splitIdx...]))
+            tail.foregroundColor = Color(nsColor: baseColor)
+            for fade in active {
+                let alpha = min(1, max(0, now.timeIntervalSince(fade.at) / Self.fadeDuration))
+                guard alpha < 1 else { continue }
+                let s = tail.index(tail.startIndex, offsetByCharacters: fade.start - split)
+                let e = tail.index(tail.startIndex, offsetByCharacters: min(fade.end, count) - split)
+                tail[s..<e].foregroundColor = Color(nsColor: baseColor.withAlphaComponent(alpha))
+            }
+            text = text + Text(tail)
+        }
+
         if showsCursor {
-            // Solid while typing; alpha-blinked while idle (the glyph stays
-            // in layout either way). Reduce Motion: steady and dim.
+            // Solid while typing; alpha-blinked while idle (the glyph stays in
+            // layout either way). Reduce Motion: steady and dim.
             let alpha: CGFloat = streaming ? 1 : (reduceMotion ? 0.4 : (cursorOn ? 0.85 : 0))
-            let s = attr.index(attr.endIndex, offsetByCharacters: -1)
-            attr[s..<attr.endIndex].foregroundColor = Color(nsColor: baseColor.withAlphaComponent(alpha))
+            text = text + Text(verbatim: "▍")
+                .foregroundColor(Color(nsColor: baseColor.withAlphaComponent(alpha)))
         }
-        return attr
+        return text
     }
 
     private func retarget(to new: String) {
