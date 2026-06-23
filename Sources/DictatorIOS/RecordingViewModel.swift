@@ -250,9 +250,12 @@ final class RecordingViewModel {
         }
 
         // Screenshot-capture hook. When the env var or launch arg below
-        // is set we synthesise a "mid-recording" state for the App Store
-        // shot: faked level, populated transcript, no real mic or model
-        // touched. Off in every regular build path — checked via
+        // is set we synthesise a resting post-dictation state for the App
+        // Store shot: model loaded, a populated transcript, and a `.ready`
+        // (at-rest) status so the mic shows its resting icon rather than
+        // the active listening ring — the shot reads as "here's your
+        // result, ready to copy" instead of mid-recording. No real mic or
+        // model is touched. Off in every regular build path — checked via
         // `ProcessInfo` so it costs nothing at runtime unless wired.
         if ProcessInfo.processInfo.environment["DICTATOR_SCREENSHOT_STATE"] == "recording"
             || CommandLine.arguments.contains("-DictatorScreenshotState_recording")
@@ -260,7 +263,7 @@ final class RecordingViewModel {
             recordingMode = .dictation
             isModelLoaded = true
             transcript = "Picking up bread, milk, and a couple of those nice apples from the new place on the corner."
-            status = .recording(level: 0.55)
+            status = .ready
         }
     }
 

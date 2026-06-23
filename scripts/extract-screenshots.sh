@@ -7,8 +7,10 @@ set -euo pipefail
 OUT_DIR="${1:?Usage: extract-screenshots.sh <out-dir>}"
 DERIVED_DATA="${DERIVED_DATA:-.derivedData}"
 
-# Pick the newest .xcresult bundle.
-XCRESULT=$(find "$DERIVED_DATA/Logs/Test" -name "*.xcresult" -type d -depth 1 2>/dev/null | head -1)
+# Pick the newest .xcresult bundle. `ls -dt` sorts by mtime so repeat
+# test runs (which accumulate timestamped bundles under Logs/Test) always
+# resolve to the latest capture rather than an arbitrary earlier one.
+XCRESULT=$(ls -dt "$DERIVED_DATA"/Logs/Test/*.xcresult 2>/dev/null | head -1)
 if [ -z "$XCRESULT" ]; then
     echo "No xcresult bundle found under $DERIVED_DATA/Logs/Test" >&2
     exit 1
