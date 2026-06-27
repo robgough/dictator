@@ -43,6 +43,7 @@ enum SpokenCues {
         if options.punctuation { s = applyMultiWordPunctuation(to: s) }
         if options.times       { s = applyTimes(to: s) }
         if options.numbers     { s = applyArithmetic(to: s) }
+        if options.numbers     { s = applyMultiplier(to: s) }
         if options.currency    { s = applyCurrency(to: s) }
         if options.punctuation { s = applySingleWordPunctuation(to: s) }
         if options.emojis      { s = applyEmojis(to: s) }
@@ -344,6 +345,45 @@ enum SpokenCues {
         return s
     }
 
+    // MARK: - Multiplier
+    //
+    // "<number> x" → "<number>x" multiplier notation: "two x" → "2x",
+    // "10 x" → "10x", "one hundred x" → "100x", "2.5 x" → "2.5x". Like the
+    // currency/percent passes, the trailing keyword (here a standalone "x")
+    // licenses digitising even a single bare word-number — which the
+    // arithmetic pass deliberately leaves as a word — because nobody
+    // dictating "two x" means the literal letter.
+    //
+    // Runs after `applyArithmetic`, so composite word-numbers ("twenty-five")
+    // and spoken decimals ("two point five") are already digits by the time
+    // we look; only the bare single-word case still needs `parseWordNumber`.
+    //
+    // The "x" must be a standalone token: the negative lookahead rejects a
+    // following word char or hyphen so "x-ray", "xbox", "example", and a
+    // trailing "ex" ("my one ex") are left untouched. The rendered "x" is
+    // always lowercase to match the "2x" convention regardless of how the
+    // engine cased the utterance. This is also why SpokenCues re-runs after
+    // the LLM passes — if a model re-splits "2x" to "2 x" or spells it back
+    // to "two x", this pass repairs it on the second application.
+    private static func applyMultiplier(to text: String) -> String {
+        let pattern = "\\b(\(wordNumberFragment)|\\d+(?:\\.\\d+)?)[ \\t]+x(?![A-Za-z0-9-])"
+        guard let regex = try? Regex(pattern).ignoresCase() else { return text }
+        return text.replacing(regex) { match in
+            let full = String(match.output[0].substring ?? "")
+            guard let numCap = match.output[1].substring else { return full }
+            let num = String(numCap)
+            let digits: String
+            if num.first?.isNumber == true {
+                digits = num
+            } else if let n = parseWordNumber(num) {
+                digits = String(n)
+            } else {
+                return full
+            }
+            return "\(digits)x"
+        }
+    }
+
     // MARK: - Currency
     //
     // Glue a currency symbol onto a digit number when a currency word
@@ -507,17 +547,47 @@ enum SpokenCues {
 
     /// Pre-substitute word-numbers in arithmetic positions to digits, so
     /// the digit-based regexes in `applyArithmetic` pick them up.
+    ///
+    /// Two-sided operators (plus/minus/times/…) only digitise their operands
+    /// when a number sits on BOTH sides — a complete "<operand> <op> <operand>"
+    /// expression. Digitising a lone operand next to the operator word was the
+    /// source of a real bug: "four times a day" became "4 times a day" and
+    /// "three to four times" became "three to 4 times", because "four" was
+    /// digitised on spec for an arithmetic substitution that never completed
+    /// (no second number). "times" especially is far more often the frequency
+    /// word than a multiplier, so the operand must be flanked to count.
+    /// Chained expressions ("five plus six equals two") still resolve across
+    /// the `applyArithmetic` loop's rounds: each operator that collapses to a
+    /// glyph exposes the next operator's left operand as a digit next round.
+    ///
+    /// `percent` is left-only (no right operand), so it keeps the single-sided
+    /// rule: "five percent" → "5 percent" → "5%".
     private static func digitiseWordNumbersInArithmeticContext(_ text: String) -> String {
         var s = text
 
-        // word-number BEFORE an operator: "<word> <op>" → "<digit> <op>".
-        // The trailing operator can be one of the two-sided set or the
-        // left-only set (percent).
-        let beforePattern = "\\b(\(wordNumberFragment))([ \\t]+)(\(twoSidedOps)|\(leftOnlyOps))\\b"
-        if let beforeRegex = try? Regex(beforePattern).ignoresCase() {
-            s = s.replacing(beforeRegex) { match in
-                // Indexed access on AnyRegexOutput: [0] whole match,
-                // [1] word-number, [2] whitespace, [3] operator.
+        // Numeric operand: a digit-form number or a word-form number.
+        let operand = "(?:\\d+(?:\\.\\d+)?|\(wordNumberFragment))"
+
+        // "<operand> <two-sided op> <operand>" — digitise whichever operands
+        // are word-form; digit-form operands pass through unchanged. The
+        // operator (and its surrounding whitespace) is preserved verbatim so
+        // applyDigitArithmetic collapses it to a glyph on the same round.
+        let twoSidedPattern = "\\b(\(operand))([ \\t]+(?:\(twoSidedOps))[ \\t]+)(\(operand))\\b"
+        if let regex = try? Regex(twoSidedPattern).ignoresCase() {
+            s = s.replacing(regex) { match in
+                guard let lhs = match.output[1].substring,
+                      let mid = match.output[2].substring,
+                      let rhs = match.output[3].substring
+                else { return String(match.output[0].substring ?? "") }
+                return "\(digitiseOperand(String(lhs)))\(mid)\(digitiseOperand(String(rhs)))"
+            }
+        }
+
+        // Left-only operators (percent): a word-number on the left, no right
+        // operand required.
+        let leftOnlyPattern = "\\b(\(wordNumberFragment))([ \\t]+)(\(leftOnlyOps))\\b"
+        if let regex = try? Regex(leftOnlyPattern).ignoresCase() {
+            s = s.replacing(regex) { match in
                 guard let wn = match.output[1].substring,
                       let space = match.output[2].substring,
                       let op = match.output[3].substring,
@@ -527,21 +597,15 @@ enum SpokenCues {
             }
         }
 
-        // word-number AFTER a two-sided operator: "<op> <word>" → "<op> <digit>".
-        // Percent isn't here because it has no right-hand operand.
-        let afterPattern = "\\b(\(twoSidedOps))([ \\t]+)(\(wordNumberFragment))\\b"
-        if let afterRegex = try? Regex(afterPattern).ignoresCase() {
-            s = s.replacing(afterRegex) { match in
-                guard let op = match.output[1].substring,
-                      let space = match.output[2].substring,
-                      let wn = match.output[3].substring,
-                      let n = parseWordNumber(String(wn))
-                else { return String(match.output[0].substring ?? "") }
-                return "\(op)\(space)\(n)"
-            }
-        }
-
         return s
+    }
+
+    /// Digitise a single arithmetic operand: word-form numbers become digits,
+    /// digit-form operands pass through untouched.
+    private static func digitiseOperand(_ token: String) -> String {
+        if token.first?.isNumber == true { return token }
+        if let n = parseWordNumber(token) { return String(n) }
+        return token
     }
 
     // MARK: - Times

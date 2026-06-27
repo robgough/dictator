@@ -17,6 +17,8 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictation now writes multiplier notation tightly: say "ten x" or "ten X" and you get "10x", "two point five x" becomes "2.5x", and so on.
+- Everyday phrases like "four times a day" or "three to four times" stay as words instead of turning into "4 times a day".
 - New bottom tab bar — Dictation, Scratchpad, History, Vocabulary, and Settings each get their own tab, with the iOS 26 Liquid Glass look throughout.
 - Dictation screen: the Copy to Clipboard button is now a blue-tinted translucent glass capsule, and the mic, assist, and copy buttons are a little smaller so the screen feels less cramped.
 - Dictation screen: the "can make mistakes" note moved out of the button area and now shows as an amber warning near the bottom of the empty transcript box, keeping the controls uncluttered.

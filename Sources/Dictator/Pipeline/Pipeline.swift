@@ -754,6 +754,16 @@ final class Pipeline {
             guard !tidied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return formatted
             }
+            // Numbers must survive grammar untouched. The general drift gate
+            // below is disabled (too many false positives on short inputs),
+            // but number-mangling is a narrow, false-positive-free invariant:
+            // grammar fixes never need to change a digit. Reverting here keeps
+            // Parakeet's "3 to 4x" from being spelled out to "three to four
+            // times" — damage SpokenCues can't repair downstream.
+            if !Self.numbersPreserved(formatted, tidied) {
+                NSLog("[Dictator] Pass 2 changed a number (e.g. spelled a digit out or rewrote a multiplier) — reverting to preserve the transcript's numbers.")
+                return formatted
+            }
             // Gate disabled. Previously this branch enforced a
             // word-Levenshtein drift ceiling (0.15 for `.tidy`, 0.30
             // for `.tighten` with fillers stripped) and reverted to
@@ -793,6 +803,13 @@ final class Pipeline {
                 systemPrompt: currentMode.effectiveStructuralPrompt(global: settings.globalPromptAddendum)
             )
             guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return formatted
+            }
+            // Same number-preservation invariant as Pass 2: the structural
+            // pass adds bullets/breaks and must never touch a digit. Revert if
+            // it spelled one out or rewrote a multiplier.
+            if !Self.numbersPreserved(formatted, restructured) {
+                NSLog("[Dictator] Pass 3 changed a number — reverting to preserve the transcript's numbers.")
                 return formatted
             }
             // Gate disabled. Previously enforced strict word-sequence
@@ -872,6 +889,27 @@ final class Pipeline {
         s.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
+    }
+
+    /// Multiset (sorted, lowercased) of the number-bearing tokens in `text`:
+    /// digit runs, decimals, and digit-led forms like "4x" or "10:30pm". By the
+    /// time the grammar/structure passes run, all number formatting is already
+    /// fixed (Parakeet's output plus SpokenCues plus Pass 1), so this is a
+    /// stable fingerprint of "the numbers in this text".
+    private static func numberSignature(_ text: String) -> [String] {
+        guard let regex = try? Regex("[0-9][0-9.,]*[A-Za-z]*") else { return [] }
+        return text.matches(of: regex).map { String(text[$0.range]).lowercased() }.sorted()
+    }
+
+    /// True when `after` carries exactly the same numbers as `before`. Used to
+    /// gate the content-preserving passes: small local models like to
+    /// "prose-ify" numbers — spelling "4x" out to "four times", "3" to
+    /// "three" — and SpokenCues can't undo that afterwards (the word "times"
+    /// is ambiguous and bare word-numbers are deliberately never re-digitised).
+    /// Arithmetic/currency the formatter applied stays stable here because the
+    /// digit tokens survive ("5 plus 3" → "5 + 3" keeps {3, 5}).
+    private static func numbersPreserved(_ before: String, _ after: String) -> Bool {
+        numberSignature(before) == numberSignature(after)
     }
 
     /// Detects the common failure where Pass 1 answers the user's question instead

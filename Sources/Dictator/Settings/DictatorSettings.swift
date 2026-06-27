@@ -834,6 +834,7 @@ struct DictatorSettings: Codable, Equatable {
     1. Spoken punctuation becomes the symbol: "comma" → "," ; "full stop" / "period" → "." ; "question mark" → "?" ; "exclamation mark" / "exclamation point" → "!" ; "colon" → ":" ; "semicolon" → ";" ; "open paren" / "close paren" → "(" / ")" ; "open bracket" / "close bracket" → "[" / "]" ; "open brace" / "close brace" → "{" / "}" ; "hyphen" → "-" ; "dash" / "em dash" → "—" ; "en dash" → "–" ; "tilde" → "~" ; "asterisk" → "*" ; "ampersand" → "&" ; "underscore" → "_" ; "backtick" → "`" ; "caret" → "^" ; "ellipsis" → "…" ; "backslash" → "\\" ; "at sign" → "@" ; "hash sign" / "pound sign" → "#" ; "dollar sign" → "$" ; "forward slash" → "/" ; "open quote" / "close quote" → " / ".
     2. "new line" or "newline" → single line break. "new paragraph" → blank line.
     3. Arithmetic operators ONLY when surrounded by numbers: "5 plus 3" → "5 + 3" ; "5 minus 3" → "5 - 3" ; "5 times 3" → "5 × 3" ; "5 divided by 3" → "5 / 3" ; "5 equals 3" → "5 = 3" ; "5 slash 3" → "5/3" ; "5 percent" → "5%". Leave the words alone otherwise ("plus side", "minus the budget", "5 times a day" stay as-is). Standalone "plus N" or "minus N" with no preceding number becomes the unary "+N" / "-N" (e.g. "plus 44" → "+44" for phone codes). Runs of single-digit words spoken adjacently ("four four seven seven seven") become a digit string ("44777").
+    3a. NEVER change a number that is already a digit. Keep every digit exactly as given — never spell it out ("3" stays "3", not "three"). Keep compact multiplier notation verbatim: "4x" stays "4x" (NEVER "four times", "4 times", or "four x"); same for "2.5x", "10x". Leave "+44", "10:30pm", "$1,600", "5%" exactly as written.
     4. Named emojis: "<name> emoji" or "emoji <name>" → JUST the emoji character. NEVER keep the descriptive word. e.g. "fire emoji" → "🔥" (not "fire 🔥").
     5. Capitalise the first letter of sentences and the pronoun "I".
     6. Preserve the user's wording and tone. EVERY content word in the input MUST appear in the output, in the same order. Do NOT drop filler words ("yeah", "okay", "so", "well", "um"). Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, plans, opinions, greetings, sign-offs, or any new content.
@@ -920,6 +921,7 @@ struct DictatorSettings: Codable, Equatable {
     - Reordering content words.
     - Dropping content words or fillers ("yeah", "okay", "so", "well", "um").
     - Replacing vocabulary (do not swap "happy" for "pleased", or "buy" for "purchase").
+    - Changing numbers in any way. Keep every digit exactly as written — never spell a digit out ("3" stays "3", not "three") and never expand a multiplier ("4x" stays "4x", never "four times", "4 times", or "four x"). Keep "2.5x", "+44", "10:30pm", "$1,600", "5%" verbatim.
     - Continuing the user's thought, answering questions, or adding any new content.
     - Adding punctuation that isn't already there (sentence boundaries are pass 1's job).
     - Adding greetings, sign-offs, headings, or commentary.
@@ -956,6 +958,7 @@ struct DictatorSettings: Codable, Equatable {
     - Adding new ideas, examples, plans, opinions, greetings, sign-offs, or commentary.
     - Continuing the user's thought, answering questions, or otherwise generating new content.
     - Substantive paraphrasing or wholesale rewriting — keep the user's vocabulary and stance.
+    - Changing numbers in any way. Keep every digit exactly as written — never spell a digit out ("3" stays "3", not "three") and never expand a multiplier ("4x" stays "4x", never "four times", "4 times", or "four x"). Keep "2.5x", "+44", "10:30pm", "$1,600", "5%" verbatim.
     - Changing the topic, tone, or claim of any sentence.
     - Reordering content beyond what's needed to drop a filler.
     - Adding punctuation that radically changes structure (sentence boundaries are pass 1's job).
