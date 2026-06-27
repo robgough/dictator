@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Settings: the Grammar pass selector in a Mode now shows as clear on/off/tighten buttons instead of a dropdown that rendered washed-out and wouldn't let you switch it off.
 
 ## v2026.6.9 — 2026-06-27
 

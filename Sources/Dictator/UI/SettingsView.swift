@@ -3672,6 +3672,11 @@ private struct ModeDetail: View {
                         Text("Tidy grammar").tag(GrammarPassMode.tidy)
                         Text("Tidy and tighten").tag(GrammarPassMode.tighten)
                     }
+                    // Segmented, not the default pop-up menu: outside a Form the
+                    // automatic style falls back to a pop-up that renders with broken
+                    // low-contrast translucency under Liquid Glass and can't be clicked.
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                     .onChange(of: mode.grammarPassMode) { _, _ in onChange() }
                     .disabled(llmDisabled)
 
