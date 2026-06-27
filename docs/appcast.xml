@@ -478,6 +478,24 @@
                 type="application/octet-stream"
                 sparkle:edSignature="9vYHHj3H2X8Oi8VQ2zR3xVAbKBjFg2L8FVvUXrXChlbY/MgJh7fibNA3ls6pv+TcDIaI5Swbx6yRhQL+Dl/fAA==" />
         </item>
+        <item>
+            <title>Version 2026.6.9</title>
+            <pubDate>Sat, 27 Jun 2026 00:26:25 +0000</pubDate>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>2026.6.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dictation now writes multiplier notation tightly: say &quot;ten x&quot; or &quot;ten X&quot; and you get &quot;10x&quot;, &quot;two point five x&quot; becomes &quot;2.5x&quot;, and so on.</li>
+  <li>Dictated numbers now survive the formatting passes intact: a transcribed &quot;3 to 4x&quot; stays &quot;3 to 4x&quot; instead of being spelled back out to &quot;three to four times&quot;, and everyday phrases like &quot;four times a day&quot; or &quot;three to four times&quot; stay as words rather than turning into &quot;4 times&quot;.</li>
+  <li>Long meetings no longer make the app feel sluggish. The live transcript&#x27;s word-by-word animation was doing steadily heavier work as the transcript grew, which could leave the whole app — the dictation HUD included — stuttering during a long meeting; it now stays light no matter how long the meeting runs.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.6.9/Dictator.dmg"
+                length="31176635"
+                type="application/octet-stream"
+                sparkle:edSignature="ovgWK7ARyYeeGYghayfD0HobI0bvMaf9MLW9R0nuGAsoC4iQKdxXSmVh+tWkhlmTwu1WRXnWzv2AMVTCM2w+Bw==" />
+        </item>
+    
     
     
     

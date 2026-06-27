@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.6.9 — 2026-06-27
+
 - Dictation now writes multiplier notation tightly: say "ten x" or "ten X" and you get "10x", "two point five x" becomes "2.5x", and so on.
 - Dictated numbers now survive the formatting passes intact: a transcribed "3 to 4x" stays "3 to 4x" instead of being spelled back out to "three to four times", and everyday phrases like "four times a day" or "three to four times" stay as words rather than turning into "4 times".
 - Long meetings no longer make the app feel sluggish. The live transcript's word-by-word animation was doing steadily heavier work as the transcript grew, which could leave the whole app — the dictation HUD included — stuttering during a long meeting; it now stays light no matter how long the meeting runs.
