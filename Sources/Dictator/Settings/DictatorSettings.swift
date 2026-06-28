@@ -174,6 +174,14 @@ struct DictatorSettings: Codable, Equatable {
     //   Settings UI shows a warning that built-in updates won't apply.
     var assistantPromptAddendum: String
     var assistantPromptOverride: String?
+    /// Whether Assistant Mode takes a single on-device snapshot of the focused
+    /// window at trigger time and feeds what's visible in it to the assistant —
+    /// the text it can read back (so "reply to this" / "summarise this" work on
+    /// content that isn't selectable or AX-readable) plus the proper nouns and
+    /// terms for correct spelling. Global (Assistant Mode is one flow, not
+    /// per-Mode). Off by default; needs macOS 27 + Screen Recording. The image
+    /// never leaves the Mac and is never stored.
+    var assistantWindowVisionContextEnabled: Bool
     /// Flips to true the first time the user finishes (or explicitly skips)
     /// the first-run wizard. When false on launch, `AppState.bootstrap()`
     /// shows the wizard window before the user sees the menu bar — the
@@ -356,6 +364,7 @@ struct DictatorSettings: Codable, Equatable {
         defaultModeID: DictationMode.writeID,
         assistantPromptAddendum: "",
         assistantPromptOverride: nil,
+        assistantWindowVisionContextEnabled: false,
         hasCompletedOnboarding: false
     )
 
@@ -379,6 +388,7 @@ struct DictatorSettings: Codable, Equatable {
         defaultModeID: UUID,
         assistantPromptAddendum: String,
         assistantPromptOverride: String?,
+        assistantWindowVisionContextEnabled: Bool,
         hasCompletedOnboarding: Bool
     ) {
         self.transcriptionEngine = transcriptionEngine
@@ -400,6 +410,7 @@ struct DictatorSettings: Codable, Equatable {
         self.defaultModeID = defaultModeID
         self.assistantPromptAddendum = assistantPromptAddendum
         self.assistantPromptOverride = assistantPromptOverride
+        self.assistantWindowVisionContextEnabled = assistantWindowVisionContextEnabled
         self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
@@ -452,6 +463,7 @@ struct DictatorSettings: Codable, Equatable {
         self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
         self.assistantPromptOverride  = try c.decodeIfPresent(String.self, forKey: .assistantPromptOverride)  ?? d.assistantPromptOverride
+        self.assistantWindowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantWindowVisionContextEnabled) ?? d.assistantWindowVisionContextEnabled
 
         // Modes migration. Pre-modes installs persisted the pass gates and the
         // three dictation prompt fields at the top level; we now bundle them
@@ -1336,6 +1348,7 @@ struct DictatorSettings: Codable, Equatable {
         case assistantTriggerMode, userName
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
+        case assistantWindowVisionContextEnabled
         case hasCompletedOnboarding
         case meetingAutoDeleteAfterDays
         case meetingAudioRetentionDays
@@ -1386,6 +1399,7 @@ struct DictatorSettings: Codable, Equatable {
         "defaultModeID",
         "assistantPromptAddendum",
         "assistantPromptOverride",
+        "assistantWindowVisionContextEnabled",
         "meetingLiveTranscriptEnabled",
         "meetingLiveNotesEnabled",
         "meetingLiveNotesSelfCorrectEnabled",

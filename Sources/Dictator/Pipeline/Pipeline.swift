@@ -292,6 +292,16 @@ final class Pipeline {
         /// the formatter pass as read-only terminology/style context. NOT
         /// written into the history record — context is ephemeral by design.
         var context: InsertionContext?
+        /// In-flight window-vision capture, kicked off at hotkey press and run
+        /// concurrently with recording (see `WindowVisionContext`). Resolved
+        /// into `visionTerms` once transcription completes — by which point it's
+        /// almost always already done, so it adds no latency to delivery.
+        var visionTask: Task<[String], Never>?
+        /// Distinctive terms read off the focused window by the vision model.
+        /// Merged with `context.documentTerms` at the consumption sites
+        /// (`combinedContext`). Empty when the mode opts out, the OS/model can't
+        /// do vision, Screen Recording isn't granted, or nothing was read.
+        var visionTerms: [String] = []
     }
     private var inFlight = InFlight()
 
@@ -310,6 +320,16 @@ final class Pipeline {
         /// it can resolve "reply to this" / "make a list here" and match the
         /// document's spelling. Ephemeral — never written to history.
         var context: InsertionContext? = nil
+        /// Why `context` came back without text, when it did (no focused field,
+        /// focused on Dictator, field exposes no cursor…). Shown in the result
+        /// window's context banner so an empty AX read is debuggable.
+        var contextReason: String? = nil
+        /// In-flight window-vision read-back (visible content + mined terms),
+        /// kicked off at trigger time and run concurrently with the instruction
+        /// recording. Resolved in `runAssistantPipeline` and merged into the
+        /// context the assistant LLM sees. nil when the option is off / vision
+        /// isn't supported / Screen Recording isn't granted.
+        var visionTask: Task<WindowVisionContext.VisionReadback, Never>? = nil
     }
     private var inFlightAssistant: InFlightAssistant?
 
@@ -499,6 +519,9 @@ final class Pipeline {
         // (mode opted out, no Accessibility, focused element doesn't expose
         // ranged text) just means no context this run.
         inFlight.context = nil
+        inFlight.visionTerms = []
+        inFlight.visionTask?.cancel()
+        inFlight.visionTask = nil
         if currentMode.contextAwarenessEnabled {
             Task.detached(priority: .userInitiated) { [weak self] in
                 let context = AXContextReader.capture(
@@ -507,6 +530,21 @@ final class Pipeline {
                     mineTerms: true
                 )
                 await MainActor.run { self?.inFlight.context = context }
+            }
+        }
+        // Window-vision context: a single on-device snapshot of the focused
+        // window, read for proper-noun spellings the AX text reads can't reach.
+        // Kicked off here so the ~1 s capture+inference overlaps the user's
+        // speech and is done before Pass 1 needs it. Detached so neither the
+        // screenshot nor the model call touches the main actor; the result is
+        // folded in by `resolveVisionTerms`. Gated on the per-mode opt-in, the
+        // OS/model actually supporting vision, and Screen Recording being
+        // granted — any of those failing just means no vision terms this run.
+        if currentMode.windowVisionContextEnabled,
+           WindowVisionContext.isSupported,
+           ScreenRecordingPermission.hasAccess() {
+            inFlight.visionTask = Task.detached(priority: .userInitiated) {
+                await WindowVisionContext.captureFocusedWindowTerms()
             }
         }
         // Recorder start is non-blocking and asynchronous — the actual
@@ -595,6 +633,13 @@ final class Pipeline {
             trimmed = SpokenCues.apply(to: trimmed, options: cueOptions)
         }
 
+        // Fold in window-vision terms (captured concurrently with recording)
+        // before any pass or the diacritic restore reads context. Awaited once
+        // here so every downstream branch — formatter, the question/no-LLM
+        // skips, the delivery-time restore — sees the same merged term list.
+        // Normally instant: the capture finished while we were transcribing.
+        await resolveVisionTerms()
+
         var formatted: String
         let formatterLLM = currentLLM()
         if formatterLLM == nil || !currentMode.formattingPassEnabled {
@@ -630,14 +675,15 @@ final class Pipeline {
             // stays the only <<<>>> data block.
             var formattingPrompt = currentMode.effectiveFormattingPrompt(global: settings.globalPromptAddendum)
             var contextInjected = false
-            if let context = inFlight.context, context.hasPromptMaterial {
+            let promptContext = combinedContext()
+            if let context = promptContext, context.hasPromptMaterial {
                 formattingPrompt += "\n\n" + context.formatterPromptBlock
                 contextInjected = true
                 NSLog("[Dictator] Pass 1 running with document context (%d/%d chars, %d terms).",
                       context.textBefore.count, context.textAfter.count, context.documentTerms.count)
             } else {
                 NSLog("[Dictator] Pass 1 running without document context (%@).",
-                      inFlight.context == nil ? "no capture" : "field empty")
+                      promptContext == nil ? "no capture" : "field empty")
             }
             do {
                 formatted = try await formatterLLM!.format(
@@ -710,7 +756,7 @@ final class Pipeline {
         // press time — deterministic, so it works in every mode (including
         // Quick and the question-skip path) without an LLM. Runs after the
         // user dictionary so explicit user mappings keep precedence.
-        if let context = inFlight.context, !context.documentTerms.isEmpty {
+        if let context = combinedContext(), !context.documentTerms.isEmpty {
             let restored = DocumentTerms.restoreDiacritics(in: corrected, terms: context.documentTerms)
             if restored != corrected {
                 NSLog("[Dictator] Restored document spelling from mined terms.")
@@ -942,6 +988,71 @@ final class Pipeline {
         return Double(hits.count) / Double(anchors.count) >= 0.6
     }
 
+    /// Awaits the in-flight window-vision capture and stashes its terms.
+    /// Called once, after transcription — by which point the capture (started
+    /// at hotkey press) has almost always finished, so this returns instantly;
+    /// the worst case is bounded by `WindowVisionContext`'s own deadline.
+    private func resolveVisionTerms() async {
+        guard let task = inFlight.visionTask else { return }
+        inFlight.visionTask = nil
+        inFlight.visionTerms = await task.value
+    }
+
+    /// The Accessibility context merged with any window-vision terms. Vision is
+    /// purely additive — it only contributes spelling-reference terms — so when
+    /// AX read nothing but vision did (an Electron/canvas/terminal app, or names
+    /// outside the field), we synthesise a terms-only context so those terms
+    /// still reach the formatter prompt and the diacritic restore. Returns nil
+    /// only when neither source produced anything. AX terms keep priority (the
+    /// document the user is in is the most authoritative source); vision fills
+    /// in behind them, deduped case-insensitively and capped so the prompt's
+    /// term list can't balloon on a busy screen.
+    private func combinedContext() -> InsertionContext? {
+        let visionTerms = inFlight.visionTerms
+        guard let ax = inFlight.context else {
+            return visionTerms.isEmpty
+                ? nil
+                : InsertionContext(textBefore: "", textAfter: "", documentTerms: visionTerms)
+        }
+        guard !visionTerms.isEmpty else { return ax }
+        var merged = ax.documentTerms
+        var seen = Set(merged.map { $0.lowercased() })
+        for term in visionTerms where seen.insert(term.lowercased()).inserted {
+            merged.append(term)
+        }
+        return InsertionContext(
+            textBefore: ax.textBefore,
+            textAfter: ax.textAfter,
+            documentTerms: Array(merged.prefix(Self.maxCombinedTerms))
+        )
+    }
+
+    /// Ceiling on the merged AX + vision term list. Comfortably above either
+    /// source's own cap so both contribute, but bounded so a text-dense window
+    /// doesn't stuff the small model's prompt.
+    private static let maxCombinedTerms = 40
+
+    /// The assistant's AX context merged with a window-vision read-back. Vision
+    /// is additive: its mined terms join the AX terms, and its visible-text
+    /// read-back becomes the [SCREEN] block. When AX read nothing but vision did
+    /// (an AX-blind app), a context is synthesised from the vision data alone.
+    /// Returns nil only when neither source produced anything.
+    private func assistantContextMerging(_ readback: WindowVisionContext.VisionReadback) -> InsertionContext? {
+        let base = inFlightAssistant?.context
+        guard !readback.content.isEmpty || !readback.terms.isEmpty else { return base }
+        var merged = base?.documentTerms ?? []
+        var seen = Set(merged.map { $0.lowercased() })
+        for term in readback.terms where seen.insert(term.lowercased()).inserted {
+            merged.append(term)
+        }
+        return InsertionContext(
+            textBefore: base?.textBefore ?? "",
+            textAfter: base?.textAfter ?? "",
+            documentTerms: Array(merged.prefix(Self.maxCombinedTerms)),
+            screenContent: readback.content
+        )
+    }
+
     /// Removes words Pass 1 glued on from the surrounding-document context.
     /// Small models shown the text before the caret sometimes "complete the
     /// seam": they prepend the tail of the context to the dictation
@@ -1157,7 +1268,7 @@ final class Pipeline {
         // quietly strip an accent the earlier restoration put back, and its
         // edit-distance validator won't blink at a one-word diacritic
         // change. Idempotent.
-        if let context = inFlight.context, !context.documentTerms.isEmpty {
+        if let context = combinedContext(), !context.documentTerms.isEmpty {
             text = DocumentTerms.restoreDiacritics(in: text, terms: context.documentTerms)
         }
         // Context-aware join: with a fresh snapshot of the caret's
@@ -1312,12 +1423,28 @@ final class Pipeline {
                 // just means no context this turn — opportunistic, never
                 // load-bearing.
                 Task.detached(priority: .userInitiated) { [weak self] in
-                    let captured = AXContextReader.capture(
+                    let captured = AXContextReader.captureDetailed(
                         maxBefore: AXContextReader.promptBeforeCap,
                         maxAfter: AXContextReader.promptAfterCap,
                         mineTerms: true
                     )
-                    await MainActor.run { self?.inFlightAssistant?.context = captured }
+                    await MainActor.run {
+                        self?.inFlightAssistant?.context = captured.context
+                        self?.inFlightAssistant?.contextReason = captured.reason
+                    }
+                }
+                // Window-vision context for the assistant: one on-device snapshot
+                // of the focused window, read back so the assistant can act on
+                // what's on screen ("reply to this") and spell what it sees, even
+                // in apps Accessibility can't read. Runs concurrently with the
+                // instruction recording; resolved in runAssistantPipeline. Gated
+                // on the opt-in + vision support + Screen Recording.
+                if settings.assistantWindowVisionContextEnabled,
+                   WindowVisionContext.isSupported,
+                   ScreenRecordingPermission.hasAccess() {
+                    inFlightAssistant?.visionTask = Task.detached(priority: .userInitiated) {
+                        await WindowVisionContext.captureFocusedWindowReadback()
+                    }
                 }
                 // Same async-warmup story as `startRecording`: recorder
                 // start is non-blocking so BT HFP negotiation doesn't
@@ -1531,8 +1658,18 @@ final class Pipeline {
         // right call.
         // Read the press-time document context now — after transcription, so
         // the detached AX capture has long since landed (read here rather than
-        // snapshotted at key-release to dodge the struct-copy race).
-        let assistantContext = inFlightAssistant?.context
+        // snapshotted at key-release to dodge the struct-copy race). Resolve the
+        // window-vision read-back too (also kicked off at trigger time) and fold
+        // it in: its terms join the AX terms, its visible text becomes the
+        // [SCREEN] block the assistant can reason over.
+        let visionAttempted = inFlightAssistant?.visionTask != nil
+        let documentReason = inFlightAssistant?.contextReason ?? ""
+        var visionReadback = WindowVisionContext.VisionReadback.empty
+        if let task = inFlightAssistant?.visionTask {
+            inFlightAssistant?.visionTask = nil
+            visionReadback = await task.value
+        }
+        let assistantContext = assistantContextMerging(visionReadback)
         var pendingCompactionIndex: Int? = nil
         let estimate = ConversationContextBudget.estimateInputTokens(
             priorTurns: priorTurns, summary: summary,
@@ -1599,6 +1736,24 @@ final class Pipeline {
             return
         }
 
+        // Snapshot what context fed this turn, for the result window — so the
+        // captured text and the vision read are visible, not guessed at.
+        let contextInfo: CapturedContextInfo? = {
+            let docText = (assistantContext?.textBefore ?? "") + (assistantContext?.textAfter ?? "")
+            let termCount = assistantContext?.documentTerms.count ?? 0
+            // Attach when there's something to show, or vision was attempted (so
+            // "vision ran but read nothing" still surfaces as a signal).
+            guard visionAttempted || !docText.isEmpty || termCount > 0 else { return nil }
+            return CapturedContextInfo(
+                documentText: String(docText.prefix(600)),
+                documentNote: docText.isEmpty ? documentReason : "",
+                termCount: termCount,
+                visionAttempted: visionAttempted,
+                visionDescription: visionReadback.content,
+                visionNote: visionReadback.failureReason ?? ""
+            )
+        }()
+
         // Build the new turn and fold it into the conversation. New
         // conversations are appended to history; follow-ups update in place.
         let newTurn = ConversationTurn(
@@ -1607,7 +1762,8 @@ final class Pipeline {
             instruction: instruction,
             selection: selection,
             mode: result.mode,
-            reply: text
+            reply: text,
+            context: contextInfo
         )
         let updatedConversation: Conversation
         if continues, var active = activeConversation {

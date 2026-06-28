@@ -197,12 +197,23 @@ private struct AssistantResultView: View {
     @ViewBuilder
     private func footer(conversation: Conversation) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "doc.on.clipboard.fill")
-                .foregroundStyle(.secondary)
-                .font(.system(size: 11))
-            Text("Latest reply is on your clipboard — \u{2318}V to paste anywhere. Closing ends this conversation.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            // A clear, persistent "it's on your clipboard" marker — the HUD's
+            // version fades after a few seconds, so the only lasting copy
+            // confirmation lives here, where the user is reading the reply.
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Copied to clipboard")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("· \u{2318}V to paste anywhere")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.green.opacity(0.12)))
+            .help("Stays on your clipboard until you copy something else. Closing this window ends the conversation.")
             Spacer()
             if let last = conversation.turns.last {
                 Button(copyFeedback ? "Copied" : "Copy latest") {
@@ -241,6 +252,9 @@ private struct TurnRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let context = turn.context {
+                ContextNote(context: context)
+            }
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "wand.and.stars")
                     .foregroundStyle(.indigo)
@@ -273,6 +287,83 @@ private struct TurnRow: View {
                 .padding(.leading, 20)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Per-turn banner showing what context Assistant Mode pulled in — the text it
+/// read around the cursor and what the vision model saw — so the user can tell
+/// at a glance whether a turn had the context it needed, and expand to see the
+/// actual captured text. Directly answers "did it manage to read my screen?".
+private struct ContextNote: View {
+    let context: CapturedContextInfo
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: context.hasVision ? "eye.fill" : "eye")
+                    .foregroundStyle(context.hasVision ? .teal : .secondary)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(summary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if context.hasDocumentText || context.hasVision {
+                    Button(expanded ? "Hide context" : "Show context") { expanded.toggle() }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                }
+            }
+            if expanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    if context.hasDocumentText {
+                        labeled("Text around your cursor", context.documentText)
+                    }
+                    if context.hasVision {
+                        labeled("What the vision model saw", context.visionDescription)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.teal.opacity(0.08))
+        )
+    }
+
+    private var summary: String {
+        var parts: [String] = []
+        if context.hasDocumentText {
+            parts.append("read cursor text")
+        } else {
+            parts.append(context.documentNote.isEmpty ? "no cursor text" : "no cursor text (\(context.documentNote))")
+        }
+        if context.termCount > 0 {
+            parts.append("\(context.termCount) term\(context.termCount == 1 ? "" : "s")")
+        }
+        if context.visionAttempted {
+            if context.hasVision {
+                parts.append("saw the window")
+            } else {
+                parts.append(context.visionNote.isEmpty ? "vision read nothing" : "vision: \(context.visionNote)")
+            }
+        }
+        return "Context: " + parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func labeled(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

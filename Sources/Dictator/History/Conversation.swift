@@ -1,5 +1,35 @@
 import Foundation
 
+/// What context Assistant Mode pulled in for a turn — surfaced in the result
+/// window so the user can see, per turn, whether the text around the cursor and
+/// the focused window were actually captured (and what they said) rather than
+/// having to guess. Optional on the turn; older turns (and turns where nothing
+/// was captured and vision wasn't tried) carry none.
+struct CapturedContextInfo: Codable, Equatable, Hashable, Sendable {
+    /// Document text read around the cursor via Accessibility (before + after),
+    /// truncated for display.
+    var documentText: String
+    /// Why the Accessibility read came back without text, when it did (no
+    /// focused field, focused on Dictator, field exposes no cursor…). Empty on
+    /// success or when there was text. Shown in the banner.
+    var documentNote: String = ""
+    /// Distinctive terms merged from the Accessibility read and the vision pass
+    /// (used as spelling references).
+    var termCount: Int
+    /// Whether window-vision actually ran for this turn — lets the UI tell
+    /// "vision read nothing" apart from "vision was off".
+    var visionAttempted: Bool
+    /// The vision model's description of the focused window; empty when it read
+    /// nothing or wasn't run.
+    var visionDescription: String
+    /// Why the vision read came back empty, when it did (timed out / couldn't
+    /// capture / declined). Empty on success or when vision wasn't attempted.
+    var visionNote: String = ""
+
+    var hasDocumentText: Bool { !documentText.isEmpty }
+    var hasVision: Bool { !visionDescription.isEmpty }
+}
+
 /// One round-trip in an Assistant Mode conversation: the user's spoken
 /// instruction (plus any selection that was active at the time) and the
 /// model's reply with its self-classified delivery mode.
@@ -10,6 +40,10 @@ struct ConversationTurn: Codable, Identifiable, Equatable, Hashable, Sendable {
     let selection: String?
     let mode: AssistantMode
     let reply: String
+    /// Context captured for this turn, for display in the result window. `var`
+    /// + default so the synthesised Codable decodes older persisted turns
+    /// (missing key → nil) and existing call sites stay source-compatible.
+    var context: CapturedContextInfo? = nil
 }
 
 /// Compaction state recorded once we've summarised the oldest turns to fit
@@ -84,6 +118,7 @@ enum ConversationContextBudget {
         if let context {
             chars += context.textBefore.count + context.textAfter.count
             chars += context.documentTerms.reduce(0) { $0 + $1.count + 2 }
+            chars += context.screenContent.count
         }
         for turn in priorTurns {
             chars += turn.instruction.count + (turn.selection?.count ?? 0) + turn.reply.count

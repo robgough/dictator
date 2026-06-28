@@ -90,6 +90,17 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// → both fall back to the context-free heuristics.
     var contextAwarenessEnabled: Bool
 
+    /// Whether dictations in this mode additionally take a single on-device
+    /// snapshot of the focused window (via Screen Recording) and read the
+    /// proper nouns / distinctive terms visible in it with Apple's on-device
+    /// vision model, merging them into the same spelling-reference terms the
+    /// Accessibility read produces. Reaches names that sit *outside* the text
+    /// field — and apps that don't expose their text to Accessibility at all.
+    /// Off by default; needs macOS 27 + Screen Recording permission. The image
+    /// never leaves the Mac and is never stored. Independent of
+    /// `contextAwarenessEnabled` — either, both, or neither can be on.
+    var windowVisionContextEnabled: Bool
+
     // MARK: - Stable IDs for the built-ins
 
     /// Hard-coded UUID for the built-in Quick mode. Stable across launches so
@@ -119,6 +130,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case grammarPromptAddendum, grammarPromptOverride
         case structuralPromptAddendum, structuralPromptOverride
         case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
+        case windowVisionContextEnabled
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
@@ -170,6 +182,9 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.pressReturnAfterPaste = try c.decodeIfPresent(Bool.self, forKey: .pressReturnAfterPaste) ?? false
         self.contextAwarenessEnabled = try c.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? true
         self.appendTrailingSpace = try c.decodeIfPresent(Bool.self, forKey: .appendTrailingSpace) ?? false
+        // Off by default — it's opt-in (needs Screen Recording + macOS 27), so a
+        // missing key (every blob predating this feature) stays disabled.
+        self.windowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowVisionContextEnabled) ?? false
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -200,7 +215,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         structuralPromptOverride: String?,
         pressReturnAfterPaste: Bool = false,
         contextAwarenessEnabled: Bool = true,
-        appendTrailingSpace: Bool = false
+        appendTrailingSpace: Bool = false,
+        windowVisionContextEnabled: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -227,6 +243,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.pressReturnAfterPaste = pressReturnAfterPaste
         self.contextAwarenessEnabled = contextAwarenessEnabled
         self.appendTrailingSpace = appendTrailingSpace
+        self.windowVisionContextEnabled = windowVisionContextEnabled
     }
 
     // MARK: - Effective prompts

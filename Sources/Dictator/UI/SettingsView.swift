@@ -3612,6 +3612,18 @@ private struct ModeDetail: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if WindowVisionContext.isSupported {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Also read the focused window with vision", isOn: $mode.windowVisionContextEnabled)
+                        .onChange(of: mode.windowVisionContextEnabled) { _, enabled in
+                            if enabled { ScreenRecordingPermission.request() }
+                            onChange()
+                        }
+                    Text("When a dictation starts, takes one on-device snapshot of just the focused window and reads the names, places, products, and technical terms visible in it with Apple's on-device vision model — so they're spelled the way they appear on screen, even when they sit outside the text field the option above reads, or the app doesn't expose its text at all. The picture only ever goes to the local model, never leaves this Mac, and is never stored — only the focused window is captured, never the whole screen. Needs Screen Recording permission (you'll be asked when you turn this on; macOS may need a relaunch for the grant to take effect). The capture and reading run while you're still talking, so they usually add no time. Best for writing and email modes; leave it off for quick notes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -3855,12 +3867,28 @@ private struct AssistantPromptPane: View {
 
     var body: some View {
         @Bindable var s = state
-        PromptCustomiser(
-            description: "Used when you trigger the Assistant hotkey. The model classifies its own reply as REPLACE (paste at the cursor) or DRAFT (clipboard only).",
-            builtin: DictatorSettings.builtinAssistantPrompt,
-            addendum: $s.settings.assistantPromptAddendum,
-            override: $s.settings.assistantPromptOverride
-        ) { state.save() }
+        VStack(alignment: .leading, spacing: 0) {
+            if WindowVisionContext.isSupported {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Read the focused window with vision", isOn: $s.settings.assistantWindowVisionContextEnabled)
+                        .onChange(of: s.settings.assistantWindowVisionContextEnabled) { _, enabled in
+                            if enabled { ScreenRecordingPermission.request() }
+                            state.save()
+                        }
+                    Text("When you trigger the assistant, takes one on-device snapshot of just the focused window and has Apple's on-device vision model describe what's in it — what the window shows, plus the visible text, names, and terms. That description is handed to your assistant so it can answer questions about what you're looking at ('describe this', 'what's this error'), act on what's on screen ('reply to this'), and spell what it sees — including images and apps that don't expose their text. Only the focused window is captured, never the whole screen; the picture only goes to the local vision model, never leaves this Mac, and is never stored. Needs Screen Recording permission (you'll be asked when you turn this on). The capture runs while you speak your instruction, so it usually adds no time.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 12)
+                Divider().padding(.bottom, 12)
+            }
+            PromptCustomiser(
+                description: "Used when you trigger the Assistant hotkey. The model classifies its own reply as REPLACE (paste at the cursor) or DRAFT (clipboard only).",
+                builtin: DictatorSettings.builtinAssistantPrompt,
+                addendum: $s.settings.assistantPromptAddendum,
+                override: $s.settings.assistantPromptOverride
+            ) { state.save() }
+        }
     }
 }
 
