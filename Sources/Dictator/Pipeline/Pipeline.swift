@@ -1176,15 +1176,21 @@ final class Pipeline {
                 )
             }.value
         }
-        if let joinContext, joinContext.hasText {
+        // Any successful capture — including an empty-but-readable field —
+        // goes through the joiner. An empty field is the clearest start of a
+        // sentence, and the joiner handles empty before/after correctly
+        // (`isMidSentence("")` is false, so a short dictation keeps its
+        // capital, and it still appends a trailing space). Only a genuine
+        // capture failure (`nil`: Accessibility missing, no focused element,
+        // unreadable field, timeout) falls back to the length heuristic.
+        if let joinContext {
             let joined = InsertionJoiner.adjust(text, before: joinContext.textBefore, after: joinContext.textAfter)
             NSLog("[Dictator] Join: caret snapshot (%d/%d chars) — %@.",
                   joinContext.textBefore.count, joinContext.textAfter.count,
                   joined == text ? "no adjustment needed" : "adjusted")
             text = joined
         } else {
-            NSLog("[Dictator] Join: no caret snapshot (%@) — context-free heuristics.",
-                  joinContext == nil ? "capture unavailable" : "field empty")
+            NSLog("[Dictator] Join: no caret snapshot — context-free heuristics.")
             text = Self.relaxShortMessage(text)
             text = Self.withTrailingSpace(text)
         }

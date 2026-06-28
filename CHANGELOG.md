@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Dictating a short phrase into an empty field (a fresh chat box, a new note) now capitalises the first letter, since an empty field is clearly the start of a sentence. Short dictations inserted mid-sentence still stay lowercase as before.
 
 ## v2026.6.10 — 2026-06-27
 
