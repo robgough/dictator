@@ -43,8 +43,33 @@ enum WindowVisionContext {
     static var isSupported: Bool {
         guard #available(macOS 27.0, *) else { return false }
         guard AppleFoundationAvailability.isUsable else { return false }
-        return SystemLanguageModel.default.capabilities.contains(.vision)
+        guard SystemLanguageModel.default.capabilities.contains(.vision) else { return false }
+        // The model advertising `.vision` is NOT sufficient: the Swift API that
+        // actually feeds it an image — `Attachment(_ cgImage:orientation:)` — was
+        // added to FoundationModels *after* the first macOS 27.0 seeds. On an OS
+        // build that predates it (e.g. 26A5378j) the model still reports `.vision`
+        // true, but the initializer symbol is absent from the shipped framework,
+        // so the moment the pipeline constructs `Attachment(image)` dyld fails to
+        // bind it and the process crashes (SIGSEGV inside FoundationModels — not a
+        // catchable error). `#available(macOS 27.0, *)` can't distinguish this: the
+        // seed reports version 27.0. So probe for the symbol directly and treat
+        // vision as unsupported when it isn't there. Self-healing: the probe flips
+        // to true automatically once the user's OS ships the initializer.
+        return imageAttachmentAPIAvailable
     }
+
+    /// True when the running OS actually exports `Attachment(_ cgImage:orientation:)`.
+    /// Probed via `dlsym` against the process's default search order (RTLD_DEFAULT)
+    /// — a lookup only, so it never constructs the attachment and thus never trips
+    /// the missing-symbol crash. The mangled name is exactly the symbol our own
+    /// `Attachment(image)` call sites reference, so a positive probe guarantees the
+    /// real call will bind. Computed once; the answer can't change within a launch.
+    private static let imageAttachmentAPIAvailable: Bool = {
+        // _$s… with the leading underscore is dyld's C prefix; dlsym wants it dropped.
+        let mangled = "$s16FoundationModels10AttachmentVA2A05ImageC7ContentVRszrlE_11orientationACyAEGSo10CGImageRefa_So0G19PropertyOrientationVSgtcfC"
+        let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT
+        return dlsym(rtldDefault, mangled) != nil
+    }()
 
     /// Capture the focused window and return the distinctive terms read from it,
     /// or an empty list on any failure (unsupported, no permission, no window,
