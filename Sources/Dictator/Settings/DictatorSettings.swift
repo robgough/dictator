@@ -360,8 +360,8 @@ struct DictatorSettings: Codable, Equatable {
         syncedDirectoryPath: nil,
         assistantTriggerMode: .rightOption,
         userName: "",
-        modes: [.quick, .write],
-        defaultModeID: DictationMode.writeID,
+        modes: [.quick, .standard, .polished, .formal],
+        defaultModeID: DictationMode.standardID,
         assistantPromptAddendum: "",
         assistantPromptOverride: nil,
         assistantWindowVisionContextEnabled: false,
@@ -558,6 +558,33 @@ struct DictatorSettings: Codable, Equatable {
         // that never had the field.
         let legacySpokenCues = read(.spokenCuesEnabled, Bool.self, true)
 
+        // Pull the legacy pass/prompt fields once so they feed both the mode's
+        // retained legacy fields and its synthesised `steps` list.
+        let grammarMaxEdit = read(.grammarPassMaxEditFraction, Double.self, 0.15)
+        let structuralEnabled = read(.structuralPassEnabled, Bool.self, true)
+        let structuralMinWords = read(.structuralPassMinWords, Int.self, 30)
+        let formattingAddendum = read(.formattingPromptAddendum, String.self, "")
+        let formattingOverride = readOptional(.formattingPromptOverride, String.self)
+        let grammarAddendum = read(.grammarPromptAddendum, String.self, "")
+        let grammarOverride = readOptional(.grammarPromptOverride, String.self)
+        let structuralAddendum = read(.structuralPromptAddendum, String.self, "")
+        let structuralOverride = readOptional(.structuralPromptOverride, String.self)
+
+        // Pre-modes blobs decode through the memberwise init (not
+        // DictationMode.init(from:)), which doesn't auto-derive steps, so build
+        // them explicitly from the same legacy fields — otherwise the migrated
+        // Write mode would ship an empty pipeline.
+        let steps = DictationMode.derivedSteps(
+            modeID: DictationMode.writeID,
+            formattingPassEnabled: true,
+            formattingOverride: formattingOverride, formattingAddendum: formattingAddendum,
+            grammarPassMode: legacyGrammarMode,
+            grammarOverride: grammarOverride, grammarAddendum: grammarAddendum,
+            grammarMaxEditFraction: grammarMaxEdit,
+            structuralPassEnabled: structuralEnabled,
+            structuralOverride: structuralOverride, structuralAddendum: structuralAddendum,
+            structuralMinWords: structuralMinWords)
+
         let write = DictationMode(
             id: DictationMode.writeID,
             name: "Write",
@@ -570,17 +597,7 @@ struct DictatorSettings: Codable, Equatable {
             currencyCuesEnabled: legacySpokenCues,
             emojiCuesEnabled: legacySpokenCues,
             vocabularyEnabled: true,
-            formattingPassEnabled: true,
-            grammarPassMode: legacyGrammarMode,
-            grammarPassMaxEditFraction: read(.grammarPassMaxEditFraction, Double.self, 0.15),
-            structuralPassEnabled: read(.structuralPassEnabled, Bool.self, true),
-            structuralPassMinWords: read(.structuralPassMinWords, Int.self, 30),
-            formattingPromptAddendum: read(.formattingPromptAddendum, String.self, ""),
-            formattingPromptOverride: readOptional(.formattingPromptOverride, String.self),
-            grammarPromptAddendum: read(.grammarPromptAddendum, String.self, ""),
-            grammarPromptOverride: readOptional(.grammarPromptOverride, String.self),
-            structuralPromptAddendum: read(.structuralPromptAddendum, String.self, ""),
-            structuralPromptOverride: readOptional(.structuralPromptOverride, String.self)
+            steps: steps
         )
         // Quick is locked to "no LLM, but pre-processing on" — the migrated
         // user's spoken-cue preference applies to Write (their primary mode),

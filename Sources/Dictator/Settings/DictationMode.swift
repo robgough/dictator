@@ -2,20 +2,16 @@ import Foundation
 
 /// A named bundle of dictation post-processing settings.
 ///
-/// Each mode picks which of the three optional LLM passes run on a dictation
-/// (formatter, grammar, structure) and carries its own prompt addendum/override
-/// for each. The user picks a default mode from the menu bar; the active mode
-/// can be cycled mid-recording with a key (default: Tab).
+/// Each mode carries an ordered list of `steps` (its LLM pipeline) plus the
+/// deterministic pre-processing toggles, context, and delivery options. The user
+/// picks a default mode from the menu bar; the active mode can be cycled
+/// mid-recording with a key (default: Tab).
 ///
-/// Two modes are seeded on first launch:
-///
-/// - **Quick** (`isLocked == true`): all passes off — raw transcript ships
-///   through the spoken-cue substitution and the user's vocabulary, then out.
-///   Locked because "no LLM" is the floor; editing prompts on it is moot, and
-///   keeping it always-present anchors the cycle.
-/// - **Write** (`isLocked == false`): all passes on, default prompts. Migrated
-///   from the legacy top-level prompt/pass fields so existing customisation
-///   isn't lost.
+/// Fresh installs seed a curated set: **Quick** (`isLocked == true`, no steps —
+/// raw transcript through cues + vocabulary, the floor), **Standard** (one
+/// Format step), **Polished** (Format + Grammar), and **Formal** (Format +
+/// Tighten). Users can add more from the "+" gallery. Modes saved before the
+/// step model are migrated on decode (see `LegacyPassKeys` / `derivedSteps`).
 ///
 /// `appBundleIDs` lets a mode auto-activate when the focused app's bundle ID
 /// matches. First mode in `settings.modes` whose `appBundleIDs` contains the
@@ -51,20 +47,14 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// list itself stays global — this is just an on/off per mode.
     var vocabularyEnabled: Bool
 
-    var formattingPassEnabled: Bool
-    var grammarPassMode: GrammarPassMode
-    /// Applies only when `grammarPassMode == .tidy`. The `.tighten` mode uses
-    /// its own permissive validator — see `Pipeline.maybeFixGrammar`.
-    var grammarPassMaxEditFraction: Double
-    var structuralPassEnabled: Bool
-    var structuralPassMinWords: Int
-
-    var formattingPromptAddendum: String
-    var formattingPromptOverride: String?
-    var grammarPromptAddendum: String
-    var grammarPromptOverride: String?
-    var structuralPromptAddendum: String
-    var structuralPromptOverride: String?
+    /// The ordered LLM pipeline for this mode. Each step transforms the previous
+    /// step's output; a mode with no steps ships the raw transcript (after the
+    /// deterministic cue/vocabulary passes) straight out, like Quick. This is
+    /// the source of truth. Blobs saved before the step model carried fixed
+    /// `formattingPassEnabled` / `grammarPassMode` / per-pass prompt fields
+    /// instead — the decoder reads those via `LegacyPassKeys` and synthesises
+    /// `steps` from them (`derivedSteps`); they are never encoded again.
+    var steps: [DictationStep]
 
     /// When true, after a successful paste the pipeline synthesises a
     /// Return key press. Useful for chat apps (Slack, iMessage, Discord)
@@ -110,6 +100,12 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// after creation, so existence isn't guaranteed — only the freshly-migrated
     /// or freshly-installed state has this id present.
     static let writeID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    /// Stable IDs for the curated step-based seed modes. Fresh installs get all
+    /// three; they can also be re-added later from the "+" gallery, which mints
+    /// fresh ids so the user can keep several.
+    static let standardID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+    static let polishedID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+    static let formalID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
 
     // MARK: - Codable
 
@@ -124,11 +120,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case id, name, isLocked, includeInCycle, appBundleIDs
         case punctuationCuesEnabled, numberCuesEnabled, timeCuesEnabled
         case currencyCuesEnabled, emojiCuesEnabled, vocabularyEnabled
-        case formattingPassEnabled, grammarPassMode, grammarPassMaxEditFraction
-        case structuralPassEnabled, structuralPassMinWords
-        case formattingPromptAddendum, formattingPromptOverride
-        case grammarPromptAddendum, grammarPromptOverride
-        case structuralPromptAddendum, structuralPromptOverride
+        case steps
         case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
         case windowVisionContextEnabled
     }
@@ -142,6 +134,18 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case spokenCuesEnabled
     }
 
+    /// Side container for the pre-step fixed-pass fields. Read only during
+    /// decode of a blob that has no `steps` key, to synthesise the step list;
+    /// never encoded (Swift's synthesised encoder only writes `CodingKeys`).
+    /// Delete once no installed copy could still hold the pre-step shape.
+    private enum LegacyPassKeys: String, CodingKey {
+        case formattingPassEnabled, grammarPassMode, grammarPassMaxEditFraction
+        case structuralPassEnabled, structuralPassMinWords
+        case formattingPromptAddendum, formattingPromptOverride
+        case grammarPromptAddendum, grammarPromptOverride
+        case structuralPromptAddendum, structuralPromptOverride
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // `id` and `name` are the only fields where a missing value would
@@ -149,9 +153,9 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         // than invent an identity.
         self.id = try c.decode(UUID.self, forKey: .id)
         self.name = try c.decode(String.self, forKey: .name)
-        // Everything else defaults to a sensible value if absent — matches the
-        // shape of `DictationMode.write` so a half-shaped blob comes back as a
-        // normally-behaved Write mode rather than failing to decode.
+        // Everything else defaults to a sensible value if absent, so a
+        // half-shaped blob comes back as a normally-behaved mode rather than
+        // failing to decode (which the outer try? would swallow into a reset).
         self.isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         self.includeInCycle = try c.decodeIfPresent(Bool.self, forKey: .includeInCycle) ?? true
         self.appBundleIDs = try c.decodeIfPresent([String].self, forKey: .appBundleIDs) ?? []
@@ -168,23 +172,39 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.currencyCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .currencyCuesEnabled) ?? cueDefault
         self.emojiCuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .emojiCuesEnabled) ?? cueDefault
         self.vocabularyEnabled = try c.decodeIfPresent(Bool.self, forKey: .vocabularyEnabled) ?? true
-        self.formattingPassEnabled = try c.decodeIfPresent(Bool.self, forKey: .formattingPassEnabled) ?? true
-        self.grammarPassMode = try c.decodeIfPresent(GrammarPassMode.self, forKey: .grammarPassMode) ?? .tighten
-        self.grammarPassMaxEditFraction = try c.decodeIfPresent(Double.self, forKey: .grammarPassMaxEditFraction) ?? 0.15
-        self.structuralPassEnabled = try c.decodeIfPresent(Bool.self, forKey: .structuralPassEnabled) ?? true
-        self.structuralPassMinWords = try c.decodeIfPresent(Int.self, forKey: .structuralPassMinWords) ?? 30
-        self.formattingPromptAddendum = try c.decodeIfPresent(String.self, forKey: .formattingPromptAddendum) ?? ""
-        self.formattingPromptOverride = try c.decodeIfPresent(String.self, forKey: .formattingPromptOverride)
-        self.grammarPromptAddendum = try c.decodeIfPresent(String.self, forKey: .grammarPromptAddendum) ?? ""
-        self.grammarPromptOverride = try c.decodeIfPresent(String.self, forKey: .grammarPromptOverride)
-        self.structuralPromptAddendum = try c.decodeIfPresent(String.self, forKey: .structuralPromptAddendum) ?? ""
-        self.structuralPromptOverride = try c.decodeIfPresent(String.self, forKey: .structuralPromptOverride)
         self.pressReturnAfterPaste = try c.decodeIfPresent(Bool.self, forKey: .pressReturnAfterPaste) ?? false
         self.contextAwarenessEnabled = try c.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? true
         self.appendTrailingSpace = try c.decodeIfPresent(Bool.self, forKey: .appendTrailingSpace) ?? false
         // Off by default — it's opt-in (needs Screen Recording + macOS 27), so a
         // missing key (every blob predating this feature) stays disabled.
         self.windowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowVisionContextEnabled) ?? false
+        // Steps are the source of truth. A blob saved before the step model has
+        // no `steps` key — read the old fixed-pass fields from their own
+        // container and synthesise the equivalent list (lossless, and stable
+        // across launches since ids derive from the mode id, so it doesn't churn
+        // until the next save persists the real steps).
+        if let decodedSteps = try c.decodeIfPresent([DictationStep].self, forKey: .steps) {
+            self.steps = decodedSteps
+        } else {
+            let lp = try? decoder.container(keyedBy: LegacyPassKeys.self)
+            func legacy<T: Decodable>(_ key: LegacyPassKeys, _ type: T.Type) -> T? {
+                guard let lp else { return nil }
+                return (try? lp.decodeIfPresent(type, forKey: key)) ?? nil
+            }
+            self.steps = Self.derivedSteps(
+                modeID: self.id,
+                formattingPassEnabled: legacy(.formattingPassEnabled, Bool.self) ?? true,
+                formattingOverride: legacy(.formattingPromptOverride, String.self),
+                formattingAddendum: legacy(.formattingPromptAddendum, String.self) ?? "",
+                grammarPassMode: legacy(.grammarPassMode, GrammarPassMode.self) ?? .tighten,
+                grammarOverride: legacy(.grammarPromptOverride, String.self),
+                grammarAddendum: legacy(.grammarPromptAddendum, String.self) ?? "",
+                grammarMaxEditFraction: legacy(.grammarPassMaxEditFraction, Double.self) ?? 0.15,
+                structuralPassEnabled: legacy(.structuralPassEnabled, Bool.self) ?? true,
+                structuralOverride: legacy(.structuralPromptOverride, String.self),
+                structuralAddendum: legacy(.structuralPromptAddendum, String.self) ?? "",
+                structuralMinWords: legacy(.structuralPassMinWords, Int.self) ?? 30)
+        }
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -193,26 +213,16 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     init(
         id: UUID,
         name: String,
-        isLocked: Bool,
-        includeInCycle: Bool,
-        appBundleIDs: [String],
-        punctuationCuesEnabled: Bool,
-        numberCuesEnabled: Bool,
-        timeCuesEnabled: Bool,
-        currencyCuesEnabled: Bool,
-        emojiCuesEnabled: Bool,
-        vocabularyEnabled: Bool,
-        formattingPassEnabled: Bool,
-        grammarPassMode: GrammarPassMode,
-        grammarPassMaxEditFraction: Double,
-        structuralPassEnabled: Bool,
-        structuralPassMinWords: Int,
-        formattingPromptAddendum: String,
-        formattingPromptOverride: String?,
-        grammarPromptAddendum: String,
-        grammarPromptOverride: String?,
-        structuralPromptAddendum: String,
-        structuralPromptOverride: String?,
+        isLocked: Bool = false,
+        includeInCycle: Bool = true,
+        appBundleIDs: [String] = [],
+        punctuationCuesEnabled: Bool = true,
+        numberCuesEnabled: Bool = true,
+        timeCuesEnabled: Bool = true,
+        currencyCuesEnabled: Bool = true,
+        emojiCuesEnabled: Bool = true,
+        vocabularyEnabled: Bool = true,
+        steps: [DictationStep] = [],
         pressReturnAfterPaste: Bool = false,
         contextAwarenessEnabled: Bool = true,
         appendTrailingSpace: Bool = false,
@@ -229,126 +239,233 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.currencyCuesEnabled = currencyCuesEnabled
         self.emojiCuesEnabled = emojiCuesEnabled
         self.vocabularyEnabled = vocabularyEnabled
-        self.formattingPassEnabled = formattingPassEnabled
-        self.grammarPassMode = grammarPassMode
-        self.grammarPassMaxEditFraction = grammarPassMaxEditFraction
-        self.structuralPassEnabled = structuralPassEnabled
-        self.structuralPassMinWords = structuralPassMinWords
-        self.formattingPromptAddendum = formattingPromptAddendum
-        self.formattingPromptOverride = formattingPromptOverride
-        self.grammarPromptAddendum = grammarPromptAddendum
-        self.grammarPromptOverride = grammarPromptOverride
-        self.structuralPromptAddendum = structuralPromptAddendum
-        self.structuralPromptOverride = structuralPromptOverride
+        self.steps = steps
         self.pressReturnAfterPaste = pressReturnAfterPaste
         self.contextAwarenessEnabled = contextAwarenessEnabled
         self.appendTrailingSpace = appendTrailingSpace
         self.windowVisionContextEnabled = windowVisionContextEnabled
     }
 
-    // MARK: - Effective prompts
+    // MARK: - Prompt helper
 
-    /// `global` is `DictatorSettings.globalPromptAddendum` — the cross-cutting
-    /// "apply to every pass" instructions, threaded in by the caller (the
-    /// dictation modes live on settings but don't hold the global field
-    /// themselves). Defaults to "" so non-pipeline callers stay simple.
-    func effectiveFormattingPrompt(global: String = "") -> String {
-        Self.combine(builtin: DictatorSettings.builtinFormattingPrompt,
-                     override: formattingPromptOverride,
-                     addendum: formattingPromptAddendum,
-                     global: global)
-    }
-
-    func effectiveGrammarPrompt(global: String = "") -> String {
-        // Tidy vs tighten pick different built-ins; override (when set) still
-        // replaces wholesale so users can pin a single custom prompt without
-        // it silently swapping under them when they change the mode.
-        let builtin: String
-        switch grammarPassMode {
-        case .off, .tidy:
-            builtin = DictatorSettings.builtinGrammarPrompt
-        case .tighten:
-            builtin = DictatorSettings.builtinTightenPrompt
-        }
-        return Self.combine(builtin: builtin,
-                            override: grammarPromptOverride,
-                            addendum: grammarPromptAddendum,
-                            global: global)
-    }
-
-    func effectiveStructuralPrompt(global: String = "") -> String {
-        Self.combine(builtin: DictatorSettings.builtinStructuralPrompt,
-                     override: structuralPromptOverride,
-                     addendum: structuralPromptAddendum,
-                     global: global)
-    }
-
-    private static func combine(builtin: String, override: String?, addendum: String, global: String) -> String {
-        let base: String
-        if let override {
-            base = override
-        } else {
-            let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
-            base = trimmed.isEmpty
-                ? builtin
-                : builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
-        }
-        return DictatorSettings.appendingGlobal(base, global)
+    /// The prompt WITHOUT the global addendum — built-in (or override) plus the
+    /// per-pass addendum. Used when synthesising a `DictationStep` from a legacy
+    /// mode's fields (`derivedSteps`); the pipeline appends the global
+    /// instructions to `step.prompt` at runtime, so global tweaks keep applying
+    /// even to a step whose prompt the user has edited.
+    static func bakedPrompt(builtin: String, override: String?, addendum: String) -> String {
+        if let override { return override }
+        let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? builtin
+            : builtin + "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + trimmed
     }
 
     // MARK: - Seeds
 
     /// The locked, no-LLM Quick mode. Always present in `settings.modes`.
     static let quick = DictationMode(
-        id: quickID,
-        name: "Quick",
-        isLocked: true,
-        includeInCycle: true,
-        appBundleIDs: [],
-        punctuationCuesEnabled: true,
-        numberCuesEnabled: true,
-        timeCuesEnabled: true,
-        currencyCuesEnabled: true,
-        emojiCuesEnabled: true,
-        vocabularyEnabled: true,
-        formattingPassEnabled: false,
-        grammarPassMode: .off,
-        grammarPassMaxEditFraction: 0.15,
-        structuralPassEnabled: false,
-        structuralPassMinWords: 30,
-        formattingPromptAddendum: "",
-        formattingPromptOverride: nil,
-        grammarPromptAddendum: "",
-        grammarPromptOverride: nil,
-        structuralPromptAddendum: "",
-        structuralPromptOverride: nil
-    )
+        id: quickID, name: "Quick", isLocked: true, steps: [])
 
-    /// The default Write mode used for fresh installs. Existing installs get
-    /// their legacy field values migrated into a Write mode via
-    /// `DictationMode.write(seededFromLegacy:)` so customisation survives.
-    static let write = DictationMode(
-        id: writeID,
-        name: "Write",
-        isLocked: false,
-        includeInCycle: true,
-        appBundleIDs: [],
-        punctuationCuesEnabled: true,
-        numberCuesEnabled: true,
-        timeCuesEnabled: true,
-        currencyCuesEnabled: true,
-        emojiCuesEnabled: true,
-        vocabularyEnabled: true,
-        formattingPassEnabled: true,
-        grammarPassMode: .tighten,
-        grammarPassMaxEditFraction: 0.15,
-        structuralPassEnabled: true,
-        structuralPassMinWords: 30,
-        formattingPromptAddendum: "",
-        formattingPromptOverride: nil,
-        grammarPromptAddendum: "",
-        grammarPromptOverride: nil,
-        structuralPromptAddendum: "",
-        structuralPromptOverride: nil
-    )
+    /// The everyday default for fresh installs: one Format step, one LLM call.
+    static let standard = DictationMode(
+        id: standardID, name: "Standard",
+        steps: [.format(id: legacyStepID(modeID: standardID, role: 1))])
+
+    /// Format + a light grammar tidy.
+    static let polished = DictationMode(
+        id: polishedID, name: "Polished",
+        steps: [
+            .format(id: legacyStepID(modeID: polishedID, role: 1)),
+            .grammar(id: legacyStepID(modeID: polishedID, role: 2)),
+        ])
+
+    /// Format + tighten: removes disfluencies for formal writing.
+    static let formal = DictationMode(
+        id: formalID, name: "Formal",
+        steps: [
+            .format(id: legacyStepID(modeID: formalID, role: 1)),
+            .tighten(id: legacyStepID(modeID: formalID, role: 2)),
+        ])
+}
+
+// MARK: - Steps
+
+/// One LLM transformation in a mode's pipeline. A mode runs its `steps` in
+/// order, each feeding the previous step's output. This replaces the old fixed
+/// format → grammar → structure passes; those are now just steps seeded from
+/// built-in templates, and users can add / remove / reorder their own.
+struct DictationStep: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID
+    var name: String
+    /// Full, editable system prompt, seeded from a built-in template. Stored
+    /// WITHOUT the global AI-instructions addendum — the pipeline appends that
+    /// at runtime so global tweaks keep applying even to an edited prompt.
+    var prompt: String
+    var enabled: Bool
+    /// Deterministic post-check. On failure the pipeline discards this step's
+    /// output and carries the previous text forward.
+    var gate: StepGate
+    /// Only consulted when `gate == .maxDrift`: the word-level edit-distance
+    /// ceiling above which the step's output is rejected.
+    var maxDriftFraction: Double
+    /// When set, the step is skipped unless the incoming text has at least this
+    /// many words (the old Structure "trigger at N words").
+    var minWords: Int?
+    /// Token-budget tier — restructuring needs more headroom than formatting.
+    var budget: StepBudget
+
+    init(id: UUID, name: String, prompt: String, enabled: Bool = true,
+         gate: StepGate = .numbersOnly, maxDriftFraction: Double = 0.15,
+         minWords: Int? = nil, budget: StepBudget = .normal) {
+        self.id = id
+        self.name = name
+        self.prompt = prompt
+        self.enabled = enabled
+        self.gate = gate
+        self.maxDriftFraction = maxDriftFraction
+        self.minWords = minWords
+        self.budget = budget
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, prompt, enabled, gate, maxDriftFraction, minWords, budget
+    }
+
+    /// Field-level backwards-compatible, matching the rest of the settings
+    /// model: only `id` is required; everything else defaults if absent.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        self.prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.gate = try c.decodeIfPresent(StepGate.self, forKey: .gate) ?? .none
+        self.maxDriftFraction = try c.decodeIfPresent(Double.self, forKey: .maxDriftFraction) ?? 0.15
+        self.minWords = try c.decodeIfPresent(Int.self, forKey: .minWords)
+        self.budget = try c.decodeIfPresent(StepBudget.self, forKey: .budget) ?? .normal
+    }
+}
+
+/// The deterministic post-check applied to a step's output. Mirrors the three
+/// legacy pass gates plus a numbers-only and a no-op option. Only surfaced in
+/// the UI under a per-step "Advanced" disclosure — new users never see it.
+enum StepGate: String, Codable, Sendable, CaseIterable {
+    /// ≥60% of input anchor words survive and the output doesn't balloon —
+    /// catches a model that answered or continued instead of transforming.
+    case anchorPreserve
+    /// Bounded word-level edit distance (see `DictationStep.maxDriftFraction`).
+    case maxDrift
+    /// Structure-only: no word may change; bullets/breaks may be inserted.
+    case wordsUnchanged
+    /// Only the numbers must round-trip unchanged.
+    case numbersOnly
+    /// No check — accept whatever the model returns.
+    case none
+
+    var label: String {
+        switch self {
+        case .anchorPreserve: return "Keep the words"
+        case .maxDrift: return "Limit rewriting"
+        case .wordsUnchanged: return "Structure only"
+        case .numbersOnly: return "Keep numbers"
+        case .none: return "No check"
+        }
+    }
+}
+
+/// Token-budget tier for a step, mapped to concrete caps by the LLM service.
+/// `expanded` is for restructuring, which legitimately grows the text with
+/// list markers and line breaks; `normal` suits format/grammar rewrites.
+enum StepBudget: String, Codable, Sendable, CaseIterable {
+    case normal
+    case expanded
+}
+
+// MARK: - Step templates
+
+extension DictationStep {
+    // Default gate is `.numbersOnly` on every template — matching the behaviour
+    // deliberately settled on weeks before this redesign: the anchor / drift /
+    // word-sequence checks were rejecting legitimate cleanups on short inputs
+    // (very common in dictation), so only the false-positive-free
+    // number-preservation revert stays on by default. The stricter gates remain
+    // selectable per step under Advanced for anyone who wants them. maxDriftFraction
+    // is still seeded sensibly so switching a step to `.maxDrift` has a good default.
+    static func format(id: UUID, prompt: String = DictatorSettings.builtinFormattingPrompt) -> DictationStep {
+        DictationStep(id: id, name: "Format", prompt: prompt, gate: .numbersOnly, budget: .normal)
+    }
+
+    static func grammar(id: UUID, prompt: String = DictatorSettings.builtinGrammarPrompt) -> DictationStep {
+        DictationStep(id: id, name: "Grammar", prompt: prompt, gate: .numbersOnly, maxDriftFraction: 0.15, budget: .normal)
+    }
+
+    static func tighten(id: UUID, prompt: String = DictatorSettings.builtinTightenPrompt) -> DictationStep {
+        // 0.30 seeds the drift ceiling should the user opt into `.maxDrift`;
+        // tighten drops fillers, so it needs a looser ceiling than a plain tidy.
+        DictationStep(id: id, name: "Tighten", prompt: prompt, gate: .numbersOnly, maxDriftFraction: 0.30, budget: .normal)
+    }
+
+    static func structure(id: UUID, prompt: String = DictatorSettings.builtinStructuralPrompt, minWords: Int = 30) -> DictationStep {
+        DictationStep(id: id, name: "Structure", prompt: prompt, gate: .numbersOnly, minWords: minWords, budget: .expanded)
+    }
+}
+
+// MARK: - Legacy → steps synthesis
+
+extension DictationMode {
+    /// Deterministic step id derived from the owning mode + a role tag. Keeps
+    /// re-derived legacy steps stable across launches (so decode → Equatable
+    /// doesn't thrash) until the first save persists them explicitly.
+    static func legacyStepID(modeID: UUID, role: UInt8) -> UUID {
+        var b = withUnsafeBytes(of: modeID.uuid) { Array($0) }
+        b[0] ^= role
+        b[15] ^= role
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                           b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+
+    /// The ordered step list a legacy (pre-steps) mode implies, baking each
+    /// pass's effective prompt (minus the global addendum) into the step.
+    static func derivedSteps(
+        modeID: UUID,
+        formattingPassEnabled: Bool,
+        formattingOverride: String?, formattingAddendum: String,
+        grammarPassMode: GrammarPassMode,
+        grammarOverride: String?, grammarAddendum: String, grammarMaxEditFraction: Double,
+        structuralPassEnabled: Bool,
+        structuralOverride: String?, structuralAddendum: String, structuralMinWords: Int
+    ) -> [DictationStep] {
+        var out: [DictationStep] = []
+        if formattingPassEnabled {
+            out.append(.format(
+                id: legacyStepID(modeID: modeID, role: 1),
+                prompt: bakedPrompt(builtin: DictatorSettings.builtinFormattingPrompt,
+                                    override: formattingOverride, addendum: formattingAddendum)))
+        }
+        switch grammarPassMode {
+        case .off:
+            break
+        case .tidy:
+            var s = DictationStep.grammar(
+                id: legacyStepID(modeID: modeID, role: 2),
+                prompt: bakedPrompt(builtin: DictatorSettings.builtinGrammarPrompt,
+                                    override: grammarOverride, addendum: grammarAddendum))
+            s.maxDriftFraction = grammarMaxEditFraction
+            out.append(s)
+        case .tighten:
+            out.append(.tighten(
+                id: legacyStepID(modeID: modeID, role: 2),
+                prompt: bakedPrompt(builtin: DictatorSettings.builtinTightenPrompt,
+                                    override: grammarOverride, addendum: grammarAddendum)))
+        }
+        if structuralPassEnabled {
+            out.append(.structure(
+                id: legacyStepID(modeID: modeID, role: 3),
+                prompt: bakedPrompt(builtin: DictatorSettings.builtinStructuralPrompt,
+                                    override: structuralOverride, addendum: structuralAddendum),
+                minWords: structuralMinWords))
+        }
+        return out
+    }
 }

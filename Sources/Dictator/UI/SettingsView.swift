@@ -32,9 +32,32 @@ struct SettingsView: View {
                 }
             }
             .listStyle(.sidebar)
+            // Outside a NavigationSplitView, `.listStyle(.sidebar)` only
+            // *sometimes* resolves its own vibrancy backing — the source-list
+            // material detection is timing-dependent in a plain HStack, which
+            // is why the sidebar intermittently rendered as a flat opaque
+            // fill. Hide the list's own background entirely and paint the
+            // real sidebar material ourselves so it's deterministic.
+            .scrollContentBackground(.hidden)
             .frame(width: 215)
-
-            Divider()
+            .background {
+                VisualEffectBlur(material: .sidebar,
+                                 blendingMode: .behindWindow,
+                                 state: .followsWindowActiveState)
+                    // Run the material up behind the (transparent — see
+                    // SettingsWindowConfigurator) titlebar and traffic
+                    // lights so the top reads as one surface, like System
+                    // Settings.
+                    .ignoresSafeArea()
+                    // The sidebar/detail hairline lives on the material so
+                    // it also spans the titlebar strip; a sibling `Divider()`
+                    // in the HStack would stop at the safe-area edge.
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(.separator)
+                            .frame(width: 1)
+                    }
+            }
 
             detailColumn(for: selection ?? .general)
                 // Bound the detail to the window so panes whose body is a `List`
@@ -179,12 +202,13 @@ private extension View {
     }
 }
 
-/// Inserts `.resizable` into the host `Settings` window's style mask. SwiftUI's
-/// `Settings` scene creates a fixed-size window and offers no API to make it
-/// resizable (`.windowResizability` is ignored), so we reach the `NSWindow`
-/// once it's attached and flip the bit ourselves. Lives as a zero-size
-/// background view; the async hop is because `window` is nil until the view is
-/// in the hierarchy.
+/// Inserts `.resizable` into the host `Settings` window's style mask, and
+/// restyles the titlebar (transparent, title hidden, full-size content view)
+/// for the System-Settings-style sidebar look. SwiftUI's `Settings` scene
+/// creates a fixed-size window and offers no API for either (`.windowResizability`
+/// is ignored), so we reach the `NSWindow` once it's attached and flip the bits
+/// ourselves. Lives as a zero-size background view; the async hop is because
+/// `window` is nil until the view is in the hierarchy.
 private struct SettingsWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -202,6 +226,18 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
         // NB: do NOT set window.contentMinSize here — it fights SwiftUI's
         // content-size resizing and froze the window. The frame's minWidth/Height
         // in DictatorApp already floors it.
+
+        // System-Settings-style top: no bold "Dictator Settings" text, a
+        // transparent titlebar, and `.fullSizeContentView` so the content view
+        // (and the sidebar's material, which ignores the top safe area) runs
+        // up behind the traffic lights. SwiftUI still lays the HStack out
+        // below the titlebar via the window's contentLayoutRect safe-area
+        // inset, so rows and the detail page title don't slide under it.
+        // The title string itself stays set (Mission Control, App Exposé).
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
     }
 }
 
@@ -239,7 +275,7 @@ private struct AboutUtilities: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("First-run wizard")
                         .font(.callout.weight(.medium))
-                    Text("Re-opens the setup walkthrough — permissions, transcription model, formatting LLM. Safe to run on an already-configured install; nothing is reset, you can step straight through to the end.")
+                    Text("Re-opens the setup walkthrough — permissions, transcription model, formatting LLM. Safe on an already-configured install; nothing is reset.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -614,10 +650,10 @@ private struct AboutAuthor: View {
     var body: some View {
         AboutSection(title: "Author") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("I'm **Rob Gough** — a tech advisor and fractional CTO, offering a senior pair of eyes on tech strategy and what to build next, drawing on a long career in senior engineering and tech leadership. I'm also building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
+                Text("I'm **Rob Gough** — a tech advisor and fractional CTO offering a senior pair of eyes on tech strategy and what to build next, drawing on a long career in engineering and tech leadership. I'm also building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Dictator started as a personal itch. There are genuinely good free dictation tools for the Mac, but the moment I wanted more than the raw transcript — punctuation tidied, \"new paragraph\" honoured, a sensible bullet list when I rambled — that functionality sat behind a subscription, even when the cleanup ran on a local model. The pieces to do it without one are already open and free: Whisper for the speech-to-text, a small Llama or Qwen for the cleanup, Apple Silicon to run them. Pulling them together turned out to be a fun problem.")
+                Text("Dictator started as a personal itch. There are genuinely good free dictation tools for the Mac, but the moment I wanted more than the raw transcript — punctuation tidied, \"new paragraph\" honoured, a sensible bullet list when I rambled — that sat behind a subscription, even when the cleanup ran on a local model. The pieces to do it without one are already open and free: Whisper for the speech-to-text, a small Llama or Qwen for the cleanup, Apple Silicon to run them. Pulling them together turned out to be a fun problem.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("I now dictate most of my long-form writing with it. I hope you find it useful — and thank you for giving it a try.")
@@ -644,10 +680,10 @@ private struct AboutPrivacy: View {
     var body: some View {
         AboutSection(title: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Everything that matters happens on your Mac. Audio captured for transcription is held in memory while you're speaking and then discarded. Transcripts, conversations, vocabulary, and your custom prompts live only under `~/Library/Application Support/Dictator/` — on this machine.")
+                Text("Everything that matters happens on your Mac. Audio is held in memory while you speak, then discarded. Transcripts, conversations, vocabulary, and your custom prompts live only under `~/Library/Application Support/Dictator/` on this machine.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Two things leave your Mac, both initiated by you: model downloads from Hugging Face when you pick one in **Settings → Models**, and periodic update checks (which you can disable). There's no telemetry, no analytics, and no account.")
+                Text("Two things leave your Mac, both initiated by you: model downloads from Hugging Face when you pick one in **Settings → Models**, and update checks (which you can disable). No telemetry, no analytics, no account.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Dictator is provided as-is. Please use it for what it's good at, and let me know when it isn't.")
@@ -1621,7 +1657,7 @@ private struct BluetoothAdvisoryNote: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Bluetooth mic active")
                     .font(.system(size: 13, weight: .semibold))
-                Text("macOS switches Bluetooth headphones into a phone-call profile while recording. Expect a 2–5 s warmup at the start of each dictation, and music or system audio will sound thin and mono for as long as the recording is in flight. For snappier dictation and full-fidelity playback, promote the MacBook microphone (or any wired input) above your headphones in the list below.")
+                Text("macOS switches Bluetooth headphones into a phone-call profile while recording, so expect a 2–5 s warmup and thin, mono audio for the length of each dictation. For snappier dictation and full-fidelity playback, promote the MacBook microphone (or any wired input) above your headphones below.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1997,7 +2033,7 @@ private struct GeneralPane: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
                     .frame(height: 72)
                     .onChange(of: s.settings.globalPromptAddendum) { _, _ in state.save() }
-                SectionFootnote("Added to every AI pass — dictation (format, grammar, restructure), the assistant, and meeting notes — even ones you've given a custom prompt. Use it for preferences that apply everywhere, like \u{201C}Always use British English\u{201D} or how to spell a product name. Tweaks for a single pass still live in each Mode and in the Assistant and Meeting-notes prompt settings.")
+                SectionFootnote("Added to every dictation step, the assistant, and meeting notes — even ones with a custom prompt. For preferences that apply everywhere, like \u{201C}Always use British English\u{201D}. Tweaks for a single step live in each Mode.")
             } header: { Text("Global AI instructions") }
             Section {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
@@ -2091,7 +2127,7 @@ private struct GeneralPane: View {
                 Toggle("Play feedback sounds", isOn: $s.settings.playSounds)
                     .onChange(of: s.settings.playSounds) { _, _ in state.save() }
 
-                SectionFootnote("Spoken cues (\"comma\" → \",\", \"fire emoji\" → 🔥), vocabulary application, grammar, structure, and per-pass prompts are all part of each **Mode** — see the Modes tab. The default mode is also pickable from the menu bar.")
+                SectionFootnote("Spoken cues, vocabulary, and the AI steps are all part of each **Mode** — see the Modes tab. The default mode is also pickable from the menu bar.")
             } header: { Text("Behaviour") }
             Section {
                 Toggle("Pre-load models on launch", isOn: $s.settings.preloadModelsOnLaunch)
@@ -2108,7 +2144,7 @@ private struct GeneralPane: View {
                     }
                 }
                 .onChange(of: s.settings.audioInterruption) { _, _ in state.save() }
-                SectionFootnote("**Auto** ducks the output when this Mac's current output device supports it, and pauses Spotify or Music when it can't. **Lower volume** dips the system output for the length of each dictation, then restores — but doesn't work on USB / Thunderbolt audio interfaces whose driver owns the volume (the macOS slider is greyed out for those). **Pause** tells Spotify or Music to pause regardless of how audio is routed. Pausing (including Auto's fallback) asks for one-time Automation permission the first time it fires for each app. Per-Mac because the right choice depends on this machine's output device.")
+                SectionFootnote("**Auto** ducks the output when the device supports it, otherwise pauses Spotify or Music. **Lower volume** dips system output for each dictation — but not on USB / Thunderbolt interfaces whose driver owns the volume. **Pause** always pauses Spotify or Music. Pausing asks for one-time Automation permission per app. Per-Mac — the right choice depends on this machine's output.")
             } header: { ThisMacHeader("Other audio") }
             Section {
                 SyncedFolderRow()
@@ -2425,7 +2461,7 @@ private struct ModelsPane: View {
             case .stats: StatsModelsPane()
             }
 
-            SectionFootnote("Model selection is stored per-Mac — different Macs have different RAM and may suit different model tiers.")
+            SectionFootnote("Model choice is stored per-Mac — Macs differ in RAM and suit different model tiers.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }
@@ -2487,7 +2523,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Transcription engine")
             } footer: {
-                SectionFootnote("**Parakeet** uses the Apple Neural Engine — roughly an order of magnitude faster than Whisper on Apple Silicon, and slightly smaller on disk. v3 covers 25 European languages; v2 is English-only with marginally better English accuracy. **Whisper** is the mature alternative — slower, but broad language support and very well-tested.")
+                SectionFootnote("**Parakeet** runs on the Apple Neural Engine — roughly 10× faster than Whisper and a little smaller on disk; v3 covers 25 European languages, v2 is English-only with marginally better English accuracy. **Whisper** is slower but well-tested, with broad language support.")
             }
             .alert(
                 "No \(engineSwitchBlocked == .parakeet ? "Parakeet" : "Whisper") models installed",
@@ -2513,7 +2549,7 @@ private struct TranscriptionModelsPane: View {
                 .disabled(s.settings.transcriptionEngine != .parakeet)
             } footer: {
                 if s.settings.transcriptionEngine == .parakeet {
-                    SectionFootnote("Streams a draft transcript into the HUD while you're holding the hotkey, so you can see whether your speech is being captured correctly. Doesn't change the final output — the cleanup passes still run on the full recording.")
+                    SectionFootnote("Streams a draft transcript into the HUD while you hold the hotkey, so you can see your speech is being captured. Doesn't change the final output — the cleanup passes still run on the full recording.")
                 } else {
                     SectionFootnote("Real-time HUD transcription is only available on Parakeet. Switch the engine above to enable it.")
                 }
@@ -2555,7 +2591,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Parakeet models")
             } footer: {
-                SectionFootnote("Parakeet runs on the Apple Neural Engine — much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Resumable downloads aren't supported (a cancelled download is discarded and re-fetched fresh next time).")
+                SectionFootnote("Runs on the Apple Neural Engine, much faster than Whisper. **v3** covers 25 European languages; **v2** is English-only and slightly more accurate on English. Downloads aren't resumable — a cancelled one is re-fetched fresh next time.")
             }
 
             Section {
@@ -2594,7 +2630,7 @@ private struct TranscriptionModelsPane: View {
             } header: {
                 Text("Whisper models")
             } footer: {
-                SectionFootnote("Pick the model that runs when you dictate with Whisper. Larger models are more accurate but slower and use more memory. A model downloads automatically the first time you use it; you can also download ahead of time below. **Verify** loads the model into memory to confirm the download finished cleanly — useful after a flaky connection.")
+                SectionFootnote("Larger models are more accurate but slower and use more memory. A model downloads on first use, or pre-fetch it below. **Verify** loads the model to confirm the download finished cleanly — useful after a flaky connection.")
             }
         }
         .formStyle(.grouped)
@@ -2630,13 +2666,13 @@ private struct FormattingModelsPane: View {
             } header: {
                 Text("Engine")
             } footer: {
-                SectionFootnote("**Apple Foundation** uses the on-device model Apple Intelligence ships with — zero disk, no in-process weights, requires Apple Intelligence to be enabled in System Settings. **MLX** downloads a HuggingFace checkpoint and runs it in-process. **None** ships the raw transcript with no LLM passes and disables Assistant Mode.")
+                SectionFootnote("**Apple Foundation** uses Apple Intelligence's on-device model — zero disk, but needs Apple Intelligence enabled in System Settings. **MLX** downloads a HuggingFace checkpoint and runs it in-process. **None** ships the raw transcript with no LLM passes and disables Assistant Mode.")
             }
 
             switch s.settings.llmEngine {
             case .none:
                 Section {
-                    Text("LLM passes are disabled. Dictations ship the raw Whisper transcript with the user dictionary applied. Assistant Mode is unavailable.")
+                    Text("LLM passes are off. Dictations ship the raw transcript with your dictionary applied, and Assistant Mode is unavailable.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2647,7 +2683,7 @@ private struct FormattingModelsPane: View {
                 } header: {
                     Text("Apple Foundation Model")
                 } footer: {
-                    SectionFootnote("Apple Intelligence's on-device model — about 3B parameters with a roughly 4K-token context window, shared across every app that uses the framework (no per-app download, no in-process weight cost). Apple applies safety filtering you don't control.")
+                    SectionFootnote("Apple Intelligence's on-device model — about 3B parameters, ~4K-token context, shared across every app (no per-app download or weight cost). Apple applies safety filtering you don't control.")
                 }
             case .mlx:
                 Section {
@@ -2685,7 +2721,7 @@ private struct FormattingModelsPane: View {
                 } header: {
                     Text("MLX Models")
                 } footer: {
-                    SectionFootnote("Downloaded HuggingFace checkpoints run via MLX-Swift. Larger models are more accurate but slower and use more RAM. **Verify** loads the model to confirm the download finished cleanly — useful after a flaky connection.")
+                    SectionFootnote("Downloaded HuggingFace checkpoints run via MLX-Swift. Larger models are more accurate but slower and use more RAM. **Verify** loads the model to confirm the download finished cleanly.")
                 }
             }
         }
@@ -2752,7 +2788,7 @@ private struct DiarizationModelsPane: View {
                     HStack(spacing: 10) {
                         Image(systemName: "moon.zzz")
                             .foregroundStyle(.secondary)
-                        Text("Speaker identification is part of Meetings, which isn't currently enabled — see Settings → Meetings to turn it on (it also needs an on-device LLM). A model you've already downloaded stays on disk and can still be removed below.")
+                        Text("Speaker identification is part of Meetings, which isn't enabled — turn it on in Settings → Meetings (it also needs an on-device LLM). An already-downloaded model stays on disk and can still be removed below.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2800,7 +2836,7 @@ private struct DiarizationModelsPane: View {
             } header: {
                 Text("Speaker diarization")
             } footer: {
-                SectionFootnote("Used by the Meetings feature to split the remote audio into per-speaker turns (\"Speaker 1 said…, Speaker 2 replied…\"). Downloads on first use, or pre-fetch from here. Your own microphone is always tagged as you — diarization only runs on the system-audio track.")
+                SectionFootnote("Splits the remote audio into per-speaker turns. Downloads on first use, or pre-fetch here. Your own microphone is always tagged as you — diarization only runs on the system-audio track.")
             }
         }
         .formStyle(.grouped)
@@ -2863,7 +2899,7 @@ private struct StatsModelsPane: View {
             } header: {
                 Text("Memory")
             } footer: {
-                SectionFootnote("Live readout. \"Dictator using\" mirrors Activity Monitor's footprint (which counts compressed and GPU-mapped pages); the actual physical RAM cost is often less because macOS compresses cold pages.")
+                SectionFootnote("Live readout. \"Dictator using\" mirrors Activity Monitor's footprint (compressed and GPU-mapped pages); actual physical RAM is often less because macOS compresses cold pages.")
             }
 
             Section {
@@ -3151,6 +3187,10 @@ private struct ModesPane: View {
     // column it renders a junk nav bar: floating back button + dead space).
     @State private var editingID: UUID?
     @State private var selectedID: UUID?
+    @State private var showAddSheet = false
+    // One-shot "modes are now steps" note. Local UserDefaults flag — no settings
+    // field needed, and it's per-Mac (fine for a UI hint).
+    @AppStorage("dictator.seenStepsIntro") private var seenStepsIntro = false
 
     var body: some View {
         @Bindable var s = state
@@ -3167,12 +3207,17 @@ private struct ModesPane: View {
                 Text("Modes")
                     .font(.system(size: 22, weight: .bold))
                 Spacer()
-                Button { addMode() } label: { Image(systemName: "plus") }
-                    .help("Add a new mode (cloned from the default)")
+                Button { showAddSheet = true } label: { Image(systemName: "plus") }
+                    .help("Add a mode")
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
             .padding(.bottom, 6)
+            if !seenStepsIntro {
+                stepsIntroNote
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 6)
+            }
             CycleAXBanner()
                 .padding(.horizontal, 20)
                 .padding(.bottom, 6)
@@ -3202,10 +3247,39 @@ private struct ModesPane: View {
             .onChange(of: selectedID) { _, new in
                 if let new { editingID = new }
             }
-            SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, prompts, bindings, pass toggles) sync via your Synced folder.")
+            SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, steps, prompts, bindings) sync via your Synced folder.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }
+        .sheet(isPresented: $showAddSheet) {
+            AddModeSheet(existingNames: Set(state.settings.modes.map(\.name))) { template in
+                installMode(from: template)
+            }
+        }
+    }
+
+    /// One-shot banner explaining the move from fixed passes to composable steps.
+    private var stepsIntroNote: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Modes are now built from steps")
+                    .font(.subheadline.weight(.semibold))
+                Text("Your existing modes still work. Mix and match steps to build your own, or add a ready-made mode with +.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("Add a mode") { showAddSheet = true }
+                        .controlSize(.small)
+                    Button("Got it") { seenStepsIntro = true }
+                        .controlSize(.small)
+                }
+                .padding(.top, 2)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
     }
 
     private func editor(mode: Binding<DictationMode>, id: UUID) -> some View {
@@ -3251,19 +3325,30 @@ private struct ModesPane: View {
         state.save()
     }
 
-    private func addMode() {
-        // Clone the default as the seed — a blank mode rarely makes sense (you'd
-        // recreate the same pass setup), so tweaking a copy is the common case.
-        let template = state.settings.defaultMode
+    /// Installs a fresh mode from a gallery template: new mode + step ids (so a
+    /// starter can be added several times), a unique name, unlocked, no app
+    /// bindings. Drills straight into the editor.
+    private func installMode(from template: DictationMode) {
         var copy = template
         copy.id = UUID()
-        copy.name = uniqueName(basedOn: template.name)
+        copy.name = uniqueName(from: template.name)
         copy.isLocked = false
         copy.includeInCycle = true
         copy.appBundleIDs = []
+        copy.steps = template.steps.map { var s = $0; s.id = UUID(); return s }
         state.settings.modes.append(copy)
         state.save()
-        editingID = copy.id   // drill straight into the new mode
+        editingID = copy.id
+    }
+
+    /// A name that doesn't collide with an existing mode — starters keep their
+    /// clean name on first add ("Polished"), then get "Polished 2", etc.
+    private func uniqueName(from base: String) -> String {
+        let existing = Set(state.settings.modes.map(\.name))
+        if !existing.contains(base) { return base }
+        var n = 2
+        while existing.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
     }
 
     private func duplicateMode(_ mode: DictationMode) {
@@ -3301,6 +3386,84 @@ private struct ModesPane: View {
         var n = 2
         while existing.contains("\(base) \(n)") { n += 1 }
         return "\(base) \(n)"
+    }
+}
+
+/// The "+" gallery: pick a ready-made starter mode or a blank one. Passes the
+/// chosen template back to `ModesPane`, which clones it with fresh ids.
+private struct AddModeSheet: View {
+    let existingNames: Set<String>
+    let onPick: (DictationMode) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add a mode").font(.title2.weight(.bold))
+            Text("Start from a ready-made mode or a blank one — rename and tweak it after.")
+                .font(.callout).foregroundStyle(.secondary)
+            VStack(spacing: 8) {
+                starterCard(.standard, "One pass — punctuation and light grammar. Fast.")
+                starterCard(.polished, "Format, then a grammar tidy.")
+                starterCard(.formal, "Format, then tighten — drops filler for formal writing.")
+                blankCard
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+    }
+
+    private func starterCard(_ mode: DictationMode, _ desc: String) -> some View {
+        Button {
+            onPick(mode)
+            dismiss()
+        } label: {
+            cardBody(title: mode.name, subtitle: desc, steps: mode.steps.map(\.name))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var blankCard: some View {
+        Button {
+            var m = DictationMode.standard
+            m.name = "New mode"
+            m.steps = []
+            onPick(m)
+            dismiss()
+        } label: {
+            cardBody(title: "Blank", subtitle: "No steps — raw transcript with your cues and dictionary.", steps: [])
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func cardBody(title: String, subtitle: String, steps: [String]) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                if !steps.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { _, name in
+                            Text(name)
+                                .font(.caption2)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        }
+                    }
+                    .padding(.top, 1)
+                }
+            }
+            Spacer()
+            Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
+        .contentShape(Rectangle())
     }
 }
 
@@ -3382,15 +3545,8 @@ private struct ModeCard: View {
     /// "Format · Grammar · Structure  ·  2 apps · Tab cycle" — what's on, and how
     /// it's reached, so the selector is informative without drilling in.
     private var summary: String {
-        var passes: [String] = []
-        if mode.formattingPassEnabled { passes.append("Format") }
-        switch mode.grammarPassMode {
-        case .off: break
-        case .tidy: passes.append("Grammar")
-        case .tighten: passes.append("Tighten")
-        }
-        if mode.structuralPassEnabled { passes.append("Structure") }
-        var s = passes.isEmpty ? "Raw transcript — no AI passes" : passes.joined(separator: " · ")
+        let names = mode.steps.filter(\.enabled).map(\.name)
+        var s = names.isEmpty ? "Raw transcript — no AI steps" : names.joined(separator: " · ")
         var extras: [String] = []
         if !mode.appBundleIDs.isEmpty {
             extras.append("\(mode.appBundleIDs.count) app\(mode.appBundleIDs.count == 1 ? "" : "s")")
@@ -3426,13 +3582,6 @@ private struct ModeDetail: View {
 
     @Environment(AppState.self) private var state
 
-    // The three pass sections are long; let them collapse. Expanded by default
-    // so nothing is hidden on first open. (They were previously
-    // `.constant(true)` — a disclosure triangle that did nothing.)
-    @State private var pass1Expanded = true
-    @State private var pass2Expanded = true
-    @State private var pass3Expanded = true
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -3448,7 +3597,7 @@ private struct ModeDetail: View {
                     appBindingsSection
                     Divider()
                     preProcessingSection
-                    passSettingsSection
+                    stepsSection
                     contextSection
                     deliverySection
                 }
@@ -3553,51 +3702,44 @@ private struct ModeDetail: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pre-processing")
                 .font(.headline)
-            Text("Deterministic substitutions that run on the raw transcript before any LLM pass. Each family can be toggled independently — turn off the ones you don't want.")
+            Text("Deterministic substitutions on the raw transcript, before any AI step.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Punctuation cues (\"comma\" → \",\", \"question mark\" → \"?\")", isOn: $mode.punctuationCuesEnabled)
-                    .onChange(of: mode.punctuationCuesEnabled) { _, _ in onChange() }
-                Text("Spoken punctuation, line breaks, brackets, dashes, symbol names. Turn off if your dictations frequently use words like \"comma\" and \"period\" literally.")
-                    .font(.caption)
+            cueRow("Punctuation cues", example: "\"comma\" → \",\"   \"new line\" → ⏎",
+                   caption: "Turn off if you dictate words like \"comma\" literally.",
+                   isOn: $mode.punctuationCuesEnabled)
+            cueRow("Number cues", example: "\"twenty-five\" → \"25\"   \"5 plus 3\" → \"5 + 3\"",
+                   caption: "Word numbers become digits in composites, arithmetic, and runs.",
+                   isOn: $mode.numberCuesEnabled)
+            cueRow("Time cues", example: "\"ten thirty PM\" → \"10:30 PM\"",
+                   caption: "Digitises times followed by AM/PM, o'clock, or \"hours\".",
+                   isOn: $mode.timeCuesEnabled)
+            cueRow("Currency cues", example: "\"five dollars\" → \"$5\"",
+                   caption: "Adds the symbol after a number — dollars, pounds, euros, yen.",
+                   isOn: $mode.currencyCuesEnabled)
+            cueRow("Emoji cues", example: "\"fire emoji\" → 🔥",
+                   caption: "Named emojis become their glyph.",
+                   isOn: $mode.emojiCuesEnabled)
+            cueRow("Apply vocabulary list", example: nil,
+                   caption: "Uses your Dictionary rules. Shared across modes; toggle is per-mode.",
+                   isOn: $mode.vocabularyEnabled)
+        }
+    }
+
+    /// A labelled toggle with an optional monospace example line and a one-line
+    /// caption — the tidy row shape the pre-processing list shares.
+    private func cueRow(_ title: String, example: String?, caption: String, isOn: Binding<Bool>) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(title, isOn: isOn)
+                .onChange(of: isOn.wrappedValue) { _, _ in onChange() }
+            if let example {
+                Text(example)
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Number cues (\"twenty-five\" → \"25\", \"5 plus 3\" → \"5 + 3\")", isOn: $mode.numberCuesEnabled)
-                    .onChange(of: mode.numberCuesEnabled) { _, _ in onChange() }
-                Text("Word-form numbers turn into digits when composite, in arithmetic context, or in adjacent runs (phone numbers, postcodes). Single small numbers like \"five apples\" stay as words.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Time cues (\"ten thirty PM\" → \"10:30 PM\", \"sixteen hundred hours\" → \"1600 hours\")", isOn: $mode.timeCuesEnabled)
-                    .onChange(of: mode.timeCuesEnabled) { _, _ in onChange() }
-                Text("Civilian and military times digitise when followed by an AM/PM/o'clock or \"hours\" marker. Turn off if you want times written as words in formal prose.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Currency cues (\"five dollars\" → \"$5\", \"twenty euros\" → \"€20\")", isOn: $mode.currencyCuesEnabled)
-                    .onChange(of: mode.currencyCuesEnabled) { _, _ in onChange() }
-                Text("Adds the currency symbol when a recognised currency word follows a number. Handles dollars, pounds, euros, and yen. Turn off if \"pounds\" routinely means weight in your dictations, not money.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Emoji cues (\"fire emoji\" → 🔥, \"thumbs up emoji\" → 👍)", isOn: $mode.emojiCuesEnabled)
-                    .onChange(of: mode.emojiCuesEnabled) { _, _ in onChange() }
-                Text("Named emojis turn into their glyph. The lookup recognises ~3700 Unicode names plus a curated alias list (smile, heart, fire, etc.). Turn off if you'd rather emojis never sneak into your output.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Apply vocabulary list", isOn: $mode.vocabularyEnabled)
-                    .onChange(of: mode.vocabularyEnabled) { _, _ in onChange() }
-                Text("When on, your custom vocabulary substitutions from the Dictionary tab are applied. The list itself is shared across modes — only the toggle is per-mode, so you can keep one dictionary and switch it off in a \"raw\" mode.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -3608,7 +3750,7 @@ private struct ModeDetail: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Use the text around the cursor", isOn: $mode.contextAwarenessEnabled)
                     .onChange(of: mode.contextAwarenessEnabled) { _, _ in onChange() }
-                Text("Reads a little of the document either side of the insertion point (through the same Accessibility permission used for pasting) when a dictation starts, plus distinctive names and terms from a wider sweep of the document. The formatting pass uses them to spell names and terminology the way your document does — accented names like Siobhán are restored even when speech recognition drops the accent, wherever they appear in the document — and the pasted text joins cleanly mid-sentence: leading space, capitalisation, and the trailing full stop adapt to where the cursor sits. Everything stays on this Mac: the context only ever goes to the local model and is never stored. Password fields are never read, and apps that don't expose their text (some Electron apps, Google Docs, terminals) simply dictate without context.")
+                Text("Reads a little text either side of the cursor so names and terms match your document, and the pasted text joins cleanly mid-sentence. On-device, never stored; password fields are never read.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3619,7 +3761,7 @@ private struct ModeDetail: View {
                             if enabled { ScreenRecordingPermission.request() }
                             onChange()
                         }
-                    Text("When a dictation starts, takes one on-device snapshot of just the focused window and reads the names, places, products, and technical terms visible in it with Apple's on-device vision model — so they're spelled the way they appear on screen, even when they sit outside the text field the option above reads, or the app doesn't expose its text at all. The picture only ever goes to the local model, never leaves this Mac, and is never stored — only the focused window is captured, never the whole screen. Needs Screen Recording permission (you'll be asked when you turn this on; macOS may need a relaunch for the grant to take effect). The capture and reading run while you're still talking, so they usually add no time. Best for writing and email modes; leave it off for quick notes.")
+                    Text("Snapshots the focused window and reads on-screen names and terms with Apple's vision model — reaching text the option above can't. On-device, never stored; only the focused window, never the whole screen. Needs Screen Recording.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -3637,144 +3779,92 @@ private struct ModeDetail: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Press Return after pasting", isOn: $mode.pressReturnAfterPaste)
                     .onChange(of: mode.pressReturnAfterPaste) { _, _ in onChange() }
-                Text("Sends a Return keypress once the paste lands. Useful for chat apps (Slack, iMessage, Discord), search boxes, and form fields where Return submits. Pair with an app binding so it only fires where you actually want auto-send — in a multi-line editor (TextEdit, VS Code, an email body) this just inserts a blank line. Only fires when the text was actually pasted; if Accessibility permission is missing and the text fell back to clipboard-only, no Return is sent.")
+                Text("Submits in chat and search boxes; inserts a blank line in editors. Pair with an app binding so it only fires where you want it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Toggle("Always end with a trailing space", isOn: $mode.appendTrailingSpace)
                     .onChange(of: mode.appendTrailingSpace) { _, _ in onChange() }
-                Text("Adds a single space after the delivered text so you can start the next dictation without typing a space first. Handy when piping into a terminal or chat where each utterance lands at the end of the line — normally the spacing adapts to the cursor and leaves no trailing space there.")
+                Text("Ends every dictation with a space, for back-to-back dictation in a terminal or chat.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    private var passSettingsSection: some View {
+    private var stepsSection: some View {
         let llmDisabled = state.settings.llmEngine == .none
 
-        return VStack(alignment: .leading, spacing: 16) {
-            // Pass 1
-            DisclosureGroup(isExpanded: $pass1Expanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Run Pass 1 (Formatting)", isOn: $mode.formattingPassEnabled)
-                        .onChange(of: mode.formattingPassEnabled) { _, _ in onChange() }
-                        .disabled(llmDisabled)
-                    Text("Adds punctuation, capitalisation, and converts spoken emojis into glyphs. Turning this off ships the raw Whisper transcript through your vocabulary substitutions and out — the same as Quick mode for this pass.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if mode.formattingPassEnabled {
-                        PromptCustomiser(
-                            description: "Punctuation, emojis, capitalisation. Runs on every dictation in this mode.",
-                            builtin: DictatorSettings.builtinFormattingPrompt,
-                            addendum: $mode.formattingPromptAddendum,
-                            override: $mode.formattingPromptOverride
-                        ) { onChange() }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Steps").font(.headline)
+                Spacer()
+                Menu {
+                    Button("Format") { addStep(.format(id: UUID())) }
+                    Button("Grammar") { addStep(.grammar(id: UUID())) }
+                    Button("Tighten") { addStep(.tighten(id: UUID())) }
+                    Button("Structure") { addStep(.structure(id: UUID())) }
+                    Divider()
+                    Button("Blank step") {
+                        addStep(DictationStep(id: UUID(), name: "New step", prompt: "", gate: .none))
                     }
+                } label: {
+                    Label("Add step", systemImage: "plus")
                 }
-                .padding(.top, 8)
-            } label: {
-                Text("Pass 1 · Formatting").font(.headline)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .controlSize(.small)
+                .disabled(llmDisabled)
             }
+            Text("Each step is one AI pass, run top to bottom on the transcript. The first step also sees the surrounding document. Most modes need just one.")
+                .font(.caption).foregroundStyle(.secondary)
 
-            // Pass 2
-            DisclosureGroup(isExpanded: $pass2Expanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Grammar pass", selection: $mode.grammarPassMode) {
-                        Text("Off").tag(GrammarPassMode.off)
-                        Text("Tidy grammar").tag(GrammarPassMode.tidy)
-                        Text("Tidy and tighten").tag(GrammarPassMode.tighten)
-                    }
-                    // Segmented, not the default pop-up menu: outside a Form the
-                    // automatic style falls back to a pop-up that renders with broken
-                    // low-contrast translucency under Liquid Glass and can't be clicked.
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .onChange(of: mode.grammarPassMode) { _, _ in onChange() }
-                    .disabled(llmDisabled)
-
-                    if mode.grammarPassMode == .tidy {
-                        Stepper(value: $mode.grammarPassMaxEditFraction, in: 0.05...0.40, step: 0.05) {
-                            HStack {
-                                Text("Discard if more than")
-                                Spacer()
-                                Text("\(Int(mode.grammarPassMaxEditFraction * 100))% of words change")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .onChange(of: mode.grammarPassMaxEditFraction) { _, _ in onChange() }
-                        .disabled(llmDisabled)
-                    }
-
-                    switch mode.grammarPassMode {
-                    case .off:
-                        Text("Skip the grammar pass. The formatter's output ships unchanged.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    case .tidy:
-                        Text("Fixes obvious grammar errors (contractions, agreement, duplicate words) while preserving your voice and filler words. The pass is rejected if too many words change.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    case .tighten:
-                        Text("Removes filler words (\"um\", \"uh\", \"like\", \"you know\"), false starts and self-corrections, and lightly tightens phrasing. Meaning is preserved; substantive rewrites are still rejected.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    if mode.grammarPassMode != .off {
-                        PromptCustomiser(
-                            description: "Fixes obvious grammar errors. Result is discarded if drift exceeds the threshold.",
-                            builtin: DictatorSettings.builtinGrammarPrompt,
-                            addendum: $mode.grammarPromptAddendum,
-                            override: $mode.grammarPromptOverride
-                        ) { onChange() }
-                    }
+            if mode.steps.isEmpty {
+                Text("No steps — dictations ship the raw transcript with your cues and dictionary applied, like Quick.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(Array($mode.steps.enumerated()), id: \.element.id) { index, $step in
+                    StepRow(
+                        step: $step,
+                        position: index + 1,
+                        isFirst: index == 0,
+                        canMoveUp: index > 0,
+                        canMoveDown: index < mode.steps.count - 1,
+                        onMoveUp: { moveStep(from: index, to: index - 1) },
+                        onMoveDown: { moveStep(from: index, to: index + 1) },
+                        onDelete: { deleteStep(step.id) },
+                        onChange: onChange
+                    )
                 }
-                .padding(.top, 8)
-            } label: {
-                Text("Pass 2 · Grammar").font(.headline)
-            }
-
-            // Pass 3
-            DisclosureGroup(isExpanded: $pass3Expanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Restructure long dictations into paragraphs / lists", isOn: $mode.structuralPassEnabled)
-                        .onChange(of: mode.structuralPassEnabled) { _, _ in onChange() }
-                        .disabled(llmDisabled)
-
-                    Stepper(value: $mode.structuralPassMinWords, in: 10...200, step: 5) {
-                        HStack {
-                            Text("Trigger when transcript reaches")
-                            Spacer()
-                            Text("\(mode.structuralPassMinWords) words")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .onChange(of: mode.structuralPassMinWords) { _, _ in onChange() }
-                    .disabled(!mode.structuralPassEnabled || llmDisabled)
-                    Text("Adds paragraph breaks and bullet lists for longer dictations. Word changes are rejected automatically.")
-                        .font(.caption).foregroundStyle(.secondary)
-
-                    if mode.structuralPassEnabled {
-                        PromptCustomiser(
-                            description: "Adds paragraph breaks and bullet lists.",
-                            builtin: DictatorSettings.builtinStructuralPrompt,
-                            addendum: $mode.structuralPromptAddendum,
-                            override: $mode.structuralPromptOverride
-                        ) { onChange() }
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                Text("Pass 3 · Structure").font(.headline)
             }
 
             if llmDisabled {
-                Text("LLM passes are disabled because **Formatting LLM → None** is selected in the Models tab. Turn LLM back on there to use Passes 1–3.")
+                Text("Steps are disabled because **Formatting LLM → None** is selected in the Models tab. Turn an LLM back on there to run them.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.10)))
             }
         }
+    }
+
+    // MARK: - Step actions
+
+    private func addStep(_ step: DictationStep) {
+        mode.steps.append(step)
+        onChange()
+    }
+
+    private func deleteStep(_ id: UUID) {
+        mode.steps.removeAll { $0.id == id }
+        onChange()
+    }
+
+    private func moveStep(from: Int, to: Int) {
+        guard mode.steps.indices.contains(from), mode.steps.indices.contains(to) else { return }
+        let step = mode.steps.remove(at: from)
+        mode.steps.insert(step, at: to)
+        onChange()
     }
 
     /// Opens NSOpenPanel filtered to `.application`, extracts the bundle ID,
@@ -3792,6 +3882,185 @@ private struct ModeDetail: View {
         if !mode.appBundleIDs.contains(bundleID) {
             mode.appBundleIDs.append(bundleID)
             onChange()
+        }
+    }
+}
+
+/// One editable step in a mode's pipeline: enable toggle, name, reorder / delete
+/// controls, an expandable prompt editor, and an "Advanced" disclosure for the
+/// gate / word-minimum / output-length knobs most users never touch.
+private struct StepRow: View {
+    @Binding var step: DictationStep
+    let position: Int
+    let isFirst: Bool
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onDelete: () -> Void
+    let onChange: () -> Void
+
+    @State private var expanded = false
+    @State private var advancedExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: $step.enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .onChange(of: step.enabled) { _, _ in onChange() }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(step.name.isEmpty ? "Step \(position)" : step.name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(step.enabled ? .primary : .secondary)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isFirst {
+                    Text("context")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .help("The first step also sees the text around the cursor and mined document terms.")
+                }
+                Button { onMoveUp() } label: { Image(systemName: "chevron.up") }
+                    .disabled(!canMoveUp)
+                Button { onMoveDown() } label: { Image(systemName: "chevron.down") }
+                    .disabled(!canMoveDown)
+                Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {
+                    HStack(spacing: 3) {
+                        Text("Edit").font(.caption)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .help(expanded ? "Collapse" : "Edit this step")
+                Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
+                    .help("Delete step")
+            }
+            .buttonStyle(.borderless)
+
+            if expanded { editor }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.06)))
+    }
+
+    private var subtitle: String {
+        var parts = [step.gate.label]
+        if let mw = step.minWords { parts.append("≥\(mw) words") }
+        if step.budget == .expanded { parts.append("long output") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Step name", text: $step.name)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: step.name) { _, _ in onChange() }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prompt").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                TextEditor(text: $step.prompt)
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(height: 140)
+                    .padding(4)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    .onChange(of: step.prompt) { _, _ in onChange() }
+                Text("The full instructions sent to the model for this step. Your Global AI instructions still apply on top.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
+            DisclosureGroup(isExpanded: $advancedExpanded) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Defaults suit most modes — change these only if you want finer control.")
+                        .font(.caption2).foregroundStyle(.secondary)
+
+                    // When the step runs
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Only run on longer dictations", isOn: Binding(
+                            get: { step.minWords != nil },
+                            set: { step.minWords = $0 ? (step.minWords ?? 30) : nil; onChange() }
+                        ))
+                        .toggleStyle(.switch)
+                        if let mw = step.minWords {
+                            Stepper(value: Binding(get: { mw }, set: { step.minWords = $0; onChange() }),
+                                    in: 10...200, step: 5) {
+                                Text("Skip unless the transcript reaches \(mw) words")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("Runs on every dictation in this mode.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // How much it may change the text
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Allow longer output", isOn: Binding(
+                            get: { step.budget == .expanded },
+                            set: { step.budget = $0 ? .expanded : .normal; onChange() }
+                        ))
+                        .toggleStyle(.switch)
+                        Text(step.budget == .expanded
+                             ? "The model may add line breaks and list markers — for a restructuring step."
+                             : "Keeps the output about the same length as the input.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    // How its output is checked
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Safety check")
+                            Spacer()
+                            Menu {
+                                ForEach(StepGate.allCases, id: \.self) { g in
+                                    Button(g.label) { step.gate = g; onChange() }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(step.gate.label).foregroundStyle(.secondary)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                        }
+                        Text(gateHelp).font(.caption).foregroundStyle(.secondary)
+                        if step.gate == .maxDrift {
+                            Stepper(value: $step.maxDriftFraction, in: 0.05...0.60, step: 0.05) {
+                                Text("Revert if more than \(Int(step.maxDriftFraction * 100))% of words change")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .onChange(of: step.maxDriftFraction) { _, _ in onChange() }
+                        }
+                    }
+                }
+                .padding(.top, 6)
+                .animation(.easeInOut(duration: 0.15), value: step.gate)
+                .animation(.easeInOut(duration: 0.15), value: step.minWords == nil)
+            } label: {
+                Text("Advanced").font(.caption.weight(.medium))
+            }
+        }
+    }
+
+    private var gateHelp: String {
+        switch step.gate {
+        case .anchorPreserve: return "Reverts if the model dropped too many of your words or answered instead of transcribing. Best for the first, formatting step."
+        case .maxDrift: return "Reverts if the rewrite changed more than the allowed fraction of words. Good for grammar and tightening."
+        case .wordsUnchanged: return "Reverts if any word changed — only line breaks and list markers may be added. For a restructuring step."
+        case .numbersOnly: return "Reverts only if a number changed. Otherwise accepts the output."
+        case .none: return "No check — whatever the model returns is used."
         }
     }
 }
@@ -3875,7 +4144,7 @@ private struct AssistantPromptPane: View {
                             if enabled { ScreenRecordingPermission.request() }
                             state.save()
                         }
-                    Text("When you trigger the assistant, takes one on-device snapshot of just the focused window and has Apple's on-device vision model describe what's in it — what the window shows, plus the visible text, names, and terms. That description is handed to your assistant so it can answer questions about what you're looking at ('describe this', 'what's this error'), act on what's on screen ('reply to this'), and spell what it sees — including images and apps that don't expose their text. Only the focused window is captured, never the whole screen; the picture only goes to the local vision model, never leaves this Mac, and is never stored. Needs Screen Recording permission (you'll be asked when you turn this on). The capture runs while you speak your instruction, so it usually adds no time.")
+                    Text("When you trigger the assistant, takes one on-device snapshot of just the focused window (never the whole screen) and has Apple's vision model describe it — the layout plus visible text, names, and terms — so the assistant can answer 'what's this error', act on 'reply to this', and spell what it sees, including images and apps that don't expose their text. On-device, never stored. Needs Screen Recording permission (you'll be asked when you turn this on). The snapshot runs while you speak, so it usually adds no time.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

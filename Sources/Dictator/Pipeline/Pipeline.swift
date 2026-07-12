@@ -70,7 +70,7 @@ final class Pipeline {
     /// for the rest of the pipeline run so mid-recording cycling (Step 2)
     /// affects only the current recording, and post-finish settings churn
     /// can't change pass behaviour underneath us.
-    private(set) var currentMode: DictationMode = .write
+    private(set) var currentMode: DictationMode = .standard
 
     /// Fired after every successful Assistant Mode turn so the host can show
     /// (or refresh) the result window. `surfaceWindow` is true when the
@@ -640,251 +640,158 @@ final class Pipeline {
         // Normally instant: the capture finished while we were transcribing.
         await resolveVisionTerms()
 
-        var formatted: String
-        let formatterLLM = currentLLM()
-        if formatterLLM == nil || !currentMode.formattingPassEnabled {
-            // No LLM engine, OR the active mode opts out of Pass 1 (e.g. Quick).
-            // Ship Whisper's raw transcript through the dictionary pass and out.
-            // Skips state .formatting so the HUD doesn't flash a "Formatting…"
-            // frame that never does anything.
-            formatted = trimmed
-            inFlight.formatted = nil
-        } else if Self.looksLikeQuestion(trimmed) {
-            // Question-shaped input is the highest-risk failure mode for Pass 1 — it's
-            // where the formatter is tempted to answer the user instead of transcribing
-            // them. Modern Whisper already capitalises and punctuates well (including
-            // adding "?"), so skipping Pass 1 here costs only minor punctuation polish
-            // while sidestepping the whole class of failure. The Grammar and Structure
-            // passes still run; their word-sequence validators catch any drift.
-            formatted = trimmed
-            inFlight.formatted = nil
-        } else if Self.wordSequence(trimmed).isEmpty {
-            // No letters or numbers left after the cue substitutions — the
-            // dictation was pure emoji/punctuation ("fire emoji" → "🔥.").
-            // There's nothing for the formatter to do, and a words-free input
-            // is exactly where small models narrate instead of echoing ("The
-            // text provided appears to be a simple exclamation. Here is the
-            // formatted version: …"). Ship it as-is.
-            formatted = trimmed
-            inFlight.formatted = nil
-        } else {
-            state = .formatting
-            // Surrounding-document context (captured at hotkey press) rides
-            // in on the system prompt so the formatter spells names and
-            // terminology the way the document does. The dictation itself
-            // stays the only <<<>>> data block.
-            var formattingPrompt = currentMode.effectiveFormattingPrompt(global: settings.globalPromptAddendum)
+        // The mode's LLM pipeline is an ordered list of steps, each transforming
+        // the previous step's output. With no engine (LLM = None) or no steps
+        // (Quick), the transcript flows straight through the deterministic
+        // vocabulary/diacritic passes and out.
+        let llm = currentLLM()
+        let steps = (llm == nil) ? [] : currentMode.steps.filter { $0.enabled }
+
+        var text = trimmed
+        var warning: String? = nil
+        var deterministicApplied = false
+
+        // The user dictionary + mined document-spelling restore. Deterministic,
+        // run ONCE right after the first LLM step (or immediately, if the mode
+        // has no steps) so later steps see the corrected text — exactly where
+        // these sat in the old fixed pipeline (after Pass 1, before grammar).
+        func applyDeterministicMidPasses() {
+            guard !deterministicApplied else { return }
+            deterministicApplied = true
+            let before = text
+            if currentMode.vocabularyEnabled {
+                text = Vocabulary.apply(VocabularyStore.shared.entries, to: text)
+            }
+            if let context = combinedContext(), !context.documentTerms.isEmpty {
+                let restored = DocumentTerms.restoreDiacritics(in: text, terms: context.documentTerms)
+                if restored != text {
+                    NSLog("[Dictator] Restored document spelling from mined terms.")
+                    text = restored
+                }
+            }
+            if text != before { inFlight.dictionaryCorrected = text }
+        }
+
+        for (index, step) in steps.enumerated() {
+            if Task.isCancelled { return }
+            let isFirst = index == 0
+
+            // Skip conditions, preserving the old per-pass guards:
+            //  • pure emoji/punctuation (no words) — nothing to transform, and
+            //    small models narrate instead of echoing;
+            //  • question-shaped input, FIRST step only — Whisper already
+            //    punctuates questions and the formatter is tempted to answer;
+            //  • a per-step minimum word count (the old Structure trigger).
+            let wordsFree = Self.wordSequence(text).isEmpty
+            let questionSkip = isFirst && Self.looksLikeQuestion(text)
+            let belowMinWords = step.minWords.map { Self.wordSequence(text).count < $0 } ?? false
+            if wordsFree || questionSkip || belowMinWords {
+                if isFirst { applyDeterministicMidPasses() }
+                continue
+            }
+
+            state = Self.hudState(for: step, isFirst: isFirst)
+
+            // Global instructions always apply. Surrounding-document context
+            // rides on the FIRST step's prompt only (names/terminology), same
+            // as the old Pass 1; the dictation stays the only <<<>>> data block.
+            var prompt = DictatorSettings.appendingGlobal(step.prompt, settings.globalPromptAddendum)
             var contextInjected = false
-            let promptContext = combinedContext()
-            if let context = promptContext, context.hasPromptMaterial {
-                formattingPrompt += "\n\n" + context.formatterPromptBlock
+            if isFirst, let context = combinedContext(), context.hasPromptMaterial {
+                prompt += "\n\n" + context.formatterPromptBlock
                 contextInjected = true
-                NSLog("[Dictator] Pass 1 running with document context (%d/%d chars, %d terms).",
-                      context.textBefore.count, context.textAfter.count, context.documentTerms.count)
-            } else {
-                NSLog("[Dictator] Pass 1 running without document context (%@).",
-                      promptContext == nil ? "no capture" : "field empty")
+                NSLog("[Dictator] Step 1 (%@) running with document context (%d/%d chars, %d terms).",
+                      step.name, context.textBefore.count, context.textAfter.count, context.documentTerms.count)
             }
+
+            let produced: String
             do {
-                formatted = try await formatterLLM!.format(
-                    text: trimmed,
-                    systemPrompt: formattingPrompt
-                )
+                produced = try await llm!.runStep(text: text, systemPrompt: prompt, budget: step.budget)
             } catch {
-                // Fallback: ship raw transcript if LLM fails
-                await finish(text: trimmed, warning: "LLM failed: \(error.localizedDescription)")
-                return
+                // Engine failure (not loaded, etc.) will hit every later step
+                // too — stop here and ship what we have with a note.
+                warning = "LLM failed: \(error.localizedDescription)"
+                if isFirst { applyDeterministicMidPasses() }
+                break
             }
-            // Seam-echo guard: with document context in the prompt the model
-            // sometimes glues the context tail onto the front of its output
-            // ("I think we " before the caret → output begins "we should…").
-            // Deterministic strip; runs before the empty check so a pure-echo
-            // output falls through to the raw-transcript fallback below.
-            if contextInjected, let context = inFlight.context {
-                let stripped = Self.stripContextEcho(formatted, raw: trimmed, context: context)
-                if stripped != formatted {
-                    NSLog("[Dictator] Pass 1 echoed document context at the seam — stripped the echoed words.")
-                    formatted = stripped
+
+            var candidate = produced
+            // Seam-echo guard on the context-bearing first step: the model
+            // sometimes glues the context tail onto the front of its output.
+            if isFirst, contextInjected, let context = inFlight.context {
+                let stripped = Self.stripContextEcho(candidate, raw: text, context: context)
+                if stripped != candidate {
+                    NSLog("[Dictator] Step 1 echoed document context at the seam — stripped the echoed words.")
+                    candidate = stripped
                 }
             }
-            // Pass 1 produced nothing — fall back to the raw transcript silently. Modern
-            // Whisper already produces capitalised, punctuated text, so the user normally
-            // can't tell the difference between LLM-formatted and Whisper-raw output.
-            if formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                formatted = trimmed
-                inFlight.formatted = nil
-            } else if !Self.passOnePreservesContent(raw: trimmed, formatted: formatted) {
-                if contextInjected {
-                    // Context-bearing runs get the gate for real: document
-                    // text in the prompt adds the failure mode of the model
-                    // transcribing the *context* instead of the dictation,
-                    // and the anchor/length check is precisely the detector
-                    // for that. Raw Whisper output is the safe landing.
-                    NSLog("[Dictator] Pass 1 anchor check failed on a context-bearing run — reverting to raw transcript.")
-                    formatted = trimmed
-                    inFlight.formatted = nil
-                } else {
-                    // Gate disabled for context-free runs: the anchor-word
-                    // check used to revert to the raw transcript when
-                    // "answered the question" drift was detected, but short
-                    // transcripts trip it with even one or two legitimate
-                    // edits. Log the would-be result so we can pick a
-                    // sensible threshold later, then accept unconditionally.
-                    // Empty-output protection above still catches actual
-                    // broken returns.
-                    NSLog("[Dictator] Pass 1 anchor check below threshold — accepted anyway (gate disabled).")
-                    inFlight.formatted = formatted
-                }
+
+            if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Empty output → keep the previous text, skip this step.
+                NSLog("[Dictator] Step '%@' returned empty — kept previous text.", step.name)
+            } else if Self.passesGate(step, input: text, output: candidate) {
+                text = candidate
+                recordStageOutput(step: step, isFirst: isFirst, output: candidate)
             } else {
-                inFlight.formatted = formatted
+                NSLog("[Dictator] Step '%@' failed its '%@' gate — reverted.", step.name, step.gate.label)
             }
-        }
 
-        // User dictionary: deterministic case-insensitive whole-word substitutions
-        // applied right after the formatter pass. Subsequent passes (grammar,
-        // structure) preserve words, so corrections survive intact. The list
-        // itself is global; the per-mode toggle decides whether to apply it
-        // (a "raw" mode opts out so words pass through untouched).
-        var corrected = formatted
-        if currentMode.vocabularyEnabled {
-            corrected = Vocabulary.apply(VocabularyStore.shared.entries, to: corrected)
+            if isFirst { applyDeterministicMidPasses() }
         }
-        // Document-spelling restoration: when the focused document writes a
-        // proper noun with diacritics ("Siobhán") and the transcript carries
-        // the accent-stripped form, restore the document's spelling. In
-        // effect a per-dictation vocabulary mined from the document at
-        // press time — deterministic, so it works in every mode (including
-        // Quick and the question-skip path) without an LLM. Runs after the
-        // user dictionary so explicit user mappings keep precedence.
-        if let context = combinedContext(), !context.documentTerms.isEmpty {
-            let restored = DocumentTerms.restoreDiacritics(in: corrected, terms: context.documentTerms)
-            if restored != corrected {
-                NSLog("[Dictator] Restored document spelling from mined terms.")
-                corrected = restored
-            }
-        }
-        if corrected != formatted { inFlight.dictionaryCorrected = corrected }
-
+        // Covers empty-step modes (Quick / LLM None) and the all-skipped case.
+        applyDeterministicMidPasses()
         if Task.isCancelled { return }
 
-        // Optional grammar pass: fixes obvious grammar errors. Validated by
-        // word-level edit distance; reverted to the previous output if it strays too far.
-        let tidied = await maybeFixGrammar(formatted: corrected)
-        if Task.isCancelled { return }
-
-        // Optional structural pass: paragraph breaks and bullet lists for long
-        // dictations. Validated by strict word-sequence equality (no word changes).
-        let final = await maybeRestructure(formatted: tidied)
-        if Task.isCancelled { return }
-
-        let warning = pendingNote
+        let note = warning ?? pendingNote
         pendingNote = nil
-        await finish(text: final, warning: warning)
+        await finish(text: text, warning: note)
     }
 
-    private func maybeFixGrammar(formatted: String) async -> String {
-        guard currentMode.grammarPassMode != .off else { return formatted }
-        guard let llm = currentLLM() else { return formatted }
-        // Words-free input (pure emoji/punctuation, e.g. "fire emoji" → "🔥.")
-        // has no grammar to fix, and with the drift gate disabled a narrating
-        // model would ship its commentary. Same skip as Pass 1's.
-        guard !Self.wordSequence(formatted).isEmpty else { return formatted }
-        state = .fixingGrammar
-        do {
-            let tidied = try await llm.tidyGrammar(
-                text: formatted,
-                systemPrompt: currentMode.effectiveGrammarPrompt(global: settings.globalPromptAddendum)
-            )
-            // Empty output usually means the model echoed the wrapping and the
-            // post-processor collapsed it to nothing. Treat as failure.
-            guard !tidied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return formatted
-            }
-            // Numbers must survive grammar untouched. The general drift gate
-            // below is disabled (too many false positives on short inputs),
-            // but number-mangling is a narrow, false-positive-free invariant:
-            // grammar fixes never need to change a digit. Reverting here keeps
-            // Parakeet's "3 to 4x" from being spelled out to "three to four
-            // times" — damage SpokenCues can't repair downstream.
-            if !Self.numbersPreserved(formatted, tidied) {
-                NSLog("[Dictator] Pass 2 changed a number (e.g. spelled a digit out or rewrote a multiplier) — reverting to preserve the transcript's numbers.")
-                return formatted
-            }
-            // Gate disabled. Previously this branch enforced a
-            // word-Levenshtein drift ceiling (0.15 for `.tidy`, 0.30
-            // for `.tighten` with fillers stripped) and reverted to
-            // `formatted` if exceeded. In practice the ceiling was
-            // rejecting legitimate cleanups on short inputs — losing
-            // two anchors out of ten reads as 20% drift even when the
-            // pass did exactly what it was meant to. We now log the
-            // measured drift for observability and accept the output
-            // unconditionally. Empty-output revert above still applies.
-            let drift: Double
-            switch currentMode.grammarPassMode {
-            case .off:
-                drift = 0 // unreachable — short-circuit above
-            case .tidy:
-                drift = Self.wordEditFraction(from: formatted, to: tidied)
-            case .tighten:
-                drift = Self.wordEditFractionStrippingFillers(from: formatted, to: tidied)
-            }
-            NSLog("[Dictator] Pass 2 drift=\(String(format: "%.3f", drift)) — accepted (gate disabled).")
-            inFlight.tidied = tidied
-            return tidied
-        } catch {
-            return formatted
+    /// Records a step's accepted output into the legacy history stage fields so
+    /// the History pane keeps showing the dictation's journey. Best-effort for
+    /// arbitrary step lists: the first step maps to "formatted", an expanded
+    /// (structure) step to "restructured", anything else to "tidied".
+    private func recordStageOutput(step: DictationStep, isFirst: Bool, output: String) {
+        if isFirst {
+            inFlight.formatted = output
+        } else if step.budget == .expanded {
+            inFlight.restructured = output
+        } else {
+            inFlight.tidied = output
         }
     }
 
-    private func maybeRestructure(formatted: String) async -> String {
-        guard currentMode.structuralPassEnabled else { return formatted }
-        guard let llm = currentLLM() else { return formatted }
-        let wordCount = Self.wordSequence(formatted).count
-        guard wordCount >= currentMode.structuralPassMinWords else { return formatted }
+    /// Maps a step to one of the existing HUD states so the panel keeps its
+    /// per-stage icon/label without a new enum case: expanded-budget steps read
+    /// as restructuring, the first step as formatting, the rest as grammar.
+    static func hudState(for step: DictationStep, isFirst: Bool) -> PipelineState {
+        if step.budget == .expanded { return .restructuring }
+        return isFirst ? .formatting : .fixingGrammar
+    }
 
-        state = .restructuring
-        do {
-            let restructured = try await llm.restructure(
-                text: formatted,
-                systemPrompt: currentMode.effectiveStructuralPrompt(global: settings.globalPromptAddendum)
-            )
-            guard !restructured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return formatted
-            }
-            // Same number-preservation invariant as Pass 2: the structural
-            // pass adds bullets/breaks and must never touch a digit. Revert if
-            // it spelled one out or rewrote a multiplier.
-            if !Self.numbersPreserved(formatted, restructured) {
-                NSLog("[Dictator] Pass 3 changed a number — reverting to preserve the transcript's numbers.")
-                return formatted
-            }
-            // Gate disabled. Previously enforced strict word-sequence
-            // equality — the structural pass's contract was "add
-            // bullets/breaks, never change words". With the gate off
-            // that contract is no longer machine-checked; if the
-            // model invents content here, it lands. Logged so we can
-            // see when it happens.
-            if Self.wordSequence(restructured) != Self.wordSequence(formatted) {
-                NSLog("[Dictator] Pass 3 word sequence changed — accepted anyway (gate disabled).")
-            }
-            inFlight.restructured = restructured
-            return restructured
-        } catch {
-            return formatted
+    /// Runs a step's deterministic post-check. On `false` the pipeline discards
+    /// the step's output and carries the previous text forward. Number
+    /// preservation is folded into the rewriting gates (drift / structure)
+    /// because small models like to prose-ify digits and SpokenCues can't undo
+    /// that downstream.
+    static func passesGate(_ step: DictationStep, input: String, output: String) -> Bool {
+        switch step.gate {
+        case .none:
+            return true
+        case .numbersOnly:
+            return numbersPreserved(input, output)
+        case .anchorPreserve:
+            return passOnePreservesContent(raw: input, formatted: output)
+        case .maxDrift:
+            guard numbersPreserved(input, output) else { return false }
+            return wordEditFractionStrippingFillers(from: input, to: output) <= step.maxDriftFraction
+        case .wordsUnchanged:
+            guard numbersPreserved(input, output) else { return false }
+            return wordSequence(output) == wordSequence(input)
         }
     }
 
-    /// Fraction of words that differ between two outputs, used to decide whether the
-    /// grammar pass stayed inside its lane. 0 = identical, 1 = totally different.
-    private static func wordEditFraction(from a: String, to b: String) -> Double {
-        let aw = wordSequence(a)
-        let bw = wordSequence(b)
-        let n = max(aw.count, bw.count)
-        guard n > 0 else { return 0 }
-        return Double(wordLevenshtein(aw, bw)) / Double(n)
-    }
-
-    /// Drift measure for the `.tighten` mode. We strip known speech fillers
+    /// Drift measure used by the `.maxDrift` gate. We strip known speech fillers
     /// and articles from BOTH sides before computing Levenshtein, so the
     /// validator doesn't punish the model for dropping ums, false starts, or
     /// adding/removing articles — those are the changes we want it to make.

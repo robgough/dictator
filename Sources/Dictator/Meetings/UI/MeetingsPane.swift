@@ -32,7 +32,7 @@ struct MeetingsPane: View {
                         Text("Meetings is an early preview")
                             .font(.headline)
                     }
-                    Text("Record a call, get a transcript split by speaker, and have notes written for you — all on-device. It's early days and we're not yet sure how reliable it is, so expect rough edges. You're very welcome to play with it; feedback (good or bad) is hugely appreciated at hello@robgough.net.")
+                    Text("Record a call, get a transcript split by speaker, and have notes written for you — all on-device. It's early days, so expect rough edges. Feedback, good or bad, is hugely appreciated at hello@robgough.net.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +104,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Storage")
             } footer: {
-                SectionFootnote("Meeting audio is large (~800 MB/hour across both tracks); transcripts are tiny. \"Delete audio\" prunes the .caf files but keeps the transcript, so you can still search older meetings. \"Delete entire meeting\" drops everything. Both sweeps run when the Meetings window opens.")
+                SectionFootnote("Meeting audio is large (~800 MB/hour across both tracks); transcripts are tiny. \"Delete audio\" prunes the .caf files but keeps the transcript, so older meetings stay searchable. \"Delete entire meeting\" drops everything. Both sweeps run when the Meetings window opens.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -144,7 +144,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                SectionFootnote("Notes are written by your selected MLX formatting model (Settings → Models) — capable models only; the smallest are turned off here, and Apple's on-device model is too small. Tuned for \(ModelCatalog.meetingsRecommendedLLMName); others work but can be weaker on long calls. Notes aren't automatic: after a meeting you get the transcript and press Generate once you've checked who said what. The default style shapes the notes for that meeting type — Auto-detect lets the model decide; override per meeting via Re-run ▾.")
+                SectionFootnote("Notes are written by your selected MLX formatting model (Settings → Models) — capable models only; the smallest are off here and Apple's on-device model is too small. Tuned for \(ModelCatalog.meetingsRecommendedLLMName); others work but can be weaker on long calls. Notes aren't automatic: after a meeting, check who said what and press Generate. The default style shapes the notes — Auto-detect lets the model decide; override per meeting via Re-run ▾.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -183,7 +183,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Coach")
             } footer: {
-                SectionFootnote("The coach watches how you run a meeting as it records — live talk balance and pace, occasional one-line nudges on the island, a key-points checklist, and a private written report afterwards. Everything is computed on this Mac, visible only to you (never in the notes or exports), and turning the coach off removes all of it.")
+                SectionFootnote("The coach watches how you run a meeting — live talk balance and pace, occasional one-line nudges on the island, a key-points checklist, and a private written report afterwards. Computed on this Mac and visible only to you (never in the notes or exports); turning the coach off removes all of it.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -195,7 +195,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Shared screens")
             } footer: {
-                SectionFootnote("Captures still frames of shared content — slides, demos — keeping only the ones that change, as images in the meeting's folder. Scoped to the meeting window only; your other windows and screens are never seen. Needs Screen Recording permission (a purple indicator shows while running). You can also toggle capture per-meeting from the Shared screen panel. Frames stay on this Mac and are deleted with the meeting.")
+                SectionFootnote("Captures still frames of shared content — slides, demos — keeping only the ones that change, as images in the meeting's folder. Scoped to the meeting window only; your other windows and screens are never seen. Needs Screen Recording permission (a purple indicator shows while running); you can also toggle capture per meeting from the Shared screen panel. Frames stay on this Mac and are deleted with the meeting.")
             }
             .disabled(!effectivelyEnabled)
 
@@ -214,12 +214,12 @@ struct MeetingsPane: View {
             } header: {
                 Text("Note styles")
             } footer: {
-                SectionFootnote("Each style is a template: ALL-CAPS lines name the sections, and the text under each tells the model what belongs there. Built-in styles can't be edited, but Duplicate gives you an editable copy. Deleting a style is safe — meetings that used it keep their notes.")
+                SectionFootnote("Each style is a template: ALL-CAPS lines name the sections, and the text under each tells the model what belongs there. Built-in styles can't be edited, but Duplicate makes an editable copy. Deleting a style is safe — meetings that used it keep their notes.")
             }
             .disabled(!effectivelyEnabled)
 
             Section {
-                Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model has been downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
+                Text("Your microphone is always tagged as you. The other side of the call is split into per-speaker turns once the diarization model is downloaded (Settings → Models → Diarization). Click a speaker name on any meeting to rename them or change their colour.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {

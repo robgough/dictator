@@ -80,6 +80,19 @@ protocol LLMEngine: AnyObject {
 }
 
 extension LLMEngine {
+    /// Runs one dictation step. A step is just a system prompt plus a token
+    /// budget, so this dispatches to the existing pass methods by budget tier:
+    /// `.normal` uses the tight formatter cap (1.20× + 8), `.expanded` uses the
+    /// generous restructuring cap (1.60× + 32) for steps that legitimately grow
+    /// the text with list markers and breaks. The per-step gate in Pipeline does
+    /// the validation, uniformly across engines.
+    func runStep(text: String, systemPrompt: String, budget: StepBudget) async throws -> String {
+        switch budget {
+        case .normal:   return try await format(text: text, systemPrompt: systemPrompt)
+        case .expanded: return try await restructure(text: text, systemPrompt: systemPrompt)
+        }
+    }
+
     /// Convenience overload for callers that have no surrounding-document
     /// context to supply — the Meetings pipeline (speaker naming, notes,
     /// summaries) drives the assistant LLM as a plain text transform. Forwards
