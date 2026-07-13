@@ -1190,7 +1190,8 @@ final class Pipeline {
             joinContext = await Task.detached(priority: .userInitiated) {
                 AXContextReader.capture(
                     maxBefore: AXContextReader.joinBeforeCap,
-                    maxAfter: AXContextReader.joinAfterCap
+                    maxAfter: AXContextReader.joinAfterCap,
+                    requireFieldAccurate: true
                 )
             }.value
         }

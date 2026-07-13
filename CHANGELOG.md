@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictating into browser comment and chat boxes no longer inserts a stray space at the start of the text — the smart join now verifies the caret snapshot actually describes the focused field, and stands down when the browser reports page text instead
 - The Settings window is rebuilt on native Mac chrome, like System Settings: page titles and controls live in a real toolbar (the Models tabs, the Modes add/back buttons with rename-in-place for the mode name, Dictionary search/sort/add, and the History count and Clear button), the close buttons sit centred in the full-height header, and the sidebar uses the standard material without rendering artifacts
 - Opening a mode in Settings → Modes now slides in like a standard navigation page, with a back button in the toolbar
 - The Settings sidebar now uses the standard translucent macOS sidebar material and extends behind the titlebar, so the window reads like System Settings instead of a flat gray panel (also fixes the sidebar occasionally rendering with the wrong background)

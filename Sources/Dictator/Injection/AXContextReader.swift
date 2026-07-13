@@ -170,15 +170,24 @@ enum AXContextReader {
     /// `mineTerms` additionally sweeps a much wider document slice for
     /// distinctive terminology (see `DocumentTerms`) — wanted at press time
     /// for the formatter, pointless for the delivery-time join snapshot.
-    static func capture(maxBefore: Int, maxAfter: Int, mineTerms: Bool = false) -> InsertionContext? {
-        captureDetailed(maxBefore: maxBefore, maxAfter: maxAfter, mineTerms: mineTerms).context
+    ///
+    /// `requireFieldAccurate` demands the ranged reads describe the exact
+    /// field the paste will land in — set by the delivery-time join snapshot,
+    /// whose character-level spacing/casing decisions go visibly wrong on a
+    /// misaligned read. The prompt capture doesn't set it: page-level text is
+    /// still legitimate spelling/terminology context.
+    static func capture(maxBefore: Int, maxAfter: Int, mineTerms: Bool = false,
+                        requireFieldAccurate: Bool = false) -> InsertionContext? {
+        captureDetailed(maxBefore: maxBefore, maxAfter: maxAfter, mineTerms: mineTerms,
+                        requireFieldAccurate: requireFieldAccurate).context
     }
 
     /// Like `capture`, but also returns a short, user-facing reason when it
     /// comes back without text — surfaced in the assistant result window's
     /// context banner so an empty read is debuggable rather than a silent
     /// "no cursor text". `reason` is nil on a successful read.
-    static func captureDetailed(maxBefore: Int, maxAfter: Int, mineTerms: Bool = false)
+    static func captureDetailed(maxBefore: Int, maxAfter: Int, mineTerms: Bool = false,
+                                requireFieldAccurate: Bool = false)
         -> (context: InsertionContext?, reason: String?)
     {
         guard AXIsProcessTrusted() else {
@@ -262,6 +271,12 @@ enum AXContextReader {
             return (nil, "this field doesn't answer text reads")
         }
 
+        if requireFieldAccurate,
+           !rangedReadsLookFieldAccurate(element, before: before ?? "", after: after ?? "") {
+            NSLog("[Dictator] Context capture: ranged reads don't match the focused element's own value — not field-accurate.")
+            return (nil, "this field's text coordinates are unreliable")
+        }
+
         var documentTerms: [String] = []
         if mineTerms {
             let wideBeforeStart = max(0, selection.location - mineBeforeCap)
@@ -276,6 +291,35 @@ enum AXContextReader {
         NSLog("[Dictator] Context capture: %d chars before / %d chars after caret (selection length %d, %d document terms).",
               before?.count ?? 0, after?.count ?? 0, selection.length, documentTerms.count)
         return (InsertionContext(textBefore: before ?? "", textAfter: after ?? "", documentTerms: documentTerms), nil)
+    }
+
+    /// Whether the ranged reads describe the focused field itself, as opposed
+    /// to some larger container. Chromium answers `kAXSelectedTextRange` /
+    /// `kAXStringForRange` in *page* coordinates when focus sits in a
+    /// contenteditable editor (browser comment boxes, chat inputs), so "text
+    /// before the caret" comes back as surrounding page prose even when the
+    /// input itself is empty — and the join then prepends a spurious leading
+    /// space to avoid "gluing onto" a word that isn't actually next to the
+    /// caret. Cross-check against the element's own `kAXValue`: text that
+    /// genuinely surrounds the caret must appear in the field's value. The
+    /// first/last character of each read is dropped before the containment
+    /// check so a cap boundary that split a grapheme can't cause a false
+    /// mismatch. Elements that expose no string value can't be verified —
+    /// trust only the classic per-field text roles there.
+    private static func rangedReadsLookFieldAccurate(_ element: AXUIElement, before: String, after: String) -> Bool {
+        var valueRef: CFTypeRef?
+        let valueErr = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
+        if valueErr == .success, let value = valueRef as? String {
+            let beforeNeedle = String(before.dropFirst())
+            let afterNeedle = String(after.dropLast())
+            if !beforeNeedle.isEmpty, !value.contains(beforeNeedle) { return false }
+            if !afterNeedle.isEmpty, !value.contains(afterNeedle) { return false }
+            return true
+        }
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+        return role == (kAXTextFieldRole as String) || role == (kAXTextAreaRole as String)
     }
 
     /// `kAXStringForRange` — the primitive that reads a substring without
