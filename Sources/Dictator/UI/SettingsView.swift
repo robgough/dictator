@@ -5,112 +5,57 @@ import AVFoundation
 import MLX
 import Sparkle
 
-struct SettingsView: View {
-    let updater: SPUUpdater
-
-    @Environment(AppState.self) private var state
-
-    // Sidebar selection. Optional because `List`'s single-selection binding is
-    // `SelectionValue?`; we coalesce to `.general` when rendering the detail so
-    // the pane is never blank.
-    @State private var selection: SettingsSection? = .general
+/// The sidebar list, hosted by `SettingsWindowController` inside a real
+/// `NSSplitViewItem(sidebarWithViewController:)` — the split item provides
+/// the source-list material and full-height layout natively, so the list
+/// hides its own background rather than hand-painting a blur.
+struct SettingsSidebar: View {
+    @Bindable var shell: SettingsShellModel
 
     var body: some View {
-        // Built as a plain HStack rather than a `NavigationSplitView`: that
-        // container mis-propagates safe area on this macOS (rdar://122947424,
-        // the same bug that forced live meeting recording out of a split view),
-        // which renders the sidebar rows invisible and lets the detail column's
-        // inner lists overflow the window unbounded. A sidebar-styled `List`
-        // beside an explicitly-bounded detail gives the same System Settings
-        // look without tripping it.
-        HStack(spacing: 0) {
-            List(SettingsSection.allCases, selection: $selection) { section in
-                Label {
-                    Text(section.title)
-                } icon: {
-                    SettingsSidebarIcon(systemImage: section.systemImage, tint: section.tint)
-                }
-            }
-            .listStyle(.sidebar)
-            // Outside a NavigationSplitView, `.listStyle(.sidebar)` only
-            // *sometimes* resolves its own vibrancy backing — the source-list
-            // material detection is timing-dependent in a plain HStack, which
-            // is why the sidebar intermittently rendered as a flat opaque
-            // fill. Hide the list's own background entirely and paint the
-            // real sidebar material ourselves so it's deterministic.
-            .scrollContentBackground(.hidden)
-            .frame(width: 215)
-            .background {
-                VisualEffectBlur(material: .sidebar,
-                                 blendingMode: .behindWindow,
-                                 state: .followsWindowActiveState)
-                    // Run the material up behind the (transparent — see
-                    // SettingsWindowConfigurator) titlebar and traffic
-                    // lights so the top reads as one surface, like System
-                    // Settings.
-                    .ignoresSafeArea()
-                    // The sidebar/detail hairline lives on the material so
-                    // it also spans the titlebar strip; a sibling `Divider()`
-                    // in the HStack would stop at the safe-area edge.
-                    .overlay(alignment: .trailing) {
-                        Rectangle()
-                            .fill(.separator)
-                            .frame(width: 1)
-                    }
-            }
-
-            detailColumn(for: selection ?? .general)
-                // Bound the detail to the window so panes whose body is a `List`
-                // (Input device priority, Modes) scroll internally instead of
-                // growing to their full intrinsic height and pushing the window
-                // open.
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        }
-        // The `Settings` scene builds its window without the `.resizable` style
-        // mask and ignores `.windowResizability`, so neither the flexible content
-        // frame nor the scene modifier makes it draggable. Reach the NSWindow and
-        // add the mask directly.
-        .background(SettingsWindowConfigurator())
-        .environment(state)
-    }
-
-    /// The detail column for a section: a fixed System-Settings-style page title
-    /// at the top (it sat empty before), then the pane content scrolling below.
-    @ViewBuilder
-    private func detailColumn(for section: SettingsSection) -> some View {
-        // Modes manages its own title + back navigation via a NavigationStack,
-        // so it skips the fixed page-title wrapper the other panes use.
-        if section == .modes {
-            detail(for: section)
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
+        List(SettingsSection.allCases, selection: Binding(
+            get: { shell.section as SettingsSection? },
+            // Coalesce: `List`'s selection binding is optional, but the
+            // detail pane should never go blank.
+            set: { shell.section = $0 ?? shell.section }
+        )) { section in
+            Label {
                 Text(section.title)
-                    .font(.system(size: 22, weight: .bold))
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-                    .padding(.bottom, 6)
-                detail(for: section)
+            } icon: {
+                SettingsSidebarIcon(systemImage: section.systemImage, tint: section.tint)
             }
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
+}
 
-    @ViewBuilder
-    private func detail(for section: SettingsSection) -> some View {
-        switch section {
-        // Grouped-`Form` panes supply their own section insets — no extra
-        // padding, they sit edge-to-edge in the detail column like System
-        // Settings. The list / master-detail / card panes relied on the old
-        // TabView's outer `.padding(20)`, so they get it back here.
-        case .general:    GeneralPane()
-        case .input:      InputPane().settingsDetailPadding()
-        case .models:     ModelsPane()
-        case .modes:      ModesPane()
-        case .meetings:   MeetingsPane()
-        case .assistant:  AssistantPromptPane().settingsDetailPadding()
-        case .dictionary: DictionaryPane().settingsDetailPadding()
-        case .history:    HistoryPane().settingsDetailPadding()
-        case .about:      AboutPane(updater: updater).settingsDetailPadding()
+/// The detail column, hosted by `SettingsWindowController`. Page titles and
+/// per-pane controls live in the window's real toolbar (see SettingsShell),
+/// so this is content only.
+struct SettingsDetailRoot: View {
+    let shell: SettingsShellModel
+    let updater: SPUUpdater
+
+    var body: some View {
+        Group {
+            switch shell.section {
+            // Grouped-`Form` panes supply their own section insets — no extra
+            // padding, they sit edge-to-edge in the detail column like System
+            // Settings. The list / master-detail / card panes relied on the old
+            // TabView's outer `.padding(20)`, so they get it back here.
+            case .general:    GeneralPane()
+            case .input:      InputPane().settingsDetailPadding()
+            case .models:     ModelsPane(shell: shell)
+            case .modes:      ModesPane(shell: shell)
+            case .meetings:   MeetingsPane()
+            case .assistant:  AssistantPromptPane().settingsDetailPadding()
+            case .dictionary: DictionaryPane(shell: shell)
+            case .history:    HistoryPane(shell: shell)
+            case .about:      AboutPane(updater: updater).settingsDetailPadding()
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -199,45 +144,6 @@ private extension View {
     /// the old TabView's `.padding(20)`.
     func settingsDetailPadding() -> some View {
         padding(20)
-    }
-}
-
-/// Inserts `.resizable` into the host `Settings` window's style mask, and
-/// restyles the titlebar (transparent, title hidden, full-size content view)
-/// for the System-Settings-style sidebar look. SwiftUI's `Settings` scene
-/// creates a fixed-size window and offers no API for either (`.windowResizability`
-/// is ignored), so we reach the `NSWindow` once it's attached and flip the bits
-/// ourselves. Lives as a zero-size background view; the async hop is because
-/// `window` is nil until the view is in the hierarchy.
-private struct SettingsWindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async { configure(view.window) }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { configure(nsView.window) }
-    }
-
-    private func configure(_ window: NSWindow?) {
-        guard let window else { return }
-        window.styleMask.insert(.resizable)
-        // NB: do NOT set window.contentMinSize here — it fights SwiftUI's
-        // content-size resizing and froze the window. The frame's minWidth/Height
-        // in DictatorApp already floors it.
-
-        // System-Settings-style top: no bold "Dictator Settings" text, a
-        // transparent titlebar, and `.fullSizeContentView` so the content view
-        // (and the sidebar's material, which ignores the top safe area) runs
-        // up behind the traffic lights. SwiftUI still lays the HStack out
-        // below the titlebar via the window's contentLayoutRect safe-area
-        // inset, so rows and the detail page title don't slide under it.
-        // The title string itself stays set (Mission Control, App Exposé).
-        window.styleMask.insert(.fullSizeContentView)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.titlebarSeparatorStyle = .none
     }
 }
 
@@ -856,11 +762,12 @@ private func openServicesSettings() {
     NSWorkspace.shared.open(url)
 }
 
-/// Sort options for the dictionary list. Persisted at the view level
-/// only \u{2014} re-opening Settings resets to the default. The
-/// underlying `settings.vocabulary` array is always stored in
-/// "as entered" order; sorting is purely a display concern.
-private enum VocabularySortOrder: String, CaseIterable, Identifiable {
+/// Sort options for the dictionary list. Held on the shell model (the
+/// toolbar's sort menu drives it); the underlying `settings.vocabulary`
+/// array is always stored in "as entered" order — sorting is purely a
+/// display concern. Internal, not private: `SettingsShellModel` and the
+/// toolbar fragment in SettingsShell.swift use it too.
+enum VocabularySortOrder: String, CaseIterable, Identifiable {
     case alphabetical
     case asEntered
 
@@ -882,8 +789,10 @@ private struct DictionaryPane: View {
     /// drop the vnode watcher picked up).
     @State private var store = VocabularyStore.shared
 
-    @State private var search: String = ""
-    @State private var sort: VocabularySortOrder = .alphabetical
+    /// Search text, sort order, and the add-entry action live in the window
+    /// toolbar (SettingsShell); this pane reads them off the shared model.
+    let shell: SettingsShellModel
+
     @State private var showingHints: Bool = false
     /// New rows go to the top of the visible list and get auto-focused, so
     /// the user can start typing immediately. The id picked here is the
@@ -893,9 +802,20 @@ private struct DictionaryPane: View {
     @State private var tester = DictionaryTester.shared
 
     var body: some View {
+        content
+            .padding(20)
+            // Focus request from the toolbar's Add button: apply, then
+            // consume so the next Add re-fires.
+            .onChange(of: shell.dictionaryFocusEntryID) { _, id in
+                guard let id else { return }
+                focusedFieldID = id
+                shell.dictionaryFocusEntryID = nil
+            }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            toolbar(vocabBinding)
             if let err = tester.lastError {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -951,6 +871,11 @@ private struct DictionaryPane: View {
                 hintsPopover
             }
             Spacer()
+            Text(countLabel(total: store.entries.count,
+                            shown: filteredEntries(from: store.entries).count))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
     }
 
@@ -1058,74 +983,6 @@ private struct DictionaryPane: View {
         }
     }
 
-    // MARK: - Toolbar (search + sort + count + add)
-
-    private func toolbar(_ vocabulary: Binding<[VocabularyEntry]>) -> some View {
-        let total = vocabulary.wrappedValue.count
-        let shown = filteredEntries(from: vocabulary.wrappedValue).count
-        return HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 12))
-                TextField("Search dictionary\u{2026}", text: $search)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                if !search.isEmpty {
-                    Button {
-                        search = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.borderless)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1)
-            )
-
-            Text(countLabel(total: total, shown: shown))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-
-            Spacer()
-
-            Picker("Sort", selection: $sort) {
-                ForEach(VocabularySortOrder.allCases) { order in
-                    Text(order.label).tag(order)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-
-            Button {
-                let new = VocabularyEntry(pattern: "", replacement: "")
-                vocabulary.wrappedValue.insert(new, at: 0)
-                state.save()
-                // Switch to "as entered" so the brand-new empty row is
-                // visible at the top regardless of alphabetic sort, then
-                // focus its pattern field for immediate typing.
-                sort = .asEntered
-                search = ""
-                focusedFieldID = new.id
-            } label: {
-                Label("Add", systemImage: "plus")
-            }
-            .controlSize(.small)
-        }
-    }
 
     private func countLabel(total: Int, shown: Int) -> String {
         if total == 0 { return "" }
@@ -1150,7 +1007,7 @@ private struct DictionaryPane: View {
         } else {
             let visible = filteredEntries(from: entries)
             if visible.isEmpty {
-                ContentUnavailableView.search(text: search)
+                ContentUnavailableView.search(text: shell.dictionarySearch)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -1182,7 +1039,7 @@ private struct DictionaryPane: View {
     // MARK: - Filtering & sorting
 
     private func filteredEntries(from source: [VocabularyEntry]) -> [VocabularyEntry] {
-        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let q = shell.dictionarySearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered: [VocabularyEntry]
         if q.isEmpty {
             filtered = source
@@ -1191,7 +1048,7 @@ private struct DictionaryPane: View {
                 $0.pattern.lowercased().contains(q) || $0.replacement.lowercased().contains(q)
             }
         }
-        switch sort {
+        switch shell.dictionarySort {
         case .alphabetical:
             return filtered.sorted {
                 $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending
@@ -1371,27 +1228,13 @@ private struct CompactDictionaryRow: View {
 private struct HistoryPane: View {
     @State private var history = DictationHistory.shared
     @State private var expanded: UUID?
-    @State private var showClearConfirm = false
+    /// The record count and Clear button live in the window toolbar
+    /// (SettingsShell); the toolbar sets `confirmHistoryClear` and this pane
+    /// presents the destructive confirmation.
+    @Bindable var shell: SettingsShellModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Recent dictations (last 7 days)")
-                    .font(.headline)
-                Spacer()
-                Text("\(history.records.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                Button(role: .destructive) {
-                    showClearConfirm = true
-                } label: {
-                    Label("Clear", systemImage: "trash")
-                }
-                .controlSize(.small)
-                .disabled(history.records.isEmpty)
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             if history.records.isEmpty {
                 ContentUnavailableView(
                     "No dictations yet",
@@ -1416,11 +1259,19 @@ private struct HistoryPane: View {
                             )
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
                 }
-                .frame(minHeight: 280)
+                // Count lives here, not in the toolbar — bare text as a
+                // toolbar item gets a liquid-glass capsule on macOS 26.
+                SectionFootnote(history.records.count == 1
+                    ? "Keeping 1 dictation from the last 7 days (capped at 500)."
+                    : "Keeping \(history.records.count) dictations from the last 7 days (capped at 500).")
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
             }
         }
-        .confirmationDialog("Clear all history?", isPresented: $showClearConfirm) {
+        .confirmationDialog("Clear all history?", isPresented: $shell.confirmHistoryClear) {
             Button("Clear", role: .destructive) {
                 history.clear()
                 expanded = nil
@@ -2380,7 +2231,9 @@ private struct MicrophoneStatusRow: View {
 /// scan once the live memory readout, two transcription engines, the LLM
 /// list, and the Finder shortcut all shared a single scrolling Form — so
 /// they live behind a segmented picker at the top.
-private enum ModelsSubPane: String, CaseIterable, Identifiable {
+// Internal, not private: `SettingsShellModel` holds the selection and the
+// toolbar's segmented control (SettingsShell.swift) renders the cases.
+enum ModelsSubPane: String, CaseIterable, Identifiable {
     case transcription = "Transcription"
     case formatting = "Formatting"
     case diarization = "Diarization"
@@ -2436,25 +2289,13 @@ private struct ThisMacHeader: View {
 
 private struct ModelsPane: View {
     @State private var manager = ModelManager.shared
-    /// Which sub-pane is showing. Reset to Transcription on each entry to
-    /// the Models tab — that's the most common reason to come here, and
-    /// landing on Stats first would bury the actual model lists.
-    @State private var subPane: ModelsSubPane = .transcription
+    /// The sub-pane tabs live centred in the window toolbar (SettingsShell)
+    /// and drive `shell.modelsTab`.
+    let shell: SettingsShellModel
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Models section", selection: $subPane) {
-                ForEach(ModelsSubPane.allCases) { p in
-                    Text(p.rawValue).tag(p)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-
-            switch subPane {
+            switch shell.modelsTab {
             case .transcription: TranscriptionModelsPane()
             case .formatting: FormattingModelsPane()
             case .diarization: DiarizationModelsPane()
@@ -2467,8 +2308,13 @@ private struct ModelsPane: View {
         }
         // Refresh on-disk download state when the user opens the Models
         // tab. Each sub-pane reads from the same shared ModelManager so a
-        // single refresh covers all three.
-        .onAppear { manager.refreshCachedStates() }
+        // single refresh covers all three. Reset to Transcription on each
+        // entry — that's the most common reason to come here, and landing
+        // on Stats first would bury the actual model lists.
+        .onAppear {
+            shell.modelsTab = .transcription
+            manager.refreshCachedStates()
+        }
     }
 }
 
@@ -3185,42 +3031,59 @@ private struct ModesPane: View {
     @Environment(AppState.self) private var state
     // Manual drill-in (NOT NavigationStack — embedded in the settings detail
     // column it renders a junk nav bar: floating back button + dead space).
-    @State private var editingID: UUID?
+    // The drill-in id and add-sheet flag live on the shell model because the
+    // back / add / make-default controls are window toolbar items
+    // (SettingsShell); the sheet and pages render here.
+    @Bindable var shell: SettingsShellModel
     @State private var selectedID: UUID?
-    @State private var showAddSheet = false
     // One-shot "modes are now steps" note. Local UserDefaults flag — no settings
     // field needed, and it's per-Mac (fine for a UI hint).
     @AppStorage("dictator.seenStepsIntro") private var seenStepsIntro = false
 
     var body: some View {
         @Bindable var s = state
-        if let id = editingID, let idx = state.settings.modes.firstIndex(where: { $0.id == id }) {
-            editor(mode: $s.settings.modes[idx], id: id)
-        } else {
-            selector
+        // Hand-rolled push/pop: the selector slides out left as the editor
+        // slides in from the right, like a NavigationStack push (which we
+        // can't use here — see the drill-in note above). ZStack keeps both
+        // pages mounted for the duration of the transition; `.clipped()`
+        // stops the outgoing page painting over the sidebar.
+        ZStack {
+            if let id = shell.editingModeID, let idx = state.settings.modes.firstIndex(where: { $0.id == id }) {
+                ModeDetail(
+                    mode: $s.settings.modes[idx],
+                    isDefault: state.settings.defaultModeID == id,
+                    onMakeDefault: {
+                        state.settings.defaultModeID = id
+                        state.save()
+                    },
+                    onChange: { state.save() }
+                )
+                .transition(.move(edge: .trailing))
+            } else {
+                selector
+                    .transition(.move(edge: .leading))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: shell.editingModeID)
+        .clipped()
+        // Popping back happens in the toolbar (SettingsShell), so the reset
+        // that makes re-selecting the same mode drill in again lives here.
+        .onChange(of: shell.editingModeID) { _, new in
+            if new == nil { selectedID = nil }
         }
     }
 
     private var selector: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Modes")
-                    .font(.system(size: 22, weight: .bold))
-                Spacer()
-                Button { showAddSheet = true } label: { Image(systemName: "plus") }
-                    .help("Add a mode")
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 6)
             if !seenStepsIntro {
                 stepsIntroNote
                     .padding(.horizontal, 20)
+                    .padding(.top, 10)
                     .padding(.bottom, 6)
             }
             CycleAXBanner()
                 .padding(.horizontal, 20)
-                .padding(.bottom, 6)
+                .padding(.vertical, 6)
             // List(selection:) + onChange (not a Button row): the List coordinates
             // click-to-select with press-drag-to-reorder; a tap gesture eats drags.
             List(selection: $selectedID) {
@@ -3245,13 +3108,13 @@ private struct ModesPane: View {
             }
             .scrollContentBackground(.hidden)
             .onChange(of: selectedID) { _, new in
-                if let new { editingID = new }
+                if let new { shell.editingModeID = new }
             }
             SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, steps, prompts, bindings) sync via your Synced folder.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }
-        .sheet(isPresented: $showAddSheet) {
+        .sheet(isPresented: $shell.showAddModeSheet) {
             AddModeSheet(existingNames: Set(state.settings.modes.map(\.name))) { template in
                 installMode(from: template)
             }
@@ -3269,7 +3132,7 @@ private struct ModesPane: View {
                 Text("Your existing modes still work. Mix and match steps to build your own, or add a ready-made mode with +.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    Button("Add a mode") { showAddSheet = true }
+                    Button("Add a mode") { shell.showAddModeSheet = true }
                         .controlSize(.small)
                     Button("Got it") { seenStepsIntro = true }
                         .controlSize(.small)
@@ -3280,37 +3143,6 @@ private struct ModesPane: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
-    }
-
-    private func editor(mode: Binding<DictationMode>, id: UUID) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Button {
-                    editingID = nil
-                    selectedID = nil   // so re-selecting the same mode drills in again
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "chevron.left")
-                        Text("Modes")
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 8)
-            ModeDetail(
-                mode: mode,
-                isDefault: state.settings.defaultModeID == id,
-                onMakeDefault: {
-                    state.settings.defaultModeID = id
-                    state.save()
-                },
-                onChange: { state.save() }
-            )
-        }
     }
 
     // MARK: - Actions
@@ -3338,7 +3170,7 @@ private struct ModesPane: View {
         copy.steps = template.steps.map { var s = $0; s.id = UUID(); return s }
         state.settings.modes.append(copy)
         state.save()
-        editingID = copy.id
+        shell.editingModeID = copy.id
     }
 
     /// A name that doesn't collide with an existing mode — starters keep their
@@ -3613,33 +3445,34 @@ private struct ModeDetail: View {
 
     // MARK: - Sections
 
+    /// Name + default-mode controls. In content, not the toolbar: the window
+    /// title already shows the (read-only) name, and text/badges as toolbar
+    /// items get wrapped in liquid-glass capsules on macOS 26.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                if mode.isLocked {
-                    Text(mode.name)
-                        .font(.title2.weight(.semibold))
-                    Image(systemName: "lock.fill")
-                        .foregroundStyle(.tertiary)
-                } else {
-                    TextField("Mode name", text: $mode.name)
-                        .font(.title2.weight(.semibold))
-                        .textFieldStyle(.plain)
-                        .onSubmit { onChange() }
-                        .onChange(of: mode.name) { _, _ in onChange() }
-                }
-                Spacer()
-                if !isDefault {
-                    Button("Make default", action: onMakeDefault)
-                        .controlSize(.small)
-                } else {
-                    Text("Default mode")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
-                }
+        HStack(spacing: 10) {
+            if mode.isLocked {
+                Text(mode.name)
+                    .font(.title2.weight(.semibold))
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(.tertiary)
+            } else {
+                TextField("Mode name", text: $mode.name)
+                    .font(.title2.weight(.semibold))
+                    .textFieldStyle(.plain)
+                    .onSubmit { onChange() }
+                    .onChange(of: mode.name) { _, _ in onChange() }
+            }
+            Spacer()
+            if !isDefault {
+                Button("Make default", action: onMakeDefault)
+                    .controlSize(.small)
+            } else {
+                Text("Default mode")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
             }
         }
     }

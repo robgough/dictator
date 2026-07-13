@@ -7,15 +7,10 @@ struct DictatorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState.shared
 
-    // Owns Sparkle's lifecycle for the whole app. `startingUpdater: true` lets
-    // Sparkle do its scheduled background check; menu-driven manual checks go
-    // through `updaterController.updater` too. SUFeedURL + SUPublicEDKey in
-    // Info.plist are what Sparkle reads to find the feed and verify signatures.
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    // Sparkle's lifecycle lives in the `SparkleUpdater` holder (see
+    // SettingsShell.swift) so the AppKit-owned Settings window can reach the
+    // updater; AppDelegate touches it at launch to start the background
+    // update schedule.
 
     var body: some Scene {
         MenuBarExtra {
@@ -37,19 +32,11 @@ struct DictatorApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
-            SettingsView(updater: updaterController.updater)
-                .environment(appState)
-                // Wider than the old single-column window to seat the sidebar
-                // (~215pt) beside a comfortable detail column. `maxWidth/Height:
-                // .infinity` lets the content grow, and `.windowResizability
-                // (.contentSize)` below lets the window follow it — without the
-                // flexible max the Settings scene pins to a fixed size.
-                .frame(minWidth: 720, idealWidth: 920, maxWidth: .infinity,
-                       minHeight: 540, idealHeight: 680, maxHeight: .infinity)
-        }
-        .windowResizability(.contentSize)
-        .handlesExternalEvents(matching: ["settings"])
+        // Settings is NOT a SwiftUI `Settings` scene: the window is owned by
+        // `SettingsWindowController` (SettingsShell.swift), which builds real
+        // AppKit chrome — NSSplitViewController sidebar + unified NSToolbar —
+        // that the scene version could only fake, with dead controls in the
+        // titlebar strip to show for it.
 
         // Meetings ships as a runtime-gated early preview (see
         // `MeetingsFeature.swift`). The scene is registered unconditionally —
@@ -82,8 +69,7 @@ struct DictatorApp: App {
         guard url.scheme?.lowercased() == "dictator" else { return }
         switch url.host?.lowercased() {
         case "settings":
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            SettingsWindowController.shared.show()
         case "onboarding", "setup", "wizard":
             NSApp.activate(ignoringOtherApps: true)
             appState.showOnboarding()
@@ -127,18 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // .accessory once the user closes it, so the dock
                     // icon doesn't persist after Settings is dismissed.
                     NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
-                    // SwiftUI 14+ emits a runtime fault if we open Settings
-                    // via `showSettingsWindow:` from outside the SwiftUI
-                    // hierarchy — it wants `SettingsLink`. The captured
-                    // action stored on AppState (set when MenuBarContent's
-                    // body first runs) is the blessed equivalent. The
-                    // fallback is only used before any popover render.
-                    if let open = AppState.shared.openSettingsAction {
-                        open()
-                    } else {
-                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                    }
+                    SettingsWindowController.shared.show()
                 }
             case "onboarding", "setup", "wizard":
                 NSApp.activate(ignoringOtherApps: true)
@@ -197,7 +172,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.setActivationPolicy(.accessory)
             }
         }
+        // Start Sparkle's background update schedule (first touch creates the
+        // controller with `startingUpdater: true`).
+        _ = SparkleUpdater.controller
+
         let state = AppState.shared
+        // Settings is an AppKit-owned window now; the captured-action
+        // indirection remains because Meetings UI and scripts call
+        // `state.openSettingsAction` without importing the controller.
+        state.openSettingsAction = { SettingsWindowController.shared.show() }
         island = IslandController(state: state)
         // Create the Scratchpad controller and hand it to AppState before
         // bootstrap, so the toggle hotkey bound there has a live panel to drive.

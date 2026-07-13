@@ -5,10 +5,6 @@ import KeyboardShortcuts
 
 struct MenuBarContent: View {
     @Environment(AppState.self) private var state
-    /// Captured into AppState the first time this view's body runs, so the
-    /// AppDelegate's dictator://settings URL handler can open Settings
-    /// without tripping SwiftUI's "use SettingsLink" runtime fault.
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @State private var history = DictationHistory.shared
     @State private var conversations = ConversationHistory.shared
@@ -51,8 +47,7 @@ struct MenuBarContent: View {
             Divider()
             HStack(spacing: 8) {
                 Button {
-                    NSApp.activate(ignoringOtherApps: true)
-                    openSettings()
+                    SettingsWindowController.shared.show()
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
@@ -92,16 +87,11 @@ struct MenuBarContent: View {
             // user may have downloaded or removed a model from Settings
             // since we last refreshed.
             modelManager.refreshCachedStates()
-            // Hand the SwiftUI-blessed openSettings action to AppState so
-            // non-SwiftUI entry points (URL handler, scripts) can open
-            // Settings without tripping the "use SettingsLink" fault.
-            // Re-captured on every popover render — cheap and ensures the
-            // closure stays valid across SwiftUI environment refreshes.
-            state.openSettingsAction = { openSettings() }
             // Captured unconditionally — the action itself is harmless and
             // the deep-link handler checks the meetings toggle before use.
+            // (openSettingsAction is set once in AppDelegate now that the
+            // Settings window is AppKit-owned.)
             state.openMeetingsAction = { showMeetings() }
-            NSLog("[Dictator] MenuBarContent.onAppear: captured openSettings action")
         }
     }
 

@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The Settings window is rebuilt on native Mac chrome, like System Settings: page titles and controls live in a real toolbar (the Models tabs, the Modes add/back buttons with rename-in-place for the mode name, Dictionary search/sort/add, and the History count and Clear button), the close buttons sit centred in the full-height header, and the sidebar uses the standard material without rendering artifacts
+- Opening a mode in Settings → Modes now slides in like a standard navigation page, with a back button in the toolbar
 - The Settings sidebar now uses the standard translucent macOS sidebar material and extends behind the titlebar, so the window reads like System Settings instead of a flat gray panel (also fixes the sidebar occasionally rendering with the wrong background)
 
 - Modes are now built from steps. Instead of three fixed passes (Format, Grammar, Structure), each mode is an ordered list of AI steps you can add, remove, reorder, and edit — most modes need just one. New installs get a curated set: Standard (one fast pass), Polished (adds a grammar tidy), Formal (adds tightening), plus the no-AI Quick. Add more anytime from the + gallery in Settings → Modes. Your existing modes carry over unchanged.
