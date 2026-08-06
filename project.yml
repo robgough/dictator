@@ -220,6 +220,20 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # Window vision (WindowVisionContext) needs FoundationModels' image
+        # input — `SystemLanguageModel.capabilities`, `Attachment(CGImage)`,
+        # `GenerationOptions(samplingMode:)` — which only *exists in the SDK*
+        # from macOS 27. `@available(macOS 27, *)` isn't enough: the symbols
+        # have to be declared to compile at all. Releases build on the
+        # macos-26 runner (Xcode 26.6 / MacOSX26.5.sdk), where they aren't,
+        # so the whole release failed on that one file.
+        #
+        # This flag is defined only when the *active SDK* is macOS 27+, so a
+        # local Xcode-beta build keeps the feature and a release build
+        # compiles it out — and, deliberately, ships without it while macOS 27
+        # is still beta. When the release toolchain gains the 27 SDK the flag
+        # starts applying there too with no code change.
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx27*]": "$(inherited) FOUNDATION_MODELS_VISION"
         ENABLE_HARDENED_RUNTIME: YES
         # macOS TCC keys Mic / Accessibility grants by *signed identity*, so an
         # unstable signature (ad-hoc) makes the OS forget you every rebuild.

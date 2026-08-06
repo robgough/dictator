@@ -39,8 +39,15 @@ enum WindowVisionContext {
     /// AND the shipped model reports the capability). Gates both the Settings
     /// toggle's visibility and the pipeline kick-off, so older OSes and
     /// ineligible Macs simply never run it.
+    ///
+    /// Always false when built against an SDK without FoundationModels' image
+    /// input (see `FOUNDATION_MODELS_VISION` in project.yml) — the code that
+    /// would use it isn't compiled in, so every entry point below must agree.
     @MainActor
     static var isSupported: Bool {
+        #if !FOUNDATION_MODELS_VISION
+        return false
+        #else
         guard #available(macOS 27.0, *) else { return false }
         guard AppleFoundationAvailability.isUsable else { return false }
         guard SystemLanguageModel.default.capabilities.contains(.vision) else { return false }
@@ -56,6 +63,7 @@ enum WindowVisionContext {
         // vision as unsupported when it isn't there. Self-healing: the probe flips
         // to true automatically once the user's OS ships the initializer.
         return imageAttachmentAPIAvailable
+        #endif
     }
 
     /// True when the running OS actually exports `Attachment(_ cgImage:orientation:)`.
@@ -77,13 +85,18 @@ enum WindowVisionContext {
     /// model inference; callers run it off the main actor (a detached task), so
     /// neither the screenshot nor the inference touches the dictation hot path.
     static func captureFocusedWindowTerms() async -> [String] {
+        #if !FOUNDATION_MODELS_VISION
+        return []
+        #else
         guard #available(macOS 27.0, *) else { return [] }
         return await withDeadline(seconds: timeoutSeconds, fallback: [String]()) {
             guard let image = await WindowImageCapture.captureFocusedWindow() else { return [] }
             return await extractTerms(from: image)
         }
+        #endif
     }
 
+    #if FOUNDATION_MODELS_VISION
     @available(macOS 27.0, *)
     private static func extractTerms(from image: CGImage) async -> [String] {
         let session = LanguageModelSession(instructions: Instructions(systemPrompt))
@@ -105,6 +118,7 @@ enum WindowVisionContext {
             return []
         }
     }
+    #endif
 
     /// The model is asked for a *spelling reference*, not a transcription —
     /// short output keeps it fast (a full read-back costs many more generation
@@ -216,6 +230,9 @@ enum WindowVisionContext {
     /// may be MLX and can't see images) then reasons over. Empty on any failure;
     /// runs concurrently with the instruction recording.
     static func captureFocusedWindowReadback() async -> VisionReadback {
+        #if !FOUNDATION_MODELS_VISION
+        return .failed("needs macOS 27")
+        #else
         guard #available(macOS 27.0, *) else { return .failed("needs macOS 27") }
         return await withDeadline(seconds: readbackTimeoutSeconds,
                                   fallback: VisionReadback.failed("timed out")) {
@@ -224,8 +241,10 @@ enum WindowVisionContext {
             }
             return await extractReadback(from: image)
         }
+        #endif
     }
 
+    #if FOUNDATION_MODELS_VISION
     @available(macOS 27.0, *)
     private static func extractReadback(from image: CGImage) async -> VisionReadback {
         let session = LanguageModelSession(instructions: Instructions(readbackSystemPrompt))
@@ -255,6 +274,7 @@ enum WindowVisionContext {
             return .failed("the vision model declined")
         }
     }
+    #endif
 
     /// Asks the vision model to be the assistant's eyes: a short description of
     /// what the window shows (it can see images and layout, not just text),

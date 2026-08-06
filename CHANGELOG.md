@@ -25,10 +25,7 @@ entries as plain bullet lines.
 
 - Modes are now built from steps. Instead of three fixed passes (Format, Grammar, Structure), each mode is an ordered list of AI steps you can add, remove, reorder, and edit — most modes need just one. New installs get a curated set: Standard (one fast pass), Polished (adds a grammar tidy), Formal (adds tightening), plus the no-AI Quick. Add more anytime from the + gallery in Settings → Modes. Your existing modes carry over unchanged.
 - Dictating a short phrase into an empty field (a fresh chat box, a new note) now capitalises the first letter, since an empty field is clearly the start of a sentence. Short dictations inserted mid-sentence still stay lowercase as before.
-- New per-Mode option under Context awareness: read the focused window with vision. When a dictation starts it takes one on-device snapshot of just the focused window and reads the names, places, and technical terms visible in it, so they're spelled the way they appear on screen — even when they sit outside the text field or the app doesn't expose its text. Uses Apple's on-device model; the picture never leaves your Mac and is never stored. Off by default; needs Screen Recording permission and a macOS 27 build whose on-device model can read images — the option only appears when your Mac actually supports it.
-- The assistant result window now shows, per turn, what context was pulled in — whether it read the text around your cursor and what the on-device vision model saw — with a "Show context" toggle to see the actual captured text. Makes it clear what fed each answer.
-- Fixed the assistant's window vision reading nothing on follow-up turns: once the result window was open it was looking at Dictator's own window instead of the app behind it. It now always reads the window you're actually looking at.
-- Assistant Mode can now see the focused window (new option in Settings → Assistant). When you trigger the assistant it takes one on-device snapshot of just the focused window and has Apple's on-device vision model describe what's in it, then hands that to your assistant — so you can ask it to describe what you're looking at, ask about an error or a chart, reply to a message that's on screen, or just have names spelled the way they appear, even in apps that don't expose their text. Off by default; needs macOS 27 and Screen Recording permission; the picture never leaves your Mac and is never stored.
+- The assistant result window now shows, per turn, what context was pulled in — whether it read the text around your cursor — with a "Show context" toggle to see the actual captured text. Makes it clear what fed each answer.
 
 ## v2026.6.10 — 2026-06-27
 
@@ -270,6 +267,16 @@ Entries below are for work that's been built but is gated behind a compile-time
 flag (`MEETINGS_ENABLED`) and not exposed in shipping Sparkle releases. Kept here
 so the design / commit context isn't lost; will move up to a real `## Unreleased`
 section if and when the feature is judged ready to ship.
+
+### Window vision (macOS 27 beta)
+
+Gated behind the `FOUNDATION_MODELS_VISION` compile flag, which is defined only
+when building against the macOS 27 SDK. macOS 27 is still beta, and releases build
+on the macOS 26 SDK, so this is compiled out of shipping builds.
+
+- New per-Mode option under Context awareness: read the focused window with vision. When a dictation starts it takes one on-device snapshot of just the focused window and reads the names, places, and technical terms visible in it, so they're spelled the way they appear on screen — even when they sit outside the text field or the app doesn't expose its text. Uses Apple's on-device model; the picture never leaves your Mac and is never stored. Off by default; needs Screen Recording permission and a macOS 27 build whose on-device model can read images — the option only appears when your Mac actually supports it.
+- Fixed the assistant's window vision reading nothing on follow-up turns: once the result window was open it was looking at Dictator's own window instead of the app behind it. It now always reads the window you're actually looking at.
+- Assistant Mode can now see the focused window (new option in Settings → Assistant). When you trigger the assistant it takes one on-device snapshot of just the focused window and has Apple's on-device vision model describe what's in it, then hands that to your assistant — so you can ask it to describe what you're looking at, ask about an error or a chart, reply to a message that's on screen, or just have names spelled the way they appear, even in apps that don't expose their text. Off by default; needs macOS 27 and Screen Recording permission; the picture never leaves your Mac and is never stored.
 
 ### Meetings (macOS)
 
