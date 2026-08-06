@@ -155,9 +155,22 @@ struct TranscriptView: View {
     /// toolbar, and the notes / speaker / re-process controls moved to the
     /// Details inspector — so the reading surface isn't buried under chrome.
     /// Notes lead (the thing you came for); Transcript and Pad follow.
+    /// Scrollable because the row grows with the meeting: a meeting with live
+    /// notes *and* coach data shows five tabs, and an HStack of five labels
+    /// reports a minimum width the detail column then can't go below. That
+    /// minimum, pushed back through the split view against a wide sidebar and
+    /// the 240pt inspector, is what stopped the column negotiation converging.
+    /// A horizontal ScrollView decouples the column's minimum from the tab
+    /// count — the row scrolls instead of forcing the window wider.
     private var header: some View {
-        MeetingSegmentedControl(segments: tabSegments, selection: $tab)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView(.horizontal, showsIndicators: false) {
+            MeetingSegmentedControl(segments: tabSegments, selection: $tab)
+                // The selected segment's glass thumb draws just outside the
+                // capsule; without the inset the ScrollView clips it.
+                .padding(.vertical, 1)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Tab order: Transcript → Live notes → Pad → Notes (the view opens on

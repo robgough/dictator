@@ -78,6 +78,16 @@ struct MeetingsRootView: View {
         NavigationSplitView {
             sidebar
                 .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
+                // Bound the sidebar so it can't be dragged wide enough to
+                // squeeze the detail column below its own minimum. Unbounded,
+                // a dragged-out sidebar (309pt here) plus the detail's
+                // inspector (min 240) left the detail less than it could
+                // compress to, and the min-size negotiation between the
+                // hosting views and AppKit's split view never settled — the
+                // window ran out of Update Constraints passes and the app
+                // aborted. The width is persisted per window, so a sidebar
+                // already dragged past `max` is clamped back on next open.
+                .navigationSplitViewColumnWidth(min: 200, ideal: 280, max: 320)
         } detail: {
             detail
         }

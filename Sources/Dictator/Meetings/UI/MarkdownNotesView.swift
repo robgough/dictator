@@ -56,7 +56,17 @@ struct MarkdownNotesView: View {
                     .frame(minHeight: 220)
                     .scrollContentBackground(.hidden)
             } else {
-                VStack(alignment: .leading, spacing: 6) {
+                // Lazy, not eager: a meeting whose notes never got the final
+                // polish pass carries the raw live outline (500+ blocks vs the
+                // ~80 a polished set has). Instantiating every block up front
+                // put hundreds of wrapping, height-depends-on-width `Text`s
+                // into the split-view column that reports its min size back to
+                // AppKit, and the size negotiation stopped converging — the
+                // window hit "more Update Constraints in Window passes than
+                // there are views" and AppKit killed the app. Every caller
+                // places this inside a vertical ScrollView, so laziness is real
+                // here and the block count no longer drives column sizing.
+                LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(MarkdownBlock.parse(markdown).enumerated()), id: \.offset) { idx, block in
                         view(for: block, isFirst: idx == 0)
                     }

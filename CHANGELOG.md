@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Fixed the Meetings window crashing the app on open after a long meeting — a meeting whose notes never got their final polish pass, shown in a window narrow enough that the sidebar, transcript and Details panes could not all fit, put the window into a layout loop that took Dictator down
+- The Meetings sidebar can no longer be dragged wide enough to squeeze the transcript, and the window keeps room for all three panes
+- The Notes / Transcript / Pad / Coach tabs now scroll sideways when the window is narrow instead of forcing the window wider
 - Dictating into browser comment and chat boxes no longer inserts a stray space at the start of the text — the smart join now verifies the caret snapshot actually describes the focused field, and stands down when the browser reports page text instead
 - The Settings window is rebuilt on native Mac chrome, like System Settings: page titles and controls live in a real toolbar (the Models tabs, the Modes add/back buttons with rename-in-place for the mode name, Dictionary search/sort/add, and the History count and Clear button), the close buttons sit centred in the full-height header, and the sidebar uses the standard material without rendering artifacts
 - Opening a mode in Settings → Modes now slides in like a standard navigation page, with a back button in the toolbar

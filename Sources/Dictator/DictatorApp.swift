@@ -52,7 +52,13 @@ struct DictatorApp: App {
         Window("Meetings", id: "meetings") {
             MeetingsRootView()
                 .environment(appState)
-                .frame(minWidth: 760, minHeight: 480)
+                // 1000 = sidebar max (320) + the detail's compressed width +
+                // the Details inspector's 240pt minimum, with room for the
+                // dividers. At the old 760 the three columns could not all be
+                // satisfied at once, and rather than collapsing one, SwiftUI
+                // and AppKit traded min-size updates until the window
+                // exhausted its Update Constraints passes and the app aborted.
+                .frame(minWidth: 1000, minHeight: 480)
         }
         // Roomier default so the live recording layout (three columns + the
         // shared-screen/transcript inspector) opens comfortably; the status bar

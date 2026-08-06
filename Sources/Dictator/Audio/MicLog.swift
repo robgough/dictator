@@ -47,6 +47,39 @@ enum MicLog {
         queue.async { append(line) }
     }
 
+    // MARK: - Uncaught exceptions
+
+    /// Mirror uncaught ObjC exceptions into the durable log before the process
+    /// dies. AppKit layout failures throw an `NSException` that unwinds out of
+    /// the display cycle and aborts — the Aug 2026 Meetings-window constraint
+    /// loop left its reason string only in the `.ips` crash report and (for a
+    /// few hours) the unified log, neither of which this log's readers reach
+    /// for first. Install once, early.
+    ///
+    /// The handler runs on the throwing thread with the process already doomed,
+    /// so it deliberately bypasses `queue` and writes synchronously — a hop
+    /// onto the serial queue would never get to drain. It builds its own
+    /// `DateFormatter` for the same reason: `stampFormatter` may be mid-use on
+    /// `queue`, and a race there would take out the handler and lose the line.
+    nonisolated static func installUncaughtExceptionLogger() {
+        NSSetUncaughtExceptionHandler { exception in
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+            f.locale = Locale(identifier: "en_US_POSIX")
+            let frames = exception.callStackSymbols.prefix(24)
+                .joined(separator: "\n    ")
+            // Spelled `MicLog.` rather than bare: an implicit `Self` reference
+            // counts as captured context, and a C function pointer can't be
+            // formed from a closure that captures.
+            MicLog.append(
+                f.string(from: Date())
+                + " FATAL uncaught \(exception.name.rawValue): "
+                + (exception.reason ?? "(no reason)")
+                + "\n    " + frames + "\n"
+            )
+        }
+    }
+
     private static func append(_ line: String) {
         guard let data = line.data(using: .utf8) else { return }
         let fm = FileManager.default

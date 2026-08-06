@@ -138,6 +138,7 @@ final class AppState {
     }
 
     func bootstrap() {
+        MicLog.installUncaughtExceptionLogger()
         // Bound MLX's GPU buffer cache. The default `cacheLimit` mirrors
         // `memoryLimit`, which on systems with abundant RAM (32+ GB) lets
         // the buffer pool grow to many GB across repeated inferences as
