@@ -510,6 +510,35 @@
                 type="application/octet-stream"
                 sparkle:edSignature="M6W8I+MHQY1i/3zy1udy4zwClr9IyZOBKBs5fBVQZqRjyUoA5ClKCnsd5ro6zImaSGrGEtbOr+ZdzKb2FtTbBg==" />
         </item>
+        <item>
+            <title>Version 2026.8.0</title>
+            <pubDate>Thu, 06 Aug 2026 02:40:53 +0000</pubDate>
+            <sparkle:version>32</sparkle:version>
+            <sparkle:shortVersionString>2026.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dictator no longer contacts Hugging Face when you use a model you have already downloaded. Loading a local model was re-checking its files against huggingface.co every time, which meant a request went out on each Assistant Mode activation and whenever a model was reloaded for dictation or meeting notes. No transcript, audio, screen content or prompt was ever sent — but the request itself revealed your IP address, which model you use, and when you used it, and that should not have been leaving your Mac. Both the language-model and Whisper paths now load straight from disk, and only reach the network when a model genuinely needs downloading.</li>
+  <li>Speech recognition and the assistant now work normally on a captive or unreliable network. Loading an already-downloaded model previously had to reach Hugging Face first, so a bad connection could stall or fail it even though every file was already on your Mac.</li>
+  <li>Fixed the Meetings window crashing the app on open after a long meeting — a meeting whose notes never got their final polish pass, shown in a window narrow enough that the sidebar, transcript and Details panes could not all fit, put the window into a layout loop that took Dictator down</li>
+  <li>The Meetings sidebar can no longer be dragged wide enough to squeeze the transcript, and the window keeps room for all three panes</li>
+  <li>The Notes / Transcript / Pad / Coach tabs now scroll sideways when the window is narrow instead of forcing the window wider</li>
+  <li>Dictating into browser comment and chat boxes no longer inserts a stray space at the start of the text — the smart join now verifies the caret snapshot actually describes the focused field, and stands down when the browser reports page text instead</li>
+  <li>The Settings window is rebuilt on native Mac chrome, like System Settings: page titles and controls live in a real toolbar (the Models tabs, the Modes add/back buttons with rename-in-place for the mode name, Dictionary search/sort/add, and the History count and Clear button), the close buttons sit centred in the full-height header, and the sidebar uses the standard material without rendering artifacts</li>
+  <li>Opening a mode in Settings → Modes now slides in like a standard navigation page, with a back button in the toolbar</li>
+  <li>The Settings sidebar now uses the standard translucent macOS sidebar material and extends behind the titlebar, so the window reads like System Settings instead of a flat gray panel (also fixes the sidebar occasionally rendering with the wrong background)</li>
+</ul>
+<ul>
+  <li>Modes are now built from steps. Instead of three fixed passes (Format, Grammar, Structure), each mode is an ordered list of AI steps you can add, remove, reorder, and edit — most modes need just one. New installs get a curated set: Standard (one fast pass), Polished (adds a grammar tidy), Formal (adds tightening), plus the no-AI Quick. Add more anytime from the + gallery in Settings → Modes. Your existing modes carry over unchanged.</li>
+  <li>Dictating a short phrase into an empty field (a fresh chat box, a new note) now capitalises the first letter, since an empty field is clearly the start of a sentence. Short dictations inserted mid-sentence still stay lowercase as before.</li>
+  <li>The assistant result window now shows, per turn, what context was pulled in — whether it read the text around your cursor — with a &quot;Show context&quot; toggle to see the actual captured text. Makes it clear what fed each answer.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.8.0/Dictator.dmg"
+                length="33042110"
+                type="application/octet-stream"
+                sparkle:edSignature="FxjB4dYnJ5m2DcJ0w4Er1twFXZDM6xximT3Q0ph+sdAOEmlo44X5HaYy4pgPAWYvf5YicyaJUWtkt3i6eOu8BQ==" />
+        </item>
+    
     
     
     

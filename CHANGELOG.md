@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.8.0 — 2026-08-06
+
 - Dictator no longer contacts Hugging Face when you use a model you have already downloaded. Loading a local model was re-checking its files against huggingface.co every time, which meant a request went out on each Assistant Mode activation and whenever a model was reloaded for dictation or meeting notes. No transcript, audio, screen content or prompt was ever sent — but the request itself revealed your IP address, which model you use, and when you used it, and that should not have been leaving your Mac. Both the language-model and Whisper paths now load straight from disk, and only reach the network when a model genuinely needs downloading.
 - Speech recognition and the assistant now work normally on a captive or unreliable network. Loading an already-downloaded model previously had to reach Hugging Face first, so a bad connection could stall or fail it even though every file was already on your Mac.
 - Fixed the Meetings window crashing the app on open after a long meeting — a meeting whose notes never got their final polish pass, shown in a window narrow enough that the sidebar, transcript and Details panes could not all fit, put the window into a layout loop that took Dictator down
