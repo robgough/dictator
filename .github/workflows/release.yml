@@ -127,11 +127,22 @@ jobs:
       - name: Build (Release, signed)
         run: |
           set -euo pipefail
+          # -skipPackagePluginValidation / -skipMacroValidation: SwiftPM build
+          # plugins and macros are untrusted until a human approves them in
+          # Xcode, and a runner has nobody to ask — it just fails the build.
+          # mlx-swift ships a `CudaBuild` plugin (it arrived with the
+          # mlx-swift-lm 3.x move in 1b47bd9), which took down the first
+          # release attempted after that bump with "Validate plug-in
+          # \"CudaBuild\" in package \"mlx-swift\"" and nothing else. Local
+          # builds don't hit it because the trust was granted interactively
+          # once and cached. On CI, skipping is the only available answer.
           xcodebuild \
               -project Dictator.xcodeproj \
               -scheme Dictator \
               -configuration Release \
               -derivedDataPath .derivedData \
+              -skipPackagePluginValidation \
+              -skipMacroValidation \
               MARKETING_VERSION="${{ steps.version.outputs.version }}" \
               CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
               CODE_SIGN_IDENTITY="$DICTATOR_CODE_SIGN_IDENTITY" \
