@@ -35,17 +35,55 @@ final class TranscriptionService: ASREngine {
         isLoading = true
         defer { isLoading = false }
 
-        let config = WhisperKitConfig(
-            model: modelID,
-            downloadBase: ModelStorage.whisperRoot(),
-            modelRepo: "argmaxinc/whisperkit-coreml",
-            verbose: false,
-            logLevel: .error,
-            prewarm: true,
-            load: true,
-            download: true
+        // Point WhisperKit at the local folder whenever the variant is already
+        // downloaded, and turn `download` off with it.
+        //
+        // `WhisperKit.setupModels` takes `modelFolder` as its first branch and
+        // returns without touching the network; the `download: true` fallback
+        // underneath it calls `hubApi.getFilenames` on *every* load, even when
+        // every file is already on disk. That made each cold load a callout to
+        // huggingface.co carrying the user's IP, their model, and the time —
+        // the same defect as the MLX path (see `MLXLLMService.ensureLoaded`).
+        // Using a model we already have needs no network.
+        //
+        // The tokenizer is already local-first inside WhisperKit
+        // (`ModelUtilities.loadTokenizer` searches the download base before it
+        // considers the Hub), so `modelFolder` closes the last remote call.
+        let localFolder = ModelStorage.whisperModelDirectory(for: modelID)
+        let isDownloaded = ModelStorage.downloadIsComplete(
+            snapshot: localFolder,
+            metadata: ModelStorage.whisperDownloadMetadataDirectory(for: modelID),
+            isReady: { contents in contents.contains { $0.hasSuffix(".mlmodelc") } }
         )
-        let kit = try await WhisperKit(config)
+
+        func makeKit(localOnly: Bool) async throws -> WhisperKit {
+            let config = WhisperKitConfig(
+                model: modelID,
+                downloadBase: ModelStorage.whisperRoot(),
+                modelRepo: "argmaxinc/whisperkit-coreml",
+                modelFolder: localOnly ? localFolder.path : nil,
+                verbose: false,
+                logLevel: .error,
+                prewarm: true,
+                load: true,
+                download: !localOnly
+            )
+            return try await WhisperKit(config)
+        }
+
+        let kit: WhisperKit
+        if isDownloaded {
+            do {
+                kit = try await makeKit(localOnly: true)
+            } catch {
+                // Local copy won't load — repair it through the Hub rather
+                // than leaving transcription broken.
+                MicLog.log("Whisper local load failed (\(error.localizedDescription)); repairing via Hub")
+                kit = try await makeKit(localOnly: false)
+            }
+        } else {
+            kit = try await makeKit(localOnly: false)
+        }
         pipe = kit
         currentModelID = modelID
     }

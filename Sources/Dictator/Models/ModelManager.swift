@@ -78,10 +78,8 @@ final class ModelManager {
     private func diskState(forWhisper id: String, expectedMB: Int) -> ModelDownloadState {
         // <root>/models/argmaxinc/whisperkit-coreml/<variant>/             ← snapshot
         // <root>/models/argmaxinc/whisperkit-coreml/.cache/huggingface/download/<variant>/ ← metadata
-        let snapshot = ModelStorage.whisperRoot()
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/\(id)", isDirectory: true)
-        let metadata = ModelStorage.whisperRoot()
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/.cache/huggingface/download/\(id)", isDirectory: true)
+        let snapshot = ModelStorage.whisperModelDirectory(for: id)
+        let metadata = ModelStorage.whisperDownloadMetadataDirectory(for: id)
         return diskState(snapshot: snapshot, metadata: metadata, expectedMB: expectedMB,
                          snapshotReadyIf: { contents in contents.contains { $0.hasSuffix(".mlmodelc") } })
     }
@@ -107,10 +105,8 @@ final class ModelManager {
     private func diskState(forLLM id: String, expectedMB: Int) -> ModelDownloadState {
         // <root>/models/<repoId>/                                ← snapshot
         // <root>/models/<repoId>/.cache/huggingface/download/    ← metadata (lives inside snapshot)
-        let snapshot = ModelStorage.llmRoot()
-            .appendingPathComponent("models/\(id)", isDirectory: true)
-        let metadata = snapshot
-            .appendingPathComponent(".cache/huggingface/download", isDirectory: true)
+        let snapshot = ModelStorage.llmModelDirectory(for: id)
+        let metadata = ModelStorage.llmDownloadMetadataDirectory(for: id)
         return diskState(snapshot: snapshot, metadata: metadata, expectedMB: expectedMB,
                          snapshotReadyIf: { contents in contents.contains { !$0.hasPrefix(".") } })
     }
@@ -425,10 +421,8 @@ final class ModelManager {
     @discardableResult
     func removeWhisper(_ id: String, using service: TranscriptionService) -> Bool {
         service.unload(modelID: id)
-        let snapshot = ModelStorage.whisperRoot()
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/\(id)", isDirectory: true)
-        let metadata = ModelStorage.whisperRoot()
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/.cache/huggingface/download/\(id)", isDirectory: true)
+        let snapshot = ModelStorage.whisperModelDirectory(for: id)
+        let metadata = ModelStorage.whisperDownloadMetadataDirectory(for: id)
         let removed = removeDirectory(at: snapshot)
         _ = removeDirectory(at: metadata)
         whisperStates[id] = .notDownloaded
@@ -452,8 +446,7 @@ final class ModelManager {
     @discardableResult
     func removeLLM(_ id: String, using service: MLXLLMService) -> Bool {
         service.unload(modelID: id)
-        let dir = ModelStorage.llmRoot()
-            .appendingPathComponent("models/\(id)", isDirectory: true)
+        let dir = ModelStorage.llmModelDirectory(for: id)
         let removed = removeDirectory(at: dir)
         llmStates[id] = .notDownloaded
         return removed

@@ -60,15 +60,57 @@ final class MLXLLMService: LLMEngine {
         // the factory reads the checkpoint's model_type. Idempotent.
         await Gemma4Registration.registerIfNeeded()
 
-        let configuration = ModelConfiguration(id: modelID)
+        // The Hub-backed path, used only when the weights aren't already here.
+        func loadFromHub() async throws -> ModelContainer {
+            try await LLMModelFactory.shared.loadContainer(
+                from: HubDownloader(downloadBase: ModelStorage.llmRoot()),
+                using: HubTokenizerLoader(),
+                configuration: ModelConfiguration(id: modelID)
+            ) { p in
+                let fraction = p.fractionCompleted
+                Task { @MainActor in progress?(fraction) }
+            }
+        }
 
-        let loaded = try await LLMModelFactory.shared.loadContainer(
-            from: HubDownloader(downloadBase: ModelStorage.llmRoot()),
-            using: HubTokenizerLoader(),
-            configuration: configuration
-        ) { p in
-            let fraction = p.fractionCompleted
-            Task { @MainActor in progress?(fraction) }
+        // Load straight off disk whenever the model is already downloaded.
+        //
+        // The Hub path can't be used for this: mlx-swift-lm's `resolve()` calls
+        // the downloader unconditionally for an `.id` configuration, and
+        // `HubApi.snapshot` only skips the network when the machine is fully
+        // offline (`shouldUseOfflineMode` is just `!isConnected`). So every
+        // cold load re-listed the repo and revalidated each file against
+        // huggingface.co, sending the user's IP, which model they run, and the
+        // time they ran it — on every Assistant Mode activation, and on every
+        // dictation or meeting pass that reloaded the model. Using a model we
+        // already have needs no network at all.
+        //
+        // `loadContainer(from directory:)` takes no downloader, so it cannot
+        // reach the network even by accident. Nothing is lost by going through
+        // it: we build a bare `ModelConfiguration(id:)` with no registry
+        // metadata, so the `.directory` form resolves to the same thing.
+        let localDirectory = ModelStorage.llmModelDirectory(for: modelID)
+        let isDownloaded = ModelStorage.downloadIsComplete(
+            snapshot: localDirectory,
+            metadata: ModelStorage.llmDownloadMetadataDirectory(for: modelID),
+            isReady: { contents in contents.contains { !$0.hasPrefix(".") } }
+        )
+
+        let loaded: ModelContainer
+        if isDownloaded {
+            do {
+                loaded = try await LLMModelFactory.shared.loadContainer(
+                    from: localDirectory,
+                    using: HubTokenizerLoader()
+                )
+            } catch {
+                // The on-disk copy is unusable — truncated, or a layout we
+                // didn't anticipate. Repair it through the Hub rather than
+                // leaving the user with a model that won't load.
+                MicLog.log("LLM local load failed (\(error.localizedDescription)); repairing via Hub")
+                loaded = try await loadFromHub()
+            }
+        } else {
+            loaded = try await loadFromHub()
         }
         container = loaded
         currentModelID = modelID
