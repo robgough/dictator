@@ -35,6 +35,8 @@ TCC (Privacy & Security grants for Mic / Accessibility) keys grants by *signed i
 
 When any of the three is unset, the build falls back to ad-hoc (still works, but TCC grants don't survive rebuilds). Sandbox is disabled in `Dictator.entitlements`, so no provisioning profile is required.
 
+Pin local builds to the **Developer ID Application** cert (the one releases are signed with), not the Apple Development cert. TCC keys a grant to the app's code-signing requirement, which includes the certificate's name; a local build signed differently from the Sparkle-installed release looks granted in System Settings but fails `AXIsProcessTrusted()` and prompts on every paste. With the release cert, grants survive switching between local and released builds. If a grant does go stale: `tccutil reset Accessibility net.robgough.Dictator` (and `ScreenCapture`), relaunch, grant once.
+
 The post-build phase ditto-copies the built `.app` to `~/Applications/Dictator.app` and re-signs it with the same identity. Two non-obvious reasons:
 - `cp -R` doesn't preserve code-signature metadata; `ditto` does.
 - xcodegen's `postBuildScripts` run *before* Xcode's `CodeSign` phase, so the ditto'd copy is unsigned at that moment and needs an explicit `codesign` invocation.
