@@ -538,6 +538,42 @@
                 type="application/octet-stream"
                 sparkle:edSignature="FxjB4dYnJ5m2DcJ0w4Er1twFXZDM6xximT3Q0ph+sdAOEmlo44X5HaYy4pgPAWYvf5YicyaJUWtkt3i6eOu8BQ==" />
         </item>
+        <item>
+            <title>Version 2026.9.0</title>
+            <pubDate>Sun, 06 Sep 2026 17:07:25 +0000</pubDate>
+            <sparkle:version>34</sparkle:version>
+            <sparkle:shortVersionString>2026.9.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Scratchpad gains an Extra large width.</li>
+  <li>Menu bar: the selected default mode is now a solid pill with white text, readable in light mode. Open Dictator Meetings is its own row and only appears when that app is installed.</li>
+  <li>Dictation → Modes has a Reset to defaults button that restores the built-in set of modes.</li>
+  <li>Assistant Mode has a memory. Say &quot;remember that I always sign off Cheers&quot; and it keeps it; it also picks up preferences you mention in passing. What it knows is a plain list in Settings → Assistant → Memory, and a file called assistant-memory.md in your synced folder you can open and edit at any time. Turn it off in the same place.</li>
+  <li>Ask the assistant how it&#x27;s doing and it answers like a person now, in its own voice, instead of reciting that it&#x27;s a writing tool. It still won&#x27;t invent an inbox or a morning it didn&#x27;t have.</li>
+  <li>The assistant now has a personality — warm, direct, a little dry — that shapes drafts and answers but never your own text when it is rewriting it. Edit or reset it under Settings → Assistant → Personality.</li>
+  <li>Settings has been reorganised into six sections: General, Dictation, Models, Assistant, Dictionary and About. The dictation hotkey now lives under Dictation, the assistant hotkey under Assistant, and Microphone and History are tabs inside Dictation.</li>
+  <li>Editing a mode opens a sheet instead of a drill-in page. Spoken cues are one switch with the five families underneath, and each option is a single row.</li>
+  <li>Long text fields in Settings (AI instructions, a mode&#x27;s extra instructions) are now full-width and left-aligned instead of a right-aligned value next to a label, and the prompt editors use readable body text rather than small monospace.</li>
+  <li>Settings help text is shorter throughout: one line per group, no banners, and full prompts are edited in their own sheets.</li>
+  <li>Dictation modes now use a style (Raw, Clean, Polished, Messages or Custom) instead of an editable list of AI steps. Improvements to the built-in prompts now reach every mode automatically; per-mode tweaks go in a new Extra instructions box, and Custom keeps a full prompt of your own.</li>
+  <li>Long dictations (about 60 words and up) are split into paragraphs automatically. The AI only picks where the breaks go; it can&#x27;t change a single word.</li>
+  <li>Very long dictations (about 250 words and up) are formatted in sentence-sized chunks, so the end no longer gets truncated or summarised.</li>
+  <li>The content checks that revert a rewrite gone wrong are back on for dictations of 40 words or more. They stay off for short dictations, where they used to misfire.</li>
+  <li>Fixed: after the July modes update the locked Quick mode was quietly running three AI passes. It is back to no AI, as documented.</li>
+  <li>Existing modes are migrated automatically. Modes with a hand-written prompt become Custom with the prompt intact, and instructions you had added to a Format prompt move into Extra instructions. Check Settings → Modes once after updating.</li>
+  <li>Every AI style now drops hesitation fillers (um, uh, er) and stutters by default instead of preserving every word. Polished also removes discourse fillers, false starts and grammar slips.</li>
+  <li>New Messages style for chat apps: casual register kept, no trailing full stop on short one-liners, never adds greetings or sign-offs. Fresh installs start with Quick, Standard, Polished and Messages.</li>
+  <li>History now lists every stage a dictation went through, labelled by pass, along with the style that produced it.</li>
+  <li>Meetings has moved to its own app, Dictator Meetings. Dictator no longer asks for system-audio or calendar access, and the Settings window loses the Meetings section.</li>
+  <li>New: Dictator shares its loaded model with Dictator Meetings over a local socket (Settings → General → Performance), so both apps never hold two copies in memory; dictation always takes priority.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.9.0/Dictator.dmg"
+                length="13827629"
+                type="application/octet-stream"
+                sparkle:edSignature="5F376cojjygdcSRM1v/8nUmQKmDu8/dDIZ3j1eHY31tpVWL2pHZWkiSpKnFay5C/xkUVti4frelY0v5rPEAcDg==" />
+        </item>
+    
     
     
     

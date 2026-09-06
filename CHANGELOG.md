@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.9.0 — 2026-09-06
+
 - Scratchpad gains an Extra large width.
 - Menu bar: the selected default mode is now a solid pill with white text, readable in light mode. Open Dictator Meetings is its own row and only appears when that app is installed.
 - Dictation → Modes has a Reset to defaults button that restores the built-in set of modes.
