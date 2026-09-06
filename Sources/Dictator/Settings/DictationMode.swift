@@ -468,7 +468,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         style: .messages)
 
     /// The "+" gallery: one card per style. Ids are minted fresh on install
-    /// (`ModesPane.installMode`), so a template can be added more than once.
+    /// (`DictationPane`'s `installMode`), so a template can be added more than
+    /// once.
     static var galleryTemplates: [DictationMode] {
         [
             DictationMode(id: UUID(), name: "Clean", style: .clean),

@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Settings has been reorganised into six sections: General, Dictation, Models, Assistant, Dictionary and About. The dictation hotkey now lives under Dictation, the assistant hotkey under Assistant, and Microphone and History are tabs inside Dictation.
+- Editing a mode opens a sheet instead of a drill-in page. Spoken cues are one switch with the five families underneath, and each option is a single row.
+- Settings help text is shorter throughout: one line per group, no banners, and full prompts are edited in their own sheets.
 - Dictation modes now use a style (Raw, Clean, Polished, Messages or Custom) instead of an editable list of AI steps. Improvements to the built-in prompts now reach every mode automatically; per-mode tweaks go in a new Extra instructions box, and Custom keeps a full prompt of your own.
 - Long dictations (about 60 words and up) are split into paragraphs automatically. The AI only picks where the breaks go; it can't change a single word.
 - Very long dictations (about 250 words and up) are formatted in sentence-sized chunks, so the end no longer gets truncated or summarised.

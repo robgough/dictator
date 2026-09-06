@@ -4,21 +4,25 @@ import Sparkle
 
 /// View-state shared between the Settings window's AppKit chrome (toolbar
 /// items) and its SwiftUI content (sidebar + detail panes). The toolbar is
-/// where per-pane controls live — the Models tabs, the Modes back/add/default
-/// controls, Dictionary search/sort/add, History clear — so the state they
-/// drive has to sit outside any single pane.
+/// where per-pane controls live — the Models tabs, the Dictation tabs, the
+/// add-mode button, Dictionary search/sort/add, History clear — so the state
+/// they drive has to sit outside any single pane.
 @MainActor @Observable
 final class SettingsShellModel {
     /// Selected sidebar section.
     var section: SettingsSection = .general
 
+    /// Dictation pane: which sub-pane the toolbar's segmented control shows.
+    var dictationTab: DictationSubPane = .modes
+
     /// Models pane: which sub-pane the toolbar's segmented control shows.
     var modelsTab: ModelsSubPane = .transcription
 
-    /// Modes pane: non-nil while drilled into a mode's editor.
-    var editingModeID: UUID?
-    /// Modes pane: presents the "+" gallery sheet (triggered from the toolbar,
-    /// presented by the pane).
+    /// Dictation → Modes: the mode whose editor sheet is open, if any. The
+    /// pane presents `ModeEditorSheet` off this; nil closes it.
+    var modeEditorID: UUID?
+    /// Dictation → Modes: presents the "+" gallery sheet (triggered from the
+    /// toolbar, presented by the pane).
     var showAddModeSheet = false
 
     /// Dictionary pane: live search text, mirrored from the toolbar's
@@ -149,7 +153,7 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         toolbar.autosavesConfiguration = false
-        toolbar.centeredItemIdentifiers = [.modelsTabs]
+        toolbar.centeredItemIdentifiers = [.modelsTabs, .dictationTabs]
         window.toolbar = toolbar
 
         if !window.setFrameUsingName("DictatorSettingsWindow") {
@@ -164,27 +168,27 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
     // MARK: - Toolbar structure
 
     /// The item list for the current shell state. Left of the tracking
-    /// separator is the (empty) sidebar section; after it: back button (modes
-    /// drill-in only, navigational so the window title renders after it),
-    /// then per-pane controls. Only real controls belong here — text (the
-    /// page title, counts, badges) gets wrapped in a liquid-glass capsule on
-    /// macOS 26 and reads as a broken button, so titles are the window title
-    /// and informational text lives in pane content.
+    /// separator is the (empty) sidebar section; after it, per-pane controls.
+    /// Only real controls belong here — text (the page title, counts, badges)
+    /// gets wrapped in a liquid-glass capsule on macOS 26 and reads as a
+    /// broken button, so titles are the window title and informational text
+    /// lives in pane content.
     private var currentIdentifiers: [NSToolbarItem.Identifier] {
         var ids: [NSToolbarItem.Identifier] = [.sidebarTrackingSeparator]
-        let editingMode = model.section == .modes && model.editingModeID != nil
-        if editingMode { ids.append(.settingsBack) }
         switch model.section {
         case .models:
             // Centred via `centeredItemIdentifiers`; the flexible spaces keep
             // it away from the title when the window is narrow.
             ids += [.flexibleSpace, .modelsTabs, .flexibleSpace]
-        case .modes where !editingMode:
-            ids += [.flexibleSpace, .addMode]
+        case .dictation:
+            ids += [.flexibleSpace, .dictationTabs, .flexibleSpace]
+            switch model.dictationTab {
+            case .modes:      ids.append(.addMode)
+            case .microphone: break
+            case .history:    ids.append(.historyClear)
+            }
         case .dictionary:
             ids += [.flexibleSpace, .dictionarySearch, .dictionarySort, .dictionaryAdd]
-        case .history:
-            ids += [.flexibleSpace, .historyClear]
         default:
             break
         }
@@ -192,16 +196,14 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
     }
 
     /// Rebuilds the toolbar when its *structure* changes (section switch,
-    /// modes drill-in/out). Item content that merely changes value — the
-    /// title text, counts, disabled states — updates itself: those items are
-    /// SwiftUI fragments observing the same model.
+    /// Dictation sub-tab switch — the "+" and Clear buttons belong to one tab
+    /// each). Item content that merely changes value — counts, disabled
+    /// states — updates itself: those items are SwiftUI fragments observing
+    /// the same model.
     private func observeStructure() {
         withObservationTracking {
             _ = model.section
-            _ = model.editingModeID
-            // Inside the tracked block so the reads it does — including the
-            // editing mode's *name* — re-fire this observation: renaming a
-            // mode in the editor live-updates the window title.
+            _ = model.dictationTab
             refreshWindowTitle()
         } onChange: {
             Task { @MainActor [weak self] in
@@ -224,22 +226,14 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
         }
     }
 
+    /// The window title is always the section title. (The mode editor is a
+    /// sheet with its own title now; it used to be a drill-in that swapped
+    /// this out for the mode's name.)
     private func refreshWindowTitle() {
-        let state = AppState.shared
-        if model.section == .modes,
-           let id = model.editingModeID,
-           let mode = state.settings.modes.first(where: { $0.id == id }) {
-            window?.title = mode.name
-        } else {
-            window?.title = model.section.title
-        }
+        window?.title = model.section.title
     }
 
     // MARK: - Toolbar item actions
-
-    @objc private func goBackToModes() {
-        model.editingModeID = nil
-    }
 
     @objc private func addMode() {
         model.showAddModeSheet = true
@@ -272,7 +266,7 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.sidebarTrackingSeparator, .flexibleSpace, .space,
-         .settingsBack, .modelsTabs, .addMode,
+         .dictationTabs, .modelsTabs, .addMode,
          .dictionarySearch, .dictionarySort, .dictionaryAdd, .historyClear]
     }
 
@@ -280,13 +274,9 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
                  itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch itemIdentifier {
-        case .settingsBack:
-            let item = borderedItem(itemIdentifier, symbol: "chevron.backward",
-                                    label: "Back", action: #selector(goBackToModes))
-            // Navigational: AppKit keeps it leading, ahead of the window
-            // title, like Finder's back button.
-            item.isNavigational = true
-            return item
+        case .dictationTabs:
+            return hostingItem(itemIdentifier, label: "Section",
+                               DictationToolbarTabs(shell: model))
         case .modelsTabs:
             return hostingItem(itemIdentifier, label: "Section",
                                ModelsToolbarTabs(shell: model))
@@ -338,7 +328,7 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
 }
 
 private extension NSToolbarItem.Identifier {
-    static let settingsBack = Self("settings.back")
+    static let dictationTabs = Self("settings.dictationTabs")
     static let modelsTabs = Self("settings.modelsTabs")
     static let addMode = Self("settings.addMode")
     static let dictionarySearch = Self("settings.dictionarySearch")
@@ -352,6 +342,21 @@ private extension NSToolbarItem.Identifier {
 // Only interactive controls — text in a toolbar item gets a liquid-glass
 // capsule on macOS 26 and reads as a broken button. Titles are the window
 // title; counts and badges live in pane content.
+
+private struct DictationToolbarTabs: View {
+    @Bindable var shell: SettingsShellModel
+
+    var body: some View {
+        Picker("Dictation section", selection: $shell.dictationTab) {
+            ForEach(DictationSubPane.allCases) { p in
+                Text(p.rawValue).tag(p)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+}
 
 private struct ModelsToolbarTabs: View {
     @Bindable var shell: SettingsShellModel
