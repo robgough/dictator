@@ -50,6 +50,12 @@ schemes:
     archive:
       config: Release
 
+# Every package is pinned to an EXACT version — the one the app is built and
+# tested against locally. The SwiftPM resolution file lives inside the
+# gitignored Dictator.xcodeproj, so a `from:` range let CI resolve whatever was
+# newest on the day: the v2026.9.0 release failed on FluidAudio 0.15.6 (its new
+# Float16 code) when the app had only ever been built against 0.14.5. Upgrades
+# are now deliberate: bump the number here, build, test, commit.
 packages:
   # WhisperKit graduated to the Argmax OSS SDK at v1.0 (May 2026). Same
   # `WhisperKit` library product, new repo. Crucially, v1.0 vendors Hub +
@@ -57,11 +63,10 @@ packages:
   # so it no longer constrains the MLX side's resolution.
   WhisperKit:
     url: https://github.com/argmaxinc/argmax-oss-swift
-    minVersion: 1.0.0
-    maxVersion: 2.0.0
+    exactVersion: 1.0.0
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
-    from: 2.2.0
+    exactVersion: 2.4.0
   # mlx-swift-lm is the successor to mlx-swift-examples (which we previously
   # pinned to eb76c5b7 to dodge a swift-transformers conflict with WhisperKit
   # 0.18 — both constraints are gone now). 3.x decoupled from swift-transformers;
@@ -69,7 +74,7 @@ packages:
   # weights keep living in the same on-disk layout under ModelStorage.llmRoot().
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
-    from: 3.31.3
+    exactVersion: 3.31.3
   # Direct dependency for the vendored Gemma 4 architecture (LLM/Gemma4/),
   # which imports MLX / MLXNN / MLXFast straight from mlx-swift rather than
   # through mlx-swift-lm's products. Local implicit-module builds resolve
@@ -80,25 +85,25 @@ packages:
   # new constraint pressure.
   MLXSwift:
     url: https://github.com/ml-explore/mlx-swift
-    from: 0.31.4
+    exactVersion: 0.31.4
   # Direct dependency for the Hub bridges (was transitive via mlx-swift-examples
   # before the 3.x decoupling). Still provides the legacy HubApi(downloadBase:)
   # download layout: <base>/models/<org>/<name>/ — ModelManager depends on it.
   SwiftTransformers:
     url: https://github.com/huggingface/swift-transformers
-    from: 1.3.3
+    exactVersion: 1.3.3
   # FluidAudio backs the Parakeet TDT v3 transcription engine — CoreML models
   # that run on the Apple Neural Engine. Zero dep overlap with WhisperKit /
   # MLX, so no version-pinning conflicts.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    from: 0.14.5
+    exactVersion: 0.14.5
   # Sparkle drives in-app auto-updates. The appcast feed at SUFeedURL is
   # served from GitHub Pages (docs/appcast.xml) and is signed per-release
   # with an EdDSA key — public key in Info.plist, private key only in CI.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: 2.6.0
+    exactVersion: 2.9.1
 
 targets:
   Dictator:
@@ -228,6 +233,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.Dictator
+        # Apple Silicon only (MLX, the Neural Engine, FoundationModels). Build
+        # just the arm64 slice: half the CI time, and no x86_64 compile of
+        # dependencies that legitimately use arm64-only types like Float16.
+        ARCHS: arm64
         # Default values for local builds. The CI release workflow overrides
         # both via `xcodebuild MARKETING_VERSION=... CURRENT_PROJECT_VERSION=...`
         # — the marketing version comes from the v* tag and the build number is
@@ -421,6 +430,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorMeetings
+        # Apple Silicon only (MLX, the Neural Engine, FoundationModels). Build
+        # just the arm64 slice: half the CI time, and no x86_64 compile of
+        # dependencies that legitimately use arm64-only types like Float16.
+        ARCHS: arm64
         # A space in PRODUCT_NAME gives "Dictator Meetings.app"; the module name
         # is pinned separately because Xcode would otherwise sanitise it to
         # `Dictator_Meetings`.
