@@ -2005,6 +2005,9 @@ private struct GeneralPane: View {
                         if on { state.preloadModels() }
                     }
                 SectionFootnote("Loads Whisper and the LLM into memory at launch (~3 GB resident). First dictation is then instant. Per-Mac because RAM cost differs by machine.")
+                Toggle("Share the loaded model with Dictator Meetings", isOn: $s.settings.shareLoadedModelEnabled)
+                    .onChange(of: s.settings.shareLoadedModelEnabled) { _, _ in state.save() }
+                SectionFootnote("Lets Dictator Meetings write notes with the model this app already has in memory instead of loading a second copy. Local only; dictation always takes priority.")
             } header: { ThisMacHeader("Performance") }
             Section {
                 Picker("While dictating", selection: $s.settings.audioInterruption) {

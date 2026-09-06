@@ -14,7 +14,7 @@ import MLXLMCommon
 /// they're not part of the `LLMEngine` protocol.
 @MainActor
 @Observable
-final class MLXLLMService: LLMEngine {
+final class MLXLLMService: LLMEngine, LLMUsageReporting {
     /// The MLX model id this engine should act as for the next per-pass call.
     /// Set by Pipeline's `activeLLM()` dispatch before any pipeline-driven call.
     /// The download / verify code paths take an explicit modelID parameter so
@@ -27,6 +27,21 @@ final class MLXLLMService: LLMEngine {
     /// True while `ensureLoaded` is running.
     private(set) var isLoading: Bool = false
     @ObservationIgnored private var container: ModelContainer?
+
+    /// True when a model container is resident right now. The LLM socket
+    /// server answers `status` with this (paired with `currentModelID`) so a
+    /// remote caller can tell "borrow it" from "load your own" — the server
+    /// never loads on a remote request, so an un-loaded engine must report
+    /// itself as such rather than looking available and then stalling for 30
+    /// seconds.
+    var isLoaded: Bool { container != nil }
+
+    /// True when *this specific* model is the one resident. `isLoaded` alone
+    /// isn't enough: the user can switch models in Settings without the old
+    /// container being dropped until the next load.
+    func isLoaded(modelID: String) -> Bool {
+        container != nil && currentModelID == modelID
+    }
 
     var assistantInputTokenBudget: Int {
         let id = modelID ?? ""
@@ -227,6 +242,14 @@ final class MLXLLMService: LLMEngine {
     /// outright rather than deriving it from the input length, because a
     /// structured reply's size has nothing to do with how much text it describes.
     func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+        try await completeReportingUsage(system: system, user: user, maxTokens: maxTokens).text
+    }
+
+    /// The real implementation, plus the token counts MLX already hands back.
+    /// `complete` throws them away (usage is recorded here either way); the LLM
+    /// socket server keeps them, because the process on the other end of the
+    /// socket can't see `UsageStatsStore`.
+    func completeReportingUsage(system: String, user: String, maxTokens: Int) async throws -> LLMCompletionResult {
         try await ensureReady()
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
@@ -248,7 +271,11 @@ final class MLXLLMService: LLMEngine {
             return (result.output, result.promptTokenCount, result.generationTokenCount)
         }
         UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
-        return LLMTextUtilities.clean(generated.output)
+        return LLMCompletionResult(
+            text: LLMTextUtilities.clean(generated.output),
+            promptTokens: generated.inTokens,
+            completionTokens: generated.outTokens
+        )
     }
 
     /// Assistant Mode: takes an optional snippet of text the user had selected plus

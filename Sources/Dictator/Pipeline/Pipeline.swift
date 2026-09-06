@@ -836,7 +836,13 @@ final class Pipeline {
         echoContext: InsertionContext?,
         llm: any LLMEngine
     ) async throws -> String {
-        var candidate = try await llm.runPass(text: text, systemPrompt: prompt)
+        // `.interactive` so a meeting generation borrowing the model over the
+        // socket is cancelled at the next token rather than making the user
+        // wait. Runs inline in this task, so the existing `Task.isCancelled`
+        // cancellation story is untouched.
+        var candidate = try await LLMScheduler.shared.run(.interactive) {
+            try await llm.runPass(text: text, systemPrompt: prompt)
+        }
 
         // Seam-echo guard on the context-bearing chunk: the model sometimes
         // glues the context tail onto the front of its output.
@@ -984,11 +990,13 @@ final class Pipeline {
             // 48 tokens is generous for a list of at most a few dozen numbers,
             // and tight enough that a model that starts writing prose instead
             // gets cut off long before it costs anything.
-            reply = try await llm.complete(
-                system: DictatorSettings.builtinParagraphsPrompt,
-                user: numbered,
-                maxTokens: 48
-            )
+            reply = try await LLMScheduler.shared.run(.interactive) {
+                try await llm.complete(
+                    system: DictatorSettings.builtinParagraphsPrompt,
+                    user: numbered,
+                    maxTokens: 48
+                )
+            }
         } catch {
             NSLog("[Dictator] Auto-paragraph pass failed (%@) — left as one paragraph.",
                   error.localizedDescription)
@@ -1828,11 +1836,13 @@ final class Pipeline {
             let keep = Array(priorTurns.suffix(2))
             state = .compacting
             do {
-                let newSummary = try await llm.summariseConversation(
-                    turns: toSummarise,
-                    priorSummary: summary,
-                    cancellation: { Task.isCancelled }
-                )
+                let newSummary = try await LLMScheduler.shared.run(.interactive) {
+                    try await llm.summariseConversation(
+                        turns: toSummarise,
+                        priorSummary: summary,
+                        cancellation: { Task.isCancelled }
+                    )
+                }
                 if Task.isCancelled { return }
                 summary = newSummary
                 priorTurns = keep
@@ -1851,15 +1861,17 @@ final class Pipeline {
         state = .assisting
         let result: AssistantResult
         do {
-            result = try await llm.assist(
-                selection: selection,
-                instruction: instruction,
-                systemPrompt: settings.effectiveAssistantPrompt,
-                priorTurns: priorTurns,
-                summary: summary,
-                context: assistantContext,
-                cancellation: { Task.isCancelled }
-            )
+            result = try await LLMScheduler.shared.run(.interactive) {
+                try await llm.assist(
+                    selection: selection,
+                    instruction: instruction,
+                    systemPrompt: self.settings.effectiveAssistantPrompt,
+                    priorTurns: priorTurns,
+                    summary: summary,
+                    context: assistantContext,
+                    cancellation: { Task.isCancelled }
+                )
+            }
         } catch {
             if Task.isCancelled { return }
             inFlightAssistant = nil

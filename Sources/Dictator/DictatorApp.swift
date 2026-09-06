@@ -210,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Flush any Scratchpad edit still inside its autosave debounce — quitting
         // mid-sentence shouldn't lose the last few keystrokes.
         scratchpad?.flush()
+        // Drop the LLM socket and unlink its file, so Meetings sees "no socket"
+        // rather than connecting to a dead endpoint.
+        LocalLLMServer.shared.stop()
     }
 
     /// The already-running Dictator instance, if any, excluding this process.

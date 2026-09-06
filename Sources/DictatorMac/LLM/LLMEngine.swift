@@ -123,3 +123,27 @@ extension LLMEngine {
         )
     }
 }
+
+/// A completion plus whatever usage the engine chose to report.
+///
+/// `LLMEngine.complete` returns bare text because that's all any in-process
+/// caller wants — usage is already recorded into `UsageStatsStore` inside the
+/// engine. The LLM socket server is the exception: it answers a *different*
+/// process, which has no way to see that store, so it needs the counts on the
+/// wire. Rather than widen `complete`'s return type across every call site,
+/// engines that can report usage cheaply opt in via `LLMUsageReporting`.
+struct LLMCompletionResult: Sendable {
+    let text: String
+    /// nil when the engine doesn't expose the figure (Apple Foundation).
+    let promptTokens: Int?
+    let completionTokens: Int?
+}
+
+/// Opt-in refinement of `complete` for engines that can hand back token counts.
+/// `MLXLLMService` conforms (MLX returns both counts from `generate`);
+/// `AppleFoundationLLMService` does not, and callers fall back to plain
+/// `complete` and send nils.
+@MainActor
+protocol LLMUsageReporting: AnyObject {
+    func completeReportingUsage(system: String, user: String, maxTokens: Int) async throws -> LLMCompletionResult
+}

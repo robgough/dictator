@@ -255,6 +255,14 @@ final class AppState {
         if settings.preloadModelsOnLaunch {
             preloadModels()
         }
+        // Publish the loaded LLM for Dictator Meetings to borrow. Deferred into
+        // a Task so the listener setup (directory chmod, stale-socket unlink,
+        // bind) never sits on the launch path — and so it lands after the
+        // preload above has been kicked off, which is what makes the socket
+        // worth connecting to in the first place.
+        Task { @MainActor in
+            LocalLLMServer.shared.applySettings(self.settings)
+        }
         if !settings.hasCompletedOnboarding {
             showOnboarding()
         }
@@ -311,6 +319,9 @@ final class AppState {
     func save() {
         settings.persist()
         pipeline.settingsChanged(settings)
+        // Start / stop the LLM socket to match the toggle. Idempotent, so
+        // calling it on every save is cheap.
+        LocalLLMServer.shared.applySettings(settings)
         dictationHotkey.setMode(settings.triggerMode)
         assistantHotkey.setMode(settings.assistantTriggerMode)
         // Keep meetings pointed at the (possibly just-changed) synced folder so

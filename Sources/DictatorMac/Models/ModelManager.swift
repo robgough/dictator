@@ -364,7 +364,13 @@ final class ModelManager {
         verifyingLLM.insert(id)
         defer { verifyingLLM.remove(id) }
         do {
-            try await service.ensureLoaded(modelID: id, progress: nil)
+            // Interactive: the user is sitting in Settings waiting for an
+            // answer, and a load evicts whatever container a background
+            // (socket) generation is mid-way through anyway — so cancel it
+            // first rather than racing it.
+            try await LLMScheduler.shared.run(.interactive) {
+                try await service.ensureLoaded(modelID: id, progress: nil)
+            }
         } catch {
             llmStates[id] = .failed("Verification failed: \(error.localizedDescription)")
         }

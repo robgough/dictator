@@ -109,6 +109,15 @@ struct DictatorSettings: Codable, Equatable {
     var audioInterruption: AudioInterruption
     var triggerMode: TriggerMode
     var preloadModelsOnLaunch: Bool
+    /// Whether Dictator publishes its loaded LLM on a local Unix domain socket
+    /// for Dictator Meetings to borrow (`LocalLLMServer`). On by default: the
+    /// whole point is that a Mac never holds two copies of a multi-GB
+    /// checkpoint in RAM. Nothing leaves the machine — the socket lives in
+    /// Application Support at mode 0600 — and a remote request is always
+    /// preemptible by the local user's dictation, so the cost of leaving it on
+    /// is bounded. Per-Mac, because whether the second app is even installed
+    /// is a property of this machine.
+    var shareLoadedModelEnabled: Bool
     /// One-shot migration scratch space. Pre-VocabularyStore installs persisted
     /// vocabulary entries here; on first launch under the file-backed store
     /// `AppState` hands these to `VocabularyStore.bootstrap` and then clears
@@ -329,6 +338,7 @@ struct DictatorSettings: Codable, Equatable {
         audioInterruption: .off,
         triggerMode: .fn,
         preloadModelsOnLaunch: false,
+        shareLoadedModelEnabled: true,
         vocabulary: [],
         syncedDirectoryPath: nil,
         assistantTriggerMode: .rightOption,
@@ -353,6 +363,7 @@ struct DictatorSettings: Codable, Equatable {
         audioInterruption: AudioInterruption,
         triggerMode: TriggerMode,
         preloadModelsOnLaunch: Bool,
+        shareLoadedModelEnabled: Bool,
         vocabulary: [VocabularyEntry],
         syncedDirectoryPath: String?,
         assistantTriggerMode: TriggerMode,
@@ -375,6 +386,7 @@ struct DictatorSettings: Codable, Equatable {
         self.audioInterruption = audioInterruption
         self.triggerMode = triggerMode
         self.preloadModelsOnLaunch = preloadModelsOnLaunch
+        self.shareLoadedModelEnabled = shareLoadedModelEnabled
         self.vocabulary = vocabulary
         self.syncedDirectoryPath = syncedDirectoryPath
         self.assistantTriggerMode = assistantTriggerMode
@@ -418,6 +430,7 @@ struct DictatorSettings: Codable, Equatable {
         self.audioInterruption      = try c.decodeIfPresent(AudioInterruption.self, forKey: .audioInterruption) ?? d.audioInterruption
         self.triggerMode            = try c.decodeIfPresent(TriggerMode.self, forKey: .triggerMode)            ?? d.triggerMode
         self.preloadModelsOnLaunch  = try c.decodeIfPresent(Bool.self,        forKey: .preloadModelsOnLaunch)  ?? d.preloadModelsOnLaunch
+        self.shareLoadedModelEnabled = try c.decodeIfPresent(Bool.self,       forKey: .shareLoadedModelEnabled) ?? d.shareLoadedModelEnabled
         self.vocabulary             = try c.decodeIfPresent([VocabularyEntry].self, forKey: .vocabulary) ?? d.vocabulary
         // syncedDirectoryPath replaced the older vocabularyDirectoryPath
         // field — read both, prefer the new name, so existing blobs migrate
@@ -1440,6 +1453,7 @@ struct DictatorSettings: Codable, Equatable {
         case pasteAutomatically, playSounds
         case audioInterruption
         case triggerMode, preloadModelsOnLaunch
+        case shareLoadedModelEnabled
         case vocabulary, syncedDirectoryPath
         case assistantTriggerMode, userName
         case modes, defaultModeID
@@ -1534,6 +1548,7 @@ struct DictatorSettings: Codable, Equatable {
         "llmEngine",
         "llmModelID",
         "preloadModelsOnLaunch",
+        "shareLoadedModelEnabled",
         "audioInterruption",
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
