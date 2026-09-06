@@ -14,5 +14,6 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictator Meetings has its own icon: teal, with a two-voice waveform, so the two apps are easy to tell apart in the Dock and the app switcher.
 - The AI instructions field in Settings → General is a full-width, left-aligned text field that grows as you type.
 - First standalone release. Meetings moved out of Dictator into its own app; your recordings, notes and settings carry over automatically.
