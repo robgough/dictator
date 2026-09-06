@@ -44,9 +44,18 @@ protocol LLMEngine: AnyObject {
     /// Apple Foundation no-ops (model is system-resident).
     func unload()
 
+    /// One content-preserving dictation transform: system prompt + the
+    /// transcript as a `<<< >>>`-wrapped data block, capped tightly because a
+    /// correctly formatted version is always about as long as its input. The
+    /// per-pass gate in Pipeline validates the result.
     func format(text: String, systemPrompt: String) async throws -> String
-    func tidyGrammar(text: String, systemPrompt: String) async throws -> String
-    func restructure(text: String, systemPrompt: String) async throws -> String
+
+    /// A plain system+user completion with no data wrapping and no length
+    /// assumptions, for the pipeline's structured side-calls — today just the
+    /// auto-paragraph pass, whose reply is a handful of sentence numbers.
+    /// Temperature 0; the output is `LLMTextUtilities.clean`ed like every other
+    /// pass, and token usage is recorded.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String
 
     /// `context` is the document text surrounding the selection/cursor in the
     /// focused app (read via Accessibility at hotkey-press). nil when none was
@@ -80,17 +89,14 @@ protocol LLMEngine: AnyObject {
 }
 
 extension LLMEngine {
-    /// Runs one dictation step. A step is just a system prompt plus a token
-    /// budget, so this dispatches to the existing pass methods by budget tier:
-    /// `.normal` uses the tight formatter cap (1.20× + 8), `.expanded` uses the
-    /// generous restructuring cap (1.60× + 32) for steps that legitimately grow
-    /// the text with list markers and breaks. The per-step gate in Pipeline does
-    /// the validation, uniformly across engines.
-    func runStep(text: String, systemPrompt: String, budget: StepBudget) async throws -> String {
-        switch budget {
-        case .normal:   return try await format(text: text, systemPrompt: systemPrompt)
-        case .expanded: return try await restructure(text: text, systemPrompt: systemPrompt)
-        }
+    /// Runs one dictation pass. Every style's passes are content-preserving
+    /// rewrites — format, polish, messages, a user's own prompt — so they all
+    /// share the tight formatter cap (1.20× + 8, floor 24, ceiling 2048). The
+    /// generous "expanded" budget the old structural step used is gone: nothing
+    /// in the pipeline grows the text any more, and paragraph breaks are applied
+    /// deterministically by `DictationText`, never generated.
+    func runPass(text: String, systemPrompt: String) async throws -> String {
+        try await format(text: text, systemPrompt: systemPrompt)
     }
 
     /// Convenience overload for callers that have no surrounding-document

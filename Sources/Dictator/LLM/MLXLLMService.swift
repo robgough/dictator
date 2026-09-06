@@ -170,26 +170,6 @@ final class MLXLLMService: LLMEngine {
         MLX.GPU.clearCache()
     }
 
-    /// Optional grammar tidying pass. Allowed to make small grammar fixes; the caller
-    /// validates by word-level edit distance and discards the result if it drifts too far.
-    func tidyGrammar(text: String, systemPrompt: String) async throws -> String {
-        // Grammar fixes don't grow the text — same cap shape as the formatter pass.
-        try await runFormatPass(text: text, systemPrompt: systemPrompt,
-                                maxTokenMultiplier: 1.20, maxTokenConstant: 8)
-    }
-
-    /// Structural rewrite. Adds paragraph/list structure without touching the
-    /// words. The caller is responsible for verifying the word sequence is preserved.
-    func restructure(text: String, systemPrompt: String) async throws -> String {
-        // Structure pass legitimately *adds* tokens — bullet markers ("- "), blank
-        // lines for paragraphs, numbered prefixes — even though no words change.
-        // Give it a much more generous cap so a long dictation can be bulleted
-        // without getting truncated mid-list. The word-sequence equality check in
-        // Pipeline.maybeRestructure() is what enforces correctness here.
-        try await runFormatPass(text: text, systemPrompt: systemPrompt,
-                                maxTokenMultiplier: 1.60, maxTokenConstant: 32)
-    }
-
     func format(text: String, systemPrompt: String) async throws -> String {
         // Tight cap on the formatter — a correctly formatted version is almost
         // always within ~15% of the input length. The real defense against the
@@ -237,6 +217,36 @@ final class MLXLLMService: LLMEngine {
             return (result.output, result.promptTokenCount, result.generationTokenCount)
         }
 
+        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        return LLMTextUtilities.clean(generated.output)
+    }
+
+    /// Plain system+user completion. No `<<< >>>` wrapping — the caller owns the
+    /// user message's shape (the paragraph pass sends a numbered sentence list,
+    /// not a transcript to transform) — and the caller states the reply budget
+    /// outright rather than deriving it from the input length, because a
+    /// structured reply's size has nothing to do with how much text it describes.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+        try await ensureReady()
+        guard let container else {
+            throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
+        }
+        let cap = max(1, maxTokens)
+        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
+            let userInput = UserInput(chat: [
+                .system(system),
+                .user(user)
+            ])
+            let lmInput = try await ctx.processor.prepare(input: userInput)
+            let params = GenerateParameters(maxTokens: cap, temperature: 0.0, topP: 1.0)
+            let result = try MLXLMCommon.generate(
+                input: lmInput,
+                parameters: params,
+                context: ctx,
+                didGenerate: { (_: [Int]) in Task.isCancelled ? .stop : .more }
+            )
+            return (result.output, result.promptTokenCount, result.generationTokenCount)
+        }
         UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
         return LLMTextUtilities.clean(generated.output)
     }

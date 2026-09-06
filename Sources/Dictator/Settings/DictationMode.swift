@@ -1,17 +1,96 @@
 import Foundation
 
+/// The LLM treatment a dictation mode applies. Replaces the free-form step list
+/// that shipped in July 2026: a mode now *references* a style, and the prompts
+/// for that style live in code (`DictatorSettings.builtin…Prompt`). That means
+/// prompt improvements reach every existing mode on update — under the step
+/// model each mode carried a frozen copy of its prompt, so edits in code never
+/// reached anyone who had already saved.
+enum DictationStyle: String, Codable, CaseIterable, Sendable {
+    /// No LLM at all. Spoken cues + vocabulary only — the floor.
+    case raw
+    /// One Format pass. Verbatim wording; punctuation, casing and spoken cues.
+    /// Fillers are kept.
+    case clean
+    /// Format, then Polish: fillers and false starts go, the result reads as
+    /// written English rather than a transcript.
+    case polished
+    /// One short-form pass tuned for chat: casual register, no sign-offs, no
+    /// paragraphing.
+    case messages
+    /// One pass with the mode's own full prompt (`DictationMode.customPrompt`).
+    case custom
+
+    var label: String {
+        switch self {
+        case .raw: return "Raw"
+        case .clean: return "Clean"
+        case .polished: return "Polished"
+        case .messages: return "Messages"
+        case .custom: return "Custom"
+        }
+    }
+
+    /// One line of UI copy under the style picker / on a gallery card.
+    var summary: String {
+        switch self {
+        case .raw:
+            return "No AI. The transcript exactly as heard, with your cues and dictionary."
+        case .clean:
+            return "Punctuation and casing only — every word you said, as you said it."
+        case .polished:
+            return "Cleaned up: fillers and false starts removed, reads as written."
+        case .messages:
+            return "Short-form chat: casual register, no sign-offs, no paragraphs."
+        case .custom:
+            return "One pass with a prompt you write yourself."
+        }
+    }
+
+    /// False only for `.raw` — every other style runs at least one LLM pass.
+    var usesLLM: Bool { self != .raw }
+
+    /// Whether the pipeline may insert paragraph breaks into a long dictation
+    /// after the passes have run. Off for `.raw` (no LLM at all) and
+    /// `.messages` (a chat message is one block by definition).
+    var autoParagraphs: Bool {
+        switch self {
+        case .clean, .polished, .custom: return true
+        case .raw, .messages: return false
+        }
+    }
+}
+
+/// One resolved LLM transformation. Built from a mode's style (plus its custom
+/// prompt) at the moment the pipeline runs, so `prompt` is always the current
+/// built-in text — never a stale copy from disk.
+///
+/// `prompt` is the BASE prompt only: no per-mode extra instructions and no
+/// global instructions. `DictatorSettings.assemblePrompt` layers those on at
+/// call time.
+struct DictationPass: Equatable, Sendable {
+    enum Kind: String, Sendable { case format, polish, messages, custom }
+    let kind: Kind
+    /// HUD + history label.
+    let name: String
+    let prompt: String
+}
+
 /// A named bundle of dictation post-processing settings.
 ///
-/// Each mode carries an ordered list of `steps` (its LLM pipeline) plus the
+/// Each mode picks a `style` (its LLM treatment — see `DictationStyle`) plus the
 /// deterministic pre-processing toggles, context, and delivery options. The user
 /// picks a default mode from the menu bar; the active mode can be cycled
 /// mid-recording with a key (default: Tab).
 ///
-/// Fresh installs seed a curated set: **Quick** (`isLocked == true`, no steps —
-/// raw transcript through cues + vocabulary, the floor), **Standard** (one
-/// Format step), **Polished** (Format + Grammar), and **Formal** (Format +
-/// Tighten). Users can add more from the "+" gallery. Modes saved before the
-/// step model are migrated on decode (see `LegacyPassKeys` / `derivedSteps`).
+/// Fresh installs seed a curated set: **Quick** (`isLocked == true`, `.raw` —
+/// the transcript through cues + vocabulary, the floor), **Standard**
+/// (`.clean`, the default), **Polished** (`.polished`) and **Messages**
+/// (`.messages`, bound to the common chat apps). Users can add more from the
+/// "+" gallery (`galleryTemplates`).
+///
+/// Modes saved under the step model (July 2026) or before it are migrated on
+/// decode — see `init(from:)` and `migratedStyle(fromSteps:isLocked:)`.
 ///
 /// `appBundleIDs` lets a mode auto-activate when the focused app's bundle ID
 /// matches. First mode in `settings.modes` whose `appBundleIDs` contains the
@@ -47,14 +126,18 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// list itself stays global — this is just an on/off per mode.
     var vocabularyEnabled: Bool
 
-    /// The ordered LLM pipeline for this mode. Each step transforms the previous
-    /// step's output; a mode with no steps ships the raw transcript (after the
-    /// deterministic cue/vocabulary passes) straight out, like Quick. This is
-    /// the source of truth. Blobs saved before the step model carried fixed
-    /// `formattingPassEnabled` / `grammarPassMode` / per-pass prompt fields
-    /// instead — the decoder reads those via `LegacyPassKeys` and synthesises
-    /// `steps` from them (`derivedSteps`); they are never encoded again.
-    var steps: [DictationStep]
+    /// The LLM treatment this mode applies. Source of truth for `passes`.
+    var style: DictationStyle
+
+    /// Appended (under a labelled header) to EVERY LLM pass this mode runs.
+    /// "" means none. This is where "always British spelling" or "keep my
+    /// bullet cues" lives — the built-in prompt itself is never edited.
+    var extraInstructions: String
+
+    /// Only used when `style == .custom`: the full system prompt for the single
+    /// pass. Empty falls back to `DictatorSettings.builtinFormattingPrompt` at
+    /// runtime so a half-configured custom mode still does something sensible.
+    var customPrompt: String
 
     /// When true, after a successful paste the pipeline synthesises a
     /// Return key press. Useful for chat apps (Slack, iMessage, Discord)
@@ -91,6 +174,47 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// `contextAwarenessEnabled` — either, both, or neither can be on.
     var windowVisionContextEnabled: Bool
 
+    // MARK: - Resolved pipeline
+
+    /// The ordered LLM passes this mode runs, resolved from `style` against the
+    /// CURRENT built-in prompts. `.raw` runs none.
+    ///
+    /// Each pass's `prompt` is the base text only — the pipeline layers
+    /// `extraInstructions` and the global instructions on with
+    /// `DictatorSettings.assemblePrompt`.
+    var passes: [DictationPass] {
+        switch style {
+        case .raw:
+            return []
+        case .clean:
+            return [DictationPass(kind: .format, name: "Format",
+                                  prompt: DictatorSettings.builtinFormattingPrompt)]
+        case .polished:
+            return [
+                DictationPass(kind: .format, name: "Format",
+                              prompt: DictatorSettings.builtinFormattingPrompt),
+                DictationPass(kind: .polish, name: "Polish",
+                              prompt: DictatorSettings.builtinPolishPrompt),
+            ]
+        case .messages:
+            return [DictationPass(kind: .messages, name: "Messages",
+                                  prompt: DictatorSettings.builtinMessagesPrompt)]
+        case .custom:
+            return [DictationPass(kind: .custom, name: "Custom",
+                                  prompt: resolvedCustomPrompt)]
+        }
+    }
+
+    /// `customPrompt` with the empty-string fallback applied.
+    var resolvedCustomPrompt: String {
+        let trimmed = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? DictatorSettings.builtinFormattingPrompt : customPrompt
+    }
+
+    /// Whether the pipeline should run the automatic paragraph split on long
+    /// dictations produced by this mode.
+    var runsAutoParagraphs: Bool { style.autoParagraphs }
+
     // MARK: - Stable IDs for the built-ins
 
     /// Hard-coded UUID for the built-in Quick mode. Stable across launches so
@@ -98,14 +222,15 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     static let quickID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     /// Hard-coded UUID for the seed Write mode. Users can rename or delete it
     /// after creation, so existence isn't guaranteed — only the freshly-migrated
-    /// or freshly-installed state has this id present.
+    /// or freshly-installed state has this id present. Retained because the
+    /// pre-modes migration (`synthesiseLegacyModes`) still mints it.
     static let writeID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-    /// Stable IDs for the curated step-based seed modes. Fresh installs get all
-    /// three; they can also be re-added later from the "+" gallery, which mints
+    /// Stable IDs for the curated seed modes. Fresh installs get all of these;
+    /// equivalents can also be added later from the "+" gallery, which mints
     /// fresh ids so the user can keep several.
     static let standardID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let polishedID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
-    static let formalID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
+    static let messagesID = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
 
     // MARK: - Codable
 
@@ -120,24 +245,23 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case id, name, isLocked, includeInCycle, appBundleIDs
         case punctuationCuesEnabled, numberCuesEnabled, timeCuesEnabled
         case currencyCuesEnabled, emojiCuesEnabled, vocabularyEnabled
+        case style, extraInstructions, customPrompt
         case steps
         case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
         case windowVisionContextEnabled
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
-    /// Kept off the main CodingKeys enum so Swift's synthesised encoder
-    /// doesn't try to write a property that no longer exists; we just
-    /// peek at the field on decode and use its value as the default for
-    /// the new sub-toggles.
+    /// Kept off the main CodingKeys enum so the encoder doesn't try to write a
+    /// property that no longer exists; we just peek at the field on decode and
+    /// use its value as the default for the new sub-toggles.
     private enum LegacyCueKey: String, CodingKey {
         case spokenCuesEnabled
     }
 
     /// Side container for the pre-step fixed-pass fields. Read only during
-    /// decode of a blob that has no `steps` key, to synthesise the step list;
-    /// never encoded (Swift's synthesised encoder only writes `CodingKeys`).
-    /// Delete once no installed copy could still hold the pre-step shape.
+    /// decode of a blob that has neither `style` nor `steps`, to reconstruct the
+    /// implied step list before mapping it to a style; never encoded.
     private enum LegacyPassKeys: String, CodingKey {
         case formattingPassEnabled, grammarPassMode, grammarPassMaxEditFraction
         case structuralPassEnabled, structuralPassMinWords
@@ -178,20 +302,29 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         // Off by default — it's opt-in (needs Screen Recording + macOS 27), so a
         // missing key (every blob predating this feature) stays disabled.
         self.windowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowVisionContextEnabled) ?? false
-        // Steps are the source of truth. A blob saved before the step model has
-        // no `steps` key — read the old fixed-pass fields from their own
-        // container and synthesise the equivalent list (lossless, and stable
-        // across launches since ids derive from the mode id, so it doesn't churn
-        // until the next save persists the real steps).
+
+        // Style is the source of truth. When it's present we ignore `steps`
+        // entirely — a new build's own blob (and the COMPAT SHADOW steps it
+        // writes for older builds on the same synced folder) always carries it.
+        if let decodedStyle = try c.decodeIfPresent(DictationStyle.self, forKey: .style) {
+            self.style = decodedStyle
+            self.extraInstructions = try c.decodeIfPresent(String.self, forKey: .extraInstructions) ?? ""
+            self.customPrompt = try c.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
+            return
+        }
+
+        // No style: this blob is either step-shaped (July 2026) or pre-steps.
+        // Reconstruct the legacy step list, then map it onto a style.
+        let legacySteps: [DictationStep]
         if let decodedSteps = try c.decodeIfPresent([DictationStep].self, forKey: .steps) {
-            self.steps = decodedSteps
+            legacySteps = decodedSteps
         } else {
             let lp = try? decoder.container(keyedBy: LegacyPassKeys.self)
             func legacy<T: Decodable>(_ key: LegacyPassKeys, _ type: T.Type) -> T? {
                 guard let lp else { return nil }
                 return (try? lp.decodeIfPresent(type, forKey: key)) ?? nil
             }
-            self.steps = Self.derivedSteps(
+            legacySteps = Self.derivedSteps(
                 modeID: self.id,
                 formattingPassEnabled: legacy(.formattingPassEnabled, Bool.self) ?? true,
                 formattingOverride: legacy(.formattingPromptOverride, String.self),
@@ -205,6 +338,49 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
                 structuralAddendum: legacy(.structuralPromptAddendum, String.self) ?? "",
                 structuralMinWords: legacy(.structuralPassMinWords, Int.self) ?? 30)
         }
+
+        let migrated = Self.migratedStyle(fromSteps: legacySteps, isLocked: self.isLocked)
+        self.style = migrated.style
+        self.extraInstructions = migrated.extraInstructions
+        self.customPrompt = migrated.customPrompt
+        NSLog("[Dictator] Mode migration: \"%@\" steps=[%@] → style=%@ extraInstructions=%d chars customPrompt=%d chars",
+              self.name,
+              legacySteps.map { "\($0.name)\($0.enabled ? "" : "(off)")" }.joined(separator: ","),
+              migrated.style.rawValue,
+              migrated.extraInstructions.count,
+              migrated.customPrompt.count)
+    }
+
+    /// Hand-rolled encode so we can ALSO emit the legacy `steps` shadow (see
+    /// `legacyShadowSteps`). Everything else is a straight field write.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(isLocked, forKey: .isLocked)
+        try c.encode(includeInCycle, forKey: .includeInCycle)
+        try c.encode(appBundleIDs, forKey: .appBundleIDs)
+        try c.encode(punctuationCuesEnabled, forKey: .punctuationCuesEnabled)
+        try c.encode(numberCuesEnabled, forKey: .numberCuesEnabled)
+        try c.encode(timeCuesEnabled, forKey: .timeCuesEnabled)
+        try c.encode(currencyCuesEnabled, forKey: .currencyCuesEnabled)
+        try c.encode(emojiCuesEnabled, forKey: .emojiCuesEnabled)
+        try c.encode(vocabularyEnabled, forKey: .vocabularyEnabled)
+        try c.encode(style, forKey: .style)
+        try c.encode(extraInstructions, forKey: .extraInstructions)
+        try c.encode(customPrompt, forKey: .customPrompt)
+        try c.encode(pressReturnAfterPaste, forKey: .pressReturnAfterPaste)
+        try c.encode(contextAwarenessEnabled, forKey: .contextAwarenessEnabled)
+        try c.encode(appendTrailingSpace, forKey: .appendTrailingSpace)
+        try c.encode(windowVisionContextEnabled, forKey: .windowVisionContextEnabled)
+        // COMPAT SHADOW — remove one release after v2026.9.
+        // Settings sync across the user's Macs through the Documents folder. An
+        // older build reading a blob with no `steps` key falls back to the
+        // legacy defaults (exactly the bug this phase fixes) and, on its next
+        // save, would clobber the custom prompts. So we keep writing an
+        // equivalent step list derived from the style. New builds ignore it
+        // whenever `style` is present.
+        try c.encode(legacyShadowSteps, forKey: .steps)
     }
 
     /// Memberwise init is no longer synthesised because we declared
@@ -222,7 +398,9 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         currencyCuesEnabled: Bool = true,
         emojiCuesEnabled: Bool = true,
         vocabularyEnabled: Bool = true,
-        steps: [DictationStep] = [],
+        style: DictationStyle = .clean,
+        extraInstructions: String = "",
+        customPrompt: String = "",
         pressReturnAfterPaste: Bool = false,
         contextAwarenessEnabled: Bool = true,
         appendTrailingSpace: Bool = false,
@@ -239,7 +417,9 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.currencyCuesEnabled = currencyCuesEnabled
         self.emojiCuesEnabled = emojiCuesEnabled
         self.vocabularyEnabled = vocabularyEnabled
-        self.steps = steps
+        self.style = style
+        self.extraInstructions = extraInstructions
+        self.customPrompt = customPrompt
         self.pressReturnAfterPaste = pressReturnAfterPaste
         self.contextAwarenessEnabled = contextAwarenessEnabled
         self.appendTrailingSpace = appendTrailingSpace
@@ -248,11 +428,9 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
 
     // MARK: - Prompt helper
 
-    /// The prompt WITHOUT the global addendum — built-in (or override) plus the
-    /// per-pass addendum. Used when synthesising a `DictationStep` from a legacy
-    /// mode's fields (`derivedSteps`); the pipeline appends the global
-    /// instructions to `step.prompt` at runtime, so global tweaks keep applying
-    /// even to a step whose prompt the user has edited.
+    /// The prompt WITHOUT the global addendum — built-in (or override) plus a
+    /// per-pass addendum. Used when synthesising legacy `DictationStep`s (both
+    /// the pre-steps decode path and the COMPAT SHADOW encode).
     static func bakedPrompt(builtin: String, override: String?, addendum: String) -> String {
         if let override { return override }
         let trimmed = addendum.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -265,42 +443,161 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
 
     /// The locked, no-LLM Quick mode. Always present in `settings.modes`.
     static let quick = DictationMode(
-        id: quickID, name: "Quick", isLocked: true, steps: [])
+        id: quickID, name: "Quick", isLocked: true, style: .raw)
 
-    /// The everyday default for fresh installs: one Format step, one LLM call.
+    /// The everyday default for fresh installs: one Format pass.
     static let standard = DictationMode(
-        id: standardID, name: "Standard",
-        steps: [.format(id: legacyStepID(modeID: standardID, role: 1))])
+        id: standardID, name: "Standard", style: .clean)
 
-    /// Format + a light grammar tidy.
+    /// Format + Polish: drops fillers and false starts.
     static let polished = DictationMode(
-        id: polishedID, name: "Polished",
-        steps: [
-            .format(id: legacyStepID(modeID: polishedID, role: 1)),
-            .grammar(id: legacyStepID(modeID: polishedID, role: 2)),
-        ])
+        id: polishedID, name: "Polished", style: .polished)
 
-    /// Format + tighten: removes disfluencies for formal writing.
-    static let formal = DictationMode(
-        id: formalID, name: "Formal",
-        steps: [
-            .format(id: legacyStepID(modeID: formalID, role: 1)),
-            .tighten(id: legacyStepID(modeID: formalID, role: 2)),
-        ])
+    /// Short-form chat formatting, pre-bound to the usual messaging apps so it
+    /// auto-activates there without the user configuring anything.
+    static let messages = DictationMode(
+        id: messagesID, name: "Messages",
+        appBundleIDs: [
+            "com.apple.MobileSMS",
+            "com.tinyspeck.slackmacgap",
+            "net.whatsapp.WhatsApp",
+            "com.hnc.Discord",
+            "org.whispersystems.signal-desktop",
+            "ru.keepcoder.Telegram",
+        ],
+        style: .messages)
+
+    /// The "+" gallery: one card per style. Ids are minted fresh on install
+    /// (`ModesPane.installMode`), so a template can be added more than once.
+    static var galleryTemplates: [DictationMode] {
+        [
+            DictationMode(id: UUID(), name: "Clean", style: .clean),
+            DictationMode(id: UUID(), name: "Polished", style: .polished),
+            DictationMode(id: UUID(), name: "Messages", style: .messages),
+            DictationMode(id: UUID(), name: "Raw", style: .raw),
+            DictationMode(id: UUID(), name: "Custom", style: .custom,
+                          customPrompt: DictatorSettings.builtinFormattingPrompt),
+        ]
+    }
 }
 
-// MARK: - Steps
+// MARK: - Steps → style migration
 
-/// One LLM transformation in a mode's pipeline. A mode runs its `steps` in
-/// order, each feeding the previous step's output. This replaces the old fixed
-/// format → grammar → structure passes; those are now just steps seeded from
-/// built-in templates, and users can add / remove / reorder their own.
+extension DictationMode {
+    /// What a legacy step's stored prompt was originally seeded from. Classified
+    /// by prefix because the step model baked a full copy of the prompt into
+    /// every mode and dropped the role — the prefix is the only signal left.
+    enum LegacyStepRole {
+        case format, grammar, tighten, structure, messages, custom
+    }
+
+    static func legacyRole(ofPrompt prompt: String) -> LegacyStepRole {
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.hasPrefix("You are a strict, deterministic dictation formatter") { return .format }
+        if p.hasPrefix("You are a GRAMMAR TIDYING") { return .grammar }
+        if p.hasPrefix("You are a GRAMMAR + TIGHTENING") { return .tighten }
+        if p.hasPrefix("You are a STRUCTURAL") { return .structure }
+        // The two headers the COMPAT SHADOW writes. Recognising them means a
+        // blob that round-trips through an OLDER build (which strips `style`
+        // and re-saves only `steps`) still comes back as the right style
+        // instead of collapsing into `.custom`.
+        if p.hasPrefix("You are a POLISHING") { return .tighten }
+        if p.hasPrefix("You are a strict, deterministic formatter for SHORT MESSAGES") { return .messages }
+        return .custom
+    }
+
+    /// Maps a legacy step list onto the new style model.
+    ///
+    /// The July 2026 steps migration synthesised an identical
+    /// Format → Tighten → Structure ladder into most modes (including the
+    /// locked Quick mode, which is documented as "no LLM"), so the mapping is
+    /// deliberately coarse: what matters is whether the user had a real custom
+    /// prompt, whether they had a disfluency-removing pass, and whether their
+    /// format prompt carried instructions of their own.
+    static func migratedStyle(fromSteps steps: [DictationStep], isLocked: Bool)
+        -> (style: DictationStyle, extraInstructions: String, customPrompt: String) {
+        // Quick is documented as the no-LLM floor; the ladder it was given in
+        // July was never intended. Restore the documented behaviour.
+        if isLocked { return (.raw, "", "") }
+
+        let enabled = steps.filter(\.enabled)
+        guard !enabled.isEmpty else { return (.raw, "", "") }
+
+        let roles = enabled.map { legacyRole(ofPrompt: $0.prompt) }
+
+        // A hand-written prompt in first position IS the mode. Later steps are
+        // dropped — they were the synthesised ladder, not a considered choice.
+        if roles.first == .custom {
+            return (.custom, "", enabled[0].prompt)
+        }
+
+        // A shadow-written Messages step round-tripping back from an older
+        // build. Recover its extra instructions the same way.
+        if roles.first == .messages {
+            let extra = recoveredExtraInstructions(
+                from: enabled[0].prompt, builtin: DictatorSettings.builtinMessagesPrompt)
+            return (.messages, extra, "")
+        }
+
+        let extra = enabled.indices
+            .first(where: { roles[$0] == .format })
+            .map { recoveredExtraInstructions(fromFormatPrompt: enabled[$0].prompt) } ?? ""
+
+        let hasCleanup = roles.contains(.tighten) || roles.contains(.grammar)
+        return (hasCleanup ? .polished : .clean, extra, "")
+    }
+
+    /// Recovers the user's own instructions from a stored Format prompt: the
+    /// non-blank lines that don't appear in the current built-in.
+    ///
+    /// The July migration baked `formattingPromptAddendum` into the prompt copy
+    /// (and some users then edited the copy directly), so a line-set difference
+    /// is the only way to get those instructions back out. Header lines and the
+    /// GLOBAL INSTRUCTIONS block are dropped — the pipeline re-adds both.
+    /// Capped at 2000 characters so a wholesale rewrite doesn't turn into a
+    /// giant addendum on top of the built-in.
+    static func recoveredExtraInstructions(fromFormatPrompt prompt: String) -> String {
+        recoveredExtraInstructions(from: prompt, builtin: DictatorSettings.builtinFormattingPrompt)
+    }
+
+    /// Line-set difference of `prompt` against `builtin` — see
+    /// `recoveredExtraInstructions(fromFormatPrompt:)`.
+    static func recoveredExtraInstructions(from prompt: String, builtin: String) -> String {
+        let builtinLines = Set(
+            builtin
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) })
+        var out: [String] = []
+        var inGlobalBlock = false
+        for rawLine in prompt.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            // Everything from the GLOBAL INSTRUCTIONS header to the end of the
+            // prompt is re-applied at runtime from settings; never recover it.
+            if line.hasPrefix("GLOBAL INSTRUCTIONS") { inGlobalBlock = true; continue }
+            if inGlobalBlock { continue }
+            if line.hasPrefix("ADDITIONAL USER INSTRUCTIONS") { continue }
+            if builtinLines.contains(line) { continue }
+            out.append(line)
+        }
+        let joined = out.joined(separator: "\n")
+        return joined.count > 2000 ? String(joined.prefix(2000)) : joined
+    }
+}
+
+// MARK: - Legacy steps (decode + compat-encode only)
+
+/// One LLM transformation in the July 2026 step model. NOT part of the live
+/// data model any more: `DictationMode` resolves its pipeline from `style`.
+/// This type survives only so we can (a) decode a step-shaped blob and map it
+/// onto a style, and (b) keep writing a `steps` shadow for older builds sharing
+/// the same synced settings file.
+///
+/// Legacy decode + compat-shadow only. Nothing outside this file may use it.
 struct DictationStep: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
-    /// Full, editable system prompt, seeded from a built-in template. Stored
-    /// WITHOUT the global AI-instructions addendum — the pipeline appends that
-    /// at runtime so global tweaks keep applying even to an edited prompt.
+    /// Full system prompt, stored WITHOUT the global AI-instructions addendum.
     var prompt: String
     var enabled: Bool
     /// Deterministic post-check. On failure the pipeline discards this step's
@@ -347,9 +644,7 @@ struct DictationStep: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// The deterministic post-check applied to a step's output. Mirrors the three
-/// legacy pass gates plus a numbers-only and a no-op option. Only surfaced in
-/// the UI under a per-step "Advanced" disclosure — new users never see it.
+/// The deterministic post-check applied to a legacy step's output. Decode-only.
 enum StepGate: String, Codable, Sendable, CaseIterable {
     /// ≥60% of input anchor words survive and the output doesn't balloon —
     /// catches a model that answered or continued instead of transforming.
@@ -374,24 +669,15 @@ enum StepGate: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// Token-budget tier for a step, mapped to concrete caps by the LLM service.
-/// `expanded` is for restructuring, which legitimately grows the text with
-/// list markers and line breaks; `normal` suits format/grammar rewrites.
+/// Token-budget tier for a legacy step. Decode-only.
 enum StepBudget: String, Codable, Sendable, CaseIterable {
     case normal
     case expanded
 }
 
-// MARK: - Step templates
+// MARK: - Legacy step templates
 
 extension DictationStep {
-    // Default gate is `.numbersOnly` on every template — matching the behaviour
-    // deliberately settled on weeks before this redesign: the anchor / drift /
-    // word-sequence checks were rejecting legitimate cleanups on short inputs
-    // (very common in dictation), so only the false-positive-free
-    // number-preservation revert stays on by default. The stricter gates remain
-    // selectable per step under Advanced for anyone who wants them. maxDriftFraction
-    // is still seeded sensibly so switching a step to `.maxDrift` has a good default.
     static func format(id: UUID, prompt: String = DictatorSettings.builtinFormattingPrompt) -> DictationStep {
         DictationStep(id: id, name: "Format", prompt: prompt, gate: .numbersOnly, budget: .normal)
     }
@@ -400,7 +686,7 @@ extension DictationStep {
         DictationStep(id: id, name: "Grammar", prompt: prompt, gate: .numbersOnly, maxDriftFraction: 0.15, budget: .normal)
     }
 
-    static func tighten(id: UUID, prompt: String = DictatorSettings.builtinTightenPrompt) -> DictationStep {
+    static func tighten(id: UUID, prompt: String = DictatorSettings.builtinPolishPrompt) -> DictationStep {
         // 0.30 seeds the drift ceiling should the user opt into `.maxDrift`;
         // tighten drops fillers, so it needs a looser ceiling than a plain tidy.
         DictationStep(id: id, name: "Tighten", prompt: prompt, gate: .numbersOnly, maxDriftFraction: 0.30, budget: .normal)
@@ -411,12 +697,12 @@ extension DictationStep {
     }
 }
 
-// MARK: - Legacy → steps synthesis
+// MARK: - Legacy → steps synthesis (pre-steps blobs only)
 
 extension DictationMode {
     /// Deterministic step id derived from the owning mode + a role tag. Keeps
-    /// re-derived legacy steps stable across launches (so decode → Equatable
-    /// doesn't thrash) until the first save persists them explicitly.
+    /// derived / shadow steps stable across launches so an older build reading
+    /// the shadow doesn't see the ids churn on every save.
     static func legacyStepID(modeID: UUID, role: UInt8) -> UUID {
         var b = withUnsafeBytes(of: modeID.uuid) { Array($0) }
         b[0] ^= role
@@ -426,7 +712,8 @@ extension DictationMode {
     }
 
     /// The ordered step list a legacy (pre-steps) mode implies, baking each
-    /// pass's effective prompt (minus the global addendum) into the step.
+    /// pass's effective prompt (minus the global addendum) into the step. Feeds
+    /// straight into `migratedStyle(fromSteps:isLocked:)`.
     static func derivedSteps(
         modeID: UUID,
         formattingPassEnabled: Bool,
@@ -456,7 +743,7 @@ extension DictationMode {
         case .tighten:
             out.append(.tighten(
                 id: legacyStepID(modeID: modeID, role: 2),
-                prompt: bakedPrompt(builtin: DictatorSettings.builtinTightenPrompt,
+                prompt: bakedPrompt(builtin: DictatorSettings.builtinPolishPrompt,
                                     override: grammarOverride, addendum: grammarAddendum)))
         }
         if structuralPassEnabled {
@@ -467,5 +754,40 @@ extension DictationMode {
                 minWords: structuralMinWords))
         }
         return out
+    }
+}
+
+// MARK: - Compat shadow for older builds
+
+extension DictationMode {
+    /// The legacy `steps` list this mode's style implies. Written by
+    /// `encode(to:)` so an older build reading the same synced settings file
+    /// still sees a sane pipeline instead of falling back to its defaults.
+    ///
+    /// COMPAT SHADOW — remove one release after v2026.9.
+    var legacyShadowSteps: [DictationStep] {
+        func baked(_ builtin: String) -> String {
+            Self.bakedPrompt(builtin: builtin, override: nil, addendum: extraInstructions)
+        }
+        switch style {
+        case .raw:
+            return []
+        case .clean:
+            return [.format(id: Self.legacyStepID(modeID: id, role: 1),
+                            prompt: baked(DictatorSettings.builtinFormattingPrompt))]
+        case .polished:
+            return [
+                .format(id: Self.legacyStepID(modeID: id, role: 1),
+                        prompt: baked(DictatorSettings.builtinFormattingPrompt)),
+                .tighten(id: Self.legacyStepID(modeID: id, role: 2),
+                         prompt: baked(DictatorSettings.builtinPolishPrompt)),
+            ]
+        case .messages:
+            return [.format(id: Self.legacyStepID(modeID: id, role: 1),
+                            prompt: baked(DictatorSettings.builtinMessagesPrompt))]
+        case .custom:
+            return [.format(id: Self.legacyStepID(modeID: id, role: 1),
+                            prompt: resolvedCustomPrompt)]
+        }
     }
 }

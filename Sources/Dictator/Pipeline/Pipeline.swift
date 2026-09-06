@@ -283,6 +283,11 @@ final class Pipeline {
     /// snapshot the full journey into the history at the end.
     private struct InFlight {
         var raw: String = ""
+        /// Every accepted transformation, in order — the LLM passes the mode's
+        /// style resolved to, plus the automatic paragraph split. This is what
+        /// the History pane renders; the four fields below are the legacy
+        /// fixed-pass slots, still written so old History rows keep working.
+        var stages: [DictationStage] = []
         var formatted: String?
         var dictionaryCorrected: String?
         var tidied: String?
@@ -640,20 +645,21 @@ final class Pipeline {
         // Normally instant: the capture finished while we were transcribing.
         await resolveVisionTerms()
 
-        // The mode's LLM pipeline is an ordered list of steps, each transforming
-        // the previous step's output. With no engine (LLM = None) or no steps
-        // (Quick), the transcript flows straight through the deterministic
+        // The mode's LLM pipeline is the ordered pass list its STYLE resolves to
+        // (Raw → none, Clean → Format, Polished → Format + Polish, …), against
+        // the current built-in prompts. With no engine (LLM = None) or a raw
+        // style, the transcript flows straight through the deterministic
         // vocabulary/diacritic passes and out.
         let llm = currentLLM()
-        let steps = (llm == nil) ? [] : currentMode.steps.filter { $0.enabled }
+        let passes = (llm == nil) ? [] : currentMode.passes
 
         var text = trimmed
         var warning: String? = nil
         var deterministicApplied = false
 
         // The user dictionary + mined document-spelling restore. Deterministic,
-        // run ONCE right after the first LLM step (or immediately, if the mode
-        // has no steps) so later steps see the corrected text — exactly where
+        // run ONCE right after the first LLM pass (or immediately, if the mode
+        // has none) so later passes see the corrected text — exactly where
         // these sat in the old fixed pipeline (after Pass 1, before grammar).
         func applyDeterministicMidPasses() {
             guard !deterministicApplied else { return }
@@ -672,74 +678,87 @@ final class Pipeline {
             if text != before { inFlight.dictionaryCorrected = text }
         }
 
-        for (index, step) in steps.enumerated() {
+        for (index, pass) in passes.enumerated() {
             if Task.isCancelled { return }
             let isFirst = index == 0
 
             // Skip conditions, preserving the old per-pass guards:
             //  • pure emoji/punctuation (no words) — nothing to transform, and
             //    small models narrate instead of echoing;
-            //  • question-shaped input, FIRST step only — Whisper already
-            //    punctuates questions and the formatter is tempted to answer;
-            //  • a per-step minimum word count (the old Structure trigger).
+            //  • question-shaped input, FIRST pass only — Whisper already
+            //    punctuates questions and the formatter is tempted to answer.
             let wordsFree = Self.wordSequence(text).isEmpty
             let questionSkip = isFirst && Self.looksLikeQuestion(text)
-            let belowMinWords = step.minWords.map { Self.wordSequence(text).count < $0 } ?? false
-            if wordsFree || questionSkip || belowMinWords {
+            if wordsFree || questionSkip {
                 if isFirst { applyDeterministicMidPasses() }
                 continue
             }
 
-            state = Self.hudState(for: step, isFirst: isFirst)
+            state = Self.hudState(for: pass)
 
-            // Global instructions always apply. Surrounding-document context
-            // rides on the FIRST step's prompt only (names/terminology), same
-            // as the old Pass 1; the dictation stays the only <<<>>> data block.
-            var prompt = DictatorSettings.appendingGlobal(step.prompt, settings.globalPromptAddendum)
-            var contextInjected = false
+            // The built-in prompt is the base; the mode's extra instructions and
+            // the user's global instructions layer on under their own headers.
+            // Nothing here is stored on disk — a prompt improvement in code
+            // reaches every existing mode on the next launch.
+            let prompt = DictatorSettings.assemblePrompt(
+                base: pass.prompt,
+                extraInstructions: currentMode.extraInstructions,
+                global: settings.globalPromptAddendum
+            )
+            // Surrounding-document context rides on the FIRST pass's prompt only
+            // (names/terminology), same as the old Pass 1; the dictation stays
+            // the only <<<>>> data block. When that pass is chunked, only chunk
+            // 0 gets it — the caret's surroundings describe the start of the
+            // dictation, not the middle of it.
+            var contextBlock: String? = nil
             if isFirst, let context = combinedContext(), context.hasPromptMaterial {
-                prompt += "\n\n" + context.formatterPromptBlock
-                contextInjected = true
-                NSLog("[Dictator] Step 1 (%@) running with document context (%d/%d chars, %d terms).",
-                      step.name, context.textBefore.count, context.textAfter.count, context.documentTerms.count)
+                contextBlock = context.formatterPromptBlock
+                NSLog("[Dictator] Pass 1 (%@) running with document context (%d/%d chars, %d terms).",
+                      pass.name, context.textBefore.count, context.textAfter.count, context.documentTerms.count)
             }
 
             let produced: String
             do {
-                produced = try await llm!.runStep(text: text, systemPrompt: prompt, budget: step.budget)
+                produced = try await runPassPossiblyChunked(
+                    pass: pass,
+                    text: text,
+                    prompt: prompt,
+                    contextBlock: contextBlock,
+                    echoContext: contextBlock == nil ? nil : inFlight.context,
+                    llm: llm!
+                )
             } catch {
-                // Engine failure (not loaded, etc.) will hit every later step
+                // Engine failure (not loaded, etc.) will hit every later pass
                 // too — stop here and ship what we have with a note.
                 warning = "LLM failed: \(error.localizedDescription)"
                 if isFirst { applyDeterministicMidPasses() }
                 break
             }
 
-            var candidate = produced
-            // Seam-echo guard on the context-bearing first step: the model
-            // sometimes glues the context tail onto the front of its output.
-            if isFirst, contextInjected, let context = inFlight.context {
-                let stripped = Self.stripContextEcho(candidate, raw: text, context: context)
-                if stripped != candidate {
-                    NSLog("[Dictator] Step 1 echoed document context at the seam — stripped the echoed words.")
-                    candidate = stripped
-                }
-            }
-
-            if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // Empty output → keep the previous text, skip this step.
-                NSLog("[Dictator] Step '%@' returned empty — kept previous text.", step.name)
-            } else if Self.passesGate(step, input: text, output: candidate) {
-                text = candidate
-                recordStageOutput(step: step, isFirst: isFirst, output: candidate)
-            } else {
-                NSLog("[Dictator] Step '%@' failed its '%@' gate — reverted.", step.name, step.gate.label)
+            // `runPassPossiblyChunked` already reverted anything empty or
+            // gate-failing, so a text that came back unchanged means the pass
+            // contributed nothing and doesn't earn a history stage.
+            if produced != text {
+                text = produced
+                recordStageOutput(pass: pass, isFirst: isFirst, output: produced)
             }
 
             if isFirst { applyDeterministicMidPasses() }
         }
-        // Covers empty-step modes (Quick / LLM None) and the all-skipped case.
+        // Covers pass-free modes (Raw / LLM None) and the all-skipped case.
         applyDeterministicMidPasses()
+        if Task.isCancelled { return }
+
+        // Automatic paragraphing. Runs after every pass so it sees the final
+        // wording, and only when nothing upstream already structured the text.
+        // Skipped after an engine failure — the next call would fail too.
+        if warning == nil, let llm, currentMode.runsAutoParagraphs {
+            if let split = await autoParagraph(text: text, llm: llm) {
+                text = split
+                inFlight.stages.append(DictationStage(name: "Paragraphs", text: split))
+                inFlight.restructured = split
+            }
+        }
         if Task.isCancelled { return }
 
         let note = warning ?? pendingNote
@@ -747,51 +766,262 @@ final class Pipeline {
         await finish(text: text, warning: note)
     }
 
-    /// Records a step's accepted output into the legacy history stage fields so
-    /// the History pane keeps showing the dictation's journey. Best-effort for
-    /// arbitrary step lists: the first step maps to "formatted", an expanded
-    /// (structure) step to "restructured", anything else to "tidied".
-    private func recordStageOutput(step: DictationStep, isFirst: Bool, output: String) {
+    // MARK: - Pass execution
+
+    /// Word count at or above which a pass is split into sentence-bounded
+    /// chunks. Long dictations degrade badly in a single call on a 3–4 B model:
+    /// the tail gets summarised, truncated, or quietly dropped, and the
+    /// whole-text gate then reverts everything — so the user's 400-word
+    /// dictation lands completely unformatted. Chunking keeps each call inside
+    /// the range these models are reliable in, and localises a gate failure to
+    /// the one chunk that misbehaved.
+    static let chunkThresholdWords = 250
+    /// Target size of each chunk. Comfortably under the threshold so a
+    /// just-over-threshold dictation splits into two balanced halves rather
+    /// than one full chunk and a stub.
+    static let chunkTargetWords = 180
+
+    /// Runs one pass over `text`, chunking it first when it's long enough that a
+    /// single call would be unreliable. Chunks run SEQUENTIALLY — there is one
+    /// MLX container and one Apple Foundation session; concurrent calls would
+    /// serialise anyway, at the cost of holding several KV caches at once.
+    ///
+    /// Returns the pass's text: accepted chunk outputs where the gate passed,
+    /// the chunk's own input where it didn't. Throws only on engine failure.
+    private func runPassPossiblyChunked(
+        pass: DictationPass,
+        text: String,
+        prompt: String,
+        contextBlock: String?,
+        echoContext: InsertionContext?,
+        llm: any LLMEngine
+    ) async throws -> String {
+        let words = DictationText.wordCount(text)
+        var pieces = [text]
+        if words >= Self.chunkThresholdWords {
+            let split = DictationText.chunks(text, targetWords: Self.chunkTargetWords)
+            if split.count > 1 {
+                pieces = split
+                NSLog("[Dictator] Pass '%@': %d words — running as %d sentence-bounded chunks.",
+                      pass.name, words, split.count)
+            }
+        }
+
+        var outputs: [String] = []
+        outputs.reserveCapacity(pieces.count)
+        for (index, piece) in pieces.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            let isFirstChunk = index == 0
+            var chunkPrompt = prompt
+            if isFirstChunk, let contextBlock { chunkPrompt += "\n\n" + contextBlock }
+            let chunkOutput = try await runPassChunk(
+                pass: pass,
+                text: piece,
+                prompt: chunkPrompt,
+                echoContext: isFirstChunk ? echoContext : nil,
+                llm: llm
+            )
+            outputs.append(chunkOutput)
+        }
+        return outputs.count == 1 ? outputs[0] : Self.joinChunks(outputs)
+    }
+
+    /// One LLM call plus its deterministic post-checks. Returns `text` unchanged
+    /// whenever the model's output can't be trusted, so the caller never has to
+    /// distinguish "reverted" from "accepted but identical".
+    private func runPassChunk(
+        pass: DictationPass,
+        text: String,
+        prompt: String,
+        echoContext: InsertionContext?,
+        llm: any LLMEngine
+    ) async throws -> String {
+        var candidate = try await llm.runPass(text: text, systemPrompt: prompt)
+
+        // Seam-echo guard on the context-bearing chunk: the model sometimes
+        // glues the context tail onto the front of its output.
+        if let echoContext {
+            let stripped = Self.stripContextEcho(candidate, raw: text, context: echoContext)
+            if stripped != candidate {
+                NSLog("[Dictator] Pass 1 echoed document context at the seam — stripped the echoed words.")
+                candidate = stripped
+            }
+        }
+
+        if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            NSLog("[Dictator] Pass '%@' returned empty — kept previous text.", pass.name)
+            return text
+        }
+        let inputWords = Self.wordSequence(text).count
+        guard Self.passesGate(pass, input: text, output: candidate) else {
+            NSLog("[Dictator] Pass '%@' failed its '%@' gate (%d words in) — reverted.",
+                  pass.name, Self.gateName(for: pass, inputWords: inputWords), inputWords)
+            return text
+        }
+        return candidate
+    }
+
+    /// Re-joins chunk outputs. A single space normally; a blank line when the
+    /// preceding chunk's output ended on a newline, because that break was the
+    /// model's own paragraph/list boundary and flattening it would undo the one
+    /// piece of structure it produced.
+    static func joinChunks(_ pieces: [String]) -> String {
+        var out = ""
+        var separator = ""
+        for piece in pieces {
+            let body = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            if body.isEmpty { continue }
+            if !out.isEmpty { out += separator }
+            out += body
+            separator = piece.hasSuffix("\n") ? "\n\n" : " "
+        }
+        return out
+    }
+
+    /// Records an accepted pass output: the ordered `stages` journey the History
+    /// pane renders, plus the legacy fixed-pass slot so records written now
+    /// still read correctly in a History pane that predates styles.
+    private func recordStageOutput(pass: DictationPass, isFirst: Bool, output: String) {
+        inFlight.stages.append(DictationStage(name: pass.name, text: output))
         if isFirst {
             inFlight.formatted = output
-        } else if step.budget == .expanded {
-            inFlight.restructured = output
         } else {
             inFlight.tidied = output
         }
     }
 
-    /// Maps a step to one of the existing HUD states so the panel keeps its
-    /// per-stage icon/label without a new enum case: expanded-budget steps read
-    /// as restructuring, the first step as formatting, the rest as grammar.
-    static func hudState(for step: DictationStep, isFirst: Bool) -> PipelineState {
-        if step.budget == .expanded { return .restructuring }
-        return isFirst ? .formatting : .fixingGrammar
-    }
-
-    /// Runs a step's deterministic post-check. On `false` the pipeline discards
-    /// the step's output and carries the previous text forward. Number
-    /// preservation is folded into the rewriting gates (drift / structure)
-    /// because small models like to prose-ify digits and SpokenCues can't undo
-    /// that downstream.
-    static func passesGate(_ step: DictationStep, input: String, output: String) -> Bool {
-        switch step.gate {
-        case .none:
-            return true
-        case .numbersOnly:
-            return numbersPreserved(input, output)
-        case .anchorPreserve:
-            return passOnePreservesContent(raw: input, formatted: output)
-        case .maxDrift:
-            guard numbersPreserved(input, output) else { return false }
-            return wordEditFractionStrippingFillers(from: input, to: output) <= step.maxDriftFraction
-        case .wordsUnchanged:
-            guard numbersPreserved(input, output) else { return false }
-            return wordSequence(output) == wordSequence(input)
+    /// Maps a pass to one of the existing HUD states so the panel keeps a
+    /// distinct icon/label per stage without a new enum case: the rewriting
+    /// passes read as formatting, Polish as grammar-fixing. (`.restructuring` is
+    /// reserved for the automatic paragraph split.)
+    static func hudState(for pass: DictationPass) -> PipelineState {
+        switch pass.kind {
+        case .format, .messages, .custom: return .formatting
+        case .polish: return .fixingGrammar
         }
     }
 
-    /// Drift measure used by the `.maxDrift` gate. We strip known speech fillers
+    /// Below this many input words the strict content gates are skipped in
+    /// favour of the number check alone.
+    ///
+    /// This is why the gates are back on at all. Applied to short inputs they
+    /// false-positived constantly — a six-word dictation has too few anchor
+    /// words to measure survival against, and any legitimate filler removal
+    /// blows past a drift fraction computed over a handful of tokens — so they
+    /// were switched off globally and long dictations lost their only guard.
+    /// Length-gating restores the protection exactly where the failure modes
+    /// (a summarised or answered dictation) actually occur.
+    static let strictGateMinWords = 40
+
+    /// Drift ceiling for the Polish pass: it is *supposed* to remove fillers and
+    /// false starts, so the budget is much looser than the old grammar pass's
+    /// 0.15 — and the fillers are stripped from both sides before measuring.
+    static let polishMaxDriftFraction = 0.30
+
+    /// Runs a pass's deterministic post-check. On `false` the pipeline discards
+    /// the pass's output and carries the previous text forward. Number
+    /// preservation is folded into every gate because small models like to
+    /// prose-ify digits and SpokenCues can't undo that downstream.
+    static func passesGate(_ pass: DictationPass, input: String, output: String) -> Bool {
+        let inputWords = wordSequence(input).count
+        guard inputWords >= strictGateMinWords else {
+            return numbersPreserved(input, output)
+        }
+        switch pass.kind {
+        case .format, .messages, .custom:
+            // Anchor survival + growth cap: catches the model answering,
+            // summarising, or replacing the dictation with commentary.
+            return passOnePreservesContent(raw: input, formatted: output)
+        case .polish:
+            guard numbersPreserved(input, output) else { return false }
+            return wordEditFractionStrippingFillers(from: input, to: output) <= polishMaxDriftFraction
+        }
+    }
+
+    /// Name of the gate `passesGate` applies for this pass and input length —
+    /// for the revert log line, so a rejection says which check fired.
+    static func gateName(for pass: DictationPass, inputWords: Int) -> String {
+        guard inputWords >= strictGateMinWords else { return "numbers preserved" }
+        switch pass.kind {
+        case .format, .messages, .custom: return "content preserved"
+        case .polish: return "max drift"
+        }
+    }
+
+    // MARK: - Automatic paragraphing
+
+    /// Word count at or above which a dictation is offered to the paragraph
+    /// pass. Below it, one paragraph is the right answer.
+    static let autoParagraphMinWords = 60
+
+    /// Splits a long single-paragraph dictation into paragraphs.
+    ///
+    /// The model never sees or emits prose: it receives a NUMBERED list of the
+    /// dictation's sentences and replies with the numbers that should start a
+    /// paragraph. The split is then applied by `DictationText`, which only ever
+    /// re-joins the sentences we already had — so the result is provably a
+    /// whitespace-only change, and a drifting small model cannot rewrite a
+    /// single word through this path. The signature check below enforces that
+    /// even if the sentence tokeniser misbehaves.
+    ///
+    /// Returns nil (leave the text alone) for every failure: too short, already
+    /// structured, too few sentences, an unusable reply, an engine error.
+    private func autoParagraph(text: String, llm: any LLMEngine) async -> String? {
+        guard DictationText.wordCount(text) >= Self.autoParagraphMinWords else { return nil }
+        // Already structured — the user spoke "new paragraph", or a pass broke
+        // it up. That structure is theirs; don't second-guess it.
+        guard !text.contains("\n\n") else { return nil }
+        let sentences = DictationText.sentences(text)
+        guard sentences.count >= 3 else { return nil }
+
+        state = .restructuring
+        let numbered = sentences.enumerated()
+            .map { "[\($0.offset + 1)] \($0.element)" }
+            .joined(separator: "\n")
+
+        let reply: String
+        do {
+            // 48 tokens is generous for a list of at most a few dozen numbers,
+            // and tight enough that a model that starts writing prose instead
+            // gets cut off long before it costs anything.
+            reply = try await llm.complete(
+                system: DictatorSettings.builtinParagraphsPrompt,
+                user: numbered,
+                maxTokens: 48
+            )
+        } catch {
+            NSLog("[Dictator] Auto-paragraph pass failed (%@) — left as one paragraph.",
+                  error.localizedDescription)
+            return nil
+        }
+        if Task.isCancelled { return nil }
+
+        let starts = DictationText.parseParagraphStarts(reply, sentenceCount: sentences.count)
+        // "none", a refusal, or anything without usable numbers.
+        guard !starts.isEmpty else { return nil }
+        // More than half the sentences starting a paragraph isn't paragraphing,
+        // it's a line break after every thought — the model misread the task.
+        guard starts.count <= sentences.count / 2 else {
+            NSLog("[Dictator] Auto-paragraph: %d breaks for %d sentences — rejected as over-splitting.",
+                  starts.count, sentences.count)
+            return nil
+        }
+
+        let split = DictationText.applyParagraphStarts(sentences, starts)
+        guard split != text else { return nil }
+        // Belt and braces on the whitespace-only guarantee: if the sentence
+        // tokeniser dropped or reordered anything, ship the original.
+        guard DictationText.nonWhitespaceSignature(split)
+                == DictationText.nonWhitespaceSignature(text) else {
+            NSLog("[Dictator] Auto-paragraph: re-join changed the text — kept one paragraph.")
+            return nil
+        }
+        NSLog("[Dictator] Auto-paragraphs: %d sentences → %d paragraphs.",
+              sentences.count, starts.count + 1)
+        return split
+    }
+
+    /// Drift measure used by the Polish gate. We strip known speech fillers
     /// and articles from BOTH sides before computing Levenshtein, so the
     /// validator doesn't punish the model for dropping ums, false starts, or
     /// adding/removing articles — those are the changes we want it to make.
@@ -836,8 +1066,9 @@ final class Pipeline {
         return prev[b.count]
     }
 
-    /// Returns the input as a sequence of lowercased alphanumeric "words" — used to
-    /// verify the structural pass didn't change any content.
+    /// Returns the input as a sequence of lowercased alphanumeric "words" — the
+    /// common currency of every content gate (length, anchors, drift) and of the
+    /// "is there anything here to transform?" skip check.
     private static func wordSequence(_ s: String) -> [String] {
         s.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
@@ -1242,6 +1473,8 @@ final class Pipeline {
             id: UUID(),
             timestamp: Date(),
             raw: inFlight.raw,
+            style: currentMode.style.label,
+            stages: inFlight.stages.isEmpty ? nil : inFlight.stages,
             formatted: inFlight.formatted,
             dictionaryCorrected: inFlight.dictionaryCorrected,
             tidied: inFlight.tidied,

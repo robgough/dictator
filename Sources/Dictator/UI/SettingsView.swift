@@ -1308,6 +1308,10 @@ private struct HistoryRow: View {
                             Text(Self.formatted(record.timestamp))
                             Text("·")
                             Text(record.inputDevice)
+                            if let style = record.style {
+                                Text("·")
+                                Text(style)
+                            }
                             if let note = record.note {
                                 Text("·")
                                 Text(note)
@@ -1346,20 +1350,34 @@ private struct HistoryRow: View {
     private var expandedStages: some View {
         VStack(alignment: .leading, spacing: 6) {
             stageRow(label: "Raw (Whisper)", text: record.raw)
-            if let f = record.formatted, f != record.raw {
-                stageRow(label: "Formatted", text: f)
-            }
-            if let c = record.dictionaryCorrected {
-                stageRow(label: "Dictionary-corrected", text: c)
-            }
-            if let t = record.tidied {
-                stageRow(label: "Grammar-tidied", text: t)
-            }
-            if let r = record.restructured {
-                stageRow(label: "Restructured", text: r)
-            }
-            if record.final != (record.restructured ?? record.tidied ?? record.dictionaryCorrected ?? record.formatted ?? record.raw) {
-                stageRow(label: "Final (delivered)", text: record.final)
+            if let stages = record.stages, !stages.isEmpty {
+                // New-style record: the pipeline's ordered passes, by name.
+                ForEach(stages, id: \.self) { stage in
+                    stageRow(label: stage.name, text: stage.text)
+                }
+                if let c = record.dictionaryCorrected {
+                    stageRow(label: "Dictionary-corrected", text: c)
+                }
+                if record.final != stages.last!.text {
+                    stageRow(label: "Final (delivered)", text: record.final)
+                }
+            } else {
+                // Legacy record (predates the ordered-stages model).
+                if let f = record.formatted, f != record.raw {
+                    stageRow(label: "Formatted", text: f)
+                }
+                if let c = record.dictionaryCorrected {
+                    stageRow(label: "Dictionary-corrected", text: c)
+                }
+                if let t = record.tidied {
+                    stageRow(label: "Grammar-tidied", text: t)
+                }
+                if let r = record.restructured {
+                    stageRow(label: "Restructured", text: r)
+                }
+                if record.final != (record.restructured ?? record.tidied ?? record.dictionaryCorrected ?? record.formatted ?? record.raw) {
+                    stageRow(label: "Final (delivered)", text: record.final)
+                }
             }
         }
         .padding(.top, 4)
@@ -3036,9 +3054,6 @@ private struct ModesPane: View {
     // (SettingsShell); the sheet and pages render here.
     @Bindable var shell: SettingsShellModel
     @State private var selectedID: UUID?
-    // One-shot "modes are now steps" note. Local UserDefaults flag — no settings
-    // field needed, and it's per-Mac (fine for a UI hint).
-    @AppStorage("dictator.seenStepsIntro") private var seenStepsIntro = false
 
     var body: some View {
         @Bindable var s = state
@@ -3075,12 +3090,6 @@ private struct ModesPane: View {
 
     private var selector: some View {
         VStack(spacing: 0) {
-            if !seenStepsIntro {
-                stepsIntroNote
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .padding(.bottom, 6)
-            }
             CycleAXBanner()
                 .padding(.horizontal, 20)
                 .padding(.vertical, 6)
@@ -3110,7 +3119,7 @@ private struct ModesPane: View {
             .onChange(of: selectedID) { _, new in
                 if let new { shell.editingModeID = new }
             }
-            SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, steps, prompts, bindings) sync via your Synced folder.")
+            SectionFootnote("Drag to reorder — order sets the Tab-cycle order and which mode's app bindings win. Modes (names, styles, prompts, bindings) sync via your Synced folder.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }
@@ -3119,30 +3128,6 @@ private struct ModesPane: View {
                 installMode(from: template)
             }
         }
-    }
-
-    /// One-shot banner explaining the move from fixed passes to composable steps.
-    private var stepsIntroNote: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Modes are now built from steps")
-                    .font(.subheadline.weight(.semibold))
-                Text("Your existing modes still work. Mix and match steps to build your own, or add a ready-made mode with +.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Button("Add a mode") { shell.showAddModeSheet = true }
-                        .controlSize(.small)
-                    Button("Got it") { seenStepsIntro = true }
-                        .controlSize(.small)
-                }
-                .padding(.top, 2)
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
     }
 
     // MARK: - Actions
@@ -3157,9 +3142,9 @@ private struct ModesPane: View {
         state.save()
     }
 
-    /// Installs a fresh mode from a gallery template: new mode + step ids (so a
-    /// starter can be added several times), a unique name, unlocked, no app
-    /// bindings. Drills straight into the editor.
+    /// Installs a fresh mode from a gallery template: a fresh id (so a starter
+    /// can be added several times), a unique name, unlocked, no app bindings.
+    /// Drills straight into the editor.
     private func installMode(from template: DictationMode) {
         var copy = template
         copy.id = UUID()
@@ -3167,7 +3152,6 @@ private struct ModesPane: View {
         copy.isLocked = false
         copy.includeInCycle = true
         copy.appBundleIDs = []
-        copy.steps = template.steps.map { var s = $0; s.id = UUID(); return s }
         state.settings.modes.append(copy)
         state.save()
         shell.editingModeID = copy.id
@@ -3221,8 +3205,8 @@ private struct ModesPane: View {
     }
 }
 
-/// The "+" gallery: pick a ready-made starter mode or a blank one. Passes the
-/// chosen template back to `ModesPane`, which clones it with fresh ids.
+/// The "+" gallery: one card per `DictationStyle` (`DictationMode.galleryTemplates`).
+/// Passes the chosen template back to `ModesPane`, which clones it with a fresh id.
 private struct AddModeSheet: View {
     let existingNames: Set<String>
     let onPick: (DictationMode) -> Void
@@ -3231,13 +3215,12 @@ private struct AddModeSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Add a mode").font(.title2.weight(.bold))
-            Text("Start from a ready-made mode or a blank one — rename and tweak it after.")
+            Text("Start from a ready-made style — rename and tweak it after.")
                 .font(.callout).foregroundStyle(.secondary)
             VStack(spacing: 8) {
-                starterCard(.standard, "One pass — punctuation and light grammar. Fast.")
-                starterCard(.polished, "Format, then a grammar tidy.")
-                starterCard(.formal, "Format, then tighten — drops filler for formal writing.")
-                blankCard
+                ForEach(Array(DictationMode.galleryTemplates.enumerated()), id: \.offset) { _, template in
+                    starterCard(template)
+                }
             }
             HStack {
                 Spacer()
@@ -3248,45 +3231,21 @@ private struct AddModeSheet: View {
         .frame(width: 440)
     }
 
-    private func starterCard(_ mode: DictationMode, _ desc: String) -> some View {
+    private func starterCard(_ mode: DictationMode) -> some View {
         Button {
             onPick(mode)
             dismiss()
         } label: {
-            cardBody(title: mode.name, subtitle: desc, steps: mode.steps.map(\.name))
+            cardBody(title: mode.name, subtitle: mode.style.summary)
         }
         .buttonStyle(.plain)
     }
 
-    private var blankCard: some View {
-        Button {
-            var m = DictationMode.standard
-            m.name = "New mode"
-            m.steps = []
-            onPick(m)
-            dismiss()
-        } label: {
-            cardBody(title: "Blank", subtitle: "No steps — raw transcript with your cues and dictionary.", steps: [])
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func cardBody(title: String, subtitle: String, steps: [String]) -> some View {
+    private func cardBody(title: String, subtitle: String) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.headline)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                if !steps.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(Array(steps.enumerated()), id: \.offset) { _, name in
-                            Text(name)
-                                .font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                        }
-                    }
-                    .padding(.top, 1)
-                }
             }
             Spacer()
             Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
@@ -3374,11 +3333,10 @@ private struct ModeCard: View {
         .padding(.vertical, 5)
     }
 
-    /// "Format · Grammar · Structure  ·  2 apps · Tab cycle" — what's on, and how
-    /// it's reached, so the selector is informative without drilling in.
+    /// "Clean · 2 apps · Tab cycle" — the style, and how the mode is reached,
+    /// so the selector is informative without drilling in.
     private var summary: String {
-        let names = mode.steps.filter(\.enabled).map(\.name)
-        var s = names.isEmpty ? "Raw transcript — no AI steps" : names.joined(separator: " · ")
+        var s = mode.style.label
         var extras: [String] = []
         if !mode.appBundleIDs.isEmpty {
             extras.append("\(mode.appBundleIDs.count) app\(mode.appBundleIDs.count == 1 ? "" : "s")")
@@ -3413,6 +3371,7 @@ private struct ModeDetail: View {
     let onChange: () -> Void
 
     @Environment(AppState.self) private var state
+    @State private var showCustomPromptSheet = false
 
     var body: some View {
         ScrollView {
@@ -3429,7 +3388,7 @@ private struct ModeDetail: View {
                     appBindingsSection
                     Divider()
                     preProcessingSection
-                    stepsSection
+                    styleSection
                     contextSection
                     deliverySection
                 }
@@ -3479,7 +3438,9 @@ private struct ModeDetail: View {
 
     private var lockedExplanation: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Quick mode skips every LLM pass. Whisper's raw transcript flows through the pre-processing toggles below — spoken-cue substitutions and your vocabulary list — before landing at your cursor. Useful when you want speed over polish, or when you don't want any AI rewriting.")
+            Text("Style: Raw — no AI passes.")
+                .font(.subheadline.weight(.semibold))
+            Text("Quick mode is Raw: no AI passes. Whisper's raw transcript flows through the pre-processing toggles below — spoken-cue substitutions and your vocabulary list — before landing at your cursor. Useful when you want speed over polish, or when you don't want any AI rewriting.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Text("The mode itself is locked because the no-LLM identity is the whole point, but each pre-processing toggle is editable so you can shape Quick the way you want it.")
@@ -3624,80 +3585,66 @@ private struct ModeDetail: View {
         }
     }
 
-    private var stepsSection: some View {
+    /// The AI treatment this mode applies: a style picker, a per-mode
+    /// "extra instructions" addendum (layered onto every pass at runtime by
+    /// `DictatorSettings.assemblePrompt`), and — for `.custom` — a full
+    /// prompt editor.
+    private var styleSection: some View {
         let llmDisabled = state.settings.llmEngine == .none
 
         return VStack(alignment: .leading, spacing: 10) {
+            Text("Style").font(.headline)
+
             HStack {
-                Text("Steps").font(.headline)
+                Text("AI treatment")
                 Spacer()
-                Menu {
-                    Button("Format") { addStep(.format(id: UUID())) }
-                    Button("Grammar") { addStep(.grammar(id: UUID())) }
-                    Button("Tighten") { addStep(.tighten(id: UUID())) }
-                    Button("Structure") { addStep(.structure(id: UUID())) }
-                    Divider()
-                    Button("Blank step") {
-                        addStep(DictationStep(id: UUID(), name: "New step", prompt: "", gate: .none))
+                Picker("", selection: $mode.style) {
+                    ForEach(DictationStyle.allCases, id: \.self) { style in
+                        Text(style.label).tag(style)
                     }
-                } label: {
-                    Label("Add step", systemImage: "plus")
                 }
-                .menuStyle(.borderlessButton)
+                .labelsHidden()
+                .pickerStyle(.menu)
                 .fixedSize()
-                .controlSize(.small)
-                .disabled(llmDisabled)
+                .onChange(of: mode.style) { _, _ in onChange() }
             }
-            Text("Each step is one AI pass, run top to bottom on the transcript. The first step also sees the surrounding document. Most modes need just one.")
+            Text(mode.style.summary)
                 .font(.caption).foregroundStyle(.secondary)
 
-            if mode.steps.isEmpty {
-                Text("No steps — dictations ship the raw transcript with your cues and dictionary applied, like Quick.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-            } else {
-                ForEach(Array($mode.steps.enumerated()), id: \.element.id) { index, $step in
-                    StepRow(
-                        step: $step,
-                        position: index + 1,
-                        isFirst: index == 0,
-                        canMoveUp: index > 0,
-                        canMoveDown: index < mode.steps.count - 1,
-                        onMoveUp: { moveStep(from: index, to: index - 1) },
-                        onMoveDown: { moveStep(from: index, to: index + 1) },
-                        onDelete: { deleteStep(step.id) },
-                        onChange: onChange
-                    )
+            if mode.style != .raw {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Extra instructions").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    TextEditor(text: $mode.extraInstructions)
+                        .font(.system(size: 11, design: .monospaced))
+                        .frame(height: 54)   // ~3 lines
+                        .padding(4)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                        .onChange(of: mode.extraInstructions) { _, _ in onChange() }
+                    Text("Added to every AI pass in this mode. Your Global AI instructions still apply.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
+            }
+
+            if mode.style == .custom {
+                Button {
+                    showCustomPromptSheet = true
+                } label: {
+                    Label("Edit prompt…", systemImage: "doc.text")
+                }
+                .controlSize(.small)
             }
 
             if llmDisabled {
-                Text("Steps are disabled because **Formatting LLM → None** is selected in the Models tab. Turn an LLM back on there to run them.")
+                Text("AI styles are off because **Formatting LLM → None** is selected in the Models tab.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.10)))
             }
         }
-    }
-
-    // MARK: - Step actions
-
-    private func addStep(_ step: DictationStep) {
-        mode.steps.append(step)
-        onChange()
-    }
-
-    private func deleteStep(_ id: UUID) {
-        mode.steps.removeAll { $0.id == id }
-        onChange()
-    }
-
-    private func moveStep(from: Int, to: Int) {
-        guard mode.steps.indices.contains(from), mode.steps.indices.contains(to) else { return }
-        let step = mode.steps.remove(at: from)
-        mode.steps.insert(step, at: to)
-        onChange()
+        .sheet(isPresented: $showCustomPromptSheet) {
+            CustomPromptSheet(customPrompt: $mode.customPrompt, onChange: onChange)
+        }
     }
 
     /// Opens NSOpenPanel filtered to `.application`, extracts the bundle ID,
@@ -3719,182 +3666,36 @@ private struct ModeDetail: View {
     }
 }
 
-/// One editable step in a mode's pipeline: enable toggle, name, reorder / delete
-/// controls, an expandable prompt editor, and an "Advanced" disclosure for the
-/// gate / word-minimum / output-length knobs most users never touch.
-private struct StepRow: View {
-    @Binding var step: DictationStep
-    let position: Int
-    let isFirst: Bool
-    let canMoveUp: Bool
-    let canMoveDown: Bool
-    let onMoveUp: () -> Void
-    let onMoveDown: () -> Void
-    let onDelete: () -> Void
+/// Full-screen prompt editor for a `.custom` mode: the single system prompt
+/// used for the mode's one AI pass. Large `TextEditor` bound straight to
+/// `customPrompt`, plus a reset back to the built-in Format prompt.
+private struct CustomPromptSheet: View {
+    @Binding var customPrompt: String
     let onChange: () -> Void
 
-    @State private var expanded = false
-    @State private var advancedExpanded = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: $step.enabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .onChange(of: step.enabled) { _, _ in onChange() }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(step.name.isEmpty ? "Step \(position)" : step.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(step.enabled ? .primary : .secondary)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Custom prompt").font(.headline)
                 Spacer()
-                if isFirst {
-                    Text("context")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                        .help("The first step also sees the text around the cursor and mined document terms.")
+                Button("Reset to built-in") {
+                    customPrompt = DictatorSettings.builtinFormattingPrompt
+                    onChange()
                 }
-                Button { onMoveUp() } label: { Image(systemName: "chevron.up") }
-                    .disabled(!canMoveUp)
-                Button { onMoveDown() } label: { Image(systemName: "chevron.down") }
-                    .disabled(!canMoveDown)
-                Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {
-                    HStack(spacing: 3) {
-                        Text("Edit").font(.caption)
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .rotationEffect(.degrees(expanded ? 90 : 0))
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .help(expanded ? "Collapse" : "Edit this step")
-                Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                    .help("Delete step")
+                .controlSize(.small)
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
             }
-            .buttonStyle(.borderless)
-
-            if expanded { editor }
+            .padding()
+            Divider()
+            TextEditor(text: $customPrompt)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(8)
+                .onChange(of: customPrompt) { _, _ in onChange() }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.06)))
-    }
-
-    private var subtitle: String {
-        var parts = [step.gate.label]
-        if let mw = step.minWords { parts.append("≥\(mw) words") }
-        if step.budget == .expanded { parts.append("long output") }
-        return parts.joined(separator: " · ")
-    }
-
-    private var editor: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Step name", text: $step.name)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: step.name) { _, _ in onChange() }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Prompt").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                TextEditor(text: $step.prompt)
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(height: 140)
-                    .padding(4)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-                    .onChange(of: step.prompt) { _, _ in onChange() }
-                Text("The full instructions sent to the model for this step. Your Global AI instructions still apply on top.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-
-            DisclosureGroup(isExpanded: $advancedExpanded) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Defaults suit most modes — change these only if you want finer control.")
-                        .font(.caption2).foregroundStyle(.secondary)
-
-                    // When the step runs
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Only run on longer dictations", isOn: Binding(
-                            get: { step.minWords != nil },
-                            set: { step.minWords = $0 ? (step.minWords ?? 30) : nil; onChange() }
-                        ))
-                        .toggleStyle(.switch)
-                        if let mw = step.minWords {
-                            Stepper(value: Binding(get: { mw }, set: { step.minWords = $0; onChange() }),
-                                    in: 10...200, step: 5) {
-                                Text("Skip unless the transcript reaches \(mw) words")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Text("Runs on every dictation in this mode.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-
-                    // How much it may change the text
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Allow longer output", isOn: Binding(
-                            get: { step.budget == .expanded },
-                            set: { step.budget = $0 ? .expanded : .normal; onChange() }
-                        ))
-                        .toggleStyle(.switch)
-                        Text(step.budget == .expanded
-                             ? "The model may add line breaks and list markers — for a restructuring step."
-                             : "Keeps the output about the same length as the input.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    // How its output is checked
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Safety check")
-                            Spacer()
-                            Menu {
-                                ForEach(StepGate.allCases, id: \.self) { g in
-                                    Button(g.label) { step.gate = g; onChange() }
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(step.gate.label).foregroundStyle(.secondary)
-                                    Image(systemName: "chevron.up.chevron.down")
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                        }
-                        Text(gateHelp).font(.caption).foregroundStyle(.secondary)
-                        if step.gate == .maxDrift {
-                            Stepper(value: $step.maxDriftFraction, in: 0.05...0.60, step: 0.05) {
-                                Text("Revert if more than \(Int(step.maxDriftFraction * 100))% of words change")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            .onChange(of: step.maxDriftFraction) { _, _ in onChange() }
-                        }
-                    }
-                }
-                .padding(.top, 6)
-                .animation(.easeInOut(duration: 0.15), value: step.gate)
-                .animation(.easeInOut(duration: 0.15), value: step.minWords == nil)
-            } label: {
-                Text("Advanced").font(.caption.weight(.medium))
-            }
-        }
-    }
-
-    private var gateHelp: String {
-        switch step.gate {
-        case .anchorPreserve: return "Reverts if the model dropped too many of your words or answered instead of transcribing. Best for the first, formatting step."
-        case .maxDrift: return "Reverts if the rewrite changed more than the allowed fraction of words. Good for grammar and tightening."
-        case .wordsUnchanged: return "Reverts if any word changed — only line breaks and list markers may be added. For a restructuring step."
-        case .numbersOnly: return "Reverts only if a number changed. Otherwise accepts the output."
-        case .none: return "No check — whatever the model returns is used."
-        }
+        .frame(width: 720, height: 520)
     }
 }
 

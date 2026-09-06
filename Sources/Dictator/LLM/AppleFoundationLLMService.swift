@@ -68,16 +68,27 @@ final class AppleFoundationLLMService: LLMEngine {
                                        maxTokenMultiplier: 1.20, maxTokenConstant: 8)
     }
 
-    func tidyGrammar(text: String, systemPrompt: String) async throws -> String {
-        try await runDeterministicPass(text: text, systemPrompt: systemPrompt,
-                                       maxTokenMultiplier: 1.20, maxTokenConstant: 8)
-    }
-
-    func restructure(text: String, systemPrompt: String) async throws -> String {
-        // Structure pass adds tokens (bullet markers, blank lines) even though no
-        // words change — the same 1.60× + 32 cap shape MLX uses.
-        try await runDeterministicPass(text: text, systemPrompt: systemPrompt,
-                                       maxTokenMultiplier: 1.60, maxTokenConstant: 32)
+    /// Plain system+user completion. No `<<< >>>` wrapping and no length
+    /// heuristics — the caller states the reply budget, because a structured
+    /// reply's size (the paragraph pass returns a few sentence numbers) has
+    /// nothing to do with how much text it describes. The refusal / over-length
+    /// guards in `runDeterministicPass` are deliberately absent: they measure
+    /// the reply against the input, which is meaningless here. A refusal comes
+    /// back as text the caller's own parser rejects.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+        try await ensureReady()
+        let session = LanguageModelSession(instructions: Instructions(system))
+        let options = GenerationOptions(
+            sampling: .greedy,
+            temperature: 0.0,
+            maximumResponseTokens: max(1, maxTokens)
+        )
+        let response = try await session.respond(to: user, options: options)
+        Self.recordTokenUsage(
+            promptCharCount: system.count + user.count,
+            responseCharCount: response.content.count
+        )
+        return LLMTextUtilities.clean(response.content)
     }
 
     private func runDeterministicPass(
@@ -113,12 +124,12 @@ final class AppleFoundationLLMService: LLMEngine {
         )
         let cleaned = LLMTextUtilities.clean(response.content)
 
-        // Length sanity check. Each deterministic pass should produce
-        // output the same order of magnitude as the input — format
-        // shrinks or stays equal, grammar mostly equal, structure
-        // grows ~10-20% with bullets/breaks. Anything beyond 2× + 50c
-        // is the model having written new prose. Throwing here lets
-        // the pipeline revert to the previous stage's text.
+        // Length sanity check. A dictation pass should produce output
+        // the same order of magnitude as its input — every style's
+        // passes are content-preserving rewrites, so they shrink or
+        // stay roughly equal. Anything beyond 2× + 50c is the model
+        // having written new prose. Throwing here lets the pipeline
+        // revert to the previous stage's text.
         let allowedMaxChars = text.count * 2 + 50
         if cleaned.count > allowedMaxChars {
             throw NSError(

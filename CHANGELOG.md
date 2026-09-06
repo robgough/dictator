@@ -13,7 +13,14 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Dictation modes now use a style (Raw, Clean, Polished, Messages or Custom) instead of an editable list of AI steps. Improvements to the built-in prompts now reach every mode automatically; per-mode tweaks go in a new Extra instructions box, and Custom keeps a full prompt of your own.
+- Long dictations (about 60 words and up) are split into paragraphs automatically. The AI only picks where the breaks go; it can't change a single word.
+- Very long dictations (about 250 words and up) are formatted in sentence-sized chunks, so the end no longer gets truncated or summarised.
+- The content checks that revert a rewrite gone wrong are back on for dictations of 40 words or more. They stay off for short dictations, where they used to misfire.
+- Fixed: after the July modes update the locked Quick mode was quietly running three AI passes. It is back to no AI, as documented.
+- Existing modes are migrated automatically. Modes with a hand-written prompt become Custom with the prompt intact, and instructions you had added to a Format prompt move into Extra instructions. Check Settings → Modes once after updating.
+- New Messages style for chat apps: casual register kept, no trailing full stop on short one-liners, never adds greetings or sign-offs. Fresh installs start with Quick, Standard, Polished and Messages.
+- History now lists every stage a dictation went through, labelled by pass, along with the style that produced it.
 
 ## v2026.8.0 — 2026-08-06
 
