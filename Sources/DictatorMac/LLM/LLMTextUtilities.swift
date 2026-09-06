@@ -71,10 +71,49 @@ enum LLMTextUtilities {
                 else { mode = .draft }
                 let bodyLines = lines.dropFirst(idx + 1)
                 let body = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                return AssistantResult(mode: mode, text: stripAssistantPreamble(body))
+                let split = extractRemember(from: stripAssistantPreamble(body))
+                return AssistantResult(mode: mode, text: split.text, remember: split.remember)
             }
         }
-        return AssistantResult(mode: .draft, text: stripAssistantPreamble(cleaned))
+        let split = extractRemember(from: stripAssistantPreamble(cleaned))
+        return AssistantResult(mode: .draft, text: split.text, remember: split.remember)
+    }
+
+    /// Longest fact we'll accept off a `REMEMBER:` line. Beyond this the model
+    /// isn't recording a preference, it's summarising the task — which is
+    /// exactly what the prompt tells it not to do — so the line is dropped.
+    static let maxRememberLength = 240
+
+    /// Pulls a trailing `REMEMBER: <fact>` line off the assistant's output.
+    ///
+    /// The line is always stripped from the deliverable when it's recognised —
+    /// it's protocol, never content, and pasting it into the user's document
+    /// would be worse than losing the memory. Over-long lines are still
+    /// stripped but the fact is discarded.
+    ///
+    /// Only fires when there's content left afterwards: an output that is
+    /// *nothing but* a REMEMBER line is a malformed turn, and returning an
+    /// empty deliverable turns it into a confusing "assistant returned no
+    /// output" rather than something the user can see and react to.
+    static func extractRemember(from text: String) -> (text: String, remember: String?) {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let idx = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+        else { return (text, nil) }
+
+        // Tolerate the markdown decoration small models sprinkle on labels.
+        let line = lines[idx].trimmingCharacters(in: .whitespaces)
+        let bare = line.trimmingCharacters(in: CharacterSet(charactersIn: "-*•#> \t"))
+            .replacingOccurrences(of: "**", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        guard bare.uppercased().hasPrefix("REMEMBER:") else { return (text, nil) }
+
+        lines.removeSubrange(idx...)
+        let remaining = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remaining.isEmpty else { return (text, nil) }
+
+        let fact = String(bare.dropFirst("REMEMBER:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fact.isEmpty, fact.count <= maxRememberLength else { return (remaining, nil) }
+        return (remaining, fact)
     }
 
     /// Small local models almost always sneak in a meta preamble ("Sure! Here's the

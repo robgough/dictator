@@ -41,6 +41,7 @@ private struct DictationModesTab: View {
     /// eats the drag. Selection is what opens the editor sheet; it's cleared
     /// when the sheet dismisses so re-clicking the same mode re-opens it.
     @State private var selectedID: UUID?
+    @State private var confirmResetModes = false
 
     /// Tab cycling needs Accessibility (the event tap has to swallow the Tab
     /// keystroke before it inserts a tab character). Without it the footer
@@ -97,6 +98,24 @@ private struct DictationModesTab: View {
                 .pickerStyle(.menu)
 
                 modeList
+
+                HStack {
+                    Spacer()
+                    Button("Reset to defaults…", role: .destructive) {
+                        confirmResetModes = true
+                    }
+                    .controlSize(.small)
+                }
+                .confirmationDialog(
+                    "Reset modes to defaults?",
+                    isPresented: $confirmResetModes,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive) { resetModesToDefaults() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Replaces every mode with the built-in set: Quick, Standard, Polished and Messages. Custom prompts and app bindings are lost.")
+                }
             } header: {
                 Text("Modes")
             } footer: {
@@ -196,6 +215,16 @@ private struct DictationModesTab: View {
 
     private func makeDefault(_ mode: DictationMode) {
         state.settings.defaultModeID = mode.id
+        state.save()
+    }
+
+    /// Back to a fresh install's modes. Useful for seeing what other users see,
+    /// and the escape hatch when a migration or an experiment leaves the list
+    /// in a state that's easier to discard than repair.
+    private func resetModesToDefaults() {
+        shell.modeEditorID = nil
+        state.settings.modes = DictatorSettings.defaults.modes
+        state.settings.defaultModeID = DictatorSettings.defaults.defaultModeID
         state.save()
     }
 

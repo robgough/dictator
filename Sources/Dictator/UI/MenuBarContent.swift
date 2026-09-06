@@ -35,17 +35,29 @@ struct MenuBarContent: View {
                 recentList
             }
 
+            // Its own full-width row, and only when the app is actually
+            // installed: squeezed into the footer next to Settings and Quit
+            // the label wrapped, and users without Dictator Meetings have no
+            // use for it at all.
+            if meetingsInstalled {
+                Divider()
+                Button {
+                    openDictatorMeetings()
+                } label: {
+                    Label("Open Dictator Meetings…", systemImage: "person.2.wave.2")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+            }
+
             Divider()
             HStack(spacing: 8) {
                 Button {
                     SettingsWindowController.shared.show()
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
-                }
-                Button {
-                    openDictatorMeetings()
-                } label: {
-                    Label("Open Dictator Meetings…", systemImage: "person.2.wave.2")
                 }
                 // The wizard exists to walk you through the things that
                 // *must* be configured for dictation to work. Once mic is
@@ -88,8 +100,17 @@ struct MenuBarContent: View {
     /// knows which. Launching by URL (rather than
     /// `launchApplication(withBundleIdentifier:)`) keeps the "already running"
     /// case a plain re-activation.
+    private static let meetingsBundleID = "net.robgough.DictatorMeetings"
+
+    /// Whether Dictator Meetings is installed anywhere Launch Services knows
+    /// about. Evaluated on each popover render — cheap, and it means the row
+    /// appears the moment the app is installed without a relaunch.
+    private var meetingsInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.meetingsBundleID) != nil
+    }
+
     private func openDictatorMeetings() {
-        let bundleID = "net.robgough.DictatorMeetings"
+        let bundleID = Self.meetingsBundleID
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             if let site = URL(string: "https://dictator.robgough.net/#meetings") {
                 NSWorkspace.shared.open(site)
@@ -155,25 +176,20 @@ struct MenuBarContent: View {
                             .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
+                            // Selected = solid accent with white text; a tinted
+                            // capsule with accent text failed contrast on the
+                            // light-mode popover material.
                             .background(
                                 Capsule().fill(
                                     state.settings.defaultModeID == mode.id
-                                    ? Color.brandBlue.opacity(0.20)
-                                    : Color.secondary.opacity(0.10)
-                                )
-                            )
-                            .overlay(
-                                Capsule().strokeBorder(
-                                    state.settings.defaultModeID == mode.id
-                                    ? Color.brandBlue.opacity(0.45)
-                                    : Color.clear,
-                                    lineWidth: 1
+                                    ? Color.brandBlue
+                                    : Color.primary.opacity(0.08)
                                 )
                             )
                             .foregroundStyle(
                                 state.settings.defaultModeID == mode.id
-                                ? Color.brandBlue
-                                : .primary
+                                ? Color.white
+                                : Color.primary
                             )
                     }
                     .buttonStyle(.plain)

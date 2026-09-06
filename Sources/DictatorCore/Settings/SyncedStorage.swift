@@ -8,6 +8,7 @@ import Foundation
 /// - `vocabulary.json` — the custom dictionary.
 /// - `history.json` — recent dictations.
 /// - `conversations.json` — Assistant Mode multi-turn threads.
+/// - `assistant-memory.md` — what Assistant Mode remembers about the user.
 ///
 /// The directory defaults to `~/Documents/Dictator/`. If the user has set a
 /// custom path (Settings → General → Synced folder), it's stored in
@@ -131,7 +132,7 @@ enum SyncedStorage {
     /// instead of leaving behind stranded copies in the old location.
     @MainActor
     static func relocateContents(from old: URL, to new: URL) {
-        let filenames = ["settings.json", "vocabulary.json", "history.json", "conversations.json", "scratchpad.md", "people.json"]
+        let filenames = ["settings.json", "vocabulary.json", "history.json", "conversations.json", "scratchpad.md", "people.json", "assistant-memory.md"]
         ensureDirectory(at: new)
         for name in filenames {
             let src = old.appendingPathComponent(name)

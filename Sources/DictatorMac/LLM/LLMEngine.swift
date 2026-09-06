@@ -11,6 +11,12 @@ enum AssistantMode: String, Sendable, Codable, Hashable {
 struct AssistantResult: Sendable {
     let mode: AssistantMode
     let text: String
+    /// One fact the model asked us to keep for future turns, pulled off a
+    /// trailing `REMEMBER:` line by `LLMTextUtilities.parseAssistant`. nil on
+    /// the overwhelming majority of turns. Defaulted so every existing
+    /// constructor — including Dictator Meetings' — keeps compiling, and so a
+    /// backend that doesn't play the memory protocol simply never sets it.
+    var remember: String? = nil
 }
 
 /// Common surface for every LLM backend the pipeline can drive. Two implementations

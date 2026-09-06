@@ -1775,6 +1775,35 @@ final class Pipeline {
         // instruction with no surface to expose it.
         instruction = SpokenCues.apply(to: instruction)
 
+        // Deterministic memory path. "Remember that I always sign off Cheers"
+        // is an instruction to the app, not a writing task — and a small local
+        // model handed it will cheerfully draft an email *about* remembering
+        // things. So we match the spoken prefix ourselves, store the rest, and
+        // never involve the LLM.
+        //
+        // Only when there's no selection: with text selected the user is
+        // plausibly saying "remember that, and rewrite this" — so we store the
+        // fact AND still run the turn.
+        let hasSelection = !(selection ?? "").isEmpty
+        var rememberedNote: String? = nil
+        if settings.assistantMemoryEnabled,
+           let fact = AssistantMemory.rememberCommand(in: instruction) {
+            let stored = AssistantMemory.shared.remember(fact)
+            if !hasSelection {
+                inFlightAssistant = nil
+                nextAssistantIsContinuation = false
+                state = .done(text: fact, pasted: false, note: stored ? "Remembered." : "Already remembered.")
+                if settings.playSounds { SoundEffects.shared.playDone() }
+                doneFader = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(2500))
+                    guard !Task.isCancelled else { return }
+                    self?.state = .idle
+                }
+                return
+            }
+            if stored { rememberedNote = fact }
+        }
+
         // Resolve prior context for this turn. If continuing, take the verbatim
         // tail (turns after the compaction cutoff) plus the existing summary.
         // Otherwise we send nothing — a fresh conversation.
@@ -1859,13 +1888,24 @@ final class Pipeline {
         }
 
         state = .assisting
+        // Memory is a store, not a setting, so it's composed here rather than
+        // inside `effectiveAssistantPrompt` — Settings shouldn't have to reach
+        // into a file-backed singleton to render a prompt preview.
+        // `let`, not a mutated var: it's captured by the @Sendable closure
+        // handed to LLMScheduler, and Swift 6 rejects a captured mutable local.
+        let assistantSystemPrompt: String = {
+            let base = settings.effectiveAssistantPrompt
+            guard settings.assistantMemoryEnabled,
+                  let memory = AssistantMemory.shared.promptBlock() else { return base }
+            return base + "\n\n" + memory
+        }()
         let result: AssistantResult
         do {
             result = try await LLMScheduler.shared.run(.interactive) {
                 try await llm.assist(
                     selection: selection,
                     instruction: instruction,
-                    systemPrompt: self.settings.effectiveAssistantPrompt,
+                    systemPrompt: assistantSystemPrompt,
                     priorTurns: priorTurns,
                     summary: summary,
                     context: assistantContext,
@@ -1939,17 +1979,25 @@ final class Pipeline {
             wordsOut: UsageStatsStore.wordCount(text)
         )
 
+        // The model's own `REMEMBER:` line, if it emitted one. Parsed off the
+        // output by `LLMTextUtilities.parseAssistant`, so `text` above is
+        // already clean.
+        if settings.assistantMemoryEnabled, let fact = result.remember {
+            if AssistantMemory.shared.remember(fact) { rememberedNote = fact }
+        }
+
         await deliverAssistant(
             text: text,
             mode: result.mode,
             hadSelection: selection != nil,
-            conversation: updatedConversation
+            conversation: updatedConversation,
+            remembered: rememberedNote
         )
         inFlightAssistant = nil
         nextAssistantIsContinuation = false
     }
 
-    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation) async {
+    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation, remembered: String? = nil) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
         // same reasoning as `finish()`. Assistant Mode is mode-less, so the
         // emoji-tidy pass always runs — matches the always-on substitution on
@@ -2016,6 +2064,12 @@ final class Pipeline {
         // the user can read it; otherwise it only refreshes the window if
         // it's already open (e.g. a multi-turn REPLACE thread).
         onAssistantTurnCompleted?(conversation, !pasted)
+
+        // Surface anything we just learned. Memory that writes itself silently
+        // is memory the user can't correct.
+        if let remembered {
+            note = note.isEmpty ? "Remembered: \(remembered)" : "\(note) · Remembered: \(remembered)"
+        }
 
         state = .done(text: text, pasted: pasted, note: note)
         if settings.playSounds { SoundEffects.shared.playDone() }

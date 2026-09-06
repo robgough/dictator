@@ -63,6 +63,7 @@ enum ScratchpadWidth: String, Codable, Sendable, Hashable, CaseIterable, Identif
     case small
     case medium
     case large
+    case extraLarge
 
     var id: String { rawValue }
 
@@ -71,15 +72,18 @@ enum ScratchpadWidth: String, Codable, Sendable, Hashable, CaseIterable, Identif
         case .small: return "Small"
         case .medium: return "Medium"
         case .large: return "Large"
+        case .extraLarge: return "Extra large"
         }
     }
 
-    /// Card width in points. `CGFloat` is taken at the use site.
+    /// Card width in points. `CGFloat` is taken at the use site, which also
+    /// clamps to the screen, so Extra large simply fills a laptop display.
     var points: Double {
         switch self {
         case .small: return 380
         case .medium: return 520
         case .large: return 700
+        case .extraLarge: return 960
         }
     }
 }
@@ -194,6 +198,17 @@ struct DictatorSettings: Codable, Equatable {
     /// it's a personal preference, not hardware-dependent. The actual key combo
     /// lives in the KeyboardShortcuts library's own storage (per-Mac), the same
     /// as the dictation/assistant combos.
+    /// How the assistant sounds. Seeded from `builtinAssistantPersona`; the
+    /// user can rewrite it wholesale in Settings → Assistant → Personality.
+    /// Stored as text rather than an addendum/override pair because a voice
+    /// isn't something you bolt onto a default — you either take ours or you
+    /// write your own. Empty means "no personality block at all".
+    var assistantPersona: String = DictatorSettings.builtinAssistantPersona
+    /// Whether Assistant Mode keeps a long-term memory of things the user has
+    /// told it (see `AssistantMemory`). Off means the memory file is never
+    /// read into the prompt and never written to — including by an explicit
+    /// "remember that…" instruction.
+    var assistantMemoryEnabled: Bool = true
     var scratchpadEnabled: Bool = true
 
     /// How wide the Scratchpad card slides in. Synced — a personal preference,
@@ -365,6 +380,8 @@ struct DictatorSettings: Codable, Equatable {
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
         self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
+        self.assistantPersona = try c.decodeIfPresent(String.self, forKey: .assistantPersona) ?? d.assistantPersona
+        self.assistantMemoryEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantMemoryEnabled) ?? d.assistantMemoryEnabled
         self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
         self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
     }
@@ -533,8 +550,30 @@ struct DictatorSettings: Codable, Equatable {
             substituted = base.replacingOccurrences(of: "{{USER_NAME}}", with: trimmed)
         }
 
-        guard let ctx = userContextBlock else { return substituted }
-        return ctx + "\n\n" + substituted
+        var blocks: [String] = []
+        if let persona = personalityBlock { blocks.append(persona) }
+        if let ctx = userContextBlock { blocks.append(ctx) }
+        blocks.append(substituted)
+        return blocks.joined(separator: "\n\n")
+    }
+
+    /// The assistant's voice, as a labelled block at the very top of the
+    /// prompt. nil when the user has emptied the persona field — an empty
+    /// personality section reads to a small model as "have no personality",
+    /// which is worse than saying nothing.
+    ///
+    /// The REPLACE carve-out is the important half: the persona is how the
+    /// assistant sounds when it's speaking, not a licence to rewrite the
+    /// user's own prose into its own voice.
+    var personalityBlock: String? {
+        let persona = assistantPersona.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !persona.isEmpty else { return nil }
+        return """
+        PERSONALITY
+        \(persona)
+        This is your voice in DRAFT replies and conversational answers. When transforming the \
+        user's own text (REPLACE), their voice wins.
+        """
     }
 
     /// Short preamble that pins the user's name in the LLM's context. nil when
@@ -895,6 +934,15 @@ struct DictatorSettings: Codable, Equatable {
     You split dictated text into paragraphs. The user's message is a numbered list of sentences, in order. Reply with ONLY the numbers of the sentences that should START a new paragraph, comma-separated, e.g. `4, 9`. Never include 1. Start a new paragraph where the topic or subject changes, where the speaker moves to a new point, or before a closing thought. Aim for paragraphs of two to five sentences. If everything is one topic, reply `none`. No other words.
     """
 
+    /// The assistant's default voice. Second person, no name, no biography —
+    /// it describes *how to sound*, not who to be, because the prompt proper
+    /// already spends a paragraph telling the model it has no personal life
+    /// and a character sketch that reads like a person invites exactly the
+    /// invented-biography answers that paragraph forbids.
+    static let builtinAssistantPersona = """
+    You're warm, quick, and a little dry. You're direct and concrete: you say less rather than more, and you'd rather be exactly right than comprehensive. You never gush, never sound corporate, never pad a sentence to seem helpful. You care about getting the words right — rhythm, precision, the difference between two near-synonyms. A well-placed joke is welcome; it's never at the user's expense.
+    """
+
     static let builtinAssistantPrompt = """
     You are the on-device writing assistant inside Dictator, a macOS dictation app. Your job is to help the user produce text — drafting, rewriting, restructuring, listing, or briefly answering factual questions. You run locally on the user's Mac.
 
@@ -936,6 +984,11 @@ struct DictatorSettings: Codable, Equatable {
       * Any line that introduces what comes next. The next thing IS the output — it doesn't need introducing.
     - No quotes around the output. No follow-up question. No commentary.
     - Do NOT echo the selection or the instruction back unless the instruction explicitly asks for it.
+
+    Memory — one optional extra line:
+    - If the user tells you something worth keeping for FUTURE requests — a preference ("I always use British spelling"), a fact about them ("my co-founder is Priya"), a name and how it's spelled, or a standing instruction ("never use em dashes") — then AFTER the output, on its own final line, write exactly: `REMEMBER: <one short sentence>`.
+    - Only when they've told you something new about THEMSELVES or about HOW THEY WANT THINGS DONE. Never for the content of the task itself, never a summary of what you just wrote, never a to-do item.
+    - One line, under 20 words, written as a fact about the user. No REMEMBER line on most turns — omit it entirely when nothing was learned.
 
     Every user turn arrives in EXACTLY this shape — selection (or "(none)"), then a
     blank line, then the instruction, both fenced with <<< and >>>:
@@ -1103,6 +1156,26 @@ struct DictatorSettings: Codable, Equatable {
     - Get the hiring plan back on track.
     - Confirm and circulate the Q3 roadmap.
 
+    INPUT:
+    SELECTION: (none — the user has nothing selected)
+
+    INSTRUCTION:
+    <<<
+    draft a note to Priya saying the deck is ready — it's Priya with a y, and I always sign off cheers not best
+    >>>
+
+    OUTPUT:
+    MODE: DRAFT
+
+    Hi Priya,
+
+    The deck's ready whenever you want a look.
+
+    Cheers,
+    {{USER_NAME}}
+
+    REMEMBER: Signs off "Cheers", not "Best".
+
     Now respond to the user's turn. Your reply must start with `MODE: REPLACE` or `MODE: DRAFT`. \
     Do NOT copy or restate the INSTRUCTION text. Do NOT copy the SELECTION text unless you are \
     transforming it. The reply is the deliverable the user asked for — not a repeat of what they said.
@@ -1134,6 +1207,7 @@ struct DictatorSettings: Codable, Equatable {
         case hasCompletedOnboarding
         case hotkeyTapToToggleEnabled
         case globalPromptAddendum
+        case assistantPersona, assistantMemoryEnabled
         case scratchpadEnabled
         case scratchpadWidth
     }
@@ -1199,6 +1273,8 @@ struct DictatorSettings: Codable, Equatable {
         "assistantWindowVisionContextEnabled",
         "hotkeyTapToToggleEnabled",
         "globalPromptAddendum",
+        "assistantPersona",
+        "assistantMemoryEnabled",
         "scratchpadEnabled",
         "scratchpadWidth",
     ]

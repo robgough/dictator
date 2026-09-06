@@ -8,6 +8,12 @@ import KeyboardShortcuts
 struct AssistantPane: View {
     @Environment(AppState.self) private var state
     @State private var showPromptSheet = false
+    @State private var showForgetConfirm = false
+
+    /// Read through `AssistantMemory` rather than cached in `@State`: the file
+    /// is hand-editable, so the store re-reads it when its mtime moves and the
+    /// count follows without this view having to watch anything.
+    private var memoryCount: Int { AssistantMemory.shared.entries.count }
 
     var body: some View {
         @Bindable var s = state
@@ -48,6 +54,42 @@ struct AssistantPane: View {
                 .help("Add your own instructions, or replace the built-in prompt entirely.")
             }
 
+            Section {
+                InstructionsField("How the assistant should sound…",
+                                  text: $s.settings.assistantPersona) { state.save() }
+                HStack {
+                    Spacer()
+                    Button("Reset") {
+                        s.settings.assistantPersona = DictatorSettings.builtinAssistantPersona
+                        state.save()
+                    }
+                    .controlSize(.small)
+                    .disabled(s.settings.assistantPersona == DictatorSettings.builtinAssistantPersona)
+                }
+            } header: {
+                Text("Personality")
+            } footer: {
+                SectionFootnote("Shapes drafts and answers, never your own text.")
+            }
+
+            Section {
+                Toggle("Remember things I tell it", isOn: $s.settings.assistantMemoryEnabled)
+                    .onChange(of: s.settings.assistantMemoryEnabled) { _, _ in state.save() }
+                if s.settings.assistantMemoryEnabled {
+                    LabeledContent(memoryCount == 1 ? "1 remembered" : "\(memoryCount) remembered") {
+                        HStack(spacing: 8) {
+                            Button("Open file") { AssistantMemory.shared.openInEditor() }
+                            Button("Forget all…") { showForgetConfirm = true }
+                                .disabled(memoryCount == 0)
+                        }
+                    }
+                }
+            } header: {
+                Text("Memory")
+            } footer: {
+                SectionFootnote("Kept in your synced folder as assistant-memory.md, one line each.")
+            }
+
             if WindowVisionContext.isSupported {
                 Section {
                     Toggle("Read the focused window with vision",
@@ -65,8 +107,17 @@ struct AssistantPane: View {
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
+        .task { AssistantMemory.shared.refresh() }
         .sheet(isPresented: $showPromptSheet) {
             AssistantPromptSheet()
+        }
+        .confirmationDialog("Forget everything the assistant remembers?",
+                            isPresented: $showForgetConfirm,
+                            titleVisibility: .visible) {
+            Button("Forget All", role: .destructive) { AssistantMemory.shared.forgetAll() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears assistant-memory.md. It can't be undone.")
         }
     }
 }
