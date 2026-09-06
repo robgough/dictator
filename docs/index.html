@@ -1213,7 +1213,7 @@
 
         <div class="download-row">
             <div class="download-col">
-                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
+                <a class="cta" id="download-mac-hero" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
                 <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
             </div>
         </div>
@@ -1452,13 +1452,13 @@
     <section id="meetings" class="meetings platform-mac">
         <img class="brand-icon" src="media/dictator-meetings-icon.png" alt="" width="64" height="64">
         <h2>Dictator Meetings</h2>
-        <p class="lede">Record a call, get a transcript split by speaker, and have the notes written for you — all on-device, in its own app.</p>
-        <p>Dictator Meetings is a separate download: a windowed companion app for recording calls and writing them up. Start a recording and it captures both sides — your microphone and the call audio itself, whatever app the call is in — transcribes and diarizes locally, and writes clean Markdown notes (summary, discussion, decisions, action items with owners) when it ends. It shares Dictator's already-loaded language model where it can, so running both apps doesn't mean holding two copies in memory.</p>
+        <p class="lede">A separate app for calls: record both sides, get a transcript split by speaker, and have the notes written for you — on your Mac, by default with nothing leaving it.</p>
+        <p>Start a recording and Dictator Meetings captures your microphone and the call audio itself, whichever app the call is in. When it ends you get a transcript with each speaker named, and Markdown notes — summary, discussion, decisions, action items with owners — written by a local model. While the call is still running it keeps a rough first pass of the notes going, so you can glance at what's been agreed without leaving the conversation.</p>
 
         <div class="download-row">
             <div class="download-col">
-                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator-Meetings.dmg">Download Dictator Meetings →</a>
-                <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
+                <a class="cta" id="download-meetings" href="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.0/Dictator-Meetings.dmg">Download Dictator Meetings →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+ · Works alone or alongside Dictator</span>
             </div>
         </div>
         <p class="release-row">
@@ -1466,7 +1466,23 @@
             · <a href="https://github.com/robgough/dictator/releases">All releases</a>
         </p>
 
-        <p style="margin-top: 22px;">Notes can be written by a model of your choice — Dictator's shared model or a local model of its own by default, or Apple's on-device model — and, only if you configure one, a cloud provider (OpenAI, OpenRouter, or Anthropic) for either the live or final pass. Cloud providers are opt-in per notes step: transcripts only leave your Mac when you deliberately pick one, and API keys are kept in the macOS Keychain, never written into synced settings.</p>
+        <div class="features">
+            <div class="feature">
+                <h3>Both sides of the call</h3>
+                <p>Your mic on one track, the call's audio on the other — Zoom, Meet, Teams, FaceTime, a browser tab, it doesn't matter. Echo from your speakers is cleaned up afterwards, so headphones are optional.</p>
+            </div>
+            <div class="feature">
+                <h3>Who said what</h3>
+                <p>Speakers are separated on-device and named from the conversation. Voices are remembered between meetings, so a regular is recognised the next time, and a matching calendar event fills in the title and attendees.</p>
+            </div>
+            <div class="feature">
+                <h3>Notes you'd actually send</h3>
+                <p>Clean Markdown with sections you choose per meeting type — stand-up, one-to-one, client call, or your own. A private coach tracks talk balance and pace, and a notes assistant answers questions about what was said.</p>
+            </div>
+        </div>
+
+        <p style="margin-top: 22px;">Notes are written by Dictator's already-loaded model when it's running (the two apps share it over a local socket, so you never hold two copies in memory), or by Dictator Meetings' own local model, or Apple's on-device model. If you want a bigger model for the final write-up you can add OpenAI, OpenRouter, or Anthropic — opt-in per notes step, with API keys kept in the macOS Keychain and never written into synced settings. Transcripts only leave your Mac when you've deliberately chosen a cloud provider.</p>
+        <p class="pipeline-footnote">Recordings, transcripts and notes are files in your synced folder. Audio stays on the Mac that recorded it; notes and transcripts follow you to your other Macs. Everything in a meeting can be exported as Markdown or deleted in one go.</p>
     </section>
 
     <section id="scratchpad" class="platform-mac">
@@ -1814,7 +1830,7 @@
         <p>Free, open source, runs locally on Apple Silicon.</p>
         <div class="download-row" style="justify-content: center;">
             <div class="download-col" style="align-items: center;">
-                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
+                <a class="cta" id="download-mac-footer" href="https://github.com/robgough/dictator/releases/latest/download/Dictator.dmg">Download for macOS →</a>
                 <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
             </div>
         </div>

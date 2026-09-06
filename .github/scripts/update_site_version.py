@@ -58,7 +58,14 @@ def main() -> int:
     parser.add_argument("--site", default=DEFAULT_SITE_PATH, help=f"Path to the site HTML (default: {DEFAULT_SITE_PATH})")
     parser.add_argument("--element-id", default=DEFAULT_ELEMENT_ID, help=f"Anchor id to update (default: {DEFAULT_ELEMENT_ID})")
     parser.add_argument("--tag-prefix", default=DEFAULT_TAG_PREFIX, help=f"Release-tag prefix before the version (default: {DEFAULT_TAG_PREFIX!r})")
+    parser.add_argument("--download-id", action="append", default=[],
+                        help="id of an <a> whose href should point at this release's DMG (repeatable). Requires --asset.")
+    parser.add_argument("--asset", default=None, help="Release asset filename for --download-id links, e.g. Dictator.dmg")
+    parser.add_argument("--jsonld", action="store_true",
+                        help="Also rewrite the JSON-LD \"downloadUrl\" to this release's DMG (requires --asset)")
     args = parser.parse_args()
+    if (args.download_id or args.jsonld) and not args.asset:
+        parser.error("--download-id / --jsonld need --asset")
 
     site_path = Path(args.site)
     version = args.version.lstrip("v").strip()
@@ -86,6 +93,31 @@ def main() -> int:
     # Rebuild the anchor with the new version in both the URL and the text.
     replacement = f"{match.group(1)}{version}{match.group(3)}{version}{match.group(5)}"
     updated = pattern.sub(replacement, original, count=1)
+
+    # Download buttons. Two apps release from one repository, and GitHub's
+    # `releases/latest/download/<asset>` resolves against the repository's
+    # single latest release — so a Dictator link 404s the moment a Meetings
+    # release is newer, and vice versa. Point each button at the versioned
+    # asset URL of the release being cut instead. The owner/repo segment is
+    # taken from the "Latest release" anchor so forks keep working.
+    if args.download_id or args.jsonld:
+        repo_match = re.search(r'href="(https://github\.com/[^/]+/[^/]+)/releases/tag/', updated)
+        if not repo_match:
+            print("error: could not infer the GitHub repository from the release anchor", file=sys.stderr)
+            return 1
+        asset_url = f"{repo_match.group(1)}/releases/download/{args.tag_prefix}{version}/{args.asset}"
+        for element_id in args.download_id:
+            link_re = re.compile(r'(<a\s[^>]*\bid="' + re.escape(element_id) + r'"[^>]*\bhref=")([^"]*)(")')
+            if not link_re.search(updated):
+                print(f"error: could not find <a id=\"{element_id}\"> in {site_path}", file=sys.stderr)
+                return 1
+            updated = link_re.sub(lambda m: f"{m.group(1)}{asset_url}{m.group(3)}", updated)
+        if args.jsonld:
+            jsonld_re = re.compile(r'("downloadUrl":\s*")([^"]*)(")')
+            if not jsonld_re.search(updated):
+                print(f"error: no JSON-LD downloadUrl in {site_path}", file=sys.stderr)
+                return 1
+            updated = jsonld_re.sub(lambda m: f"{m.group(1)}{asset_url}{m.group(3)}", updated, count=1)
 
     if updated == original:
         print(f"{site_path} already references v{version}; nothing to do")

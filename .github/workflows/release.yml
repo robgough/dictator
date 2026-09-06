@@ -389,12 +389,17 @@ jobs:
       - name: Update marketing site version
         # Rewrites the "Latest release: vX.Y.Z" line in docs/index.html so
         # the marketing site's visible version + tag link match the release
-        # that just shipped. The download button still points at
-        # /releases/latest/download/... and doesn't need touching.
+        # that just shipped, and points the two download buttons (and the
+        # JSON-LD downloadUrl) at this release's DMG by versioned URL. Two
+        # apps release from this repository and GitHub has one "latest"
+        # release per repo, so /releases/latest/download/… can't be trusted
+        # to resolve to the right app.
         run: |
           set -euo pipefail
           python3 .github/scripts/update_site_version.py \
-              "${{ steps.version.outputs.version }}"
+              "${{ steps.version.outputs.version }}" \
+              --download-id download-mac-hero --download-id download-mac-footer \
+              --asset Dictator.dmg --jsonld
 
       - name: Commit appcast + changelog + site back
         run: |
@@ -725,10 +730,14 @@ jobs:
           TAG="meetings-v$VERSION"
 
           if ! gh release view "$TAG" >/dev/null 2>&1; then
+              # --latest=false: the repository's single "latest" release stays
+              # Dictator's, so releases/latest/download/Dictator.dmg (old links,
+              # README badges) keeps resolving. Meetings links are versioned.
               gh release create "$TAG" \
                   --title "Dictator Meetings $VERSION" \
                   --notes-file "${{ steps.notes.outputs.md }}" \
-                  --target "$GITHUB_SHA"
+                  --target "$GITHUB_SHA" \
+                  --latest=false
           else
               gh release edit "$TAG" \
                   --notes-file "${{ steps.notes.outputs.md }}"
@@ -770,7 +779,8 @@ jobs:
           python3 .github/scripts/update_site_version.py \
               "${{ steps.version.outputs.version }}" \
               --element-id latest-meetings-release-link \
-              --tag-prefix meetings-v
+              --tag-prefix meetings-v \
+              --download-id download-meetings --asset Dictator-Meetings.dmg
 
       - name: Commit appcast + changelog + site back
         run: |

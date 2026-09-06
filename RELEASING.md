@@ -98,6 +98,15 @@ End users running an older version see the update offer the next time Sparkle's 
 
 For a dry run without pushing a tag, use the *Run workflow* button on the Actions tab and pass the version manually.
 
+## Releasing both apps together
+
+Two products release from one repository, and GitHub keeps a single "latest" release per repository. Two consequences:
+
+- Meetings releases are created with `--latest=false`, so the repository's latest release is always Dictator's and `releases/latest/download/Dictator.dmg` keeps resolving for anyone holding an old link.
+- The site's download buttons are versioned (`releases/download/<tag>/<asset>`), rewritten by `update_site_version.py` on each release, so neither app's button depends on which release happens to be newest.
+
+Push tags one at a time and let each run finish before pushing the next: both jobs commit the appcast, changelog and site back to `main`, and two runs racing on that commit-back means one of them rebases and retries. Order: push `main` first (the site deploys from `docs/` on push), then `v<version>`, wait for green, then `meetings-v<version>`.
+
 ## Cutting a Dictator Meetings release
 
 ```bash
