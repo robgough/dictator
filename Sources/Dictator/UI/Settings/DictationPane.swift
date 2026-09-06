@@ -176,14 +176,29 @@ private struct DictationModesTab: View {
     /// otherwise take an arbitrary height and nest a second scroller inside
     /// the form's own. Capped so a long mode list still scrolls internally
     /// rather than pushing the footer off-screen.
+    /// Fixed row height — title (14pt semibold) + 4pt + caption (11pt) with
+    /// breathing room. The list is sized from it exactly (plus the plain
+    /// style's own 4pt top/bottom inset), and scrolls only past
+    /// `maxVisibleModeRows`.
+    static let modeRowHeight: CGFloat = 50
+    static let maxVisibleModeRows = 8
+
     private var listHeight: CGFloat {
-        min(CGFloat(state.settings.modes.count) * 46 + 12, 420)
+        let rows = min(state.settings.modes.count, Self.maxVisibleModeRows)
+        return CGFloat(rows) * Self.modeRowHeight + 8
     }
 
     private var modeList: some View {
         List(selection: $selectedID) {
             ForEach(state.settings.modes) { mode in
                 ModeCard(mode: mode, isDefault: state.settings.defaultModeID == mode.id)
+                    // Every row is exactly `modeRowHeight` tall so the list's
+                    // frame below is arithmetic, not a guess: a guessed 46pt
+                    // clipped the last row's subtitle and left the slack as
+                    // a gap above the first.
+                    .frame(height: Self.modeRowHeight)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10))
+                    .listRowSeparator(.visible)
                     .tag(mode.id)
                     .contextMenu {
                         if state.settings.defaultModeID != mode.id {
@@ -201,8 +216,10 @@ private struct DictationModesTab: View {
                 state.save()
             }
         }
-        .listStyle(.inset(alternatesRowBackgrounds: false))
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, Self.modeRowHeight)
         .scrollContentBackground(.hidden)
+        .scrollDisabled(state.settings.modes.count <= Self.maxVisibleModeRows)
         .frame(height: listHeight)
     }
 
@@ -323,7 +340,7 @@ private struct ModeCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// "Clean · 2 apps · Tab cycle" — the style, and how the mode is reached,

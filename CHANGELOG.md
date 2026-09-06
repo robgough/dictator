@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Fixed: the modes list in Settings → Dictation clipped its last row and left a gap above the first.
 - The Polished style is now a single AI pass instead of two, so it finishes in about half the time on slower Macs. The progress labels now match the style names: Polishing and Paragraphs.
 _No changes yet._
 
