@@ -1,35 +1,29 @@
 import SwiftUI
 
 /// Observable bridge from `IslandController` (which knows the screen) to the
-/// SwiftUI content (which needs the screen's notch geometry and the coach
-/// visibility verdict). The controller writes; the view reads.
+/// SwiftUI content (which needs the screen's notch geometry). The controller
+/// writes; the view reads.
+///
+/// Dictation-only since Meetings moved into its own app — the meeting coach
+/// has its own `CoachIslandContext` over there, driving a second panel built
+/// from the same shared `IslandPanel` / `NotchGeometry` primitives.
 @MainActor
 @Observable
 final class IslandContext {
     var geometry = NotchGeometry(hasNotch: false, notchWidth: 0, topInset: 24)
-    /// Coach strip allowed on the island right now (engine present, not
-    /// hidden, setting on). The controller computes this — the view also
-    /// needs it because dictation/coach share the surface.
-    var coachVisible = false
     /// Drives the emergence animation: false = island tucked up behind the
     /// screen's top edge (inside the notch, where there is one), true =
     /// dropped down into view. Mutated only by the controller, inside
     /// withAnimation — and it doubles as the controller's source of truth
     /// for "is the island out", so there's no separate flag to desync.
     var revealed = false
-    /// Coach checklist expanded on the island (click to open). The
-    /// controller watches this to grant the panel key-window status while
-    /// the quick-add field needs typing, and collapses it when dictation
-    /// takes the surface or the meeting ends.
-    var coachExpanded = false
 }
 
 /// The island itself: a black shape anchored to the top-centre of the
 /// screen, springing between sizes as content changes. On notched screens
 /// it sits flush to the top edge at least as wide as the notch — black on
 /// black with the housing, content below the camera area. On plain screens
-/// transient dictation states still sit flush-top; the long-lived coach
-/// strip drops below the menu bar as a fully-rounded pill.
+/// the transient dictation states still sit flush-top.
 ///
 /// All motion happens here in SwiftUI — the panel never animates its frame.
 struct IslandView: View {
@@ -45,7 +39,6 @@ struct IslandView: View {
     private enum Mode: Equatable {
         case hidden
         case dictation
-        case coach(nudging: Bool, expanded: Bool)
     }
 
     private var mode: Mode {
@@ -56,11 +49,7 @@ struct IslandView: View {
             if case .failed = s { return true }
             return false
         }()
-        if dictationActive { return .dictation }
-        if context.coachVisible, let engine = state.activeCoachEngine {
-            return .coach(nudging: engine.activeNudge != nil, expanded: context.coachExpanded)
-        }
-        return .hidden
+        return dictationActive ? .dictation : .hidden
     }
 
     /// Measured height of the current island, so the tuck offset is exactly
@@ -109,12 +98,7 @@ struct IslandView: View {
 
     @ViewBuilder
     private func island(for mode: Mode, geo: NotchGeometry) -> some View {
-        // Every mode docks flush with the top edge — the coach strip
-        // included. (An earlier cut floated the coach as a detached pill
-        // below the menu bar on plain monitors; in use it read as a
-        // disconnected blob rather than the same island, so the coach now
-        // gets the identical faux-notch treatment and simply covers the
-        // empty centre of the menu bar for the meeting's duration.)
+        // Every mode docks flush with the top edge.
         content(for: mode)
             .frame(width: width(for: mode, geo: geo))
             .padding(.top, geo.topInset + Self.topBleed)   // clear notch / menu bar / bleed
@@ -156,16 +140,6 @@ struct IslandView: View {
             DictationIslandContent()
                 .frame(height: dictationHeight)
                 .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
-        case .coach:
-            if let engine = state.activeCoachEngine {
-                CoachIslandContent(
-                    engine: engine,
-                    expanded: Binding(
-                        get: { context.coachExpanded },
-                        set: { context.coachExpanded = $0 }
-                    )
-                )
-            }
         }
     }
 
@@ -177,16 +151,10 @@ struct IslandView: View {
         return 96
     }
 
-    private func width(for mode: Mode, geo: NotchGeometry) -> CGFloat {
+    private func width(for mode: Mode, geo _: NotchGeometry) -> CGFloat {
         switch mode {
         case .hidden: 0
         case .dictation: 520
-        // Expanded checklist needs working room; the nudge line needs room
-        // to read; the ambient strip hugs the notch (plus a visible lip
-        // either side so it registers at all).
-        case .coach(_, expanded: true): max(geo.notchWidth + 56, 440)
-        case .coach(nudging: true, _): max(geo.notchWidth + 56, 380)
-        case .coach: max(geo.notchWidth + 56, 210)
         }
     }
 }

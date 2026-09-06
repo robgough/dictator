@@ -300,6 +300,10 @@ final class LocalLLMServer {
         // we clamp it to something a runaway client can't turn into an
         // open-ended generation.
         let maxTokens = min(max(request.maxTokens ?? 1024, 1), 16_384)
+        // Honoured now that `LLMEngine.complete` takes one. Clamped to the
+        // usual 0…2 band so a malformed client can't ask for nonsense; absent
+        // means 0, the deterministic default every in-process caller uses.
+        let temperature = min(max(request.temperature ?? 0, 0), 2)
 
         let engine: any LLMEngine
         switch readyEngine() {
@@ -315,9 +319,12 @@ final class LocalLLMServer {
         do {
             let result = try await LLMScheduler.shared.run(.background) { () -> LLMCompletionResult in
                 if let reporting = engine as? LLMUsageReporting {
-                    return try await reporting.completeReportingUsage(system: system, user: user, maxTokens: maxTokens)
+                    return try await reporting.completeReportingUsage(system: system, user: user,
+                                                                      maxTokens: maxTokens,
+                                                                      temperature: temperature)
                 }
-                let text = try await engine.complete(system: system, user: user, maxTokens: maxTokens)
+                let text = try await engine.complete(system: system, user: user,
+                                                     maxTokens: maxTokens, temperature: temperature)
                 return LLMCompletionResult(text: text, promptTokens: nil, completionTokens: nil)
             }
             log(client: client, op: "complete", promptChars: user.count,

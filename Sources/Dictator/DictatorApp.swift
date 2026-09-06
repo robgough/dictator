@@ -18,17 +18,8 @@ struct DictatorApp: App {
                 .environment(appState)
                 .onOpenURL { url in handleURL(url) }
         } label: {
-            // A live meeting takes priority over the dictation pipeline icon —
-            // the always-visible menu bar is the user's proof a recording is
-            // actually happening, even with the Meetings window closed.
-            if appState.isRecordingMeeting {
-                Image(systemName: "record.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.red, .red)
-            } else {
-                Image(systemName: appState.pipeline.state.iconName)
-                    .symbolRenderingMode(.hierarchical)
-            }
+            Image(systemName: appState.pipeline.state.iconName)
+                .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
 
@@ -38,39 +29,13 @@ struct DictatorApp: App {
         // that the scene version could only fake, with dead controls in the
         // titlebar strip to show for it.
 
-        // Meetings ships as a runtime-gated early preview (see
-        // `MeetingsFeature.swift`). The scene is registered unconditionally —
-        // scene builders can't take a runtime `if` — but every entry point
-        // (menu bar buttons, the deep link below) checks
-        // `MeetingsFeature.isEnabled` before opening it.
-        //
-        // A single `Window`, NOT a `WindowGroup`: Meetings is one-per-app, so
-        // `openWindow(id: "meetings")` re-fronts the existing window instead of
-        // spawning a duplicate, and there's no ⌘N "new window" command. The
-        // live recording / detail-pane state lives in this window's `@State`,
-        // which only makes sense as a single instance anyway.
-        Window("Meetings", id: "meetings") {
-            MeetingsRootView()
-                .environment(appState)
-                // 1000 = sidebar max (320) + the detail's compressed width +
-                // the Details inspector's 240pt minimum, with room for the
-                // dividers. At the old 760 the three columns could not all be
-                // satisfied at once, and rather than collapsing one, SwiftUI
-                // and AppKit traded min-size updates until the window
-                // exhausted its Update Constraints passes and the app aborted.
-                .frame(minWidth: 1000, minHeight: 480)
-        }
-        // Roomier default so the live recording layout (three columns + the
-        // shared-screen/transcript inspector) opens comfortably; the status bar
-        // compresses gracefully below this, down to the 760pt minimum.
-        .defaultSize(width: 1280, height: 760)
-        .handlesExternalEvents(matching: ["meetings"])
     }
 
-    /// Routes incoming `dictator://…` URLs. Three hosts handled today:
-    /// `settings` opens the Settings window, `onboarding` re-shows the
-    /// wizard, `meetings` opens the Meetings window. Anything else is
-    /// logged and ignored.
+    /// Routes incoming `dictator://…` URLs. Two hosts handled today:
+    /// `settings` opens the Settings window and `onboarding` re-shows the
+    /// wizard. Anything else is logged and ignored. (`dictator://meetings` is
+    /// gone — meetings live in Dictator Meetings, which answers
+    /// `dictator-meetings://`.)
     private func handleURL(_ url: URL) {
         guard url.scheme?.lowercased() == "dictator" else { return }
         switch url.host?.lowercased() {
@@ -79,14 +44,6 @@ struct DictatorApp: App {
         case "onboarding", "setup", "wizard":
             NSApp.activate(ignoringOtherApps: true)
             appState.showOnboarding()
-        case "meetings":
-            guard MeetingsFeature.isEnabled else {
-                NSLog("[Dictator] dictator://meetings ignored — Meetings is off or missing a usable LLM (see Settings → Meetings)")
-                return
-            }
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            appState.openMeetingsAction?()
         default:
             NSLog("[Dictator] Ignoring unknown URL: \(url.absoluteString)")
         }
@@ -124,18 +81,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "onboarding", "setup", "wizard":
                 NSApp.activate(ignoringOtherApps: true)
                 AppState.shared.showOnboarding()
-            case "meetings":
-                Task { @MainActor in
-                    // Gate checked inside the hop — `MeetingsFeature.isEnabled`
-                    // reads MainActor state now that it's a runtime setting.
-                    guard MeetingsFeature.isEnabled else {
-                        NSLog("[Dictator] dictator://meetings ignored — Meetings is off or missing a usable LLM (see Settings → Meetings)")
-                        return
-                    }
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
-                    AppState.shared.openMeetingsAction?()
-                }
             default:
                 NSLog("[Dictator] Ignoring unknown URL: \(url.absoluteString)")
             }
@@ -184,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let state = AppState.shared
         // Settings is an AppKit-owned window now; the captured-action
-        // indirection remains because Meetings UI and scripts call
+        // indirection remains because the menu bar and scripts call
         // `state.openSettingsAction` without importing the controller.
         state.openSettingsAction = { SettingsWindowController.shared.show() }
         island = IslandController(state: state)
@@ -210,8 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Flush any Scratchpad edit still inside its autosave debounce — quitting
         // mid-sentence shouldn't lose the last few keystrokes.
         scratchpad?.flush()
-        // Drop the LLM socket and unlink its file, so Meetings sees "no socket"
-        // rather than connecting to a dead endpoint.
+        // Drop the LLM socket and unlink its file, so Dictator Meetings sees
+        // "no socket" rather than connecting to a dead endpoint.
         LocalLLMServer.shared.stop()
     }
 

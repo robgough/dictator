@@ -241,27 +241,35 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
     /// not a transcript to transform) — and the caller states the reply budget
     /// outright rather than deriving it from the input length, because a
     /// structured reply's size has nothing to do with how much text it describes.
-    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
-        try await completeReportingUsage(system: system, user: user, maxTokens: maxTokens).text
+    func complete(system: String, user: String, maxTokens: Int, temperature: Double = 0) async throws -> String {
+        try await completeReportingUsage(system: system, user: user, maxTokens: maxTokens,
+                                         temperature: temperature).text
     }
 
     /// The real implementation, plus the token counts MLX already hands back.
     /// `complete` throws them away (usage is recorded here either way); the LLM
     /// socket server keeps them, because the process on the other end of the
     /// socket can't see `UsageStatsStore`.
-    func completeReportingUsage(system: String, user: String, maxTokens: Int) async throws -> LLMCompletionResult {
+    func completeReportingUsage(system: String, user: String, maxTokens: Int,
+                                temperature: Double = 0) async throws -> LLMCompletionResult {
         try await ensureReady()
         guard let container else {
             throw NSError(domain: "Dictator", code: 2, userInfo: [NSLocalizedDescriptionKey: "LLM not loaded"])
         }
         let cap = max(1, maxTokens)
+        // Greedy (topP 1.0) at temperature 0, which is every dictation caller;
+        // a non-zero temperature also opens topP up to 0.95, matching what
+        // `assist` uses — sampling at full topP with a warm temperature is the
+        // combination MLX's own examples pair.
+        let temp = Float(max(0, temperature))
+        let topP: Float = temp > 0 ? 0.95 : 1.0
         let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             let userInput = UserInput(chat: [
                 .system(system),
                 .user(user)
             ])
             let lmInput = try await ctx.processor.prepare(input: userInput)
-            let params = GenerateParameters(maxTokens: cap, temperature: 0.0, topP: 1.0)
+            let params = GenerateParameters(maxTokens: cap, temperature: temp, topP: topP)
             let result = try MLXLMCommon.generate(
                 input: lmInput,
                 parameters: params,

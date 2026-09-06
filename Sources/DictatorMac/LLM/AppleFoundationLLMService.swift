@@ -75,12 +75,14 @@ final class AppleFoundationLLMService: LLMEngine {
     /// guards in `runDeterministicPass` are deliberately absent: they measure
     /// the reply against the input, which is meaningless here. A refusal comes
     /// back as text the caller's own parser rejects.
-    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+    func complete(system: String, user: String, maxTokens: Int, temperature: Double = 0) async throws -> String {
         try await ensureReady()
         let session = LanguageModelSession(instructions: Instructions(system))
+        // Greedy decoding is only correct at temperature 0; a warm request has
+        // to switch to random sampling or the temperature is silently ignored.
         let options = GenerationOptions(
-            sampling: .greedy,
-            temperature: 0.0,
+            sampling: temperature > 0 ? .random(probabilityThreshold: 0.95) : .greedy,
+            temperature: max(0, temperature),
             maximumResponseTokens: max(1, maxTokens)
         )
         let response = try await session.respond(to: user, options: options)

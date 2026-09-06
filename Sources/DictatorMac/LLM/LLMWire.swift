@@ -69,9 +69,8 @@ struct LLMWireRequest: Codable, Sendable {
     var user: String?
     /// `.complete` — reply budget in tokens.
     var maxTokens: Int?
-    /// `.complete`. Accepted and echoed into the log, but v1 always generates at
-    /// temperature 0 (that's what `LLMEngine.complete` does), so it has no
-    /// effect yet.
+    /// `.complete`. Forwarded to the engine (clamped to 0…2 by the server);
+    /// absent means 0, the deterministic default every in-process caller uses.
     var temperature: Double?
     /// Reserved. The server treats every socket request as `.background`
     /// regardless: a remote caller must never be able to outrank the local

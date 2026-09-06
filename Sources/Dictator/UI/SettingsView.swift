@@ -48,7 +48,6 @@ struct SettingsDetailRoot: View {
             case .input:      InputPane().settingsDetailPadding()
             case .models:     ModelsPane(shell: shell)
             case .modes:      ModesPane(shell: shell)
-            case .meetings:   MeetingsPane()
             case .assistant:  AssistantPromptPane().settingsDetailPadding()
             case .dictionary: DictionaryPane(shell: shell)
             case .history:    HistoryPane(shell: shell)
@@ -59,10 +58,10 @@ struct SettingsDetailRoot: View {
     }
 }
 
-/// The nine settings sections, in sidebar order. Identity is the case itself so
+/// The eight settings sections, in sidebar order. Identity is the case itself so
 /// `List`'s data-driven selection binds straight to `SettingsSection?`.
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-    case general, input, models, modes, meetings, assistant, dictionary, history, about
+    case general, input, models, modes, assistant, dictionary, history, about
 
     var id: Self { self }
 
@@ -72,7 +71,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .input:      "Input"
         case .models:     "Models"
         case .modes:      "Modes"
-        case .meetings:   "Meetings"
         case .assistant:  "Assistant"
         case .dictionary: "Dictionary"
         case .history:    "History"
@@ -86,7 +84,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .input:      "mic.fill"
         case .models:     "cpu"
         case .modes:      "rectangle.stack.fill"
-        case .meetings:   "person.2.fill"
         case .assistant:  "wand.and.stars"
         case .dictionary: "character.book.closed.fill"
         case .history:    "clock.fill"
@@ -95,15 +92,14 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     }
 
     /// Badge tint behind the white glyph. Picked to read as distinct, vaguely
-    /// semantic chips (mic = blue, AI passes = purple/pink, meetings = teal…)
-    /// rather than to match any system convention.
+    /// semantic chips (mic = blue, AI passes = purple/pink…) rather than to
+    /// match any system convention.
     var tint: Color {
         switch self {
         case .general:    .gray
         case .input:      .blue
         case .models:     .purple
         case .modes:      .orange
-        case .meetings:   Color(red: 0.10, green: 0.52, blue: 0.50)   // deep teal — bright .teal washes out the white glyph
         case .assistant:  .pink
         case .dictionary: .green
         case .history:    .indigo
@@ -121,9 +117,9 @@ private struct SettingsSidebarIcon: View {
     var body: some View {
         Image(systemName: systemImage)
             // Scale-to-fit a fixed inner box rather than sizing by font: SF
-            // Symbols have different aspect ratios, and wide glyphs (Meetings'
-            // person.2.wave.2.fill especially) overflow a font-sized frame
-            // horizontally and spill past the badge. A 13×13 fit box keeps every
+            // Symbols have different aspect ratios, and wide glyphs overflow
+            // a font-sized frame horizontally and spill past the badge. A
+            // 13×13 fit box keeps every
             // icon inside the 20×20 badge with margin.
             .resizable()
             .scaledToFit()
@@ -1902,7 +1898,7 @@ private struct GeneralPane: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
                     .frame(height: 72)
                     .onChange(of: s.settings.globalPromptAddendum) { _, _ in state.save() }
-                SectionFootnote("Added to every dictation step, the assistant, and meeting notes — even ones with a custom prompt. For preferences that apply everywhere, like \u{201C}Always use British English\u{201D}. Tweaks for a single step live in each Mode.")
+                SectionFootnote("Added to every dictation step and the assistant — even ones with a custom prompt. For preferences that apply everywhere, like \u{201C}Always use British English\u{201D}. Tweaks for a single step live in each Mode.")
             } header: { Text("Global AI instructions") }
             Section {
                 Picker("Trigger", selection: $s.settings.triggerMode) {
@@ -2257,7 +2253,6 @@ private struct MicrophoneStatusRow: View {
 enum ModelsSubPane: String, CaseIterable, Identifiable {
     case transcription = "Transcription"
     case formatting = "Formatting"
-    case diarization = "Diarization"
     case stats = "Stats"
     var id: String { rawValue }
 }
@@ -2272,7 +2267,7 @@ enum ModelsSubPane: String, CaseIterable, Identifiable {
 /// The one footer style for the whole Settings window. `.footnote` (not
 /// `.callout`) so it sits clearly below the body-sized control labels above it,
 /// matching System Settings' quiet section footers. Not `private` so panes in
-/// other files (e.g. MeetingsPane) route their footers through it too.
+/// other files route their footers through it too.
 private struct ModelsPane: View {
     @State private var manager = ModelManager.shared
     /// The sub-pane tabs live centred in the window toolbar (SettingsShell)
@@ -2284,7 +2279,6 @@ private struct ModelsPane: View {
             switch shell.modelsTab {
             case .transcription: TranscriptionModelsPane()
             case .formatting: FormattingModelsPane()
-            case .diarization: DiarizationModelsPane()
             case .stats: StatsModelsPane()
             }
 
@@ -2600,79 +2594,6 @@ private struct AppleFoundationStatusRow: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-    }
-}
-
-/// Diarization sub-pane: download / verify / remove for the offline
-/// speaker-diarization bundle. There's only one option in v0.2, so the row
-/// is always "active" — picking between models isn't a thing yet, but the
-/// shape mirrors the other panes so we can grow it without rewriting.
-private struct DiarizationModelsPane: View {
-    @Environment(AppState.self) private var state
-    @State private var manager = ModelManager.shared
-    @State private var diarizer = DiarizerServiceHolder.shared
-
-    var body: some View {
-        let meetingsOff = !MeetingsFeature.isEnabled
-        Form {
-            if meetingsOff {
-                Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "moon.zzz")
-                            .foregroundStyle(.secondary)
-                        Text("Speaker identification is part of Meetings, which isn't enabled — turn it on in Settings → Meetings (it also needs an on-device LLM). An already-downloaded model stays on disk and can still be removed below.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            Section {
-                ForEach(ModelCatalog.diarizationModels) { model in
-                    let downloadState = manager.diarizationStates[model.id] ?? .unknown
-                    ModelRow(
-                        name: model.displayName,
-                        note: model.note,
-                        sizeMB: model.approxSizeMB,
-                        ramMB: model.approxRAMMB,
-                        state: downloadState,
-                        isActive: true,
-                        isLoaded: diarizer.currentModelID == model.id,
-                        isVerifying: manager.verifyingDiarization.contains(model.id),
-                        select: {},
-                        download: {
-                            manager.downloadDiarization(model.id, using: DiarizerServiceHolder.shared)
-                        },
-                        cancel: {
-                            manager.cancelDiarizationDownload(model.id)
-                        },
-                        verify: {
-                            Task { await manager.verifyDiarization(model.id, using: DiarizerServiceHolder.shared) }
-                        },
-                        unload: {
-                            manager.unloadDiarization(model.id, using: DiarizerServiceHolder.shared)
-                        },
-                        remove: {
-                            manager.removeDiarization(model.id, using: DiarizerServiceHolder.shared)
-                        }
-                    )
-                    // Greyed while Meetings is off — but an already-downloaded
-                    // model keeps its row interactive so it can still be
-                    // removed (no reason to strand a 100 MB download behind
-                    // the preview toggle). Not-yet-downloaded rows are fully
-                    // disabled: downloading a model for a feature that's off
-                    // would just be wasted disk.
-                    .disabled(meetingsOff && downloadState != .ready)
-                    .opacity(meetingsOff ? 0.6 : 1)
-                }
-            } header: {
-                Text("Speaker diarization")
-            } footer: {
-                SectionFootnote("Splits the remote audio into per-speaker turns. Downloads on first use, or pre-fetch here. Your own microphone is always tagged as you — diarization only runs on the system-audio track.")
-            }
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 }
 

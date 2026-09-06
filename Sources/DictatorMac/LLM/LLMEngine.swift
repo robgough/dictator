@@ -51,11 +51,17 @@ protocol LLMEngine: AnyObject {
     func format(text: String, systemPrompt: String) async throws -> String
 
     /// A plain system+user completion with no data wrapping and no length
-    /// assumptions, for the pipeline's structured side-calls — today just the
-    /// auto-paragraph pass, whose reply is a handful of sentence numbers.
-    /// Temperature 0; the output is `LLMTextUtilities.clean`ed like every other
-    /// pass, and token usage is recorded.
-    func complete(system: String, user: String, maxTokens: Int) async throws -> String
+    /// assumptions, for the pipeline's structured side-calls — the
+    /// auto-paragraph pass, whose reply is a handful of sentence numbers, and
+    /// (in Dictator Meetings) every note-writing pass that goes through a
+    /// local provider. The output is `LLMTextUtilities.clean`ed like every
+    /// other pass, and token usage is recorded.
+    ///
+    /// `temperature` defaults to 0 — the deterministic setting every in-app
+    /// caller wants — and is a parameter only because the meetings assistant
+    /// reproduces `assist`'s 0.2 through this entry point, and the socket
+    /// server forwards whatever the wire asked for.
+    func complete(system: String, user: String, maxTokens: Int, temperature: Double) async throws -> String
 
     /// `context` is the document text surrounding the selection/cursor in the
     /// focused app (read via Accessibility at hotkey-press). nil when none was
@@ -89,6 +95,11 @@ protocol LLMEngine: AnyObject {
 }
 
 extension LLMEngine {
+    /// Temperature-0 shorthand, which is what every dictation call site wants.
+    func complete(system: String, user: String, maxTokens: Int) async throws -> String {
+        try await complete(system: system, user: user, maxTokens: maxTokens, temperature: 0)
+    }
+
     /// Runs one dictation pass. Every style's passes are content-preserving
     /// rewrites — format, polish, messages, a user's own prompt — so they all
     /// share the tight formatter cap (1.20× + 8, floor 24, ceiling 2048). The
@@ -145,5 +156,12 @@ struct LLMCompletionResult: Sendable {
 /// `complete` and send nils.
 @MainActor
 protocol LLMUsageReporting: AnyObject {
-    func completeReportingUsage(system: String, user: String, maxTokens: Int) async throws -> LLMCompletionResult
+    func completeReportingUsage(system: String, user: String, maxTokens: Int,
+                                temperature: Double) async throws -> LLMCompletionResult
+}
+
+extension LLMUsageReporting {
+    func completeReportingUsage(system: String, user: String, maxTokens: Int) async throws -> LLMCompletionResult {
+        try await completeReportingUsage(system: system, user: user, maxTokens: maxTokens, temperature: 0)
+    }
 }

@@ -3,15 +3,12 @@ import SwiftUI
 import Observation
 
 /// Owns the island panel — successor to the retired `HUDController`, same
-/// observation loop and key-monitor plumbing, now serving two tenants:
+/// observation loop and key-monitor plumbing. One tenant now that Meetings
+/// has its own app: the dictation pipeline (transient states, following the
+/// mouse screen — the island appears where the user's attention is when they
+/// hit the hotkey). Dictator Meetings runs its own `CoachIslandController`
+/// over the same shared `IslandPanel`.
 ///
-///   - the dictation pipeline (transient states, follows the mouse screen —
-///     it appears where the user's attention is when they hit the hotkey);
-///   - the meeting coach (persistent ambient strip, pinned to the screen
-///     that was active when the recording started — a long-lived strip that
-///     chased the cursor across displays would be noise).
-///
-/// Dictation takes the surface while active; the coach strip resumes after.
 /// All visual morphing happens inside `IslandView`'s springs — this
 /// controller only shows/hides/repositions the fixed-size panel.
 @MainActor
@@ -20,10 +17,6 @@ final class IslandController {
     private let state: AppState
     private let context = IslandContext()
     private var observationTask: Task<Void, Never>?
-
-    /// The screen the coach strip is pinned to for the current meeting.
-    /// Captured when the engine first appears, cleared with it.
-    private var pinnedCoachScreen: NSScreen?
 
     /// Escape-to-cancel while the pipeline is cancellable; Tab cycles the
     /// dictation mode during `.recording`. Carried over from HUDController
@@ -79,10 +72,6 @@ final class IslandController {
                 // here — IslandView observes those itself; the controller
                 // only reacts to structural changes.
                 _ = self.state.pipeline.state
-                _ = self.state.activeCoachEngine
-                _ = self.state.activeCoachEngine?.chipHidden
-                _ = self.state.settings.meetingCoachChipEnabled
-                _ = self.context.coachExpanded
             } onChange: {
                 guard resumed.markResumed() else { return }
                 continuation.resume()
@@ -94,40 +83,16 @@ final class IslandController {
         let s = state.pipeline.state
         let dictationActive = s.isActive || isTerminal(s)
 
-        let engine = state.activeCoachEngine
-        if engine == nil {
-            pinnedCoachScreen = nil
-        } else if pinnedCoachScreen == nil {
-            // First sight of this meeting's engine — pin the coach strip to
-            // the screen the user is on right now (recording just started).
-            pinnedCoachScreen = activeScreen()
-        }
-        let coachVisible = engine != nil
-            && engine?.chipHidden != true
-            && state.settings.meetingCoachChipEnabled
-        context.coachVisible = coachVisible
-
-        // The expanded checklist collapses whenever the coach loses the
-        // surface — dictation taking over, the strip hiding, meeting end.
-        if context.coachExpanded, !coachVisible || dictationActive {
-            context.coachExpanded = false
-        }
-        // Key-window status only while the quick-add field could need
-        // typing (ScratchpadPanel's nonactivating+key pattern).
-        let wantsKey = context.coachExpanded
-        if panel.allowsKey != wantsKey {
-            panel.allowsKey = wantsKey
-            if wantsKey {
-                panel.makeKey()
-            } else if panel.isKeyWindow {
-                panel.resignKey()
-            }
+        // The dictation island never needs key-window status — nothing on it
+        // takes typed input.
+        if panel.allowsKey {
+            panel.allowsKey = false
+            if panel.isKeyWindow { panel.resignKey() }
         }
 
-        // Mouse policy: transparent unless something is clickable — the
-        // pipeline's hover-cancel, or the coach strip (tap to expand,
-        // checklist interactions, context menu).
-        panel.ignoresMouseEvents = !(s.canCancel || (coachVisible && !dictationActive))
+        // Mouse policy: transparent unless the pipeline's hover-cancel target
+        // is live.
+        panel.ignoresMouseEvents = !s.canCancel
 
         // Escape monitor: only while the pipeline is cancellable.
         if s.canCancel && !escapeActive {
@@ -152,9 +117,8 @@ final class IslandController {
             recordingMonitorActive = false
         }
 
-        // Dictation follows the mouse; the coach holds its pinned screen.
-        let targetScreen = dictationActive ? activeScreen() : pinnedCoachScreen ?? activeScreen()
-        let shouldShow = dictationActive || coachVisible
+        let targetScreen = activeScreen()
+        let shouldShow = dictationActive
 
         // Stateless reconciliation: the desired visibility is compared
         // against `context.revealed` itself — no separate bookkeeping flag

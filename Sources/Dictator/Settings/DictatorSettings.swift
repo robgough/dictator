@@ -171,83 +171,6 @@ struct DictatorSettings: Codable, Equatable {
     /// model so the first hotkey press just works.
     var hasCompletedOnboarding: Bool
 
-    /// How long to keep recorded / imported meetings before pruning them
-    /// off disk. 0 = never delete. Per-Mac (local-settings.json) because
-    /// meetings live in App Support, not the synced folder — each Mac has
-    /// its own pile of meeting audio.
-    var meetingAutoDeleteAfterDays: Int = 0
-
-    /// Days after which a meeting's audio files (mic.caf, system.caf) are
-    /// pruned even though its transcript is kept. Lets users hold on to
-    /// the searchable transcript history forever while letting the bulky
-    /// audio age out. 0 = keep audio forever. Independent of
-    /// `meetingAutoDeleteAfterDays`: a meeting hit by both first loses
-    /// audio, then the whole record when the older window kicks in.
-    var meetingAudioRetentionDays: Int = 0
-
-    /// Show a running draft transcript while a meeting records (the "watch it
-    /// take shape" pane). Default ON. Turning it off skips the entire live ASR
-    /// path — no per-buffer resampling, chunking, or draft rendering during the
-    /// call — which meaningfully lightens the in-call load on a long meeting.
-    /// Live notes are built from this transcript, so they only run when it's on.
-    /// Personal preference, synced across Macs.
-    var meetingLiveTranscriptEnabled: Bool = true
-    /// Build a rough first-pass of the notes *while the meeting records* —
-    /// the LLM runs periodically over the live transcript and appends bullet
-    /// points, superseded by the full pass once the meeting stops. Default
-    /// ON: watching the notes take shape is the point of the feature. It runs
-    /// the LLM on the GPU during the call, so the toggle is there for users who
-    /// want to save battery, but it's on out of the box.
-    var meetingLiveNotesEnabled: Bool = true
-    /// While building the live first-pass notes, periodically ask the LLM to
-    /// REVISE points the later conversation has contradicted or superseded — a
-    /// reversed decision, a corrected number — instead of only ever appending.
-    /// The model emits a small diff (drop/edit a numbered bullet), applied
-    /// deterministically, so the document is never wholesale-rewritten (which
-    /// small local models truncate). Only matters when `meetingLiveNotesEnabled`
-    /// is on; default ON.
-    var meetingLiveNotesSelfCorrectEnabled: Bool = true
-    /// The meeting coach: live conversation metrics (talk balance, monologue
-    /// timer, pace) computed while recording, plus a private per-meeting
-    /// metrics summary stored afterwards. Derived entirely from the level
-    /// callbacks and live transcript the recording already produces — no
-    /// extra capture, negligible cost. Default ON. Synced across Macs —
-    /// wanting coaching is a personal preference, not hardware-dependent.
-    var meetingCoachEnabled: Bool = true
-    /// Show the coach's ambient strip + nudges on the notch island during a
-    /// meeting. Separate from `meetingCoachEnabled` so the metrics can keep
-    /// being computed (in-window strip, post-meeting summary) with the
-    /// floating presence off. Default ON; synced.
-    var meetingCoachChipEnabled: Bool = true
-    /// Recognise people across meetings by voice: persist speaker
-    /// embeddings to people.json, link returning voices to their person
-    /// (applying the known name), learn named strangers. Default ON — one
-    /// switch, not per-person consent — with per-person delete (embeddings
-    /// purged) as the hygiene valve. All on-device. Synced.
-    var peopleRecognitionEnabled: Bool = true
-    /// Match each recording to its calendar event (title, attendees,
-    /// scheduled span) at record time. Prompts for calendar access on first
-    /// use; denial leaves meetings without calendar context, silently.
-    /// Default ON; synced.
-    var meetingCalendarMatchingEnabled: Bool = true
-    /// Capture keyframes of shared screen content during meetings
-    /// (window-scoped, kept as HEICs in the meeting's local folder). OFF by
-    /// default — it needs the Screen Recording permission, the heaviest grant
-    /// the app holds, and the system shows the purple capture indicator while
-    /// it runs. The toggle preference syncs; the grant is per-Mac.
-    var meetingCaptureScreenshots: Bool = false
-    /// Appended under the built-in coach-report prompt (the warmth lever —
-    /// the default voice is deliberately blunt). Synced.
-    var meetingCoachPromptAddendum: String = ""
-    /// When set, replaces the built-in coach prompt wholesale.
-    var meetingCoachPromptOverride: String?
-    /// Reusable checklist bundles ("Client type B") layered onto a meeting's
-    /// checklist at record start, alongside the meeting type's own items.
-    /// Synced — they're personal playbooks, not hardware.
-    var coachChecklistProfiles: [CoachChecklistProfile] = []
-    /// Pre-record sheet defaults: the type and profiles picked last time.
-    var meetingLastPresetTypeID: String?
-    var meetingLastProfileIDs: [String] = []
     /// How a tap of the dictation / assistant hotkey behaves. ON (default):
     /// a quick tap-and-release (under ~0.35 s) latches listening ON — tap
     /// again to stop — while holding past the threshold is push-to-talk
@@ -255,17 +178,9 @@ struct DictatorSettings: Codable, Equatable {
     /// hold button. Synced across Macs — it's a personal interaction
     /// preference, not hardware-dependent.
     var hotkeyTapToToggleEnabled: Bool = true
-    /// Appended under the built-in meeting summary prompt. Empty = no
-    /// addendum. Synced across Macs because it's a personal preference,
-    /// not hardware-dependent.
-    var meetingSummaryPromptAddendum: String = ""
-    /// When set, replaces the built-in summary prompt wholesale. nil =
-    /// use built-in + addendum.
-    var meetingSummaryPromptOverride: String?
-
     /// Cross-cutting instructions the user wants applied to EVERY LLM pass —
-    /// dictation (format / grammar / restructure), the assistant, and meeting
-    /// notes. Appended as the outermost layer of each effective prompt: after
+    /// dictation (format / grammar / restructure) and the assistant.
+    /// Appended as the outermost layer of each effective prompt: after
     /// any per-pass addendum, and even when a pass is fully overridden, so a
     /// preference like "always use British English" or a house spelling holds
     /// everywhere without being pasted into each pass separately. Empty = no
@@ -273,39 +188,6 @@ struct DictatorSettings: Codable, Equatable {
     /// hardware-dependent.
     var globalPromptAddendum: String = ""
 
-    /// Default meeting-type bias applied when the meeting itself is set
-    /// to `.auto` (i.e. the user hasn't picked a specific type on the
-    /// detail page). Synced across Macs because the right default
-    /// depends on what kind of meetings the user typically records, not
-    /// on which Mac is doing the recording.
-    var defaultMeetingType: MeetingTypeID = .auto
-
-    /// User-created meeting types, each defining the sections their notes
-    /// should have (see `MeetingTypeDefinition`). Listed after the built-ins
-    /// everywhere a type can be picked. Synced across Macs — a custom notes
-    /// style is a personal preference, not hardware-dependent.
-    var customMeetingTypes: [MeetingTypeDefinition] = []
-
-    /// When true, MeetingProcessor runs a post-transcription dedup pass that
-    /// drops mic-track words within ±300 ms of an identical (or near-identical)
-    /// system-track word. Only matters when the user isn't wearing headphones —
-    /// their mic picks up the remote speakers and the same words land on both
-    /// tracks. AEC usually catches this; the dedup is the belt-and-braces
-    /// layer for residual leakage (Bluetooth latency, AGC stomp).
-    /// Per-Mac because echo behaviour depends on this Mac's headphones-versus-
-    /// speakers setup. Default ON; off is the escape hatch if it ever eats
-    /// legitimate overlapping speech.
-    var meetingDedupeMicEchoes: Bool = true
-
-    /// Master switch for the Meetings feature, which ships as an early
-    /// preview. Off by default: the menu bar entries, the
-    /// `dictator://meetings` deep link, and the diarization model options
-    /// only light up once the user opts in from Settings → Meetings (where
-    /// a preview notice stays visible even when enabled). Per-Mac
-    /// (local-settings.json) — opting into a preview is a per-installation
-    /// decision, like onboarding state; it shouldn't silently enable the
-    /// feature on every synced Mac.
-    var meetingsEnabled: Bool = false
 
     /// Master switch for the Scratchpad — the slide-in plain-text note bound to
     /// a global combo (default ⌥X). On by default. Synced across Macs because
@@ -481,29 +363,8 @@ struct DictatorSettings: Codable, Equatable {
         // already have models + permissions configured, and we don't want to
         // ambush them with a setup window on next launch.
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? true
-        self.meetingAutoDeleteAfterDays = try c.decodeIfPresent(Int.self, forKey: .meetingAutoDeleteAfterDays) ?? d.meetingAutoDeleteAfterDays
-        self.meetingAudioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .meetingAudioRetentionDays) ?? d.meetingAudioRetentionDays
-        self.meetingLiveTranscriptEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveTranscriptEnabled) ?? d.meetingLiveTranscriptEnabled
-        self.meetingLiveNotesEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesEnabled) ?? d.meetingLiveNotesEnabled
-        self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
-        self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
-        self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
-        self.peopleRecognitionEnabled = try c.decodeIfPresent(Bool.self, forKey: .peopleRecognitionEnabled) ?? d.peopleRecognitionEnabled
-        self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
-        self.meetingCaptureScreenshots = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureScreenshots) ?? d.meetingCaptureScreenshots
-        self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
-        self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
-        self.coachChecklistProfiles = try c.decodeIfPresent([CoachChecklistProfile].self, forKey: .coachChecklistProfiles) ?? d.coachChecklistProfiles
-        self.meetingLastPresetTypeID = try c.decodeIfPresent(String.self, forKey: .meetingLastPresetTypeID) ?? d.meetingLastPresetTypeID
-        self.meetingLastProfileIDs = try c.decodeIfPresent([String].self, forKey: .meetingLastProfileIDs) ?? d.meetingLastProfileIDs
         self.hotkeyTapToToggleEnabled = try c.decodeIfPresent(Bool.self, forKey: .hotkeyTapToToggleEnabled) ?? d.hotkeyTapToToggleEnabled
-        self.meetingSummaryPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptAddendum) ?? d.meetingSummaryPromptAddendum
         self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
-        self.meetingSummaryPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingSummaryPromptOverride) ?? d.meetingSummaryPromptOverride
-        self.defaultMeetingType = try c.decodeIfPresent(MeetingTypeID.self, forKey: .defaultMeetingType) ?? d.defaultMeetingType
-        self.customMeetingTypes = try c.decodeIfPresent([MeetingTypeDefinition].self, forKey: .customMeetingTypes) ?? d.customMeetingTypes
-        self.meetingDedupeMicEchoes = try c.decodeIfPresent(Bool.self, forKey: .meetingDedupeMicEchoes) ?? d.meetingDedupeMicEchoes
-        self.meetingsEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingsEnabled) ?? d.meetingsEnabled
         self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
         self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
     }
@@ -643,76 +504,6 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     // MARK: - Effective prompts
-
-    /// Resolved coach-report prompt: override wins; otherwise built-in +
-    /// addendum (the addendum is the warmth lever — the built-in default is
-    /// deliberately blunt). Global instructions stack outermost as always.
-    var effectiveMeetingCoachPrompt: String {
-        Self.combine(builtin: Self.builtinMeetingCoachPrompt,
-                     override: meetingCoachPromptOverride,
-                     addendum: meetingCoachPromptAddendum,
-                     global: globalPromptAddendum)
-    }
-
-    /// Resolved meeting summary prompt: override wins if set, otherwise
-    /// built-in + addendum. Same shape as `effectiveAssistantPrompt` —
-    /// the LLM never sees the raw addendum/override; only this.
-    var effectiveMeetingSummaryPrompt: String {
-        Self.combine(builtin: Self.builtinMeetingSummaryPrompt,
-                     override: meetingSummaryPromptOverride,
-                     addendum: meetingSummaryPromptAddendum,
-                     global: globalPromptAddendum)
-    }
-
-    /// Resolved meeting summary prompt biased toward a specific meeting
-    /// shape (stand-up, retro, a custom type, …). Override still wins
-    /// outright — if the user has replaced the built-in wholesale they're in
-    /// full control and the type's compiled template is intentionally
-    /// ignored. Otherwise the prompt stacks as `builtin + compiled type
-    /// template + user addendum`, so a user "always use British spelling"
-    /// addendum continues to apply on top of the per-type steer. The caller
-    /// resolves the definition via `MeetingTypeRegistry` — settings stays
-    /// registry-free.
-    func effectiveMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
-        var stitched: String
-        if let override = meetingSummaryPromptOverride {
-            stitched = override
-        } else {
-            stitched = Self.builtinMeetingSummaryPrompt
-            let typeAddendum = MeetingTemplateCompiler.compile(definition)
-            if !typeAddendum.isEmpty {
-                stitched += "\n\n" + typeAddendum
-            }
-            let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !userAddendum.isEmpty {
-                stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
-            }
-        }
-        return Self.appendingGlobal(stitched, globalPromptAddendum)
-    }
-
-    /// Compact variant of `effectiveMeetingSummaryPrompt(for:)` used for very
-    /// short meetings (see `builtinCompactMeetingSummaryPrompt`). Stacks the
-    /// same way — override wins outright; otherwise `compact builtin +
-    /// compiled type template + user addendum` — so a user's "always British
-    /// spelling" steer and per-type bias keep applying on the short path too.
-    func effectiveCompactMeetingSummaryPrompt(for definition: MeetingTypeDefinition) -> String {
-        var stitched: String
-        if let override = meetingSummaryPromptOverride {
-            stitched = override
-        } else {
-            stitched = Self.builtinCompactMeetingSummaryPrompt
-            let typeAddendum = MeetingTemplateCompiler.compile(definition)
-            if !typeAddendum.isEmpty {
-                stitched += "\n\n" + typeAddendum
-            }
-            let userAddendum = meetingSummaryPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !userAddendum.isEmpty {
-                stitched += "\n\nADDITIONAL USER INSTRUCTIONS (apply alongside everything above):\n" + userAddendum
-            }
-        }
-        return Self.appendingGlobal(stitched, globalPromptAddendum)
-    }
 
     var effectiveAssistantPrompt: String {
         // Assistant Mode drafts emails, replies, messages — it's the one pass
@@ -1104,125 +895,6 @@ struct DictatorSettings: Codable, Equatable {
     You split dictated text into paragraphs. The user's message is a numbered list of sentences, in order. Reply with ONLY the numbers of the sentences that should START a new paragraph, comma-separated, e.g. `4, 9`. Never include 1. Start a new paragraph where the topic or subject changes, where the speaker moves to a new point, or before a closing thought. Aim for paragraphs of two to five sentences. If everything is one topic, reply `none`. No other words.
     """
 
-    /// The coach report's built-in system prompt. Blunt by decision — terse
-    /// factual sentences in the nudges' voice, no praise padding; the
-    /// addendum is where a user softens it. The hard rules: the metrics and
-    /// checklist outcomes are COMPUTED inputs the model must cite as given,
-    /// never recalculate or invent.
-    static let builtinMeetingCoachPrompt = """
-    You are a blunt, factual conversation coach reviewing how the user — always labelled "Me" — handled a meeting they recorded. You are speaking directly to them; write in the second person.
-
-    You receive: THEIR CONVERSATION METRICS (computed from the recording — these numbers are facts; cite them as given, never recalculate, never invent others), the KEY POINTS outcomes (computed — covered, missed, or dismissed), an optional RUBRIC describing what good looks like for this kind of meeting, and the MEETING NOTES for context about what was discussed.
-
-    Write a short markdown report, no more than ~12 lines total:
-
-    ## How it went
-    Two to four terse bullets on how they handled the conversation, each grounded in a specific metric or key-point outcome. Lead with whatever mattered most. A key point they flagged mid-meeting and never got to is always worth a bullet.
-
-    ## Work on
-    At most TWO items, one line each — the highest-leverage changes, tied to the rubric where one is provided. Skip the section entirely if the conversation was genuinely well handled.
-
-    Rules:
-    - Blunt and factual. No praise padding, no hedging, no "consider perhaps".
-    - Every claim must trace to a given metric, key-point outcome, or the notes. Never invent events, quotes, or numbers.
-    - Filler-word counts are approximate by nature — treat them as a relative signal, not a precise tally.
-    - Judge only "Me". Never coach or characterise the other participants.
-    - No preamble, no sign-off. Start at the first heading.
-    """
-
-    static let builtinMeetingSummaryPrompt = """
-    You write clean, copy-pasteable meeting notes in Markdown from a recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
-
-    Summarise and paraphrase — don't copy long passages verbatim, and leave out greetings, small talk, and technical-difficulty chatter ("can you hear me?", "you're on mute") unless it actually matters.
-
-    The same point sometimes appears more than once — overlapping microphone and system audio can transcribe the same speech twice with slightly different errors. When two passages clearly say the same thing, record the point ONCE, keeping the clearer wording.
-
-    Fix obvious transcription errors. Product, tool, framework, company, and AI model names are the ones most often garbled — correct them to the most likely real name (e.g. a mangled spelling of a well-known tool or model). If you're not confident of a corrected name, keep your best guess and list it under `## Items to verify`. Correcting a garbled real name is the ONE thing you may change: numbers, figures, dates, and quoted wording still stay exactly as said (see FACTS AND FIGURES below).
-
-    Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
-
-    Structure the notes in this order. Every section except Summary is OPTIONAL: omit any heading that would have no content (heading and all) — a short meeting might be just a Summary. Never refuse and never emit placeholder text like "N/A". Always include `## Summary`.
-
-    ## Summary
-    A factual prose recap of what the meeting was about and where it landed — 2–3 sentences for a short meeting, up to a short paragraph for a long one. No bullet points here — it's prose. No editorialising.
-
-    ## Attendees
-    OPTIONAL. Include only when the transcript makes the participants (and their roles, if stated) clear — one `-` bullet each, e.g. `- **Alice** — VP Engineering`. Speakers are often anonymous, so omit this section entirely rather than guess names or roles the transcript doesn't support.
-
-    Then the substance of the meeting, grouped BY TOPIC rather than in chronological order. Use `##` headings named to fit the content ("The setup", "Cost", "Testing", "How they start a project", …), or a single `## Discussion` when the meeting is simple. Within each section:
-    - `-` bullets, written in your own words (a two-space indent `  -` makes a sub-point). Do NOT start a bullet with the speaker's name, and do NOT copy the transcript's `[Speaker · mm:ss]` prefixes into the notes.
-    - A Markdown table when the content is genuinely tabular — comparing options, tools, or plans, or laying figures out across rows. Use standard pipe syntax with a header row and a `---` separator row, for example:
-    | Option | Cost | Notes |
-    | --- | --- | --- |
-    | A | £10/mo | fastest to set up |
-    Don't force prose into a table.
-    Be THOROUGH: capture every distinct point that was actually discussed, not just a headline few. A long, dense meeting must produce correspondingly thorough notes — distil each point (don't transcribe verbatim), but do not drop real content for the sake of brevity. This is the body of the notes.
-
-    ## Decisions
-    OPTIONAL. Concrete AGREED OUTCOMES as `-` bullets — things the participants chose to do or not do, NOT topics merely discussed.
-
-    ## Action items
-    Tasks as Markdown checkboxes, each in the shape `- [ ] **Owner** — the task`. Always use the `- [ ]` checkbox form. Use the owner-attribution rules below. When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix.
-
-    ## Notable quotes
-    OPTIONAL. A few memorable one-liners, paraphrased and kept short. Attribute one only when the speaker is clear from the transcript; otherwise leave it unattributed.
-
-    ## Items to verify
-    OPTIONAL. Names, product/tool/model names, figures, or facts you corrected or were unsure about — one short `-` bullet each, so the reader knows what to double-check.
-
-    Rules:
-    - Plain Markdown: `##` headings (`###` for a sub-theme), `-` bullets, `- [ ]` task checkboxes (Action items only), and pipe tables. A two-space indent makes a sub-point. Bold (`**…**`) is allowed for action-item owners and attendee names. No HTML.
-    - You MAY end a bullet in any topic, Decisions, or Action items section with a timestamp — the bare time ONLY, in square brackets at the very end, e.g. `… recall and loyalty. [6:07]`. No speaker name, no parentheses, nothing else inside the brackets. Only add it when you're confident which moment the point came from; omit it otherwise. Never put a timestamp on the Summary.
-    - Never wrap the notes, or any individual section, in ``` code fences.
-    - Be faithful to the transcript. Do not invent decisions, tasks, owners, numbers, or names that aren't supported by what was said. (Correcting a garbled real name to its true spelling is not inventing; making one up is.)
-    - FACTS AND FIGURES: when the transcript states something specific and checkable — team or company size, org structure and reporting lines, financial figures (revenue, budgets, prices, funding), dates and deadlines, product, company or technology names, metrics and percentages — record it in the notes EXACTLY as stated. Never round ("about fifty" stays "about fifty", "47" stays "47"), never vague-ify ("a large team" for "12 engineers"), and never drop a concrete figure or name because it was mentioned only in passing. These specifics are often the most valuable content in the notes. Example — GOOD: `- Platform team is 12 engineers across 3 squads, reporting to the VP Engineering`. BAD: `- They discussed the team structure.`
-    - ATTRIBUTION DISCIPLINE (applies to every section, not just Action items): a point being ABOUT a person is NOT the same as that person saying it. Credit a statement, view, preference, question, or commitment to someone ONLY when the transcript shows THAT speaker saying it — i.e. it appears under their `[Name · mm:ss]` prefix. "Speaker 1 says Bob should own rollout" means Speaker 1 said it; it does NOT mean Bob said anything. When the transcript doesn't make the speaker clear, state the point without naming who said it rather than guessing. The transcript's speaker prefixes are the ONLY evidence of who said what — never infer a speaker from the content of a line.
-
-    ACTION ITEM ATTRIBUTION — read carefully:
-
-    1. The owner MUST be the EXACT display name shown in the transcript's `[Speaker · mm:ss]` prefix — "Me", "Speaker 1", "Speaker 2", or a renamed label like "Alice". Match spelling and casing character-for-character. Do NOT add titles ("Mr. Alice"), do NOT abbreviate ("A." for Alice), do NOT translate ("Myself" for "Me"). Do NOT invent names that don't appear in the transcript prefixes.
-
-    2. Attribute aggressively when the transcript names the owner — explicitly OR implicitly:
-       - Explicit ("Alice, you're on rollout", "Bob will write the doc") → owner is the named person, exactly as they appear in the speaker prefixes.
-       - First-person commitment ("I'll send the doc", "I can take this", "let me follow up") → owner is whoever is currently speaking that line (the name in the `[Speaker · …]` prefix on that line). When that speaker is the recorder, the owner is literally "Me".
-       - Second-person assignment ("you'll handle X", "can you take Y?") agreed by the named person in a later line → owner is the named person being assigned to.
-
-    3. Only leave a task unowned (no `**Owner** —` prefix) when it is genuinely unattributed — "someone should look at this", "we need to follow up on Y", or where the speaker is ambiguous and no later line clarifies. Don't guess and don't default to "Me" out of convenience.
-
-    4. Never put more than one name in the owner. If two people are jointly responsible, pick the lead and mention the second in the task text ("with Bob"); if there's no lead, leave it unowned and describe the shared ownership in the task text.
-
-    Output the Markdown notes ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
-    """
-
-    /// Compact override for very short meetings (a quick note, a 30-second
-    /// aside). The full four-section contract scaffolds empty `## Discussion`
-    /// / `## Decisions` headers onto a recording that has nothing to put under
-    /// them — overkill that reads as broken. For these we drop the rigid
-    /// section list entirely and ask for a 1–3 sentence `## Summary` plus an
-    /// `## Action items` section ONLY when tasks were actually mentioned.
-    /// Selected by `MeetingSummaryService.generateNotes` on the short path and
-    /// fed through `effectiveCompactMeetingSummaryPrompt` so the user's
-    /// override/addendum still apply, mirroring the normal path.
-    static let builtinCompactMeetingSummaryPrompt = """
-    You write a SHORT, copy-pasteable note in Markdown from a brief recorded meeting transcript. The transcript is segmented by speaker — every line is prefixed `[Speaker · mm:ss] …`. Speakers are anonymous ("Speaker 1", "Speaker 2", …) unless the user has renamed them. "Me" is the person who recorded the meeting; everyone else is on the other side of the call.
-
-    This recording is very short, so keep the note light — do NOT scaffold empty sections onto it.
-
-    If overlapping microphone and system audio transcribed the same point twice, record it once. Correct obviously garbled product, tool, or AI model names to their likely real spelling; keep numbers, figures, and quoted wording exactly as said.
-
-    Output Markdown ONLY — no preamble, no commentary, no code fences. Do NOT include a top-level `#` title; the meeting title is added separately. Start at the first `##` section heading.
-
-    ## Summary
-    A factual prose recap of what was said — 1–3 sentences. No bullet points, no editorialising. Keep any specific names, numbers, or figures exactly as stated.
-
-    ## Action items
-    Include this section ONLY if a task was actually mentioned. Each item in the shape `- [ ] **Owner** — the task`, owner being the EXACT display name from the `[Speaker · mm:ss]` prefix (use "Me" for the recorder's own first-person commitments). When a task has no identifiable owner, write `- [ ] the task` with no bold owner prefix. If no task was mentioned, OMIT this section entirely — heading and all.
-
-    Do NOT add `## Discussion` or `## Decisions` sections — a note this short doesn't warrant them. Be faithful to the transcript: do not invent tasks, owners, decisions, or names that aren't supported by what was said. A point being ABOUT a person is not the same as that person saying it — credit a statement or task to someone only when it appears under their `[Name · mm:ss]` prefix, and leave it unattributed when the speaker isn't clear. Never refuse and never emit placeholder text like "N/A".
-
-    Output the Markdown ONLY. Nothing before the first `##`. No "Here are the notes:" preamble. No ``` fences.
-    """
-
     static let builtinAssistantPrompt = """
     You are the on-device writing assistant inside Dictator, a macOS dictation app. Your job is to help the user produce text — drafting, rewriting, restructuring, listing, or briefly answering factual questions. You run locally on the user's Mac.
 
@@ -1446,7 +1118,7 @@ struct DictatorSettings: Codable, Equatable {
     /// in-memory recovery flag) doesn't get serialised, and so we can list
     /// every persisted key in one place — `syncedKeys` and `localKeys`
     /// below partition this set for the two-file layout.
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case transcriptionEngine, whisperModelID, parakeetModelID
         case realtimeInterimEnabled
         case llmEngine, llmModelID
@@ -1460,29 +1132,8 @@ struct DictatorSettings: Codable, Equatable {
         case assistantPromptAddendum, assistantPromptOverride
         case assistantWindowVisionContextEnabled
         case hasCompletedOnboarding
-        case meetingAutoDeleteAfterDays
-        case meetingAudioRetentionDays
-        case meetingLiveTranscriptEnabled
-        case meetingLiveNotesEnabled
-        case meetingLiveNotesSelfCorrectEnabled
-        case meetingCoachEnabled
-        case meetingCoachChipEnabled
-        case peopleRecognitionEnabled
-        case meetingCalendarMatchingEnabled
-        case meetingCaptureScreenshots
-        case meetingCoachPromptAddendum
-        case meetingCoachPromptOverride
-        case coachChecklistProfiles
-        case meetingLastPresetTypeID
-        case meetingLastProfileIDs
         case hotkeyTapToToggleEnabled
-        case meetingSummaryPromptAddendum
-        case meetingSummaryPromptOverride
         case globalPromptAddendum
-        case defaultMeetingType
-        case customMeetingTypes
-        case meetingDedupeMicEchoes
-        case meetingsEnabled
         case scratchpadEnabled
         case scratchpadWidth
     }
@@ -1493,6 +1144,42 @@ struct DictatorSettings: Codable, Equatable {
     /// (vocabularyDirectoryPath → syncedDirectoryPath).
     private enum LegacyTopLevelKeys: String, CodingKey {
         case vocabularyDirectoryPath
+    }
+
+    // COMPAT — remove after v2026.10
+    //
+    /// Keys read out of the two settings files that this app doesn't own any
+    /// more, kept verbatim so `persist()` can write them straight back.
+    ///
+    /// Meetings moved into its own app in v2026.9 and took 21 settings keys
+    /// with it, but Dictator Meetings only imports them the first time IT
+    /// launches — which may be days after this build replaced the old one, or
+    /// never. `persist()` rebuilds each file from scratch (encode → filter →
+    /// write), so without this the very first settings save Dictator makes
+    /// would silently delete a user's meeting types, coach profiles and
+    /// prompt customisations before the new app ever saw them.
+    ///
+    /// Keyed `"synced"` / `"local"` because the two files are written
+    /// separately and a key must go back into the file it came from. Captured
+    /// once per launch in `loadFromFiles()`; empty on a fresh install and
+    /// after Dictator Meetings has been through an import-and-save cycle that
+    /// removed them.
+    ///
+    /// Deliberately NOT part of the Codable shape — it's a file-level
+    /// side-channel, not a settings field. `nonisolated(unsafe)` because
+    /// `persist()` isn't actor-isolated (it's called from wherever settings
+    /// change) while `load()` is `@MainActor`; both run on the main thread in
+    /// practice, and this is written exactly once per launch before any save.
+    nonisolated(unsafe) private(set) static var passthrough: [String: [String: Any]] = [:]
+
+    /// Every key this app still owns: the live Codable surface plus the
+    /// legacy keys migration reads. Anything else in a settings file is
+    /// somebody else's and rides through untouched.
+    private static var ownedKeys: Set<String> {
+        var keys = Set(CodingKeys.allCases.map(\.rawValue))
+        keys.insert(LegacyTopLevelKeys.vocabularyDirectoryPath.rawValue)
+        keys.insert(LegacyCodingKeys.grammarPassEnabled.rawValue)
+        return keys
     }
 
     /// Keys that belong in the user-visible synced file
@@ -1510,25 +1197,8 @@ struct DictatorSettings: Codable, Equatable {
         "assistantPromptAddendum",
         "assistantPromptOverride",
         "assistantWindowVisionContextEnabled",
-        "meetingLiveTranscriptEnabled",
-        "meetingLiveNotesEnabled",
-        "meetingLiveNotesSelfCorrectEnabled",
-        "meetingCoachEnabled",
-        "meetingCoachChipEnabled",
-        "peopleRecognitionEnabled",
-        "meetingCalendarMatchingEnabled",
-        "meetingCaptureScreenshots",
-        "meetingCoachPromptAddendum",
-        "meetingCoachPromptOverride",
-        "coachChecklistProfiles",
-        "meetingLastPresetTypeID",
-        "meetingLastProfileIDs",
         "hotkeyTapToToggleEnabled",
-        "meetingSummaryPromptAddendum",
-        "meetingSummaryPromptOverride",
         "globalPromptAddendum",
-        "defaultMeetingType",
-        "customMeetingTypes",
         "scratchpadEnabled",
         "scratchpadWidth",
     ]
@@ -1553,10 +1223,6 @@ struct DictatorSettings: Codable, Equatable {
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
-        "meetingAutoDeleteAfterDays",
-        "meetingAudioRetentionDays",
-        "meetingDedupeMicEchoes",
-        "meetingsEnabled",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the
@@ -1678,6 +1344,20 @@ struct DictatorSettings: Codable, Equatable {
         guard syncedExists || localExists else { return nil }
 
         let syncedDict = readEnvelope(at: syncedURL)
+
+        // COMPAT — remove after v2026.10. Stash anything neither file's owner
+        // recognises (in practice: the meeting keys, until Dictator Meetings
+        // has imported them) so persist() can put it back.
+        let owned = ownedKeys
+        passthrough = [
+            "synced": syncedDict.filter { !owned.contains($0.key) },
+            "local": localDict.filter { !owned.contains($0.key) },
+        ]
+        let carried = passthrough.values.reduce(0) { $0 + $1.count }
+        if carried > 0 {
+            NSLog("[Dictator] Settings: carrying \(carried) key(s) this app no longer owns through save (meetings compat).")
+        }
+
         // Local wins on overlap, but in normal operation there shouldn't be
         // any — each file owns its own keys.
         var merged: [String: Any] = [:]
@@ -1755,8 +1435,15 @@ struct DictatorSettings: Codable, Equatable {
               let object = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = object as? [String: Any]
         else { return }
-        let synced = dict.filter { Self.syncedKeys.contains($0.key) }
-        let local = dict.filter { Self.localKeys.contains($0.key) }
+        var synced = dict.filter { Self.syncedKeys.contains($0.key) }
+        var local = dict.filter { Self.localKeys.contains($0.key) }
+        // COMPAT — remove after v2026.10. Merge back the keys this app no
+        // longer owns, so a Dictator save can't strip a user's meeting
+        // settings before Dictator Meetings has imported them. Our own keys
+        // win on any collision — passthrough only ever holds keys we don't
+        // recognise, so a collision would mean the sets are out of step.
+        for (k, v) in Self.passthrough["synced"] ?? [:] where synced[k] == nil { synced[k] = v }
+        for (k, v) in Self.passthrough["local"] ?? [:] where local[k] == nil { local[k] = v }
         Self.writeEnvelope(synced, to: Self.syncedFileURL(syncedDirectoryPath: syncedDirectoryPath))
         Self.writeEnvelope(local, to: Self.localFileURL())
     }
@@ -1812,14 +1499,4 @@ struct DictatorSettings: Codable, Equatable {
         LocalLLM.engine(kind: llmEngine, modelID: llmModelID)
     }
 
-    /// Whether meetings are running the LLM the notes were tuned for: the
-    /// MLX engine with `ModelCatalog.meetingsRecommendedLLMID` selected.
-    /// Meetings no longer *require* this — any configured engine writes
-    /// notes — but anything else surfaces a non-blocking quality warning
-    /// (`MeetingsFeature.llmQualityNote`). See the catalog constant for the
-    /// rationale; the hard "is there any usable note-writing LLM?" gate
-    /// lives in `MeetingsFeature.llmRequirementMessage`.
-    var meetingsUsingRecommendedLLM: Bool {
-        llmEngine == .mlx && llmModelID == ModelCatalog.meetingsRecommendedLLMID
-    }
 }

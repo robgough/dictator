@@ -20,55 +20,6 @@ final class AppState {
     /// menu-bar popover may not have rendered yet on a cold launch.
     var openSettingsAction: (@MainActor () -> Void)?
 
-    /// Captured `EnvironmentValues.openWindow` action so non-SwiftUI
-    /// surfaces (dictator://meetings URL handler) can open the Meetings
-    /// window. Set by MenuBarContent on first render.
-    var openMeetingsAction: (@MainActor () -> Void)?
-
-    /// One-shot flag set by the menu bar's "Record meeting" entry. Read
-    /// (and immediately cleared) by `MeetingsRootView` the next time it
-    /// appears or observes a change — at which point it kicks off the
-    /// same `startRecording()` flow as the in-window Record button. The
-    /// flag dodges the "window doesn't exist yet" race: the menu bar
-    /// sets it *then* opens the window, so by the time the Meetings view
-    /// renders it can observe the request and consume it in one place.
-    var pendingMeetingRecording: Bool = false
-
-    /// When a meeting is actively recording, the moment it started — mirrored
-    /// from the live `MeetingSession` so the always-visible menu-bar icon can
-    /// show a recording indicator even when the Meetings window is closed or
-    /// backgrounded. nil when no meeting is recording.
-    var meetingRecordingStartedAt: Date?
-    var isRecordingMeeting: Bool { meetingRecordingStartedAt != nil }
-
-    /// The live meeting's coach engine, mirrored here (like
-    /// `meetingRecordingStartedAt`) so the notch island can show the coach
-    /// strip even when the Meetings window is closed — which is the normal
-    /// state mid-call. Set by `MeetingSession` when recording starts, cleared
-    /// on every teardown path. nil when no meeting is recording or the coach
-    /// is disabled.
-    var activeCoachEngine: MeetingCoachEngine?
-
-    /// True while the Meetings window is the key window. Set by
-    /// `MeetingsRootView` from its `controlActiveState`. Drives both the
-    /// assistant-hotkey routing (below) and the "Hold ⌘⌥A to ask" affordance
-    /// on the notes view, which only makes sense when the window is focused.
-    var meetingsWindowIsKey: Bool = false
-
-    /// The assistant controller for the meeting currently shown in the detail
-    /// pane, registered by the notes view while it's on screen. Lets the
-    /// assistant hotkey operate on the meeting's notes instead of the global
-    /// selection when the Meetings window is focused. Weak + observation-
-    /// ignored: it's a routing target, never rendered from here.
-    @ObservationIgnored weak var meetingAssistant: MeetingAssistantController?
-    /// Remembers which path the in-flight assistant press took, so the matching
-    /// release goes to the same place even with tap-to-toggle (where the start
-    /// and stop are seconds and a focus-change apart).
-    @ObservationIgnored private weak var inFlightMeetingAssistant: MeetingAssistantController?
-
-    /// The meeting assistant the hotkey should drive right now — only when the
-    /// Meetings window is key and it actually has notes to act on. Otherwise
-    /// nil, so the hotkey falls through to the normal selection-based assistant.
     /// Human-readable form of the assistant hotkey, for on-screen hints like
     /// "Hold ⌘⌥A to ask". Uses the live keyboard-combo when that mode is set,
     /// otherwise the modifier-key label.
@@ -79,45 +30,6 @@ final class AppState {
             return (s?.isEmpty == false) ? s! : "⌘⌥A"
         }
         return settings.assistantTriggerMode.label
-    }
-
-    private func routableMeetingAssistant() -> MeetingAssistantController? {
-        guard meetingsWindowIsKey, let controller = meetingAssistant, controller.canRun else { return nil }
-        return controller
-    }
-
-    /// Assistant-hotkey press. Routes to the focused meeting's notes assistant
-    /// when one is available, else the global Assistant Mode flow.
-    private func assistantPress() {
-        if let controller = routableMeetingAssistant() {
-            inFlightMeetingAssistant = controller
-            controller.beginListening()
-        } else {
-            inFlightMeetingAssistant = nil
-            pipeline.startAssistant()
-        }
-    }
-
-    /// Assistant-hotkey release. Mirrors whatever `assistantPress` routed to.
-    private func assistantRelease() {
-        if let controller = inFlightMeetingAssistant {
-            inFlightMeetingAssistant = nil
-            controller.endListeningAndRun()
-        } else {
-            pipeline.finishAssistant()
-        }
-    }
-
-    /// Assistant-hotkey chord-cancel — the trigger modifier was used as a chord
-    /// (e.g. ⌥3 → "#"), so abandon whichever flow the press started rather than
-    /// committing it.
-    private func assistantCancel() {
-        if let controller = inFlightMeetingAssistant {
-            inFlightMeetingAssistant = nil
-            controller.cancelListening()
-        } else {
-            pipeline.cancelInFlight()
-        }
     }
 
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
@@ -133,8 +45,8 @@ final class AppState {
 
     private init() {
         // Teach the shared `SyncedStorage` where this app's synced folder is.
-        // It can't read `AppState` directly — it's compiled into Dictator
-        // Meetings and the iOS app too — so it asks through this closure.
+        // It can't read `AppState` directly — the file is compiled into
+        // Dictator Meetings and the iOS app too — so it asks through this closure.
         // Registered here rather than in `bootstrap()` because anything that
         // reaches `SyncedStorage.directory` has necessarily gone through
         // `AppState.shared` first.
@@ -167,23 +79,6 @@ final class AppState {
         SyncedStorage.migrateFromAppSupport(filename: "conversations.json")
         SyncedStorage.cleanupLegacyBackups()
 
-        // Meeting notes + transcripts live in the synced folder so a meeting
-        // recorded on one Mac can be read on another; the large audio tracks
-        // stay per-Mac in Application Support. Point MeetingStorage at the
-        // synced folder, then reconcile on-disk meetings to that split (pulling
-        // any audio that an earlier build synced back out to local). Must run
-        // before MeetingsStore.shared is first referenced so its initial scan
-        // reads the synced location.
-        MeetingStorage.syncedBaseURL = SyncedStorage.directory
-        MeetingStorage.migrateToSplitStorage()
-        // Recover any recording a crash cut short before its meta.json was
-        // written: synthesise the meta so it reappears as a `.captured` meeting
-        // (with its mirrored first-pass notes) the user can finish, and clear
-        // the stale live-mirror files. Must run before MeetingsStore scans.
-        MeetingRecovery.recoverInterrupted(settings: settings)
-        // Backfill notes.md / transcript.md for meetings recorded before them.
-        MeetingStorage.backfillDerivedMarkdown()
-
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy
         // settings.vocabulary array as a one-shot migration source; once
@@ -199,12 +94,11 @@ final class AppState {
         }
 
         AudioDeviceManager.shared.bootstrap()
-        // Deliberately NOT reaping leaked meeting-tap aggregates here: destroying
-        // aggregate devices interrupts whatever audio is playing (a brief pause at
-        // launch), and the leaked taps are already hidden from the input list by
-        // the enumerator filter + knownDevices pruning. They're reaped at the next
-        // meeting start (MeetingAudioRecorder.sweepStaleAggregates) or on logout —
-        // neither a moment when audio is actively playing.
+        // Deliberately NOT reaping leaked aggregate tap devices here (Dictator
+        // Meetings does that in its own bootstrap): destroying aggregate
+        // devices interrupts whatever audio is playing, which is not a thing a
+        // login-item menu-bar app should do. The leaked taps are already hidden
+        // from the input list by the enumerator filter + knownDevices pruning.
         // Render + register the cue sounds off-main *now* so the first hotkey
         // press's arm chime is instant. Unlike the old engine prewarm this
         // opens no audio device IO (system sounds render inside coreaudiod),
@@ -239,9 +133,9 @@ final class AppState {
         )
         assistantHotkey.bind(
             mode: settings.assistantTriggerMode,
-            onPress: { [weak self] in self?.assistantPress() },
-            onRelease: { [weak self] in self?.assistantRelease() },
-            onCancel: { [weak self] in self?.assistantCancel() },
+            onPress: { [weak self] in self?.pipeline.startAssistant() },
+            onRelease: { [weak self] in self?.pipeline.finishAssistant() },
+            onCancel: { [weak self] in self?.pipeline.cancelInFlight() },
             tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
         // Scratchpad: a plain tap-to-toggle combo, no push-to-talk semantics, so
@@ -324,11 +218,6 @@ final class AppState {
         LocalLLMServer.shared.applySettings(settings)
         dictationHotkey.setMode(settings.triggerMode)
         assistantHotkey.setMode(settings.assistantTriggerMode)
-        // Keep meetings pointed at the (possibly just-changed) synced folder so
-        // new recordings land there. Existing meetings aren't auto-moved on a
-        // folder change — only the initial Application Support migration moves
-        // them — so a relocate leaves prior meetings where they were.
-        MeetingStorage.syncedBaseURL = SyncedStorage.directory
     }
 
     /// Used by the Settings UI's "Reset" button next to the keyboard-shortcut recorder.

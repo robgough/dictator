@@ -5,7 +5,6 @@ import KeyboardShortcuts
 
 struct MenuBarContent: View {
     @Environment(AppState.self) private var state
-    @Environment(\.openWindow) private var openWindow
     @State private var history = DictationHistory.shared
     @State private var conversations = ConversationHistory.shared
     @State private var modelManager = ModelManager.shared
@@ -17,14 +16,6 @@ struct MenuBarContent: View {
             header
             Divider()
             statusRow
-
-            // Meetings entries only appear once the user opts into the
-            // preview (Settings → Meetings) AND a usable LLM exists for the
-            // notes pass — runtime-gated, not compile-time, so changes take
-            // effect on the next menu open.
-            if MeetingsFeature.isEnabled {
-                recordMeetingButton
-            }
 
             // Default mode picker — only shown once the user has more than the
             // built-in Quick (i.e. after migration or once they add a custom
@@ -51,12 +42,10 @@ struct MenuBarContent: View {
                 } label: {
                     Label("Settings…", systemImage: "gearshape")
                 }
-                if MeetingsFeature.isEnabled {
-                    Button {
-                        showMeetings()
-                    } label: {
-                        Label("Meetings…", systemImage: "person.2.wave.2")
-                    }
+                Button {
+                    openDictatorMeetings()
+                } label: {
+                    Label("Open Dictator Meetings…", systemImage: "person.2.wave.2")
                 }
                 // The wizard exists to walk you through the things that
                 // *must* be configured for dictation to work. Once mic is
@@ -87,29 +76,32 @@ struct MenuBarContent: View {
             // user may have downloaded or removed a model from Settings
             // since we last refreshed.
             modelManager.refreshCachedStates()
-            // Captured unconditionally — the action itself is harmless and
-            // the deep-link handler checks the meetings toggle before use.
-            // (openSettingsAction is set once in AppDelegate now that the
-            // Settings window is AppKit-owned.)
-            state.openMeetingsAction = { showMeetings() }
         }
     }
 
-    /// Open — or, when it's already open, re-front and focus — the single
-    /// Meetings window. `openWindow(id:)` re-fronts a singleton `Window`, but
-    /// for an accessory (menu-bar) app an already-open window sitting behind
-    /// another app doesn't reliably become key, so we raise it explicitly on the
-    /// next runloop tick (by which point SwiftUI has surfaced/created it). The
-    /// `.regular` activation makes the dock icon appear; the AppDelegate flips
-    /// back to `.accessory` when the window closes.
-    private func showMeetings() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: "meetings")
-        DispatchQueue.main.async {
-            NSApp.windows
-                .first { $0.title == "Meetings" || ($0.identifier?.rawValue.hasPrefix("meetings") ?? false) }?
-                .makeKeyAndOrderFront(nil)
+    /// Launch the separate Dictator Meetings app, or — when it isn't
+    /// installed — send the user to the download page.
+    ///
+    /// `urlForApplication(withBundleIdentifier:)` is the only reliable way to
+    /// find it: it may be in `/Applications`, `~/Applications`, or a
+    /// DerivedData folder on a development Mac, and Launch Services already
+    /// knows which. Launching by URL (rather than
+    /// `launchApplication(withBundleIdentifier:)`) keeps the "already running"
+    /// case a plain re-activation.
+    private func openDictatorMeetings() {
+        let bundleID = "net.robgough.DictatorMeetings"
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            if let site = URL(string: "https://dictator.robgough.net/#meetings") {
+                NSWorkspace.shared.open(site)
+            }
+            return
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
+            if let error {
+                NSLog("[Dictator] Couldn't launch Dictator Meetings: \(error)")
+            }
         }
     }
 
@@ -272,46 +264,6 @@ struct MenuBarContent: View {
                 ProgressView().controlSize(.small)
             }
         }
-    }
-
-    /// Primary affordance near the top of the popover: one-click start of
-    /// a meeting recording without first opening the Meetings window and
-    /// hunting for the toolbar button. Sets a pending flag on AppState,
-    /// then opens the window — MeetingsRootView consumes the flag from
-    /// its onAppear / onChange and drives the same startRecording() flow
-    /// the toolbar button uses, so there's a single code path for "begin
-    /// a meeting capture" regardless of who triggered it.
-    private var recordMeetingButton: some View {
-        Button {
-            state.pendingMeetingRecording = true
-            showMeetings()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "record.circle.fill")
-                    .foregroundStyle(.red)
-                    .font(.system(size: 14, weight: .semibold))
-                Text("Record meeting")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.red.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Open the Meetings window and start recording immediately.")
     }
 
     private var statusText: String {
