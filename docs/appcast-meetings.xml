@@ -12,5 +12,24 @@
             sparkle:edSignature verified by SUPublicEDKey in the running app's
             Info.plist (the same EdDSA keypair Dictator uses).
         -->
+        <item>
+            <title>Version 2026.9.0</title>
+            <pubDate>Sun, 06 Sep 2026 17:28:02 +0000</pubDate>
+            <sparkle:version>35</sparkle:version>
+            <sparkle:shortVersionString>2026.9.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Fixed: the meetings list could come up empty on launch because the window scanned for meetings before the app had pointed storage at your synced folder. Existing meetings were never touched; they just weren&#x27;t listed.</li>
+  <li>Dictator Meetings has its own app icon: the two-people-and-a-voice symbol from its menu bar item, in Dictator&#x27;s blue, so the two apps are easy to tell apart in the Dock and the app switcher.</li>
+  <li>The AI instructions field in Settings → General is a full-width, left-aligned text field that grows as you type.</li>
+  <li>First standalone release. Meetings moved out of Dictator into its own app; your recordings, notes and settings carry over automatically.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.0/Dictator-Meetings.dmg"
+                length="14456881"
+                type="application/octet-stream"
+                sparkle:edSignature="l3iK39jBWLahTBlxTeahb9vR64xNnB+MDPWnynzBm4xtTFkAd76O+U9uJ+LGSR8kgaBomWTOy4E4nA6yVENZAg==" />
+        </item>
+    
     </channel>
 </rss>
