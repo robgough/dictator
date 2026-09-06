@@ -45,6 +45,55 @@ struct ThisMacHeader: View {
     }
 }
 
+/// A sentence or two of free text inside a grouped `Form` — instructions,
+/// preferences — rendered full width and left-aligned. The obvious
+/// `TextField("Label", text:)` in a grouped Form puts the label on the left
+/// and trailing-aligns the value, which is right for a name and unreadable
+/// for prose. This hides the label (put it in the section header), grows
+/// from three to eight lines, then scrolls.
+struct InstructionsField: View {
+    private let prompt: String
+    @Binding private var text: String
+    private let onChange: () -> Void
+
+    init(_ prompt: String, text: Binding<String>, onChange: @escaping () -> Void) {
+        self.prompt = prompt
+        self._text = text
+        self.onChange = onChange
+    }
+
+    var body: some View {
+        TextField("", text: $text, prompt: Text(prompt), axis: .vertical)
+            .labelsHidden()
+            .lineLimit(3...8)
+            .multilineTextAlignment(.leading)
+            .font(.body)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: text) { _, _ in onChange() }
+    }
+}
+
+/// A full prompt editor for sheets: readable body text (not 11pt monospace),
+/// comfortable line spacing, a proper text-area surface. `TextEditor` paints
+/// its own background unless `scrollContentBackground` is hidden, which is
+/// why earlier rounded backgrounds never showed their corners.
+struct PromptEditor: View {
+    @Binding var text: String
+    var onChange: () -> Void = {}
+    var accent: Color? = nil
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.system(size: 13))
+            .lineSpacing(3)
+            .scrollContentBackground(.hidden)
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder((accent ?? Color.secondary).opacity(accent == nil ? 0.2 : 0.4)))
+            .onChange(of: text) { _, _ in onChange() }
+    }
+}
+
 /// Per-prompt editor. Two modes:
 /// - Addendum mode (default): edit a small "Additional instructions" field that
 ///   gets appended under the built-in at send time.
@@ -116,15 +165,10 @@ struct PromptCustomiser: View {
             Text("Appended under the built-in prompt. Use for small personal tweaks — e.g. \"always use British spelling\" or \"never include em-dashes\".")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextEditor(text: $addendum)
-                .font(.system(size: 12, design: .monospaced))
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+            PromptEditor(text: $addendum, onChange: onChange)
                 // Same height as the override editor so flipping between addendum
                 // and override mode doesn't reflow the pane.
                 .frame(height: 300)
-                .onChange(of: addendum) { _, _ in onChange() }
             if !addendum.isEmpty {
                 HStack {
                     Button("Clear") {
@@ -164,17 +208,13 @@ struct PromptCustomiser: View {
 
             Text("Custom prompt (replaces built-in)")
                 .font(.subheadline.weight(.medium))
-            TextEditor(text: Binding(
+            PromptEditor(text: Binding(
                 get: { override ?? "" },
                 set: { newValue in
                     override = newValue
                     onChange()
                 }
-            ))
-            .font(.system(size: 12, design: .monospaced))
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.4)))
+            ), accent: .orange)
             .frame(height: 300)
         }
     }
@@ -197,7 +237,8 @@ struct BuiltinPromptSheet: View {
             Divider()
             ScrollView {
                 Text(prompt)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 13))
+                    .lineSpacing(3)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()

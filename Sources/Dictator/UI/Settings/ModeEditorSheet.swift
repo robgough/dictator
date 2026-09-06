@@ -24,6 +24,7 @@ struct ModeEditorSheet: View {
             Divider()
             Form {
                 styleSection
+                if mode.style != .raw { extraInstructionsSection }
                 if !mode.isLocked {
                     appsSection
                 }
@@ -97,13 +98,6 @@ struct ModeEditorSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if mode.style != .raw {
-                TextField("Extra instructions", text: $mode.extraInstructions, axis: .vertical)
-                    .lineLimit(2...5)
-                    .onChange(of: mode.extraInstructions) { _, _ in onChange() }
-                    .help("Added to every AI step in this mode, on top of your General AI instructions.")
-            }
-
             if mode.style == .custom {
                 Button {
                     showCustomPromptSheet = true
@@ -117,6 +111,24 @@ struct ModeEditorSheet: View {
             if state.settings.llmEngine == .none {
                 SectionFootnote("AI styles need an LLM (see Models).")
             }
+        }
+    }
+
+
+    /// A sentence or two of preference for this mode. Full width and
+    /// left-aligned: a labelled field in a grouped Form renders its value
+    /// trailing-aligned, which is right for a name and unreadable for prose.
+    private var extraInstructionsSection: some View {
+        Section {
+            InstructionsField(
+                "Add instructions for this mode…",
+                text: $mode.extraInstructions,
+                onChange: onChange
+            )
+        } header: {
+            Text("Extra instructions")
+        } footer: {
+            SectionFootnote("Added to every AI pass in this mode, after your General AI instructions.")
         }
     }
 
@@ -268,10 +280,8 @@ private struct CustomPromptSheet: View {
             }
             .padding()
             Divider()
-            TextEditor(text: $customPrompt)
-                .font(.system(size: 12, design: .monospaced))
-                .padding(8)
-                .onChange(of: customPrompt) { _, _ in onChange() }
+            PromptEditor(text: $customPrompt, onChange: onChange)
+                .padding(12)
         }
         .frame(width: 720, height: 520)
     }

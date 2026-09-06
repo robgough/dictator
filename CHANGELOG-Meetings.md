@@ -14,4 +14,5 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The AI instructions field in Settings → General is a full-width, left-aligned text field that grows as you type.
 - First standalone release. Meetings moved out of Dictator into its own app; your recordings, notes and settings carry over automatically.

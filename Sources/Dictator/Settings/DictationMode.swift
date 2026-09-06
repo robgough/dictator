@@ -582,6 +582,9 @@ extension DictationMode {
             builtin
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) })
+        // Built-in lines long enough to be unambiguous as prefixes (a short
+        // line like "HARD RULES:" would match too eagerly).
+        let builtinPrefixes = builtinLines.filter { $0.count >= 40 }
         var out: [String] = []
         var inGlobalBlock = false
         for rawLine in prompt.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -593,6 +596,14 @@ extension DictationMode {
             if inGlobalBlock { continue }
             if line.hasPrefix("ADDITIONAL USER INSTRUCTIONS") { continue }
             if builtinLines.contains(line) { continue }
+            // A user who edited a built-in line in place ("You are a strict,
+            // deterministic dictation formatter. You are receiving speech…")
+            // keeps only what they added, not the built-in opener too.
+            if let prefix = builtinPrefixes.first(where: { line.hasPrefix($0) }) {
+                let rest = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                if !rest.isEmpty { out.append(rest) }
+                continue
+            }
             out.append(line)
         }
         let joined = out.joined(separator: "\n")

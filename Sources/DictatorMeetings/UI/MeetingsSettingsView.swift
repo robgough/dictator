@@ -59,15 +59,14 @@ private struct GeneralTab: View {
             }
 
             Section {
-                TextEditor(text: Binding(
-                    get: { s.settings.globalPromptAddendum },
-                    set: { s.settings.globalPromptAddendum = $0; state.save() }
-                ))
-                .font(.system(size: 12, design: .monospaced))
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.textBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
-                .frame(height: 120)
+                InstructionsField(
+                    "e.g. Always use British spelling",
+                    text: Binding(
+                        get: { s.settings.globalPromptAddendum },
+                        set: { s.settings.globalPromptAddendum = $0 }
+                    ),
+                    onChange: { state.save() }
+                )
             } header: {
                 Text("AI instructions")
             } footer: {

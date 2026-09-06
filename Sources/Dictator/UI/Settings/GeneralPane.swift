@@ -23,8 +23,7 @@ struct GeneralPane: View {
             }
 
             Section {
-                TextField("e.g. Rob Gough", text: $s.settings.userName)
-                    .textFieldStyle(.roundedBorder)
+                TextField("Name", text: $s.settings.userName, prompt: Text("Rob Gough"))
                     .onSubmit { state.save() }
                     .onChange(of: s.settings.userName) { _, _ in state.save() }
             } header: {
@@ -36,11 +35,11 @@ struct GeneralPane: View {
             Section {
                 // Plain (not monospace) and borderless: this is a sentence or
                 // two of preference, not a prompt. Full prompts live in sheets.
-                TextField("e.g. Always use British spelling",
-                          text: $s.settings.globalPromptAddendum,
-                          axis: .vertical)
-                    .lineLimit(2...5)
-                    .onChange(of: s.settings.globalPromptAddendum) { _, _ in state.save() }
+                InstructionsField(
+                    "e.g. Always use British spelling",
+                    text: $s.settings.globalPromptAddendum,
+                    onChange: { state.save() }
+                )
             } header: {
                 Text("AI instructions")
             } footer: {
