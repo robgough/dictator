@@ -2,13 +2,12 @@
 // Renders the Dictator Meetings app icon at every size macOS asks for.
 // Run from the repo root: `swift scripts/make_meetings_icon.swift`
 //
-// Same family as Dictator's icon (scripts/make_icon.swift): pale gradient
-// squircle, centred 9-bar waveform of vertical capsules. Two things set it
-// apart so the Dock, the switcher and the Applications folder read the two
-// apps at a glance:
-//   - colour: teal → sea-green instead of Dictator's blue;
-//   - silhouette: a twin-peak envelope — two voices in a conversation —
-//     instead of Dictator's single centred peak.
+// Same family as Dictator's icon (scripts/make_icon.swift) — pale gradient
+// squircle, the same blue gradient — but the glyph is the SF Symbol the
+// app already uses in its menu-bar item, `person.2.wave.2` (two people and
+// a voice), rendered through the gradient. Same colour, different picture:
+// enough to tell the two apps apart in the Dock without looking like a
+// different product family.
 // Also writes docs/media/dictator-meetings-icon.png (512 px) for the site.
 
 import AppKit
@@ -42,15 +41,13 @@ private func renderIcon(pixels: Int) -> CGImage {
     let corner = bgRect.width * 0.225
     let bgPath = CGPath(roundedRect: bgRect, cornerWidth: corner, cornerHeight: corner, transform: nil)
 
-    // Background: the same paper-white → cool grey as Dictator, with the
-    // faintest teal cast at the bottom so the two icons share a family but
-    // not a swatch.
+    // Background: identical to Dictator's (paper white → cool light grey).
     ctx.saveGState()
     ctx.addPath(bgPath)
     ctx.clip()
     let bgGradient = CGGradient(colorsSpace: cs, colors: [
-        NSColor(srgbRed: 0.985, green: 0.992, blue: 0.990, alpha: 1).cgColor,
-        NSColor(srgbRed: 0.895, green: 0.935, blue: 0.930, alpha: 1).cgColor,
+        NSColor(srgbRed: 0.985, green: 0.987, blue: 0.995, alpha: 1).cgColor,
+        NSColor(srgbRed: 0.905, green: 0.920, blue: 0.945, alpha: 1).cgColor,
     ] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(bgGradient, start: CGPoint(x: 0, y: s), end: CGPoint(x: 0, y: 0), options: [])
     ctx.restoreGState()
@@ -62,40 +59,58 @@ private func renderIcon(pixels: Int) -> CGImage {
     ctx.strokePath()
     ctx.restoreGState()
 
-    // Twin-peak envelope: two speakers. Dictator's is a single centred peak.
-    let heights: [CGFloat] = [0.30, 0.60, 0.86, 0.62, 0.36, 0.64, 0.84, 0.58, 0.30]
-    let barCount = CGFloat(heights.count)
-    let clusterWidth = s * 0.62
-    let clusterX = (s - clusterWidth) / 2
-    let gapRatio: CGFloat = 0.55
-    let barW = clusterWidth / (barCount + (barCount - 1) * gapRatio)
-    let gap = barW * gapRatio
-    let maxBarH = s * 0.70
+    // Glyph: the menu-bar symbol, drawn through Dictator's blue gradient.
+    // The symbol is rasterised large, then fitted to ~66% of the icon width
+    // and centred; a transparency layer + destination-in keeps the gradient
+    // only where the glyph has coverage, and the layer takes the shadow as
+    // one shape.
+    let symbolPoint = max(64, s * 0.55)
+    let config = NSImage.SymbolConfiguration(pointSize: symbolPoint, weight: .medium)
+    guard let symbol = NSImage(systemSymbolName: "person.2.wave.2", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config),
+          let glyph = symbol.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        fatalError("SF Symbol person.2.wave.2 unavailable")
+    }
+    let targetW = s * 0.66
+    let scale = targetW / CGFloat(glyph.width)
+    let glyphW = CGFloat(glyph.width) * scale
+    let glyphH = CGFloat(glyph.height) * scale
+    // Optically centred: the symbol's waves sit high, so nudge down a touch.
+    let glyphRect = CGRect(x: (s - glyphW) / 2, y: (s - glyphH) / 2 - s * 0.01, width: glyphW, height: glyphH)
 
-    // Teal → sea-green. Deliberately far from Dictator's blue on the hue
-    // wheel, and from the system green, so it reads as its own thing.
     let barGradient = CGGradient(colorsSpace: cs, colors: [
-        NSColor(srgbRed: 0.30, green: 0.82, blue: 0.74, alpha: 1).cgColor,
-        NSColor(srgbRed: 0.02, green: 0.56, blue: 0.50, alpha: 1).cgColor,
+        NSColor(srgbRed: 0.32, green: 0.55, blue: 1.00, alpha: 1).cgColor,
+        NSColor(srgbRed: 0.04, green: 0.40, blue: 0.92, alpha: 1).cgColor,
     ] as CFArray, locations: [0, 1])!
+
+    // Turn the glyph's alpha into a Quartz image mask (0 = paint, 255 = keep
+    // out) and clip the gradient through it. Compositing the gradient with
+    // destination-in instead left a one-level tint across the whole glyph
+    // rectangle from premultiplied rounding — invisible on disk, visible in
+    // Finder's preview.
+    let gw = glyph.width, gh = glyph.height
+    var rgba = [UInt8](repeating: 0, count: gw * gh * 4)
+    rgba.withUnsafeMutableBytes { buf in
+        let tmp = CGContext(data: buf.baseAddress, width: gw, height: gh, bitsPerComponent: 8,
+                            bytesPerRow: gw * 4, space: cs,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        tmp.draw(glyph, in: CGRect(x: 0, y: 0, width: gw, height: gh))
+    }
+    var maskBytes = [UInt8](repeating: 255, count: gw * gh)
+    for i in 0..<(gw * gh) { maskBytes[i] = 255 &- rgba[i * 4 + 3] }
+    let provider = CGDataProvider(data: Data(maskBytes) as CFData)!
+    let mask = CGImage(maskWidth: gw, height: gh, bitsPerComponent: 8, bitsPerPixel: 8,
+                       bytesPerRow: gw, provider: provider, decode: nil, shouldInterpolate: true)!
 
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.006), blur: s * 0.025,
-                  color: NSColor(srgbRed: 0.02, green: 0.30, blue: 0.28, alpha: 0.20).cgColor)
-    let cluster = CGMutablePath()
-    for (i, h) in heights.enumerated() {
-        let x = clusterX + CGFloat(i) * (barW + gap)
-        let barH = maxBarH * h
-        let y = (s - barH) / 2
-        let rect = CGRect(x: x, y: y, width: barW, height: barH)
-        let r = barW / 2
-        cluster.addPath(CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil))
-    }
-    ctx.addPath(cluster)
-    ctx.clip()
+                  color: NSColor(srgbRed: 0.05, green: 0.15, blue: 0.45, alpha: 0.18).cgColor)
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    ctx.clip(to: glyphRect, mask: mask)
     ctx.drawLinearGradient(barGradient,
-                           start: CGPoint(x: 0, y: (s + maxBarH) / 2),
-                           end: CGPoint(x: 0, y: (s - maxBarH) / 2), options: [])
+                           start: CGPoint(x: 0, y: glyphRect.maxY),
+                           end: CGPoint(x: 0, y: glyphRect.minY), options: [])
+    ctx.endTransparencyLayer()
     ctx.restoreGState()
 
     return ctx.makeImage()!
