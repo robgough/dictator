@@ -34,6 +34,14 @@ struct DictatorMeetingsApp: App {
     /// exactly that reason.
     @State private var menuBarInserted = MeetingsAppState.shared.settings.showMenuBarStatus
 
+    init() {
+        // Storage must be pointed at the synced folder before the Meetings
+        // window's first scan, and SwiftUI can show that window before the
+        // AppDelegate's launch hook fires. `bootstrap()` re-calls this as a
+        // no-op.
+        MeetingsAppState.shared.prepareStorage()
+    }
+
     var body: some Scene {
         // A single `Window`, NOT a `WindowGroup`: Meetings is one-per-app, so
         // reopening re-fronts the existing window instead of spawning a

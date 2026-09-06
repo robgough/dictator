@@ -85,6 +85,33 @@ final class MeetingsAppState {
         self.settings = MeetingsSettings.load()
     }
 
+    private var storagePrepared = false
+
+    /// Point meeting storage at the synced folder and reconcile what's on
+    /// disk. Idempotent, and deliberately separate from `bootstrap()`: in a
+    /// SwiftUI-lifecycle app the main window can appear — and
+    /// `MeetingsStore` scan — before the AppDelegate's
+    /// `applicationDidFinishLaunching` runs, so `DictatorMeetingsApp.init`
+    /// calls this first. Before this ran, the first scan read the per-Mac
+    /// audio folder (no meta.json files) and the sidebar came up empty.
+    func prepareStorage() {
+        guard !storagePrepared else { return }
+        storagePrepared = true
+        // Meeting notes + transcripts live in the synced folder so a meeting
+        // recorded on one Mac can be read on another; the large audio tracks
+        // stay per-Mac in Application Support. Point MeetingStorage at the
+        // synced folder, then reconcile on-disk meetings to that split.
+        MeetingStorage.syncedBaseURL = SyncedStorage.directory
+        MeetingStorage.migrateToSplitStorage()
+        // Recover any recording a crash cut short before its meta.json was
+        // written: synthesise the meta so it reappears as a `.captured` meeting
+        // (with its mirrored first-pass notes) the user can finish, and clear
+        // the stale live-mirror files.
+        MeetingRecovery.recoverInterrupted(settings: settings)
+        // Backfill notes.md / transcript.md for meetings recorded before them.
+        MeetingStorage.backfillDerivedMarkdown()
+    }
+
     func bootstrap() {
         MicLog.installUncaughtExceptionLogger()
 
@@ -97,21 +124,7 @@ final class MeetingsAppState {
         // pool can't run away.
         MLX.GPU.set(cacheLimit: 512 * 1024 * 1024)
 
-        // Meeting notes + transcripts live in the synced folder so a meeting
-        // recorded on one Mac can be read on another; the large audio tracks
-        // stay per-Mac in Application Support. Point MeetingStorage at the
-        // synced folder, then reconcile on-disk meetings to that split. Must
-        // run before MeetingsStore.shared is first referenced so its initial
-        // scan reads the synced location.
-        MeetingStorage.syncedBaseURL = SyncedStorage.directory
-        MeetingStorage.migrateToSplitStorage()
-        // Recover any recording a crash cut short before its meta.json was
-        // written: synthesise the meta so it reappears as a `.captured` meeting
-        // (with its mirrored first-pass notes) the user can finish, and clear
-        // the stale live-mirror files. Must run before MeetingsStore scans.
-        MeetingRecovery.recoverInterrupted(settings: settings)
-        // Backfill notes.md / transcript.md for meetings recorded before them.
-        MeetingStorage.backfillDerivedMarkdown()
+        prepareStorage()
 
         AudioDeviceManager.shared.bootstrap()
 

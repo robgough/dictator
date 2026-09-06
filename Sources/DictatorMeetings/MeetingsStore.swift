@@ -25,6 +25,7 @@ final class MeetingsStore {
     /// folder.
     func refresh() {
         let loaded = MeetingStorage.loadAllMetas()
+        NSLog("[DictatorMeetings] Scanned %d meetings at %@", loaded.count, MeetingStorage.meetingsRoot().path)
         metas = loaded.sorted { $0.createdAt > $1.createdAt }
         applyAutoDeleteIfConfigured()
         applyAudioRetentionIfConfigured()

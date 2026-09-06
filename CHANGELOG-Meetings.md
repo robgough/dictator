@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Fixed: the meetings list could come up empty on launch because the window scanned for meetings before the app had pointed storage at your synced folder. Existing meetings were never touched; they just weren't listed.
 - Dictator Meetings has its own app icon: the two-people-and-a-voice symbol from its menu bar item, in Dictator's blue, so the two apps are easy to tell apart in the Dock and the app switcher.
 - The AI instructions field in Settings → General is a full-width, left-aligned text field that grows as you type.
 - First standalone release. Meetings moved out of Dictator into its own app; your recordings, notes and settings carry over automatically.
