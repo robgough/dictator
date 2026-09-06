@@ -1172,7 +1172,7 @@
         <li><a href="#modes">Dictation modes</a></li>
         <li><a href="#context">Context awareness</a></li>
         <li><a href="#assistant">Assistant mode</a></li>
-        <li><a href="#meetings">Meetings (preview)</a></li>
+        <li><a href="#meetings">Dictator Meetings</a></li>
         <li><a href="#scratchpad">Scratchpad</a></li>
         <li><a href="#models">Choose your models</a></li>
         <li><a href="#tradeoff">Local-first, honestly</a></li>
@@ -1229,7 +1229,7 @@
             <li class="chip">Context-aware</li>
             <li class="chip">Custom modes, per app</li>
             <li class="chip">Multi-turn assistant</li>
-            <li class="chip">Meeting notes (preview)</li>
+            <li class="chip">Meetings (separate app)</li>
             <li class="chip">Floating scratchpad</li>
             <li class="chip">Free &amp; open source</li>
         </ul>
@@ -1388,23 +1388,25 @@
 
     <section id="modes" class="platform-mac">
         <h2>Dictation modes</h2>
-        <p class="lede">Not every dictation needs the full cleanup. Modes let you keep a stripped-back Quick option alongside the full pipeline — and add your own for the contexts you reach for.</p>
-        <p>A mode bundles which of the optional passes run, the prompts they use, and whether spoken cues and your vocabulary apply. Two come seeded; you can add your own from Settings.</p>
+        <p class="lede">Not every dictation needs the same amount of cleanup. Each mode picks a style — how much the AI is allowed to touch — and you can add your own modes for the contexts you reach for.</p>
+        <p>A style controls the shape of the output; a mode pairs a style with its own extra instructions, spoken-cue settings, and an "auto-activate for these apps" list. Fresh installs seed four modes — Quick, Standard, Polished, and Messages — and you can duplicate or add more from Settings.</p>
 
         <div class="two-col">
             <div class="mode" style="--mode-color: #f59e0b;">
-                <h3>Quick</h3>
-                <p>Every LLM pass off. Raw transcript only — with spoken cues ("comma", "new paragraph", "fire emoji") and your vocabulary substitutions still applied. The fastest path from speech to pasted text. Built-in and locked, so it's always there as the floor.</p>
+                <h3>Raw</h3>
+                <p>No AI pass at all. Spoken cues ("comma", "new paragraph", "fire emoji") and your vocabulary substitutions still apply, so it's not literally unprocessed — just the fastest path from speech to pasted text. Quick mode uses this style.</p>
             </div>
             <div class="mode" style="--mode-color: #10b981;">
-                <h3>Write</h3>
-                <p>Every pass on, default prompts — punctuation, grammar, paragraph and bullet structure. The full pipeline. Edit its prompts, or duplicate it as the starting point for a custom mode.</p>
+                <h3>Polished</h3>
+                <p>Punctuation, grammar, and structure, all cleaned up — hesitation fillers and false starts dropped by default. The most AI touches a transcript gets.</p>
             </div>
         </div>
 
-        <p style="margin-top: 18px;">Add your own for the contexts you reach for — an Email mode with a more formal prompt, a Slack mode that keeps things terse, a Code Comments mode that skips structure. Each pass takes either a prompt addendum (appended under the built-in) or a full override, so you can tune one pass without losing the scaffolding on the others.</p>
+        <p style="margin-top: 18px;">Between those two sit Clean (punctuation and formatting, lighter-touch than Polished) and Messages (casual register kept, no trailing full stop on short one-liners, never invents a greeting or sign-off — built for chat apps). Custom drops the built-in styles entirely and runs a prompt you write yourself. Every built-in style shares one set of prompts, so improvements reach every mode that uses it automatically; a mode's own Extra instructions box layers your tweaks on top without forking the whole prompt.</p>
 
-        <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Write, decide partway through it should've been Quick, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind Email mode to Mail.app, Slack mode to Slack, and Dictator picks the right one as you start to record.</p>
+        <p>Long dictations (roughly 60 words and up) get paragraph breaks automatically — the AI only chooses where to break, it can't reword a single line — and very long ones are chunked so the ending doesn't get truncated or quietly summarised.</p>
+
+        <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Polished, decide partway through it should've been Raw, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind a Slack mode to Slack, an Email mode to Mail.app, and Dictator picks the right one as you start to record.</p>
     </section>
 
     <section id="context" class="platform-mac">
@@ -1448,28 +1450,22 @@
     </section>
 
     <section id="meetings" class="meetings platform-mac">
-        <h2>Meetings <span class="preview-pill">Very early preview</span></h2>
-        <p class="lede">Record a call, get a transcript split by speaker, and have the notes written for you — all on-device.</p>
-        <p>Start a recording from the menu bar and Dictator captures both sides — your microphone and the call audio itself, whatever app the call is in. Or import an existing recording. As with everything else on this page, nothing is uploaded anywhere.</p>
+        <h2>Dictator Meetings</h2>
+        <p class="lede">Record a call, get a transcript split by speaker, and have the notes written for you — all on-device, in its own app.</p>
+        <p>Dictator Meetings is a separate download: a windowed companion app for recording calls and writing them up. Start a recording and it captures both sides — your microphone and the call audio itself, whatever app the call is in — transcribes and diarizes locally, and writes clean Markdown notes (summary, discussion, decisions, action items with owners) when it ends. It shares Dictator's already-loaded language model where it can, so running both apps doesn't mean holding two copies in memory.</p>
 
-        <div class="callout warn">
-            <strong>This one is genuinely early.</strong> Meetings ships switched off; you opt in from Settings → Meetings, where a notice sets expectations. It works end-to-end, but we're still finding out how reliable it is across real calls, mics, and meeting shapes — expect rough edges, and behaviour that changes between versions. If you try it, feedback (good or bad) is hugely appreciated at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
-        </div>
-
-        <div class="two-col" style="margin-top: 18px;">
-            <div class="mode" style="--mode-color: #ff453a;">
-                <h3>While it records</h3>
-                <p>A live transcript builds as people talk, with rough live notes taking shape alongside it. There's a pad for your own notes too — anything you jot down is treated as ground truth when the final notes are written, so your names, owners, and figures win over the transcript.</p>
-            </div>
-            <div class="mode" style="--mode-color: #32ade6;">
-                <h3>When it ends</h3>
-                <p>The full recording is re-transcribed, split by speaker, and written up as clean Markdown notes — summary, discussion, decisions, action items with owners. Pick a note style (stand-up, retro, 1-on-1, client call, interview…), define your own, or let it auto-detect — and re-run with a one-off instruction until the notes come out right.</p>
+        <div class="download-row">
+            <div class="download-col">
+                <a class="cta" href="https://github.com/robgough/dictator/releases/latest/download/Dictator-Meetings.dmg">Download Dictator Meetings →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
             </div>
         </div>
+        <p class="release-row">
+            Latest release: <a id="latest-meetings-release-link" href="https://github.com/robgough/dictator/releases/tag/meetings-v2026.9.0">v2026.9.0</a>
+            · <a href="https://github.com/robgough/dictator/releases">All releases</a>
+        </p>
 
-        <p style="margin-top: 18px;">Speakers are told apart automatically and picked up by name when someone is clearly introduced or addressed ("thanks, Rory") — guessed names are marked so you can spot and correct them. The finished notes answer to the same assistant as dictation: ask what was decided, or tell it how to rewrite them. Notes and transcripts sync between your Macs through the same folder as your settings; the audio stays on the Mac that recorded it.</p>
-
-        <p>What it needs: the Parakeet speech model, the speaker-identification model (~110 MB), and — the big one — <a href="#models">Gemma 4 E4B</a>. In our testing it's the only local model that writes notes you can rely on across an hour of audio, so the feature is gated on it, and realistically that means a 32 GB Mac. Capturing the call audio uses macOS's System Audio Recording permission, and a recorded hour ends up around 80 MB on disk.</p>
+        <p style="margin-top: 22px;">Notes can be written by a model of your choice — Dictator's shared model or a local model of its own by default, or Apple's on-device model — and, only if you configure one, a cloud provider (OpenAI, OpenRouter, or Anthropic) for either the live or final pass. Cloud providers are opt-in per notes step: transcripts only leave your Mac when you deliberately pick one, and API keys are kept in the macOS Keychain, never written into synced settings.</p>
     </section>
 
     <section id="scratchpad" class="platform-mac">
@@ -1548,7 +1544,7 @@
                     <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Alternative 3B with a different prose style.</td></tr>
                     <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality output, noticeably slower. Plan for 32 GB.</td></tr>
                     <tr><td class="model-name">Gemma 4 E2B (QAT 4-bit)</td><td class="size">4.4 GB</td> <td class="size">~4 GB</td>    <td class="size">24 GB</td> <td class="note">Google's latest, derived from Gemini 3. Strong for its size — the download includes vision towers that are dropped at load, so it runs lighter than the file size suggests.</td></tr>
-                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">The best-quality model Dictator offers. Same Gemini 3 lineage as the E2B, with more effective parameters. Required for <a href="#meetings">Meetings</a>.</td></tr>
+                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">The best-quality model Dictator offers. Same Gemini 3 lineage as the E2B, with more effective parameters. Also the model <a href="#meetings">Dictator Meetings</a> recommends for local notes.</td></tr>
                     <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">—</td>     <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies). Pick this if you prefer Whisper's output straight, or want zero LLM overhead.</td></tr>
                 </tbody>
             </table>

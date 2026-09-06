@@ -22,6 +22,8 @@ entries as plain bullet lines.
 - Every AI style now drops hesitation fillers (um, uh, er) and stutters by default instead of preserving every word. Polished also removes discourse fillers, false starts and grammar slips.
 - New Messages style for chat apps: casual register kept, no trailing full stop on short one-liners, never adds greetings or sign-offs. Fresh installs start with Quick, Standard, Polished and Messages.
 - History now lists every stage a dictation went through, labelled by pass, along with the style that produced it.
+- Meetings has moved to its own app, Dictator Meetings. Dictator no longer asks for system-audio or calendar access, and the Settings window loses the Meetings section.
+- New: Dictator shares its loaded model with Dictator Meetings over a local socket (Settings → General → Performance), so both apps never hold two copies in memory; dictation always takes priority.
 
 ## v2026.8.0 — 2026-08-06
 

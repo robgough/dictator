@@ -14,66 +14,85 @@ We update the version in both the href and the link text in place — the
 owner/repo segment of the URL stays whatever's in the file, so this script
 works for forks without a code change.
 
+Dictator Meetings reuses this same script against the same file, pointed at
+its own anchor id and its own tag prefix:
+
+    <a id="latest-meetings-release-link" href="https://github.com/<owner>/<repo>/releases/tag/meetings-v2026.9.0">v2026.9.0</a>
+
 Usage:
+    update_site_version.py <version> [--site PATH] [--element-id ID] [--tag-prefix PREFIX]
+
     update_site_version.py 2026.5.7
+    update_site_version.py 2026.9.0 --element-id latest-meetings-release-link --tag-prefix meetings-v
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
 
-SITE_PATH = Path("docs/index.html")
+DEFAULT_SITE_PATH = "docs/index.html"
+DEFAULT_ELEMENT_ID = "latest-release-link"
+DEFAULT_TAG_PREFIX = "v"
 
-# Captures: 1=href prefix up to `tag/v`, 2=URL version, 3=text version.
-# Anchored on the id so we never touch a different anchor that happens to
-# share the same URL shape.
-ANCHOR_RE = re.compile(
-    r'(<a id="latest-release-link" href="https://github\.com/[^/]+/[^/]+/releases/tag/v)'
-    r'([^"]+)'
-    r'(">v)'
-    r'([^<]+)'
-    r'(</a>)'
-)
+
+def anchor_re(element_id: str, tag_prefix: str) -> re.Pattern[str]:
+    # Captures: 1=href prefix up to the tag prefix, 2=URL version, 3=text
+    # version. Anchored on the id so we never touch a different anchor that
+    # happens to share the same URL shape.
+    return re.compile(
+        r'(<a id="' + re.escape(element_id) + r'" href="https://github\.com/[^/]+/[^/]+/releases/tag/'
+        + re.escape(tag_prefix) + r')'
+        r'([^"]+)'
+        r'(">v)'
+        r'([^<]+)'
+        r'(</a>)'
+    )
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <version>", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description="Update the marketing site's latest-release anchor.")
+    parser.add_argument("version", help="Version to publish, e.g. 2026.5.7")
+    parser.add_argument("--site", default=DEFAULT_SITE_PATH, help=f"Path to the site HTML (default: {DEFAULT_SITE_PATH})")
+    parser.add_argument("--element-id", default=DEFAULT_ELEMENT_ID, help=f"Anchor id to update (default: {DEFAULT_ELEMENT_ID})")
+    parser.add_argument("--tag-prefix", default=DEFAULT_TAG_PREFIX, help=f"Release-tag prefix before the version (default: {DEFAULT_TAG_PREFIX!r})")
+    args = parser.parse_args()
 
-    version = sys.argv[1].lstrip("v").strip()
+    site_path = Path(args.site)
+    version = args.version.lstrip("v").strip()
     if not version:
         print("error: empty version", file=sys.stderr)
         return 2
 
-    if not SITE_PATH.exists():
-        print(f"error: {SITE_PATH} not found (run from repo root)", file=sys.stderr)
+    if not site_path.exists():
+        print(f"error: {site_path} not found (run from repo root)", file=sys.stderr)
         return 1
 
-    original = SITE_PATH.read_text(encoding="utf-8")
-    match = ANCHOR_RE.search(original)
+    original = site_path.read_text(encoding="utf-8")
+    pattern = anchor_re(args.element_id, args.tag_prefix)
+    match = pattern.search(original)
     if not match:
         # Surface a clear error rather than silently leaving the version
         # stale. Catches the case where someone reshapes the anchor in the
         # HTML without updating the regex here.
         print(
-            f"error: could not find <a id=\"latest-release-link\"> in {SITE_PATH}",
+            f"error: could not find <a id=\"{args.element_id}\"> in {site_path}",
             file=sys.stderr,
         )
         return 1
 
     # Rebuild the anchor with the new version in both the URL and the text.
     replacement = f"{match.group(1)}{version}{match.group(3)}{version}{match.group(5)}"
-    updated = ANCHOR_RE.sub(replacement, original, count=1)
+    updated = pattern.sub(replacement, original, count=1)
 
     if updated == original:
-        print(f"{SITE_PATH} already references v{version}; nothing to do")
+        print(f"{site_path} already references v{version}; nothing to do")
         return 0
 
-    SITE_PATH.write_text(updated, encoding="utf-8")
-    print(f"updated {SITE_PATH} to v{version}")
+    site_path.write_text(updated, encoding="utf-8")
+    print(f"updated {site_path} to v{version}")
     return 0
 
 

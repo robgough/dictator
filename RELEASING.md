@@ -2,6 +2,8 @@
 
 The release pipeline lives at `.github/workflows/release.yml`. It triggers on `v*` tag pushes (or via the *Run workflow* button) and produces a signed, notarized, Sparkle-signed DMG on the matching GitHub Release. This document is the one-time setup checklist that has to happen before that workflow can run end-to-end.
 
+The same workflow also ships **Dictator Meetings**, the standalone meeting-notes app, off `meetings-v*` tags — see [Cutting a Dictator Meetings release](#cutting-a-dictator-meetings-release) below. Both apps share the Apple signing cert, notary credentials, and Sparkle EdDSA keypair, so the one-time setup below covers both; they publish to separate GitHub Releases, separate appcasts (`docs/appcast.xml` vs `docs/appcast-meetings.xml`), and separate changelogs (`CHANGELOG.md` vs `CHANGELOG-Meetings.md`).
+
 ## One-time setup
 
 ### 1. Apple Developer Program
@@ -95,6 +97,25 @@ That triggers `.github/workflows/release.yml`. The workflow will:
 End users running an older version see the update offer the next time Sparkle's scheduled check runs (or when they click *Check for Updates…* in the menu bar).
 
 For a dry run without pushing a tag, use the *Run workflow* button on the Actions tab and pass the version manually.
+
+## Cutting a Dictator Meetings release
+
+```bash
+git tag meetings-v2026.9.0
+git push origin meetings-v2026.9.0
+```
+
+The `meetings-v*` prefix routes the push to the `release-meetings` job instead of `release` — everything else about the flow is the same shape, aimed at different files:
+
+1. Builds scheme `DictatorMeetings` (product `Dictator Meetings.app`), signed with the same Developer ID cert.
+2. Notarizes and staples it (same notary credentials).
+3. Packages `Dictator-Meetings.dmg` (the stable, unversioned asset name the site and Sparkle enclosure link to — analogous to `Dictator.dmg`).
+4. EdDSA-signs it with the same Sparkle private key (both apps' `SUPublicEDKey` are identical, so one keypair signs both).
+5. Creates the GitHub Release tagged `meetings-v2026.9.0` and uploads the DMG.
+6. Appends the entry to `docs/appcast-meetings.xml` and versions `CHANGELOG-Meetings.md`.
+7. Updates the Dictator Meetings download anchor on the marketing site and pushes everything back to `main`.
+
+For a dry run, use *Run workflow* on the Actions tab, pick **meetings** from the `app` dropdown, and pass the version manually.
 
 ## Version numbering
 

@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Insert a new release <item> into docs/appcast.xml.
+"""Insert a new release <item> into an appcast XML file (docs/appcast.xml by
+default).
 
-Invoked by .github/workflows/release.yml. All inputs come from env vars so
+Invoked by .github/workflows/release.yml. Most inputs come from env vars so
 we don't have to thread them through positional argv; that also keeps the
-workflow YAML free of fragile multi-line shell quoting.
+workflow YAML free of fragile multi-line shell quoting. The one exception is
+the appcast path itself, taken as an optional positional argument so the
+Dictator Meetings release job can point this at docs/appcast-meetings.xml
+without duplicating the script.
+
+Usage:
+    append_appcast.py [APPCAST_PATH]   # defaults to docs/appcast.xml
 
 Required env:
     APPCAST_VERSION    e.g. 0.2.0
@@ -70,14 +77,15 @@ def main() -> int:
     ]
     item = "\n".join(parts) + "\n    "
 
-    path = pathlib.Path("docs/appcast.xml")
+    appcast_path = sys.argv[1] if len(sys.argv) > 1 else "docs/appcast.xml"
+    path = pathlib.Path(appcast_path)
     src = path.read_text()
     updated, count = re.subn(r"(\s*)</channel>", f"\n{item}\\1</channel>", src, count=1)
     if count != 1:
-        print("could not locate </channel> in docs/appcast.xml", file=sys.stderr)
+        print(f"could not locate </channel> in {path}", file=sys.stderr)
         return 1
     path.write_text(updated)
-    print(f"appended v{version} to docs/appcast.xml")
+    print(f"appended v{version} to {path}")
     return 0
 
 

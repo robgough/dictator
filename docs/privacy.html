@@ -79,7 +79,7 @@
 <div class="wrap">
     <a class="back" href="index.html">&larr; Dictator</a>
     <h1>Privacy</h1>
-    <p class="updated">Last updated: 24 May 2026</p>
+    <p class="updated">Last updated: 6 September 2026</p>
 
     <p>Dictator runs entirely on your device — Mac or iPhone. The short version: your audio, your transcripts, and your settings never leave the device.</p>
 
@@ -87,9 +87,10 @@
     <p>Audio captured from the microphone is held in memory for the duration of a recording and then discarded. The transcript is produced locally by WhisperKit or Parakeet (on macOS) or Parakeet (on iOS), optionally tidied by a local language model — MLX on macOS, Apple Intelligence on iOS — and pasted into the focused app. Dictation history, conversations, vocabulary, custom prompts, and input-device preferences are stored in plain JSON files in the app's own container — on macOS at <code>~/Library/Application Support/Dictator/</code>, on iOS in the app's sandbox (also visible to the Dictator keyboard extension via a shared App Group so it can collect a dictation result for the field you were typing in). Everything stays on the device.</p>
 
     <h2>What leaves your device</h2>
-    <p>One thing on iOS, two on macOS, all initiated by you:</p>
+    <p>One thing on iOS, three on macOS (one of them only if you turn it on), all initiated by you:</p>
     <p><strong>Model downloads.</strong> When you first set up the app (or pick a different Whisper / LLM model from Settings → Models on macOS), Dictator downloads the weights from Hugging Face. Hugging Face will see those requests; Dictator doesn't add anything to them.</p>
     <p><strong>Update checks (macOS only).</strong> The macOS app periodically asks <code>dictator.robgough.net</code> whether a newer version is available, via the <a href="https://sparkle-project.org">Sparkle</a> updater. The request includes your operating system version and the running app version — what any auto-updater needs to compare. The site is hosted on GitHub Pages; standard GitHub access logs apply. You can disable update checks in Settings. The iOS app receives updates through the App Store instead and makes no update-check requests of its own.</p>
+    <p><strong>Optional cloud providers for Dictator Meetings notes.</strong> By default, Dictator Meetings writes notes entirely on-device — using Dictator's shared local model, its own local model, or Apple's on-device model — and nothing leaves your Mac. If you deliberately configure a cloud provider (OpenAI, OpenRouter, or Anthropic) for the live or final notes step, the meeting transcript for that step is sent to that provider to generate the notes; no other Dictator or Dictator Meetings data is included. Nothing is sent unless you add a provider and select it. API keys you enter for a cloud provider are stored in the macOS Keychain, never in Dictator Meetings' synced settings files, and you can turn a cloud provider off — or delete its key — at any time from Settings → Providers.</p>
 
     <h2>No analytics, no telemetry</h2>
     <p>The Dictator apps do not send analytics, crash reports, or usage data to the author or anyone else. There is no account, no sign-in, and no server-side component beyond the static macOS update feed.</p>

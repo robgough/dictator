@@ -2,18 +2,34 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "meetings-v*"]
   workflow_dispatch:
     inputs:
       version:
         description: "Version (e.g. 0.2.0) — used when running manually; tag pushes derive it from the tag name."
         required: false
+      app:
+        description: "Which app to build for a manual run. Ignored for tag pushes — the tag prefix (v* vs meetings-v*) decides which job runs."
+        required: false
+        default: dictator
+        type: choice
+        options:
+          - dictator
+          - meetings
 
 permissions:
   contents: write  # needed for the appcast commit-back and the GH Release upload
 
 jobs:
   release:
+    # Builds and ships Dictator (the menu-bar dictation app) on `v*` tags.
+    # Gated so a `meetings-v*` tag push (handled by the release-meetings job
+    # below) never also runs this job — without the guard, this job's version
+    # derivation (`${GITHUB_REF#refs/tags/v}`) would mangle a "meetings-v…"
+    # ref into a bogus version string.
+    if: |
+      (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/meetings-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.app == 'dictator')
     # macos-26 is required so the runner has Xcode 17 + the macOS 26 SDK —
     # FoundationModels (used by AppleFoundationLLMService) only ships with the
     # 26 SDK, and the project's MACOSX_DEPLOYMENT_TARGET is 26.0. Older runner
@@ -397,6 +413,378 @@ jobs:
           # `git push origin HEAD:main` is non-fast-forward in that case and
           # fails. Rebase our single appcast commit onto whatever main is now
           # and retry a few times to absorb commits that land mid-push.
+          for attempt in 1 2 3 4 5; do
+              git fetch origin main
+              git rebase origin/main || {
+                  echo "::error::appcast rebase onto origin/main failed"
+                  git rebase --abort || true
+                  exit 1
+              }
+              if git push origin HEAD:main; then
+                  echo "pushed appcast on attempt $attempt"
+                  exit 0
+              fi
+              echo "push rejected on attempt $attempt; retrying"
+              sleep 3
+          done
+          echo "::error::failed to push appcast after 5 attempts"
+          exit 1
+
+  release-meetings:
+    # Builds and ships Dictator Meetings (the standalone meeting-notes app,
+    # split out of Dictator in Phase 2) on `meetings-v*` tags.
+    #
+    # This job is a deliberate near-duplicate of `release` above rather than
+    # a shared/reusable workflow. The two apps' pipelines are identical in
+    # shape (build → re-sign Sparkle helpers → notarize → DMG → notarize DMG
+    # → EdDSA-sign → GitHub Release → appcast → changelog → site → commit
+    # back) but differ in enough small constants — scheme name, app bundle
+    # name (with a space), DMG asset name, appcast/changelog paths, site
+    # anchor id, tag prefix — that factoring into a `workflow_call` reusable
+    # workflow would mean threading ~15 inputs through it for very little
+    # line-count saved, while risking a typo'd input silently changing the
+    # existing `release` job's behaviour. Keeping them as two flat jobs means
+    # `release` above is untouched (only gained an `if:` gate) and this job
+    # can be read start-to-finish without jumping to another file. The three
+    # Python helper scripts ARE shared (not duplicated) — see the extra
+    # arguments passed to release_notes.py / append_appcast.py /
+    # update_site_version.py below, whose defaults keep the `release` job's
+    # call sites unchanged.
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/meetings-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.app == 'meetings')
+    runs-on: macos-26
+    env:
+      # ─── Required at build/sign time ──────────────────────────────────
+      APPLE_TEAM_ID:           ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_CERT_P12_BASE64:   ${{ secrets.APPLE_CERT_P12_BASE64 }}
+      APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+
+      # ─── Required at notarize time (STUB: workflow skips notarize when empty) ──
+      APPLE_NOTARY_USER:     ${{ secrets.APPLE_NOTARY_USER }}
+      APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
+      # ─── Required to sign Sparkle updates. Same keypair as Dictator — one
+      # secret signs both apps' appcasts; SUPublicEDKey in each Info.plist
+      # is identical. ──────────────────────────────────────────────────────
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v6
+        with:
+          # Need the full history so the appcast commit-back doesn't fail with
+          # a shallow-clone push error.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive version from tag (or workflow input)
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/meetings-v* ]]; then
+              VERSION="${GITHUB_REF#refs/tags/meetings-v}"
+          else
+              VERSION="${{ inputs.version }}"
+              if [[ -z "$VERSION" ]]; then
+                  echo "::error::version input required for manual runs" && exit 1
+              fi
+          fi
+          # Build number monotonically increments via the run number — combined
+          # with version, this gives every artifact a unique CFBundleVersion.
+          BUILD="$GITHUB_RUN_NUMBER"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD"     >> "$GITHUB_OUTPUT"
+          echo "Building Dictator Meetings $VERSION (build $BUILD)"
+
+      - name: Extract release notes from CHANGELOG-Meetings.md
+        id: notes
+        # Runs early so the markdown body is ready by the time `gh release
+        # create` needs --notes-file, and the HTML form is ready for the
+        # appcast's <description> CDATA. The "Version the CHANGELOG" step
+        # near the end of the job rewrites Unreleased → versioned in place.
+        run: |
+          set -euo pipefail
+          MD_PATH="$RUNNER_TEMP/release-notes.md"
+          HTML_PATH="$RUNNER_TEMP/release-notes.html"
+          python3 .github/scripts/release_notes.py extract CHANGELOG-Meetings.md > "$MD_PATH"
+          python3 .github/scripts/release_notes.py html < "$MD_PATH" > "$HTML_PATH"
+          if grep -qF '_No changes yet._' "$MD_PATH"; then
+              echo "::warning::CHANGELOG-Meetings.md has no entries under '## Unreleased' — release notes will read 'No user-facing changes in this release.'"
+              echo "No user-facing changes in this release." > "$MD_PATH"
+          fi
+          echo "md=$MD_PATH"     >> "$GITHUB_OUTPUT"
+          echo "html=$HTML_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Install xcodegen + create-dmg
+        run: brew install xcodegen create-dmg
+
+      - name: Import Developer ID signing cert
+        # Imports the .p12 into a fresh keychain dedicated to this run, so we
+        # never touch the runner's login keychain and the cert is gone the
+        # moment the runner is recycled.
+        run: |
+          if [[ -z "$APPLE_CERT_P12_BASE64" ]]; then
+              echo "::error::APPLE_CERT_P12_BASE64 secret missing — cannot sign."
+              exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$APPLE_CERT_P12_PASSWORD" \
+              -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d \"\")
+
+          # Surface the Developer ID Application identity for the next steps.
+          IDENT=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+              | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          if [[ -z "$IDENT" ]]; then
+              echo "::error::No Developer ID Application identity in imported cert"
+              security find-identity -v -p codesigning "$KEYCHAIN"
+              exit 1
+          fi
+          echo "DICTATOR_CODE_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+          echo "DICTATOR_CODE_SIGN_STYLE=Manual"    >> "$GITHUB_ENV"
+          echo "DICTATOR_TEAM_ID=$APPLE_TEAM_ID"    >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project
+        run: ./gen
+
+      - name: Build (Release, signed)
+        run: |
+          set -euo pipefail
+          # -skipPackagePluginValidation / -skipMacroValidation: see the same
+          # step in the `release` job — mlx-swift's untrusted build plugins
+          # and macros can't be approved interactively on a runner.
+          xcodebuild \
+              -project Dictator.xcodeproj \
+              -scheme DictatorMeetings \
+              -configuration Release \
+              -derivedDataPath .derivedData-meetings \
+              -skipPackagePluginValidation \
+              -skipMacroValidation \
+              MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+              CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+              CODE_SIGN_IDENTITY="$DICTATOR_CODE_SIGN_IDENTITY" \
+              DEVELOPMENT_TEAM="$DICTATOR_TEAM_ID" \
+              CODE_SIGN_STYLE=Manual \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              build
+
+          APP_PATH=".derivedData-meetings/Build/Products/Release/Dictator Meetings.app"
+          if [[ ! -d "$APP_PATH" ]]; then
+              echo "::error::Build produced no .app at $APP_PATH"
+              exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Re-sign Sparkle helpers and the app for notarization
+        # Same rationale as the `release` job's identically-named step —
+        # Xcode's "Embed & Sign" doesn't reach Sparkle's nested XPC services
+        # / Updater.app / Autoupdate, and a throwaway-keychain cert doesn't
+        # always get a secure timestamp from a plain archive build.
+        run: |
+          set -euo pipefail
+          IDENT="$DICTATOR_CODE_SIGN_IDENTITY"
+          SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/$(readlink "$SPARKLE_FW/Versions/Current")"
+
+          for nested in \
+              "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc" \
+              "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc" \
+              "$SPARKLE_VERSION_DIR/Updater.app" \
+              "$SPARKLE_VERSION_DIR/Autoupdate"; do
+              codesign --force --timestamp --options runtime \
+                  --preserve-metadata=entitlements \
+                  --sign "$IDENT" \
+                  "$nested"
+          done
+
+          codesign --force --timestamp --options runtime \
+              --sign "$IDENT" \
+              "$SPARKLE_FW"
+
+          # Outer app, with Dictator Meetings' own entitlements file (drops
+          # com.apple.security.automation.apple-events — Meetings doesn't
+          # script other apps — but is otherwise the same shape as Dictator's).
+          codesign --force --timestamp --options runtime \
+              --entitlements Sources/DictatorMeetings/DictatorMeetings.entitlements \
+              --sign "$IDENT" \
+              "$APP_PATH"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Notarize app
+        if: env.APPLE_NOTARY_PASSWORD != ''
+        run: |
+          set -euo pipefail
+          ZIP="$RUNNER_TEMP/DictatorMeetings-app.zip"
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP"
+          xcrun notarytool submit "$ZIP" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_TEAM_ID" \
+              --wait
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+
+      - name: Warn that notarization was skipped
+        if: env.APPLE_NOTARY_PASSWORD == ''
+        run: |
+          echo "::warning::Notarization skipped (APPLE_NOTARY_PASSWORD secret not set)."
+          echo "::warning::The released DMG will run, but users will see Gatekeeper warnings."
+
+      - name: Build DMG
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          # Stable, unversioned asset name — same reasoning as Dictator's DMG:
+          # the marketing site deep-links to
+          # releases/latest/download/Dictator-Meetings.dmg, and GitHub's
+          # latest-release redirect needs a stable asset name across releases.
+          # No space in the filename (unlike the .app / volume name) so the
+          # URL and any shell handling of it stay simple.
+          DMG_PATH="$RUNNER_TEMP/Dictator-Meetings.dmg"
+          create-dmg \
+              --volname "Dictator Meetings $VERSION" \
+              --window-size 540 320 \
+              --icon-size 96 \
+              --icon "Dictator Meetings.app" 140 150 \
+              --app-drop-link 400 150 \
+              --no-internet-enable \
+              "$DMG_PATH" \
+              "$APP_PATH"
+
+          codesign --force --sign "$DICTATOR_CODE_SIGN_IDENTITY" "$DMG_PATH"
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Notarize DMG
+        if: env.APPLE_NOTARY_PASSWORD != ''
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "$DMG_PATH" \
+              --apple-id "$APPLE_NOTARY_USER" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --team-id  "$APPLE_TEAM_ID" \
+              --wait
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+      - name: Sign DMG for Sparkle (EdDSA)
+        id: sparkle_sign
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+              echo "::error::SPARKLE_PRIVATE_KEY secret missing — cannot sign updates."
+              exit 1
+          fi
+
+          # Keep this version in sync with the `release` job's copy (and with
+          # what SPM resolves in the app).
+          SPARKLE_VERSION="2.9.1"
+          curl -sSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
+              "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          SIGN_UPDATE="$RUNNER_TEMP/sparkle/bin/sign_update"
+
+          set +e
+          SIG_OUTPUT=$(printf '%s' "$SPARKLE_PRIVATE_KEY" | tr -d '[:space:]' \
+              | "$SIGN_UPDATE" --ed-key-file - "$DMG_PATH" 2>&1)
+          SIG_EXIT=$?
+          set -e
+          echo "$SIG_OUTPUT"
+          if [[ $SIG_EXIT -ne 0 ]]; then
+              echo "::error::sign_update exited $SIG_EXIT"
+              exit $SIG_EXIT
+          fi
+
+          ED_SIGNATURE=$(echo "$SIG_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          LENGTH=$(echo       "$SIG_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+
+          if [[ -z "$ED_SIGNATURE" || -z "$LENGTH" ]]; then
+              echo "::error::Failed to parse sign_update output"
+              exit 1
+          fi
+          echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "length=$LENGTH"             >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release & upload DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="meetings-v$VERSION"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+              gh release create "$TAG" \
+                  --title "Dictator Meetings $VERSION" \
+                  --notes-file "${{ steps.notes.outputs.md }}" \
+                  --target "$GITHUB_SHA"
+          else
+              gh release edit "$TAG" \
+                  --notes-file "${{ steps.notes.outputs.md }}"
+          fi
+          gh release upload "$TAG" "$DMG_PATH" --clobber
+
+      - name: Append release to docs/appcast-meetings.xml
+        env:
+          APPCAST_VERSION: ${{ steps.version.outputs.version }}
+          APPCAST_BUILD:   ${{ steps.version.outputs.build }}
+          APPCAST_LENGTH:  ${{ steps.sparkle_sign.outputs.length }}
+          APPCAST_ED_SIG:  ${{ steps.sparkle_sign.outputs.ed_signature }}
+        run: |
+          set -euo pipefail
+          DMG_NAME="$(basename "$DMG_PATH")"
+          export APPCAST_DMG_URL="https://github.com/${{ github.repository }}/releases/download/meetings-v$APPCAST_VERSION/$DMG_NAME"
+          export APPCAST_PUBDATE="$(date -u +'%a, %d %b %Y %H:%M:%S +0000')"
+          export APPCAST_DESCRIPTION_HTML="$(cat "${{ steps.notes.outputs.html }}")"
+          python3 .github/scripts/append_appcast.py docs/appcast-meetings.xml
+
+      - name: Version CHANGELOG-Meetings.md
+        # Move the '## Unreleased' section under a versioned heading and
+        # reset Unreleased to its empty placeholder, same as the `release`
+        # job but pointed at CHANGELOG-Meetings.md.
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release_notes.py version \
+              "${{ steps.version.outputs.version }}" \
+              "$(date -u +'%Y-%m-%d')" \
+              CHANGELOG-Meetings.md
+
+      - name: Update marketing site version (Meetings)
+        # Rewrites the Dictator Meetings "Latest release: vX.Y.Z" anchor in
+        # docs/index.html — a separate id from Dictator's own anchor, and a
+        # `meetings-v` tag prefix instead of `v`. Same script as the
+        # `release` job; only the extra flags differ.
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/update_site_version.py \
+              "${{ steps.version.outputs.version }}" \
+              --element-id latest-meetings-release-link \
+              --tag-prefix meetings-v
+
+      - name: Commit appcast + changelog + site back
+        run: |
+          set -euo pipefail
+          if git diff --quiet docs/appcast-meetings.xml CHANGELOG-Meetings.md docs/index.html; then
+              echo "nothing to commit"
+              exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast-meetings.xml CHANGELOG-Meetings.md docs/index.html
+          git commit -m "Publish Dictator Meetings v${{ steps.version.outputs.version }} (appcast + changelog + site)"
+          # Same rebase-and-retry dance as the `release` job — this job's
+          # detached-HEAD checkout can be behind main by the time it pushes.
           for attempt in 1 2 3 4 5; do
               git fetch origin main
               git rebase origin/main || {

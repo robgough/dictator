@@ -2,6 +2,8 @@
 
 Tiny native macOS dictation app. Hold a hotkey, talk, release — Dictator transcribes locally with [WhisperKit](https://github.com/argmaxinc/WhisperKit), runs the text through one to three small local-LLM passes ([MLX Swift](https://github.com/ml-explore/mlx-swift-examples)) to format punctuation / "new line" / named emojis, optionally tidy grammar and restructure into paragraphs/lists, then pastes the result into the focused app.
 
+This repo also builds **Dictator Meetings**, a separate windowed app for recording calls and writing meeting notes on-device — see `Sources/DictatorMeetings/`. It's a distinct scheme, bundle ID, and release channel from Dictator; the two apps share code (not a compiled framework — each gets its own copy) under `Sources/DictatorMac/` and `Sources/DictatorCore/`, and Dictator can share its already-loaded LLM with Meetings over a local socket rather than both apps holding a copy in memory.
+
 Apple Silicon only. Built and tested on macOS 26.
 
 ## Build
@@ -20,7 +22,8 @@ $EDITOR .env
 # too, but only if you've exported the variable in your shell.
 ./gen
 
-open Dictator.xcodeproj   # then ⌘R
+open Dictator.xcodeproj   # then ⌘R the "Dictator" scheme (dictation),
+                          # or switch to "DictatorMeetings" for the notes app
 ```
 
 Without `DICTATOR_TEAM_ID` set, the app still builds — Xcode falls back to ad-hoc signing. The trade-off: you'll be re-prompted for Microphone and Accessibility permission after every Clean Build Folder, because TCC can't anchor the grants to a stable identity.

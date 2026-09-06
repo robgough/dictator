@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone="yes"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Dictator Meetings</title>
+        <link>https://dictator.robgough.net/appcast-meetings.xml</link>
+        <description>On-device meeting notes for macOS.</description>
+        <language>en</language>
+        <!--
+            Releases are appended below by .github/workflows/release.yml when a
+            `meetings-v*` tag is pushed. Each <item> carries an <enclosure>
+            pointing at the signed, notarized DMG on GitHub Releases plus a
+            sparkle:edSignature verified by SUPublicEDKey in the running app's
+            Info.plist (the same EdDSA keypair Dictator uses).
+        -->
+    </channel>
+</rss>
