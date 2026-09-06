@@ -157,9 +157,9 @@ struct DictationIslandContent: View {
         case .formatting:
             StatusRow(icon: "sparkles", title: "Formatting", accent: .hudPurple)
         case .fixingGrammar:
-            StatusRow(icon: "text.badge.checkmark", title: "Tidying grammar", accent: .hudPink)
+            StatusRow(icon: "text.badge.checkmark", title: "Polishing", accent: .hudPink)
         case .restructuring:
-            StatusRow(icon: "list.bullet.indent", title: "Structuring", accent: .hudTeal)
+            StatusRow(icon: "list.bullet.indent", title: "Paragraphs", accent: .hudTeal)
         case .assisting:
             StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .hudIndigo)
         case .compacting:

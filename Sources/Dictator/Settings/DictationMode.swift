@@ -39,7 +39,7 @@ enum DictationStyle: String, Codable, CaseIterable, Sendable {
         case .clean:
             return "Punctuation and casing, ums and stutters removed — otherwise your words, as you said them."
         case .polished:
-            return "Clean, then tidied: \"you know\" fillers, false starts and grammar slips removed — reads as written."
+            return "Clean plus \"you know\" fillers, false starts and grammar slips removed, in one pass — reads as written."
         case .messages:
             return "Short-form chat: casual register, no sign-offs, no paragraphs."
         case .custom:
@@ -190,12 +190,10 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
             return [DictationPass(kind: .format, name: "Format",
                                   prompt: DictatorSettings.builtinFormattingPrompt)]
         case .polished:
-            return [
-                DictationPass(kind: .format, name: "Format",
-                              prompt: DictatorSettings.builtinFormattingPrompt),
-                DictationPass(kind: .polish, name: "Polish",
-                              prompt: DictatorSettings.builtinPolishPrompt),
-            ]
+            // One call, not two: the Format prompt with the polish rules
+            // appended. Halves the wait on slower Macs.
+            return [DictationPass(kind: .polish, name: "Polish",
+                                  prompt: DictatorSettings.builtinPolishedPrompt)]
         case .messages:
             return [DictationPass(kind: .messages, name: "Messages",
                                   prompt: DictatorSettings.builtinMessagesPrompt)]

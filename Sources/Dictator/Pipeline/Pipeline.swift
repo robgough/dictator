@@ -939,7 +939,10 @@ final class Pipeline {
             // summarising, or replacing the dictation with commentary.
             return passOnePreservesContent(raw: input, formatted: output)
         case .polish:
-            guard numbersPreserved(input, output) else { return false }
+            // The combined format-and-polish pass: the format guard (anchors
+            // survive, no growth — catches answering and summarising) plus
+            // the drift ceiling with fillers stripped (catches rewording).
+            guard passOnePreservesContent(raw: input, formatted: output) else { return false }
             return wordEditFractionStrippingFillers(from: input, to: output) <= polishMaxDriftFraction
         }
     }
@@ -950,7 +953,7 @@ final class Pipeline {
         guard inputWords >= strictGateMinWords else { return "numbers preserved" }
         switch pass.kind {
         case .format, .messages, .custom: return "content preserved"
-        case .polish: return "max drift"
+        case .polish: return "content preserved + max drift"
         }
     }
 

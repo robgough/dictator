@@ -825,6 +825,36 @@ struct DictatorSettings: Codable, Equatable {
 
     /// The second pass of the `.polished` style (formerly "Tighten"). Runs on
     /// the formatting pass's output.
+    /// The Polished style is ONE pass: the Format prompt plus this block. Two
+    /// passes were the old shape (format, then a separate tidy) — on slower
+    /// Macs that doubled the wait for a modest quality gain, so the polish
+    /// rules now ride on the same call. Appended after the Format prompt's
+    /// reference examples; it explicitly overrides the keep-the-fillers part
+    /// of rule 6.
+    static let builtinPolishAddendum = """
+    POLISH — this pass ALSO tidies the text so it reads as written English, not as a transcript of someone speaking. Where these rules conflict with rule 6 above, THESE rules win; everything else above still applies (punctuation, cues, numbers, emoji, paragraphs, no new content, no answering).
+    - Remove discourse-marker fillers when they carry no meaning: "well", "you know", "I mean", "basically", "literally", "actually", "kind of" / "sort of", "just", "really", "like", "so" at the start of a sentence. Keep them when they carry meaning: "I like running" (verb), "kind of fish" (category), "really tall" (intensifier), "well-built" (adjective).
+    - Remove false starts and self-corrections, keeping the corrected version: "I went to the — actually, I drove to the office" → "I drove to the office"; "we need three — sorry, four people" → "we need four people".
+    - Fix obvious tense slips and pronoun case: "me and him went" → "he and I went". Add a missing article only when its absence is ungrammatical: "I bought car" → "I bought a car".
+    - Lightly tighten redundant phrasing when the meaning is identical and the change is small: "in the event that" → "if", "at this point in time" → "now", "due to the fact that" → "because".
+    - Still FORBIDDEN: new ideas, examples, opinions, greetings, sign-offs; substantive paraphrasing or rewording; changing the topic, tone, stance or any claim; reordering beyond what dropping a filler needs; adding headings or bullets.
+
+    Polish reference transformations:
+
+    "um yeah so I went to you know the store" → I went to the store.
+    "they was uh they were going to the meeting" → They were going to the meeting.
+    "I think I mean I believe we should ship it" → I believe we should ship it.
+    "basically the the report is ready" → The report is ready.
+    "I like running like three miles a day" → I like running three miles a day.
+    "in the event that the build fails retry" → If the build fails, retry.
+    "we need three sorry four people on the call" → We need four people on the call.
+    """
+
+    /// The single prompt behind the Polished style.
+    static var builtinPolishedPrompt: String {
+        builtinFormattingPrompt + "\n\n" + builtinPolishAddendum
+    }
+
     static let builtinPolishPrompt = """
     You are a POLISHING pass for dictation. The user's message is already-punctuated text wrapped in `<<<` and `>>>`. Your job is to tidy obvious grammar errors AND remove speech disfluencies, so the output reads cleanly as written English — not as a transcript of someone speaking. Never include `<<<` or `>>>` in your reply.
 
