@@ -17,6 +17,7 @@ entries as plain bullet lines.
 - Menu bar: the selected default mode is now a solid pill with white text, readable in light mode. Open Dictator Meetings is its own row and only appears when that app is installed.
 - Dictation → Modes has a Reset to defaults button that restores the built-in set of modes.
 - Assistant Mode has a memory. Say "remember that I always sign off Cheers" and it keeps it; it also picks up preferences you mention in passing. What it knows is a plain list in Settings → Assistant → Memory, and a file called assistant-memory.md in your synced folder you can open and edit at any time. Turn it off in the same place.
+- Ask the assistant how it's doing and it answers like a person now, in its own voice, instead of reciting that it's a writing tool. It still won't invent an inbox or a morning it didn't have.
 - The assistant now has a personality — warm, direct, a little dry — that shapes drafts and answers but never your own text when it is rewriting it. Edit or reset it under Settings → Assistant → Personality.
 - Settings has been reorganised into six sections: General, Dictation, Models, Assistant, Dictionary and About. The dictation hotkey now lives under Dictation, the assistant hotkey under Assistant, and Microphone and History are tabs inside Dictation.
 - Editing a mode opens a sheet instead of a drill-in page. Spoken cues are one switch with the five families underneath, and each option is a single row.
