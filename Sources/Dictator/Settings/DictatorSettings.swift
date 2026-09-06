@@ -1,32 +1,5 @@
 import Foundation
 
-/// Which speech-to-text engine the pipeline uses. Each engine has its own
-/// model picker in Settings → Models; switching here is the cheap "pick the
-/// faster / different-language engine" lever without affecting LLM or paste
-/// behaviour.
-enum TranscriptionEngine: String, Codable, Sendable, Hashable, CaseIterable {
-    case whisper   // WhisperKit CoreML (Argmax)
-    case parakeet  // Parakeet TDT via FluidAudio CoreML (Apple Neural Engine)
-}
-
-/// Which LLM backend the pipeline drives for the formatter / grammar / structure
-/// passes and Assistant Mode. Switching here is the primary "do I want a local
-/// LLM at all, and which one" lever.
-///
-/// `apple` uses the Apple Foundation Models framework — the system-resident
-/// ~3B model that ships with Apple Intelligence. Zero in-process weights, but
-/// requires the user to have Apple Intelligence enabled.
-///
-/// `mlx` uses a HuggingFace MLX checkpoint picked from `ModelCatalog.llmModels`
-/// — the legacy path. The specific model is `llmModelID`.
-///
-/// `none` disables every LLM pass; raw Whisper transcripts ship straight through.
-enum LLMEngineKind: String, Codable, Sendable, Hashable, CaseIterable {
-    case none
-    case apple
-    case mlx
-}
-
 /// How aggressive the second LLM pass (grammar) is allowed to be.
 ///
 /// - `off`: skipped entirely; the formatter's output ships unchanged into
@@ -1816,18 +1789,12 @@ struct DictatorSettings: Codable, Equatable {
     ///
     /// For MLX, writes the configured model id into the singleton before
     /// returning so any subsequent per-pass call loads the right checkpoint.
+    ///
+    /// Thin wrapper over `LocalLLM.engine(kind:modelID:)` — the resolution
+    /// itself is shared with Dictator Meetings' local providers.
     @MainActor
     func activeLLMEngine() -> (any LLMEngine)? {
-        switch llmEngine {
-        case .none:
-            return nil
-        case .apple:
-            return AppleFoundationLLMServiceHolder.shared
-        case .mlx:
-            let mlx = MLXLLMServiceHolder.shared
-            mlx.modelID = llmModelID
-            return mlx
-        }
+        LocalLLM.engine(kind: llmEngine, modelID: llmModelID)
     }
 
     /// Whether meetings are running the LLM the notes were tuned for: the

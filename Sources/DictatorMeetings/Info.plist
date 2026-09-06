@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Dictator</string>
+	<string>Dictator Meetings</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Dictator</string>
+	<string>Dictator Meetings</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>net.robgough.Dictator</string>
+			<string>net.robgough.DictatorMeetings</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>dictator</string>
+				<string>dictator-meetings</string>
 			</array>
 		</dict>
 	</array>
@@ -33,37 +33,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
-	<key>LSUIElement</key>
-	<true/>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>Dictator pastes transcribed text into the focused app, and (if you turn on "Pause other audio" in Settings) tells Spotify or Music to pause while you're dictating.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Dictator Meetings captures system audio to transcribe what's coming out of your speakers — the other side of your call — alongside your microphone. Audio is processed entirely on your Mac.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dictator Meetings matches a meeting recording to its calendar event so the meeting gets the right title, attendees, and scheduled timing. Calendar data never leaves your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dictator needs microphone access to listen and transcribe your speech.</string>
-	<key>NSServices</key>
-	<array>
-		<dict>
-			<key>NSMenuItem</key>
-			<dict>
-				<key>default</key>
-				<string>Learn Word in Dictator…</string>
-			</dict>
-			<key>NSMessage</key>
-			<string>learnWord</string>
-			<key>NSPortName</key>
-			<string>Dictator</string>
-			<key>NSReturnTypes</key>
-			<array/>
-			<key>NSSendTypes</key>
-			<array>
-				<string>public.utf8-plain-text</string>
-				<string>NSStringPboardType</string>
-			</array>
-		</dict>
-	</array>
+	<string>Dictator Meetings needs microphone access to record and transcribe what you say in a meeting.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://dictator.robgough.net/appcast.xml</string>
+	<string>https://dictator.robgough.net/appcast-meetings.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>nKdcgJBzUX/UsPNA71RLRx1CzXBby33QOor7CQ7t9Yg=</string>
 </dict>

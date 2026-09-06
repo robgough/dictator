@@ -21,17 +21,27 @@ import Foundation
 /// self-defeating.
 enum SyncedStorage {
 #if canImport(AppKit)
-    /// Resolves the synced folder URL. Reads `AppState.shared.settings.syncedDirectoryPath`
-    /// from the main actor — callers from background contexts should hop
-    /// to main before calling.
+    /// The app's custom synced-folder path, if it has one and the user set it.
+    /// Registered by each mac app at startup — Dictator hands over
+    /// `AppState.shared.settings.syncedDirectoryPath`, Dictator Meetings its own
+    /// equivalent. It's a closure rather than a direct read because this file is
+    /// compiled into both apps (and iOS), and neither app's settings type is
+    /// visible from here. Unregistered (or returning nil/empty) means
+    /// `defaultDirectory`, which is also what the value is before the app's
+    /// settings have loaded.
     ///
     /// macOS-only: the synced-folder picker (`Settings → General → Synced
-    /// folder`) lives behind `AppState`, which is itself macOS-only. iOS
-    /// always uses `defaultDirectory`; when iOS grows a custom-folder
-    /// picker the platform conditional comes off.
+    /// folder`) is macOS-only. iOS always uses `defaultDirectory`; when iOS
+    /// grows a custom-folder picker the platform conditional comes off.
+    @MainActor
+    static var customDirectoryProvider: (@MainActor () -> String?)?
+
+    /// Resolves the synced folder URL from `customDirectoryProvider`, falling
+    /// back to `defaultDirectory`. Main-actor isolated — callers from background
+    /// contexts should hop to main before calling.
     @MainActor
     static var directory: URL {
-        let custom = AppState.shared.settings.syncedDirectoryPath
+        let custom = customDirectoryProvider?()
         if let custom, !custom.isEmpty {
             return URL(fileURLWithPath: custom, isDirectory: true)
         }

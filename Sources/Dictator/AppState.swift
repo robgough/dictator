@@ -132,6 +132,13 @@ final class AppState {
     @ObservationIgnored var scratchpadController: ScratchpadController?
 
     private init() {
+        // Teach the shared `SyncedStorage` where this app's synced folder is.
+        // It can't read `AppState` directly — it's compiled into Dictator
+        // Meetings and the iOS app too — so it asks through this closure.
+        // Registered here rather than in `bootstrap()` because anything that
+        // reaches `SyncedStorage.directory` has necessarily gone through
+        // `AppState.shared` first.
+        SyncedStorage.customDirectoryProvider = { AppState.shared.settings.syncedDirectoryPath }
         let settings = DictatorSettings.load()
         self.settings = settings
         self.pipeline = Pipeline(settings: settings)

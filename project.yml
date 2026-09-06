@@ -22,6 +22,20 @@ schemes:
       config: Debug
     archive:
       config: Release
+  DictatorMeetings:
+    build:
+      targets:
+        DictatorMeetings: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
   DictatorIOS:
     build:
       targets:
@@ -92,6 +106,13 @@ targets:
     platform: macOS
     sources:
       - path: Sources/Dictator
+      # Shared with DictatorMeetings — audio capture, model catalog/manager,
+      # the LLM engines and a handful of UI primitives. Compiled into both
+      # apps rather than built as a framework: no module boundary, no `public`
+      # churn, and each process gets its own copy of the `…Holder.shared`
+      # singletons, which is what we want (they hold per-process model state).
+      - path: Sources/DictatorMac
+      # Shared with the iOS target too.
       - path: Sources/DictatorCore
     postBuildScripts:
       - script: |
@@ -161,8 +182,6 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator needs microphone access to listen and transcribe your speech."
-        NSAudioCaptureUsageDescription: "Dictator captures system audio during meetings to transcribe what's coming out of your speakers — the other side of your call — alongside your microphone. Audio is processed entirely on your Mac."
-        NSCalendarsFullAccessUsageDescription: "Dictator matches a meeting recording to its calendar event so the meeting gets the right title, attendees, and scheduled timing. Calendar data never leaves your Mac."
         NSAppleEventsUsageDescription: "Dictator pastes transcribed text into the focused app, and (if you turn on \"Pause other audio\" in Settings) tells Spotify or Music to pause while you're dictating."
         # Sparkle auto-updates. The appcast lives at the URL below (served by
         # GitHub Pages from docs/appcast.xml). SUPublicEDKey is the EdDSA
@@ -273,6 +292,179 @@ targets:
         product: WhisperKit
       - package: KeyboardShortcuts
         product: KeyboardShortcuts
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
+      - package: MLXSwift
+        product: MLX
+      - package: MLXSwift
+        product: MLXNN
+      - package: MLXSwift
+        product: MLXFast
+      - package: SwiftTransformers
+        product: Hub
+      - package: SwiftTransformers
+        product: Tokenizers
+      - package: FluidAudio
+        product: FluidAudio
+      - package: Sparkle
+        product: Sparkle
+
+  # Dictator Meetings — the standalone meeting recorder / note-taker, split out
+  # of Dictator in Phase 2. Separate bundle ID, separate appcast feed, separate
+  # TCC grants (system-audio + calendar live here now, not in Dictator).
+  #
+  # It compiles the same Sources/DictatorMac and Sources/DictatorCore folders as
+  # Dictator rather than linking a framework: no module boundary to maintain and
+  # each process gets its own `…Holder.shared` model singletons. The one place
+  # the two processes DO share is the LLM socket (Phase 2.2) — Meetings borrows
+  # Dictator's already-loaded model instead of holding a second copy.
+  #
+  # Unlike Dictator this is NOT an `LSUIElement` accessory app: it's windowed,
+  # with a Dock icon, so no `LSUIElement` key below.
+  DictatorMeetings:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/DictatorMeetings
+      - path: Sources/DictatorMac
+      - path: Sources/DictatorCore
+    postBuildScripts:
+      - script: |
+          # Install a stable copy of the built .app at ~/Applications. macOS TCC
+          # keys permissions by signed identity AND launch path; the DerivedData
+          # path changes after every Clean Build Folder, so grants for Mic +
+          # Accessibility were getting invalidated each rebuild. After this runs,
+          # launch ~/Applications/Dictator.app and the grants persist.
+          set -e
+          mkdir -p "$HOME/Applications"
+          DEST="$HOME/Applications/${PRODUCT_NAME}.app"
+          rm -rf "$DEST"
+          # `ditto` preserves bundle metadata. `cp -R` doesn't.
+          ditto "$BUILT_PRODUCTS_DIR/${PRODUCT_NAME}.app" "$DEST"
+
+          # ExtractAppIntentsMetadata is one of the Apple-internal build
+          # phases that runs AFTER this script, so on the very first clean
+          # build BUILT_PRODUCTS_DIR doesn't yet have Metadata.appintents
+          # at the moment we ditto. On every subsequent build the previous
+          # build's metadata is still on disk and we forward-copy it — it
+          # lags by one build during incremental development. For release
+          # archive builds the archive is produced AFTER all phases run,
+          # so the shipped .app always contains current metadata. Without
+          # this folder, Spotlight / Shortcuts / Siri don't pick up the
+          # app's App Intents (NSServices uses Info.plist and is unaffected).
+          SRC_INTENTS="$BUILT_PRODUCTS_DIR/${PRODUCT_NAME}.app/Contents/Resources/Metadata.appintents"
+          if [ -d "$SRC_INTENTS" ]; then
+              rm -rf "$DEST/Contents/Resources/Metadata.appintents"
+              ditto "$SRC_INTENTS" "$DEST/Contents/Resources/Metadata.appintents"
+          fi
+
+          # This post-build script runs BEFORE the final CodeSign phase, so the
+          # ditto'd copy is unsigned. Re-sign it with the same identity Xcode is
+          # about to use. EXPANDED_CODE_SIGN_IDENTITY is the resolved cert (a
+          # SHA-1) and EXPANDED_CODE_SIGN_IDENTITY_NAME is the human-readable
+          # display name — either works with `codesign --sign`. If signing isn't
+          # configured (no team), this still copies but stays ad-hoc, in which
+          # case TCC permissions can't be made stable anyway.
+          IDENT="${EXPANDED_CODE_SIGN_IDENTITY:-${EXPANDED_CODE_SIGN_IDENTITY_NAME:-}}"
+          if [ -n "$IDENT" ] && [ "$IDENT" != "-" ]; then
+              ENT_FLAG=""
+              if [ -n "${CODE_SIGN_ENTITLEMENTS:-}" ] && [ -f "$CODE_SIGN_ENTITLEMENTS" ]; then
+                  ENT_FLAG="--entitlements $CODE_SIGN_ENTITLEMENTS"
+              fi
+              codesign --force --deep --options runtime --sign "$IDENT" $ENT_FLAG "$DEST" 2>&1 \
+                  && echo "Installed and signed: $DEST ($IDENT)"
+          else
+              codesign --force --deep --sign - "$DEST"
+              echo "Installed (ad-hoc): $DEST"
+          fi
+        name: "Install to ~/Applications"
+        basedOnDependencyAnalysis: false
+    info:
+      path: Sources/DictatorMeetings/Info.plist
+      properties:
+        LSMinimumSystemVersion: "26.0"
+        CFBundleName: Dictator Meetings
+        CFBundleDisplayName: Dictator Meetings
+        # $() refs, not literals, for the same reason as Dictator's: the release
+        # workflow's `xcodebuild MARKETING_VERSION=…` overrides have to reach the
+        # shipped Info.plist or Sparkle's "is this newer?" check never fires.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSMicrophoneUsageDescription: "Dictator Meetings needs microphone access to record and transcribe what you say in a meeting."
+        # These two moved here from Dictator when meetings split out — Dictator
+        # no longer captures system audio or reads the calendar, so it no longer
+        # declares (or prompts for) either.
+        NSAudioCaptureUsageDescription: "Dictator Meetings captures system audio to transcribe what's coming out of your speakers — the other side of your call — alongside your microphone. Audio is processed entirely on your Mac."
+        NSCalendarsFullAccessUsageDescription: "Dictator Meetings matches a meeting recording to its calendar event so the meeting gets the right title, attendees, and scheduled timing. Calendar data never leaves your Mac."
+        # Its own appcast feed (docs/appcast-meetings.xml, served by GitHub
+        # Pages) so the two apps version independently. Same EdDSA keypair as
+        # Dictator — one SPARKLE_PRIVATE_KEY secret signs both releases.
+        SUFeedURL: "https://dictator.robgough.net/appcast-meetings.xml"
+        SUPublicEDKey: "nKdcgJBzUX/UsPNA71RLRx1CzXBby33QOor7CQ7t9Yg="
+        SUEnableAutomaticChecks: true
+        # Custom URL scheme, distinct from Dictator's `dictator`. Dictator's
+        # "Open Dictator Meetings…" menu item and support docs deep-link through
+        # it (`dictator-meetings://record` starts a recording).
+        CFBundleURLTypes:
+          - CFBundleURLName: net.robgough.DictatorMeetings
+            CFBundleURLSchemes:
+              - dictator-meetings
+    # Two entitlements files swapped per config, exactly as Dictator does — the
+    # only difference between them is `get-task-allow` (Debug true so Xcode can
+    # attach, Release false because notarization rejects it). Checked in and
+    # owned manually so `./gen` can't clobber one of them.
+    #
+    # No `com.apple.security.automation.apple-events`: that's Dictator's
+    # "pause Spotify while dictating" feature. Meetings doesn't script other apps.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorMeetings
+        # A space in PRODUCT_NAME gives "Dictator Meetings.app"; the module name
+        # is pinned separately because Xcode would otherwise sanitise it to
+        # `Dictator_Meetings`.
+        PRODUCT_NAME: "Dictator Meetings"
+        PRODUCT_MODULE_NAME: DictatorMeetings
+        # Versioned independently of Dictator: released off `meetings-v*` tags,
+        # which the CI workflow turns into MARKETING_VERSION / run-number build.
+        MARKETING_VERSION: "2026.9.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # Same SDK-conditional flag as Dictator — the shared DictatorMac sources
+        # compile into both targets, so both need the condition defined
+        # identically or the shared files diverge between apps. See the long
+        # explanation on Dictator's copy above.
+        "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx27*]": "$(inherited) FOUNDATION_MODELS_VISION"
+        ENABLE_HARDENED_RUNTIME: YES
+        # Same three signing env vars as Dictator (see the comment on its
+        # settings block): unset any of them and you get ad-hoc signing, which
+        # means macOS forgets the Mic / Screen Recording grants every rebuild.
+        DEVELOPMENT_TEAM: ${DICTATOR_TEAM_ID}
+        CODE_SIGN_IDENTITY: ${DICTATOR_CODE_SIGN_IDENTITY}
+        CODE_SIGN_STYLE: ${DICTATOR_CODE_SIGN_STYLE}
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The "Install to ~/Applications" post-build phase reads
+        # BUILT_PRODUCTS_DIR and writes to ~/Applications; Xcode 15+ sandboxes
+        # script phases by default and denies both.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorMeetings/DictatorMeetings.Debug.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Sources/DictatorMeetings/DictatorMeetings.entitlements
+    # Same package products as Dictator minus KeyboardShortcuts: Meetings has no
+    # global hotkeys (its Assistant is an in-app ⌘⌥A menu command). WhisperKit
+    # is here only because the shared ModelManager still talks to
+    # TranscriptionService; dropping it is later cleanup.
+    dependencies:
+      - package: WhisperKit
+        product: WhisperKit
       - package: MLXSwiftLM
         product: MLXLLM
       - package: MLXSwiftLM
