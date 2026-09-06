@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The notes assistant now knows the current date and time when answering questions or drafting follow-ups.
 _No changes yet._
 
 ## v2026.9.0 — 2026-09-06

@@ -213,3 +213,20 @@ enum LLMTextUtilities {
         """
     }
 }
+
+/// Prompt fragments both apps' assistants share.
+enum PromptContext {
+    /// "The current date and time is Saturday, 6 September 2026 at 23:12 (BST).
+    /// …" — computed at call time, so a model that's asked for "tomorrow",
+    /// "next Friday" or "this quarter" has an anchor instead of a guess. Local
+    /// time and zone, in the user's locale.
+    static func currentDateLine(now: Date = Date(), locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+        let f = DateFormatter()
+        f.locale = locale
+        f.timeZone = timeZone
+        f.dateStyle = .full
+        f.timeStyle = .short
+        let zone = timeZone.abbreviation(for: now) ?? timeZone.identifier
+        return "The current date and time is \(f.string(from: now)) (\(zone)). Resolve relative dates and times — \"tomorrow\", \"next Friday\", \"end of the month\" — from this, and never state a different current date."
+    }
+}

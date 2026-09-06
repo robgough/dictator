@@ -847,20 +847,23 @@ struct MeetingsSettings: Codable, Equatable {
     /// no name is configured — caller still substitutes the empty template
     /// so example signatures collapse, but no positive instruction is prepended.
     var userContextBlock: String? {
+        // Always present: the date line is useful with or without a name.
+        var lines = ["USER CONTEXT", PromptContext.currentDateLine()]
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return """
-        USER CONTEXT
-        The user's name is \(trimmed). Sign off with "\(trimmed)" ONLY when drafting a \
-        full email or formal letter — i.e. when the output already opens with a "Hi X," \
-        / "Dear X," greeting and reads like correspondence the user will send.
-        DO NOT sign off short chat replies (Slack/iMessage/SMS), comments, conversational \
-        answers, content snippets (lists, taglines, code, ideas, paragraphs), or anything \
-        that would be pasted mid-document. Most outputs need NO signature.
-        If you do sign, write exactly "\(trimmed)" — never a placeholder like "[Your Name]", \
-        "[Name]", "[Your name]", or any bracketed stand-in. When referring to the user by \
-        name, use this exact spelling and don't invent other names for them.
-        """
+        if !trimmed.isEmpty {
+            lines.append("""
+            The user's name is \(trimmed). Sign off with "\(trimmed)" ONLY when drafting a \
+            full email or formal letter — i.e. when the output already opens with a "Hi X," \
+            / "Dear X," greeting and reads like correspondence the user will send.
+            DO NOT sign off short chat replies (Slack/iMessage/SMS), comments, conversational \
+            answers, content snippets (lists, taglines, code, ideas, paragraphs), or anything \
+            that would be pasted mid-document. Most outputs need NO signature.
+            If you do sign, write exactly "\(trimmed)" — never a placeholder like "[Your Name]", \
+            "[Name]", "[Your name]", or any bracketed stand-in. When referring to the user by \
+            name, use this exact spelling and don't invent other names for them.
+            """)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// When `override` is set (even if empty), it replaces the built-in wholesale —
