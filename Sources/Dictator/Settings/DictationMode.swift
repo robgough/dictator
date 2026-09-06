@@ -37,9 +37,9 @@ enum DictationStyle: String, Codable, CaseIterable, Sendable {
         case .raw:
             return "No AI. The transcript exactly as heard, with your cues and dictionary."
         case .clean:
-            return "Punctuation and casing only — every word you said, as you said it."
+            return "Punctuation and casing, ums and stutters removed — otherwise your words, as you said them."
         case .polished:
-            return "Cleaned up: fillers and false starts removed, reads as written."
+            return "Clean, then tidied: \"you know\" fillers, false starts and grammar slips removed — reads as written."
         case .messages:
             return "Short-form chat: casual register, no sign-offs, no paragraphs."
         case .custom:
@@ -557,8 +557,22 @@ extension DictationMode {
     /// Capped at 2000 characters so a wholesale rewrite doesn't turn into a
     /// giant addendum on top of the built-in.
     static func recoveredExtraInstructions(fromFormatPrompt prompt: String) -> String {
-        recoveredExtraInstructions(from: prompt, builtin: DictatorSettings.builtinFormattingPrompt)
+        recoveredExtraInstructions(
+            from: prompt,
+            builtin: DictatorSettings.builtinFormattingPrompt + "\n" + legacyFormattingPromptLines.joined(separator: "\n"))
     }
+
+    /// Lines of `builtinFormattingPrompt` as it shipped Jul–Aug 2026, when the
+    /// steps model copied it into every mode, that have since been reworded.
+    /// The line-set diff treats them as built-in too, so an old copy's former
+    /// rule 6 doesn't come back as a recovered "extra instruction" that
+    /// re-imposes the retired keep-every-filler rule. Append the previous
+    /// wording here whenever a Format-prompt line is edited. Delete with the
+    /// COMPAT SHADOW.
+    static let legacyFormattingPromptLines: [String] = [
+        "6. Preserve the user's wording and tone. EVERY content word in the input MUST appear in the output, in the same order. Do NOT drop filler words (\"yeah\", \"okay\", \"so\", \"well\", \"um\"). Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, plans, opinions, greetings, sign-offs, or any new content.",
+        "Rule 6 still binds: NEVER change vocabulary, NEVER reorder, NEVER drop content words.",
+    ]
 
     /// Line-set difference of `prompt` against `builtin` — see
     /// `recoveredExtraInstructions(fromFormatPrompt:)`.

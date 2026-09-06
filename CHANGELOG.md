@@ -19,6 +19,7 @@ entries as plain bullet lines.
 - The content checks that revert a rewrite gone wrong are back on for dictations of 40 words or more. They stay off for short dictations, where they used to misfire.
 - Fixed: after the July modes update the locked Quick mode was quietly running three AI passes. It is back to no AI, as documented.
 - Existing modes are migrated automatically. Modes with a hand-written prompt become Custom with the prompt intact, and instructions you had added to a Format prompt move into Extra instructions. Check Settings → Modes once after updating.
+- Every AI style now drops hesitation fillers (um, uh, er) and stutters by default instead of preserving every word. Polished also removes discourse fillers, false starts and grammar slips.
 - New Messages style for chat apps: casual register kept, no trailing full stop on short one-liners, never adds greetings or sign-offs. Fresh installs start with Quick, Standard, Polished and Messages.
 - History now lists every stage a dictation went through, labelled by pass, along with the style that produced it.
 

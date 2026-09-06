@@ -894,12 +894,12 @@ struct DictatorSettings: Codable, Equatable {
     3a. NEVER change a number that is already a digit. Keep every digit exactly as given — never spell it out ("3" stays "3", not "three"). Keep compact multiplier notation verbatim: "4x" stays "4x" (NEVER "four times", "4 times", or "four x"); same for "2.5x", "10x". Leave "+44", "10:30pm", "$1,600", "5%" exactly as written.
     4. Named emojis: "<name> emoji" or "emoji <name>" → JUST the emoji character. NEVER keep the descriptive word. e.g. "fire emoji" → "🔥" (not "fire 🔥").
     5. Capitalise the first letter of sentences and the pronoun "I".
-    6. Preserve the user's wording and tone. EVERY content word in the input MUST appear in the output, in the same order. Do NOT drop filler words ("yeah", "okay", "so", "well", "um"). Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, plans, opinions, greetings, sign-offs, or any new content.
+    6. Preserve the user's wording and tone. Every content word in the input appears in the output, in the same order — EXCEPT hesitation fillers, which you always remove: "um", "umm", "uh", "uhh", "er", "erm", "ah", "hmm", "mm", "mhm". Words that carry the speaker's voice are NOT fillers here and stay: "yeah", "okay", "so", "well", "like", "basically", "you know". Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, plans, opinions, greetings, sign-offs, or any new content.
     7. PERMITTED minor edits (do these ONLY when the error is unambiguous, never to "improve" otherwise fine text):
        - Add the apostrophe to obvious contractions: "dont" → "don't", "wont" → "won't", "Im" → "I'm", "youre" → "you're", "its" used as "it is" → "it's".
        - Collapse accidentally-repeated words from speech disfluency: "the the" → "the", "I I think" → "I think".
        - Fix obvious subject–verb agreement errors: "they was" → "they were", "he are" → "he is".
-       Rule 6 still binds: NEVER change vocabulary, NEVER reorder, NEVER drop content words.
+       Rule 6 still binds: NEVER change vocabulary, NEVER reorder, NEVER drop content words — hesitation fillers are the only words that go.
     8. Paragraphs: when the dictation is long and the topic shifts, start a new paragraph (a blank line). Keep sentences together within a topic. Never add headings or bullets.
 
     Output rules:
@@ -915,6 +915,8 @@ struct DictatorSettings: Codable, Equatable {
     "yeah okay so this should work" → Yeah, okay, so this should work.
     "hi rob comma can you grab the report question mark" → Hi Rob, can you grab the report?
     "i dont think the the meeting will run long" → I don't think the meeting will run long.
+    "um so I think uh we should ship it" → So I think we should ship it.
+    "yeah well um it kind of works you know" → Yeah, well, it kind of works, you know.
     "thanks comma you're a star emoji and a sparkles emoji" → Thanks, you're a ⭐ and a ✨
     "Okay, let's do something." → Okay, let's do something.
     "why is the formatter sometimes returning empty question mark" → Why is the formatter sometimes returning empty?
@@ -1078,13 +1080,13 @@ struct DictatorSettings: Codable, Equatable {
     3a. NEVER change a number that is already a digit. Keep every digit exactly as given — never spell it out ("3" stays "3", not "three"). Keep "4x", "2.5x", "+44", "10:30pm", "$1,600", "5%" exactly as written.
     4. Named emojis: "<name> emoji" or "emoji <name>" → JUST the emoji character. NEVER keep the descriptive word. e.g. "fire emoji" → "🔥" (not "fire 🔥"). Never add an emoji the speaker didn't ask for.
     5. Capitalise the first letter of sentences and the pronoun "I" — EXCEPT for words that are stylistically lowercase in chat: "lol", "ok", "omg", "idk", "haha", "yeah", "nah", "brb", "ty". Leave those exactly as spoken.
-    6. Preserve the user's wording and tone. EVERY content word in the input MUST appear in the output, in the same order. Do NOT drop filler words ("yeah", "okay", "so", "well"). Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, opinions, or any new content.
+    6. Preserve the user's wording and tone. Every content word in the input appears in the output, in the same order — EXCEPT hesitation fillers, which you always remove: "um", "umm", "uh", "uhh", "er", "erm", "ah", "hmm", "mm", "mhm". Chat words that carry the speaker's voice stay exactly as spoken: "yeah", "okay", "so", "well", "like", "lol". Do NOT paraphrase. Do NOT reorder. Do NOT continue their thought. Do NOT add ideas, examples, opinions, or any new content.
     7. NEVER add a greeting ("Hi", "Hey", "Dear") or a sign-off ("Thanks", "Best", "Cheers", a name) that the speaker did not say. A message that starts mid-thought stays starting mid-thought.
     8. TRAILING FULL STOP: a message that is a single short sentence (roughly ten words or fewer) ends with NO full stop — that is how people write messages. Keep a "?" or a "!" when the sentence is a question or an exclamation. Two or more sentences DO get full stops between them, and the last one may keep its full stop.
     9. PERMITTED minor edits (do these ONLY when the error is unambiguous, never to "improve" otherwise fine text):
        - Add the apostrophe to obvious contractions: "dont" → "don't", "Im" → "I'm", "youre" → "you're", "its" used as "it is" → "it's".
        - Collapse accidentally-repeated words from speech disfluency: "the the" → "the", "I I think" → "I think".
-       Rule 6 still binds: NEVER change vocabulary, NEVER reorder, NEVER drop content words.
+       Rule 6 still binds: NEVER change vocabulary, NEVER reorder, NEVER drop content words — hesitation fillers are the only words that go.
 
     Output rules:
     - Your reply is ONLY the formatted message. Nothing before it. Nothing after it.
@@ -1101,6 +1103,7 @@ struct DictatorSettings: Codable, Equatable {
     "can you grab milk on the way home question mark" → Can you grab milk on the way home?
     "yes exclamation mark" → Yes!
     "i dont think the the meeting will run long" → I don't think the meeting will run long
+    "um yeah on my way uh five minutes" → yeah on my way, five minutes
     "thanks comma you're a star emoji" → Thanks, you're a ⭐
     "im at the pub already. come find me when youre done" → I'm at the pub already. Come find me when you're done.
     "call me on plus four four seven seven seven one two three four five six" → Call me on +44777123456
