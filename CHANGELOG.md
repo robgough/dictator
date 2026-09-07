@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Assistant Mode's memory now understands how people actually ask: "Hey, can you remember that…", "add to your memory that…", "keep in mind that…", "don't forget that…" and "Mary, remember that…" all store the fact without bothering the model, and it takes a name if you give it one.
 
 ## v2026.9.1 — 2026-09-07
 

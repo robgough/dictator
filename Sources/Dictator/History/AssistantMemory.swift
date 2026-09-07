@@ -152,7 +152,7 @@ final class AssistantMemory {
         let texts = cache.map(\.text).filter { !$0.isEmpty }
         guard !texts.isEmpty else { return nil }
 
-        let header = "MEMORY — things the user has told you before. Use them when relevant; never recite them unprompted:"
+        let header = "MEMORY — things the user has told you before. Some are about them, some are about what they want from you (a name to answer to, a tone to keep). Use them when relevant; never recite them unprompted:"
         var kept: [String] = []
         var used = header.count
         for text in texts.reversed() {
@@ -166,15 +166,42 @@ final class AssistantMemory {
 
     // MARK: - Spoken "remember that…" detector
 
-    /// Longest first so `remember that …` wins over `remember …` and the
-    /// remainder doesn't keep a dangling "that".
+    /// The command itself. Within a family the longer form comes first so
+    /// `remember that …` wins over `remember …` and the remainder doesn't
+    /// keep a dangling "that".
     private nonisolated static let commandPrefixes = [
         "for future reference",
-        "remember that",
+        "add to your memory that", "add to your memory",
+        "add to memory that", "add to memory",
+        "keep in mind that", "keep in mind",
+        "bear in mind that", "bear in mind",
+        "don't forget that", "don't forget",
+        "do not forget that", "do not forget",
+        "make a note that",
+        "note down that",
+        "memorise that", "memorize that",
+        "remember that", "remember",
         "from now on",
-        "note that",
-        "remember"
+        "note that"
     ]
+
+    /// What people say *before* the command when they're talking to someone
+    /// rather than issuing an order — "Hey, can you please remember that…".
+    /// Peeled off, as many as it takes, before the command is matched. Each
+    /// has to end on a word boundary, so "hide" isn't "hi" and "sort" isn't
+    /// "so".
+    private nonisolated static let leadIns = [
+        "can you please", "could you please", "would you please", "will you please",
+        "can you", "could you", "would you", "will you",
+        "i want you to", "i'd like you to", "i need you to",
+        "please", "hey", "hi", "hello", "okay", "ok", "so", "also", "and",
+        "right", "well", "now", "just", "actually", "oh", "um", "uh"
+    ]
+
+    /// Punctuation and space that can sit between lead-ins and the command —
+    /// "Okay, so… remember that". Stripped from the front only; a trailing
+    /// full stop belongs to the fact.
+    private nonisolated static let leadingNoise = CharacterSet(charactersIn: ",.!;:-—– \t\n\r")
 
     /// Recognises a spoken instruction that is *only* an instruction to
     /// remember something, and returns the thing to remember.
@@ -183,19 +210,57 @@ final class AssistantMemory {
     /// round-trip through a small local model that will, more often than not,
     /// helpfully draft an email about remembering things. Deterministic
     /// prefix match, no LLM, no output pasted anywhere.
+    ///
+    /// Tolerates how the command actually gets said: lead-ins ("hey, can you
+    /// …"), a name up front ("Mary, remember that …"), and the question mark
+    /// a "can you …?" framing leaves on the end.
     nonisolated static func rememberCommand(in instruction: String) -> String? {
-        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmed.lowercased()
-        for prefix in commandPrefixes where lower.hasPrefix(prefix) {
-            let rest = String(trimmed.dropFirst(prefix.count))
-            // The prefix has to end on a word boundary — "remembering the
-            // meeting" is not a memory command.
-            if let first = rest.first, first.isLetter || first.isNumber { continue }
-            let fact = normalise(rest)
-            guard !fact.isEmpty else { return nil }
-            return capitalisingFirst(fact)
+        var s = Substring(instruction)
+        // Bounded: every pass consumes at least one character, and nobody
+        // stacks eight lead-ins.
+        for _ in 0..<8 {
+            s = s.drop(while: { $0.unicodeScalars.allSatisfy(leadingNoise.contains) })
+            guard !s.isEmpty else { return nil }
+            let lower = s.lowercased().replacingOccurrences(of: "’", with: "'")
+
+            if let prefix = commandPrefixes.first(where: { startsWithWord(lower, $0) }) {
+                var fact = normalise(String(s.dropFirst(prefix.count)))
+                // "Can you remember that X?" — the question mark belongs to
+                // the asking, not the fact.
+                while fact.hasSuffix("?") {
+                    fact = String(fact.dropLast()).trimmingCharacters(in: .whitespaces)
+                }
+                guard !fact.isEmpty else { return nil }
+                return capitalisingFirst(fact)
+            }
+            if let leadIn = leadIns.first(where: { startsWithWord(lower, $0) }) {
+                s = s.dropFirst(leadIn.count)
+                continue
+            }
+            if let name = vocativeLength(of: s) {
+                s = s.dropFirst(name)
+                continue
+            }
+            return nil
         }
         return nil
+    }
+
+    /// `text` starts with `word` and the match ends on a word boundary —
+    /// "remembering the meeting" is not a memory command.
+    private nonisolated static func startsWithWord(_ text: String, _ word: String) -> Bool {
+        guard text.hasPrefix(word) else { return false }
+        guard let next = text.dropFirst(word.count).first else { return true }
+        return !(next.isLetter || next.isNumber)
+    }
+
+    /// Length of a single name followed by a comma at the front of `s`
+    /// ("Mary, remember that …"), or nil. One word of letters only, so it
+    /// can't swallow anything that isn't obviously someone being addressed.
+    private nonisolated static func vocativeLength(of s: Substring) -> Int? {
+        let word = s.prefix(while: { $0.isLetter })
+        guard !word.isEmpty, word.count <= 24, s.dropFirst(word.count).first == "," else { return nil }
+        return word.count
     }
 
     // MARK: - Text normalisation
