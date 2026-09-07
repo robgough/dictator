@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.9.1 — 2026-09-07
+
 - The notch island is tidier while listening: the meter row is one line (mode chip over the mic name, no "Listening" caption) and the live preview lost its caption and its clipped top line, so the island is a little shorter.
 - Settings now say "Not synced between Macs" instead of "Per Mac" for machine-specific options.
 - Sound sets: Settings → General → Sounds now offers five — Classic (the original chimes), Glass, Soft (the new default), Wood and Minimal — each with a play button so you can hear it before you pick. Each set is a soft tap when the hotkey lands, a rising pair when the mic is live, a falling pair on release, and a chord when the text is pasted.
