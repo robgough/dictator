@@ -30,6 +30,23 @@
                 type="application/octet-stream"
                 sparkle:edSignature="l3iK39jBWLahTBlxTeahb9vR64xNnB+MDPWnynzBm4xtTFkAd76O+U9uJ+LGSR8kgaBomWTOy4E4nA6yVENZAg==" />
         </item>
+        <item>
+            <title>Version 2026.9.1</title>
+            <pubDate>Mon, 07 Sep 2026 23:53:24 +0000</pubDate>
+            <sparkle:version>38</sparkle:version>
+            <sparkle:shortVersionString>2026.9.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>The notes assistant now knows the current date and time when answering questions or drafting follow-ups.</li>
+  <li>Renaming a meeting no longer occasionally renames a different meeting: a title you type is now always applied to the meeting you typed it into, even if you click straight to another meeting in the sidebar, and clicking away saves the new title instead of losing it.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.1/Dictator-Meetings.dmg"
+                length="14477257"
+                type="application/octet-stream"
+                sparkle:edSignature="4kuxb5dXDz8CTnGvxD25sCw7FBnAdVT9KFNSjDm4s64gCBWYOLEG/eA5sp8odrb/M7fl8grLX20LDGzH7mWtCg==" />
+        </item>
+    
     
     </channel>
 </rss>
