@@ -6,8 +6,8 @@ import KeyboardShortcuts
 
 /// General: the settings that aren't about a single flow — permissions, who
 /// you are, the instruction line that applies everywhere, delivery behaviour,
-/// the HUD style, the Scratchpad, where synced data lives, and the per-Mac
-/// performance trade-offs.
+/// the HUD style, the sound set, the Scratchpad, where synced data lives, and
+/// the per-Mac performance trade-offs.
 ///
 /// The dictation and assistant hotkeys deliberately live with their flows
 /// (Dictation → Modes, Assistant) rather than here.
@@ -49,8 +49,6 @@ struct GeneralPane: View {
             Section {
                 Toggle("Paste into the focused app", isOn: $s.settings.pasteAutomatically)
                     .onChange(of: s.settings.pasteAutomatically) { _, _ in state.save() }
-                Toggle("Play sounds", isOn: $s.settings.playSounds)
-                    .onChange(of: s.settings.playSounds) { _, _ in state.save() }
                 Toggle("Tap the hotkey to start and stop", isOn: $s.settings.hotkeyTapToToggleEnabled)
                     .onChange(of: s.settings.hotkeyTapToToggleEnabled) { _, _ in state.save() }
                     .help("Applies to both hotkeys. Holding still works as push-to-talk.")
@@ -73,6 +71,16 @@ struct GeneralPane: View {
                 Text("HUD")
             } footer: {
                 SectionFootnote("Not synced between Macs.")
+            }
+
+            Section {
+                Toggle("Play sounds", isOn: $s.settings.playSounds)
+                    .onChange(of: s.settings.playSounds) { _, _ in state.save() }
+                SoundThemeGallery()
+            } header: {
+                Text("Sounds")
+            } footer: {
+                SectionFootnote("Press play to hear a set.")
             }
 
             Section {

@@ -104,6 +104,7 @@ final class AppState {
         // opens no audio device IO (system sounds render inside coreaudiod),
         // so it can't dip other audio or pin the mic indicator — and there's
         // no point doing it when cues are switched off.
+        SoundEffects.shared.setTheme(settings.soundTheme)
         if settings.playSounds { SoundEffects.shared.prewarm() }
         pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
             self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)
@@ -213,6 +214,7 @@ final class AppState {
     func save() {
         settings.persist()
         pipeline.settingsChanged(settings)
+        SoundEffects.shared.setTheme(settings.soundTheme)
         // Start / stop the LLM socket to match the toggle. Idempotent, so
         // calling it on every save is cheap.
         LocalLLMServer.shared.applySettings(settings)

@@ -15,6 +15,7 @@ entries as plain bullet lines.
 
 - The notch island is tidier while listening: the meter row is one line (mode chip over the mic name, no "Listening" caption) and the live preview lost its caption and its clipped top line, so the island is a little shorter.
 - Settings now say "Not synced between Macs" instead of "Per Mac" for machine-specific options.
+- Sound sets: Settings → General → Sounds now offers five — Classic (the original chimes), Glass, Soft (the new default), Wood and Minimal — each with a play button so you can hear it before you pick. Each set is a soft tap when the hotkey lands, a rising pair when the mic is live, a falling pair on release, and a chord when the text is pasted.
 - Pressing Esc to cancel a dictation no longer also sends Escape to the app you're dictating into (so it won't close a popover or find bar there). Needs the Accessibility permission paste already uses.
 - New HUD styles: Settings → General → HUD shows a picture of each — the Notch island, a Small island, a compact Bottom pill and a tiny Mini badge — and you click the one you want. The bottom styles pop up just above the Dock, handier on large monitors where the island sits too high.
 

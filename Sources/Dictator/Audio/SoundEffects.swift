@@ -22,44 +22,60 @@ import AudioToolbox
 /// prewarm engine, no idle-stop, and no configuration-change handler to get
 /// wrong.
 ///
-/// The tones are still synthesised in-process (the bell / wood partial design
-/// below — that's the polish). They're rendered to small CAF files in
-/// Application Support once per synthesis version, registered as
-/// `SystemSoundID`s, and replayed from disk.
+/// The tones are synthesised in-process (`SoundSynth`, one `SoundTheme`'s
+/// worth at a time — the user picks the set in Settings). They're rendered to
+/// small CAF files in Application Support once per synthesis version,
+/// registered as `SystemSoundID`s, and replayed from disk. `preview(_:)`
+/// registers any other theme on demand so Settings can play a sample of it.
 ///
 /// Trade-offs inherited from the system-sound path, all acceptable for short
 /// UI cues: playback uses the user's *alert* volume and the *"Play sound
 /// effects through"* output device (usually the same as the main output), and
 /// honours the system "play user-interface sound effects" toggle. Overlapping
 /// cues mix rather than interrupt — moot here, since cues are sequential and
-/// ≤0.4 s.
+/// well under a second.
 final class SoundEffects: @unchecked Sendable {
     static let shared = SoundEffects()
 
-    /// Bump when the synthesis below changes so stale cached CAFs aren't
-    /// reused. Old-version files linger harmlessly (a few KB each).
-    private static let cacheVersion = 1
+    /// Bump when `SoundSynth` changes so stale cached CAFs aren't reused.
+    /// Old-version files linger harmlessly (a few KB each).
+    /// v2 (2026-09): glass palette, stereo, reverb tail.
+    /// v3 (2026-09): themed sets, files named `<theme>-<cue>`.
+    private static let cacheVersion = 3
 
     private let format: AVAudioFormat
 
-    /// Registered system-sound handles. All access on `queue`.
-    private var armID: SystemSoundID = 0
-    private var startID: SystemSoundID = 0
-    private var stopID: SystemSoundID = 0
-    private var doneID: SystemSoundID = 0
-    /// True once the CAFs are rendered + registered. All access on `queue`.
-    private var prepared = false
+    /// The set Settings has chosen. All access on `queue`.
+    private var theme: SoundTheme = .soft
+    /// Live cue handles, registered for `preparedTheme`. All access on `queue`.
+    private var liveIDs: [SoundSynth.Cue: SystemSoundID] = [:]
+    private var preparedTheme: SoundTheme?
+    /// Handles registered for sampling from Settings, kept for the session so
+    /// repeated plays are instant. Separate from `liveIDs` so switching the
+    /// live theme never disposes a handle a preview is about to use.
+    private var previewIDs: [SoundTheme: [SoundSynth.Cue: SystemSoundID]] = [:]
 
     /// Serial queue ordering setup and playback. `AudioServicesPlaySystemSound`
     /// is non-blocking (it hands the sound to the system sound server and
     /// returns), so this never backs up; it exists purely to isolate the
-    /// one-time render/register from the cue calls without a lock. The first
+    /// render/register work from the cue calls without a lock. The first
     /// launch renders four tiny files here off the main thread; later launches
     /// just re-register the cached files.
     private let queue = DispatchQueue(label: "Dictator.SoundEffects", qos: .userInitiated)
 
     private init() {
-        format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+        format = AVAudioFormat(standardFormatWithSampleRate: Double(SoundSynth.sampleRate), channels: 2)!
+    }
+
+    /// Point the live cues at `theme`. Cheap when unchanged; otherwise drops
+    /// the current registrations and lets the next cue (or `prewarm`)
+    /// re-prepare against the new set.
+    func setTheme(_ theme: SoundTheme) {
+        queue.async { [weak self] in
+            guard let self, self.theme != theme else { return }
+            self.theme = theme
+            self.disposeLiveLocked()
+        }
     }
 
     /// Render + register the cues ahead of the first hotkey press so the arm
@@ -71,58 +87,96 @@ final class SoundEffects: @unchecked Sendable {
         queue.async { [weak self] in self?.prepareLocked() }
     }
 
-    func playArm()   { play(\.armID) }
-    func playStart() { play(\.startID) }
-    func playStop()  { play(\.stopID) }
-    func playDone()  { play(\.doneID) }
+    func playArm()   { play(.arm) }
+    func playStart() { play(.start) }
+    func playStop()  { play(.stop) }
+    func playDone()  { play(.done) }
 
-    private func play(_ id: KeyPath<SoundEffects, SystemSoundID>) {
+    /// Play a sample of `theme` — arm, start, stop, done in sequence, spaced
+    /// roughly as a real dictation spaces them. Doesn't touch the live theme
+    /// and ignores the "Play sounds" switch: the user pressed a play button.
+    func preview(_ theme: SoundTheme) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let ids: [SoundSynth.Cue: SystemSoundID]
+            if let cached = self.previewIDs[theme] {
+                ids = cached
+            } else {
+                guard let made = try? self.registerAll(theme: theme) else { return }
+                self.previewIDs[theme] = made
+                ids = made
+            }
+            let schedule: [(SoundSynth.Cue, Double)] = [(.arm, 0), (.start, 0.35), (.stop, 1.05), (.done, 1.55)]
+            for (cue, delay) in schedule {
+                guard let id = ids[cue] else { continue }
+                self.queue.asyncAfter(deadline: .now() + delay) {
+                    AudioServicesPlaySystemSound(id)
+                }
+            }
+        }
+    }
+
+    private func play(_ cue: SoundSynth.Cue) {
         // Hop onto the serial queue so the caller (the hotkey path) returns
-        // immediately and we never touch `prepared` / the IDs off-queue.
+        // immediately and we never touch the IDs off-queue.
         queue.async { [weak self] in
             guard let self else { return }
             self.prepareLocked()
-            guard self.prepared else { return }
-            AudioServicesPlaySystemSound(self[keyPath: id])
+            if let id = self.liveIDs[cue] {
+                AudioServicesPlaySystemSound(id)
+            }
         }
     }
 
-    /// Render any missing CAFs and register every cue. Idempotent — runs its
-    /// work once and no-ops thereafter. Must run on `queue`.
+    /// Render any missing CAFs for the live theme and register every cue.
+    /// Idempotent per theme. Must run on `queue`.
     private func prepareLocked() {
-        guard !prepared else { return }
-        let dir = Self.cueDirectory()
+        if preparedTheme == theme, !liveIDs.isEmpty { return }
+        disposeLiveLocked()
         do {
-            armID   = try register("arm",   Self.makeTone(format: format, frequency: 370, partials: Self.woodPartials,  attackSeconds: 0.025, durationMS: 180, amplitude: 0.12), in: dir)  // F#4, woody
-            startID = try register("start", Self.makeTone(format: format, frequency: 587, partials: Self.chimePartials, attackSeconds: 0.020, durationMS: 400, amplitude: 0.16), in: dir)  // D5
-            stopID  = try register("stop",  Self.makeTone(format: format, frequency: 440, partials: Self.chimePartials, attackSeconds: 0.018, durationMS: 400, amplitude: 0.16), in: dir)  // A4
-            doneID  = try register("done",  Self.makeTone(format: format, frequency: 880, partials: Self.chimePartials, attackSeconds: 0.014, durationMS: 320, amplitude: 0.11), in: dir)  // A5, quieter
-            prepared = true
+            liveIDs = try registerAll(theme: theme)
+            preparedTheme = theme
         } catch {
             // No output device, unwritable cache, or registration refusal:
             // skip cues silently, same best-effort contract the engine had.
-            prepared = false
+            liveIDs = [:]
+            preparedTheme = nil
         }
     }
 
-    /// Write `buffer` to `<dir>/<name>.v<cacheVersion>.caf` if it isn't already
-    /// there, then create a `SystemSoundID` for it. Must run on `queue`.
-    private func register(_ name: String, _ buffer: AVAudioPCMBuffer, in dir: URL) throws -> SystemSoundID {
-        let url = dir.appendingPathComponent("\(name).v\(Self.cacheVersion).caf")
+    private func disposeLiveLocked() {
+        for id in liveIDs.values { AudioServicesDisposeSystemSoundID(id) }
+        liveIDs = [:]
+        preparedTheme = nil
+    }
+
+    private func registerAll(theme: SoundTheme) throws -> [SoundSynth.Cue: SystemSoundID] {
+        let dir = Self.cueDirectory()
+        var ids: [SoundSynth.Cue: SystemSoundID] = [:]
+        for cue in SoundSynth.Cue.allCases {
+            ids[cue] = try register(cue, theme: theme, in: dir)
+        }
+        return ids
+    }
+
+    /// Render `cue` to `<dir>/<theme>-<cue>.v<cacheVersion>.caf` if it isn't
+    /// already there, then create a `SystemSoundID` for it. Must run on `queue`.
+    private func register(_ cue: SoundSynth.Cue, theme: SoundTheme, in dir: URL) throws -> SystemSoundID {
+        let url = dir.appendingPathComponent("\(theme.rawValue)-\(cue.rawValue).v\(Self.cacheVersion).caf")
         if !FileManager.default.fileExists(atPath: url.path) {
             // 16-bit LinearPCM CAF — ample for a UI cue. The buffer stays
             // Float32 in memory; AVAudioFile converts on write.
             let settings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: format.sampleRate,
-                AVNumberOfChannelsKey: 1,
+                AVNumberOfChannelsKey: format.channelCount,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
                 AVLinearPCMIsBigEndianKey: false,
             ]
             let file = try AVAudioFile(forWriting: url, settings: settings,
                                        commonFormat: .pcmFormatFloat32, interleaved: false)
-            try file.write(from: buffer)
+            try file.write(from: buffer(for: cue, theme: theme))
         }
         var id: SystemSoundID = 0
         let status = AudioServicesCreateSystemSoundID(url as CFURL, &id)
@@ -144,93 +198,20 @@ final class SoundEffects: @unchecked Sendable {
         return dir
     }
 
-    // MARK: - Synthesis
-
-    private struct Partial {
-        let ratio: Float        // multiple of the fundamental (non-integer is fine)
-        let gain: Float         // relative amplitude at t=0
-        let decay: Float        // higher = faster fall-off
-    }
-
-    /// Warm chime partials — purely harmonic (no inharmonic strike tone),
-    /// with a quiet sub-octave for body. The sub-octave is the warmth lever:
-    /// it adds the lower-frequency resonance the ear reads as "real wooden
-    /// instrument" rather than "synthesised tone". The 3× partial (perfect
-    /// 12th) replaces a 4× double-octave because human-vocal/orchestral
-    /// instruments emphasise 3×, so the ear hears it as natural sparkle
-    /// rather than synth-bright. `decay` is normalised to buffer duration,
-    /// so end-of-buffer amplitude is exp(-decay) — keep it ≥ 4 so residual
-    /// is below 2% before the tail-fade cleans up.
-    private static let chimePartials: [Partial] = [
-        Partial(ratio: 0.500, gain: 0.18, decay: 4.0),   // sub-octave body
-        Partial(ratio: 1.000, gain: 1.00, decay: 4.5),   // fundamental
-        Partial(ratio: 2.000, gain: 0.22, decay: 6.0),   // octave warmth
-        Partial(ratio: 3.000, gain: 0.07, decay: 8.5),   // perfect 12th sparkle
-    ]
-
-    /// Woody / muted partial structure. Fundamental + light sub-octave for
-    /// body + a touch of octave. No inharmonic shimmer, no high sparkle,
-    /// faster overall decay. Feels like a soft mallet on a damped wooden
-    /// block — distinct enough from the chimes to read as a different
-    /// category of event.
-    private static let woodPartials: [Partial] = [
-        Partial(ratio: 0.500, gain: 0.10, decay: 4.5),
-        Partial(ratio: 1.000, gain: 1.00, decay: 5.0),
-        Partial(ratio: 2.000, gain: 0.15, decay: 6.5),
-    ]
-
-    private static func makeTone(format: AVAudioFormat,
-                                 frequency: Float,
-                                 partials: [Partial],
-                                 attackSeconds: Float,
-                                 durationMS: Int,
-                                 amplitude: Float) -> AVAudioPCMBuffer {
-        let sampleRate = Float(format.sampleRate)
-        let frameCount = AVAudioFrameCount(sampleRate * Float(durationMS) / 1000)
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+    /// Copies `SoundSynth`'s rendered channels into a PCM buffer in `format`.
+    private func buffer(for cue: SoundSynth.Cue, theme: SoundTheme) -> AVAudioPCMBuffer {
+        let channels = SoundSynth.render(cue, theme: theme)
+        let frameCount = AVAudioFrameCount(channels.first?.count ?? 0)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(frameCount, 1))!
         buffer.frameLength = frameCount
-
-        guard let channels = buffer.floatChannelData else { return buffer }
-        let channelCount = Int(format.channelCount)
-
-        let durationSeconds = Float(durationMS) / 1000
-        let attackFraction = attackSeconds / durationSeconds
-        // Final 25 ms gets a cosine fade-out to zero so however the partials
-        // are sitting at end-of-buffer they don't produce a hard cut. Cheap
-        // hygiene that lets us pick any decay value without an audible click.
-        let tailFadeSeconds: Float = 0.025
-        let tailFadeStart = max(0, durationSeconds - tailFadeSeconds)
-
-        for i in 0..<Int(frameCount) {
-            let t = Float(i) / sampleRate
-            let normalized = t / durationSeconds // 0…1
-
-            // Raised-cosine attack to eliminate the onset click of a hard
-            // ramp; held flat at 1.0 after the attack so the per-partial
-            // exponential decays handle the rest.
-            let attackEnv: Float
-            if t < attackSeconds {
-                attackEnv = 0.5 - 0.5 * cosf(.pi * t / attackSeconds)
-            } else {
-                attackEnv = 1.0
+        guard let data = buffer.floatChannelData else { return buffer }
+        for c in 0..<Int(format.channelCount) {
+            let source = channels[min(c, channels.count - 1)]
+            source.withUnsafeBufferPointer { src in
+                if let base = src.baseAddress {
+                    data[c].update(from: base, count: Int(frameCount))
+                }
             }
-            let tailEnv: Float
-            if t >= tailFadeStart {
-                let into = (t - tailFadeStart) / tailFadeSeconds
-                tailEnv = 0.5 + 0.5 * cosf(.pi * min(into, 1))
-            } else {
-                tailEnv = 1.0
-            }
-            let decayPhase = max(0, normalized - attackFraction)
-
-            var sample: Float = 0
-            for p in partials {
-                let env = expf(-p.decay * decayPhase)
-                sample += p.gain * env * sinf(2 * .pi * frequency * p.ratio * t)
-            }
-
-            let s = sample * attackEnv * tailEnv * amplitude
-            for c in 0..<channelCount { channels[c][i] = s }
         }
         return buffer
     }

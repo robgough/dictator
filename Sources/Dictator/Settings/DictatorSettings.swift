@@ -272,6 +272,10 @@ struct DictatorSettings: Codable, Equatable {
     /// monitor), so it shouldn't follow the user to their other Macs.
     var hudStyle: HUDStyle = .island
 
+    /// Which set of audio cues plays (see `SoundTheme` in SoundSynth.swift).
+    /// Synced — a taste preference, not hardware-dependent.
+    var soundTheme: SoundTheme = .soft
+
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
     /// the live key on disk because doing so would clobber data we couldn't
@@ -441,6 +445,7 @@ struct DictatorSettings: Codable, Equatable {
         self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
         self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
         self.hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? d.hudStyle
+        self.soundTheme = try c.decodeIfPresent(SoundTheme.self, forKey: .soundTheme) ?? d.soundTheme
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -1314,6 +1319,7 @@ struct DictatorSettings: Codable, Equatable {
         case scratchpadEnabled
         case scratchpadWidth
         case hudStyle
+        case soundTheme
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -1381,6 +1387,7 @@ struct DictatorSettings: Codable, Equatable {
         "assistantMemoryEnabled",
         "scratchpadEnabled",
         "scratchpadWidth",
+        "soundTheme",
     ]
 
     /// Keys that belong in the per-Mac file
