@@ -15,7 +15,7 @@ keep entries as plain bullet lines.
 ## Unreleased
 
 - The notes assistant now knows the current date and time when answering questions or drafting follow-ups.
-_No changes yet._
+- Renaming a meeting no longer occasionally renames a different meeting: a title you type is now always applied to the meeting you typed it into, even if you click straight to another meeting in the sidebar, and clicking away saves the new title instead of losing it.
 
 ## v2026.9.0 — 2026-09-06
 

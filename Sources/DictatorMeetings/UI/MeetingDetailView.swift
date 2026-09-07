@@ -8,6 +8,16 @@ struct MeetingDetailView: View {
     @Environment(MeetingsAppState.self) private var state
     @Bindable var session: MeetingSession
     @State private var titleDraft: String = ""
+    /// The meeting the title field is drafting a rename for, captured the
+    /// moment editing begins and held until that edit commits or is
+    /// abandoned. This view is REUSED when the user picks another meeting
+    /// (see the `session.id` onChange below), so `session` can be swapped
+    /// out from under a half-typed title; renaming whatever `session` points
+    /// at when the commit lands is how a rename ended up on a different
+    /// meeting. The captured target is immutable for the life of the edit,
+    /// so the commit always reaches the meeting the user was typing into.
+    @State private var titleTarget: MeetingSession?
+    @FocusState private var titleFocused: Bool
     @State private var transcriptCache: MeetingTranscript?
     @State private var titleHovered = false
     /// Whether the trailing Details inspector is showing. Remembered across
@@ -48,7 +58,13 @@ struct MeetingDetailView: View {
             titleDraft = session.meta.title
             reloadTranscriptIfNeeded()
         }
-        .onChange(of: session.meta.title) { _, new in titleDraft = new }
+        // Don't stomp what the user is typing: an auto-rename (or any other
+        // background meta write) landing mid-edit would otherwise replace the
+        // draft under the caret.
+        .onChange(of: session.meta.title) { _, new in
+            guard !titleFocused else { return }
+            titleDraft = new
+        }
         .onChange(of: session.state) { _, _ in reloadTranscriptIfNeeded() }
         // When the user picks a different meeting in the sidebar SwiftUI
         // reuses this view instance and just swaps the bound session.
@@ -57,6 +73,11 @@ struct MeetingDetailView: View {
         // values — the title happens to update via its own onChange, but
         // the transcript would silently keep showing the old one.
         .onChange(of: session.id) { _, _ in
+            // Flush a half-typed title to the meeting it was typed into
+            // BEFORE the draft is reset — the swap can arrive before the
+            // field has resigned focus and committed.
+            commitTitleEdit()
+            titleFocused = false
             titleDraft = session.meta.title
             transcriptCache = nil
             reloadTranscriptIfNeeded()
@@ -106,9 +127,30 @@ struct MeetingDetailView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                TextField("Title", text: $titleDraft, onCommit: {
-                    session.rename(to: titleDraft)
-                })
+                TextField("Title", text: $titleDraft)
+                .focused($titleFocused)
+                // Return commits, and so does clicking away (Finder/Notes
+                // behaviour) — both through `commitTitleEdit`, which renames
+                // the captured target rather than the currently-bound session.
+                .onSubmit {
+                    // Return is only reachable while the field has focus, so
+                    // if focus tracking somehow never fired, the bound session
+                    // is the right target — better than dropping the rename.
+                    if titleTarget == nil { titleTarget = session }
+                    commitTitleEdit()
+                }
+                .onChange(of: titleFocused) { _, focused in
+                    if focused {
+                        titleTarget = session
+                    } else {
+                        commitTitleEdit()
+                        // Whatever the field editor pushed back on its way
+                        // out (it can carry the previous meeting's text when
+                        // the selection changed mid-edit), the header must
+                        // show the persisted title of the meeting on screen.
+                        titleDraft = session.meta.title
+                    }
+                }
                 .textFieldStyle(.plain)
                 .font(.title3.weight(.semibold))
                 .padding(.horizontal, 6)
@@ -127,6 +169,24 @@ struct MeetingDetailView: View {
             Spacer()
             statePill
         }
+    }
+
+    /// Commit the in-progress title edit to `titleTarget` — the meeting that
+    /// was bound when the user started typing, not whatever `session` points
+    /// at now. Clearing the target first makes this idempotent: focus loss,
+    /// Return, and a session swap can all fire for the same edit, and only
+    /// the first one writes. Empty titles are rejected (and the field is put
+    /// back to the real title so it doesn't sit blank).
+    private func commitTitleEdit() {
+        guard let target = titleTarget else { return }
+        titleTarget = nil
+        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            if target === session { titleDraft = session.meta.title }
+            return
+        }
+        guard trimmed != target.meta.title else { return }
+        target.rename(to: trimmed)
     }
 
     private var headerSubtitle: String {
