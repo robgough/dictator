@@ -88,7 +88,11 @@ jobs:
           HTML_PATH="$RUNNER_TEMP/release-notes.html"
           python3 .github/scripts/release_notes.py extract > "$MD_PATH"
           python3 .github/scripts/release_notes.py html < "$MD_PATH" > "$HTML_PATH"
-          if grep -qF '_No changes yet._' "$MD_PATH"; then
+          # Whole-body comparison: `extract` prints exactly the placeholder when
+          # there's nothing to release. A substring grep here once matched a
+          # stale placeholder line sitting under real bullets and published
+          # v2026.9.1 with "No user-facing changes" as its release body.
+          if [[ "$(cat "$MD_PATH")" == "_No changes yet._" ]]; then
               echo "::warning::CHANGELOG.md has no entries under '## Unreleased' — release notes will read 'No user-facing changes in this release.'"
               # Replace the placeholder marker with the prose Sparkle and the
               # GitHub Release should actually show, since the placeholder
@@ -513,7 +517,11 @@ jobs:
           HTML_PATH="$RUNNER_TEMP/release-notes.html"
           python3 .github/scripts/release_notes.py extract CHANGELOG-Meetings.md > "$MD_PATH"
           python3 .github/scripts/release_notes.py html < "$MD_PATH" > "$HTML_PATH"
-          if grep -qF '_No changes yet._' "$MD_PATH"; then
+          # Whole-body comparison: `extract` prints exactly the placeholder when
+          # there's nothing to release. A substring grep here once matched a
+          # stale placeholder line sitting under real bullets and published
+          # v2026.9.1 with "No user-facing changes" as its release body.
+          if [[ "$(cat "$MD_PATH")" == "_No changes yet._" ]]; then
               echo "::warning::CHANGELOG-Meetings.md has no entries under '## Unreleased' — release notes will read 'No user-facing changes in this release.'"
               echo "No user-facing changes in this release." > "$MD_PATH"
           fi

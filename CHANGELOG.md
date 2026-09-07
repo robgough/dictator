@@ -22,11 +22,9 @@ _No changes yet._
 - Sound sets: Settings → General → Sounds now offers five — Classic (the original chimes), Glass, Soft (the new default), Wood and Minimal — each with a play button so you can hear it before you pick. Each set is a soft tap when the hotkey lands, a rising pair when the mic is live, a falling pair on release, and a chord when the text is pasted.
 - Pressing Esc to cancel a dictation no longer also sends Escape to the app you're dictating into (so it won't close a popover or find bar there). Needs the Accessibility permission paste already uses.
 - New HUD styles: Settings → General → HUD shows a picture of each — the Notch island, a Small island, a compact Bottom pill and a tiny Mini badge — and you click the one you want. The bottom styles pop up just above the Dock, handier on large monitors where the island sits too high.
-
 - The assistant now knows the current date and time, so "draft a note for next Friday" resolves to the right day.
 - Fixed: the modes list in Settings → Dictation clipped its last row and left a gap above the first.
 - The Polished style is now a single AI pass instead of two, so it finishes in about half the time on slower Macs. The progress labels now match the style names: Polishing and Paragraphs.
-_No changes yet._
 
 ## v2026.9.0 — 2026-09-06
 

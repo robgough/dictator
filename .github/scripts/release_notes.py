@@ -29,17 +29,33 @@ EMPTY_PLACEHOLDER = "_No changes yet._"
 EMPTY_RELEASE_PROSE = "No user-facing changes in this release."
 
 
-def read_unreleased(path: pathlib.Path = CHANGELOG_PATH) -> str:
-    """Return the body of '## Unreleased', stripped. Body = everything after
-    the heading line up to the next '## ' heading or EOF."""
-    text = path.read_text()
+def unreleased_span(text: str, path: pathlib.Path) -> tuple[int, int, str]:
+    """Locate '## Unreleased' in `text`. Returns (heading_start, body_end,
+    body): body = everything after the heading line up to the next '## '
+    heading or EOF, stripped, with any stray placeholder lines dropped.
+
+    The placeholder is dropped line-by-line rather than compared whole
+    because it tends to get left behind: someone adds bullets *above*
+    "_No changes yet._" instead of replacing it, and a body that still
+    contains the marker must count as real content (v2026.9.1 shipped with
+    "No user-facing changes" as its GitHub Release body for exactly this
+    reason). An empty result still means "nothing to release"."""
     m = re.search(r'^## Unreleased\s*\n', text, flags=re.M)
     if not m:
         raise SystemExit(f"{path}: no '## Unreleased' heading found")
     rest = text[m.end():]
     next_heading = re.search(r'^## ', rest, flags=re.M)
-    end = m.end() + next_heading.start() if next_heading else len(text)
-    return text[m.end():end].strip()
+    body_end = m.end() + next_heading.start() if next_heading else len(text)
+    raw = text[m.end():body_end]
+    lines = [ln for ln in raw.splitlines() if ln.strip() != EMPTY_PLACEHOLDER]
+    return m.start(), body_end, "\n".join(lines).strip()
+
+
+def read_unreleased(path: pathlib.Path = CHANGELOG_PATH) -> str:
+    """Return the body of '## Unreleased', stripped of whitespace and of any
+    stray placeholder lines. Empty string when there's nothing to release."""
+    _, _, body = unreleased_span(path.read_text(), path)
+    return body
 
 
 def md_bullets_to_html(md: str) -> str:
@@ -80,20 +96,14 @@ def version_unreleased(version: str, date: str, path: pathlib.Path = CHANGELOG_P
     'No user-facing changes' prose instead of carrying the placeholder
     forward (which would read as a bug)."""
     text = path.read_text()
-    m = re.search(r'^## Unreleased\s*\n', text, flags=re.M)
-    if not m:
-        raise SystemExit(f"{path}: no '## Unreleased' heading found")
-    rest = text[m.end():]
-    next_heading = re.search(r'^## ', rest, flags=re.M)
-    body_end = m.end() + next_heading.start() if next_heading else len(text)
-    body = text[m.end():body_end].strip()
-    versioned = body if body and body != EMPTY_PLACEHOLDER else EMPTY_RELEASE_PROSE
+    start, body_end, body = unreleased_span(text, path)
+    versioned = body if body else EMPTY_RELEASE_PROSE
     replacement = (
         f"## Unreleased\n\n{EMPTY_PLACEHOLDER}\n\n"
         f"## v{version} — {date}\n\n"
         f"{versioned}\n\n"
     )
-    new_text = text[:m.start()] + replacement + text[body_end:].lstrip("\n")
+    new_text = text[:start] + replacement + text[body_end:].lstrip("\n")
     path.write_text(new_text)
 
 
@@ -105,7 +115,7 @@ def main() -> int:
     if cmd == "extract":
         path = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else CHANGELOG_PATH
         body = read_unreleased(path)
-        print(body if body and body != EMPTY_PLACEHOLDER else EMPTY_PLACEHOLDER)
+        print(body if body else EMPTY_PLACEHOLDER)
         return 0
     if cmd == "html":
         md = sys.stdin.read()
