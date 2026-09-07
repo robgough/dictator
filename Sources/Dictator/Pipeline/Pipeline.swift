@@ -1352,8 +1352,9 @@ final class Pipeline {
     }
 
     /// Drop the auto-capitalisation and trailing period when the user has
-    /// dictated something short — chat replies, mid-document edits, casual
-    /// IDE input, etc. The threshold (≤ 6 words) is calibrated to catch
+    /// dictated something short — a chat reply. Applied only in the Messages
+    /// style, and only when no caret snapshot is available (with one, the
+    /// context-aware joiner decides). The threshold (≤ 6 words) is calibrated to catch
     /// single-utterance messages without catching anything that reads like
     /// a complete formal sentence. Skipped when the text contains a
     /// strong sentence break ("." mid-text, "?" or "!" anywhere), since
@@ -1462,7 +1463,14 @@ final class Pipeline {
             text = joined
         } else {
             NSLog("[Dictator] Join: no caret snapshot — context-free heuristics.")
-            text = Self.relaxShortMessage(text)
+            // The short-message relax (lowercase the first letter and drop the
+            // full stop on a ≤6-word dictation) is a chat-reply convention, so
+            // it only applies in the Messages style. Everywhere else a short
+            // sentence in a terminal or browser is still a sentence — the
+            // no-snapshot path used to lowercase "That looks like it solved it".
+            if currentMode.style == .messages {
+                text = Self.relaxShortMessage(text)
+            }
             text = Self.withTrailingSpace(text)
         }
         // Per-mode override: guarantee a trailing space even when the
