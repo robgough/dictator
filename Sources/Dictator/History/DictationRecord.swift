@@ -49,4 +49,11 @@ struct DictationRecord: Codable, Identifiable, Equatable, Hashable, Sendable {
     let pasted: Bool
     let inputDevice: String
     let note: String?
+
+    /// Bundle ID of the app that was frontmost when the hotkey fired — where
+    /// the text was delivered. Diagnostics only (no UI): join/spacing quirks
+    /// are app-specific, and this is what makes "which apps did this happen
+    /// in?" answerable after the fact. nil on records written before it
+    /// existed, and whenever the frontmost app couldn't be identified.
+    let appBundleID: String?
 }

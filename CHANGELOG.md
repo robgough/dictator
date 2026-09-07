@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictating into an empty compose box in Signal, and into web editors in Firefox, no longer inserts a leading space or lowercases the first word — the box's greyed-out placeholder text was being mistaken for text before the cursor.
 - Assistant Mode's memory now understands how people actually ask: "Hey, can you remember that…", "add to your memory that…", "keep in mind that…", "don't forget that…" and "Mary, remember that…" all store the fact without bothering the model, and it takes a name if you give it one.
 
 ## v2026.9.1 — 2026-09-07

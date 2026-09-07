@@ -307,6 +307,11 @@ final class Pipeline {
         /// (`combinedContext`). Empty when the mode opts out, the OS/model can't
         /// do vision, Screen Recording isn't granted, or nothing was read.
         var visionTerms: [String] = []
+        /// Bundle ID of the app that was frontmost when the hotkey fired — the
+        /// app the paste will land in. Recorded in history purely as
+        /// diagnostics: join/spacing bugs are almost always app-specific, and
+        /// "which app was this?" was previously unanswerable after the fact.
+        var appBundleID: String?
     }
     private var inFlight = InFlight()
 
@@ -523,6 +528,7 @@ final class Pipeline {
         // lands on the main actor long before Pass 1 needs it. A nil capture
         // (mode opted out, no Accessibility, focused element doesn't expose
         // ranged text) just means no context this run.
+        inFlight.appBundleID = bundleID
         inFlight.context = nil
         inFlight.visionTerms = []
         inFlight.visionTask?.cancel()
@@ -1428,14 +1434,17 @@ final class Pipeline {
         // opted out, paste-automatically off, Accessibility missing, or the
         // focused element doesn't expose ranged text).
         var joinContext: InsertionContext?
+        var joinPlaceholderChars = 0
         if currentMode.contextAwarenessEnabled && settings.pasteAutomatically {
-            joinContext = await Task.detached(priority: .userInitiated) {
-                AXContextReader.capture(
+            let captured = await Task.detached(priority: .userInitiated) {
+                AXContextReader.captureDetailed(
                     maxBefore: AXContextReader.joinBeforeCap,
                     maxAfter: AXContextReader.joinAfterCap,
                     requireFieldAccurate: true
                 )
             }.value
+            joinContext = captured.context
+            joinPlaceholderChars = captured.placeholderChars
         }
         // Any successful capture — including an empty-but-readable field —
         // goes through the joiner. An empty field is the clearest start of a
@@ -1446,8 +1455,9 @@ final class Pipeline {
         // unreadable field, timeout) falls back to the length heuristic.
         if let joinContext {
             let joined = InsertionJoiner.adjust(text, before: joinContext.textBefore, after: joinContext.textAfter)
-            NSLog("[Dictator] Join: caret snapshot (%d/%d chars) — %@.",
-                  joinContext.textBefore.count, joinContext.textAfter.count,
+            NSLog("[Dictator] Join: caret snapshot (%d/%d chars, %d placeholder chars dropped) in %@ — %@.",
+                  joinContext.textBefore.count, joinContext.textAfter.count, joinPlaceholderChars,
+                  inFlight.appBundleID ?? "an unknown app",
                   joined == text ? "no adjustment needed" : "adjusted")
             text = joined
         } else {
@@ -1493,7 +1503,8 @@ final class Pipeline {
             final: text,
             pasted: pasted,
             inputDevice: AudioDeviceManager.shared.activeInputDeviceName(),
-            note: note
+            note: note,
+            appBundleID: inFlight.appBundleID
         )
         DictationHistory.shared.append(record)
         UsageStatsStore.shared.record(
