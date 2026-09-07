@@ -1,19 +1,6 @@
 import SwiftUI
 
-// Literal RGB tints for the non-blue island accents. We deliberately don't use
-// SwiftUI's semantic colours (`.indigo`, `.purple`, `.pink`, `.teal`,
-// `.orange`) here: those are dynamic and re-resolve under the visual-effect
-// view's vibrancy appearance, which itself shifts with the window content
-// behind the HUD — so otherwise the icons and status text would drift in
-// colour as the user moved the HUD over different apps. The HUD's blue
-// reuses `Color.brandBlue` (defined in BrandColors.swift).
-private extension Color {
-    static let hudIndigo = Color(red: 0.369, green: 0.361, blue: 0.902) // ~#5E5CE6
-    static let hudPurple = Color(red: 0.749, green: 0.353, blue: 0.949) // ~#BF5AF2
-    static let hudPink   = Color(red: 1.0,   green: 0.216, blue: 0.373) // ~#FF375F
-    static let hudTeal   = Color(red: 0.392, green: 0.824, blue: 1.0)   // ~#64D2FF
-    static let hudOrange = Color(red: 1.0,   green: 0.624, blue: 0.039) // ~#FF9F0A
-}
+// Accent tints live in HUDPalette.swift (shared with the compact HUD styles).
 
 struct DictationIslandContent: View {
     @Environment(AppState.self) private var state
@@ -94,6 +81,13 @@ struct DictationIslandContent: View {
                     .controlSize(.small)
             }
         case .recording(let level, let isAssistant, let interim):
+            // One row: dot (or assistant glyph), the meter stretching across
+            // the middle, and a tight trailing column — the mode chip over
+            // the live mic's name for dictation, title over prompt for the
+            // assistant. No "Listening" caption (the pulsing dot and bars say
+            // it) and no Esc hint here (the ear's ✕ is visible the whole
+            // time); the working stages below keep their hint because
+            // they're the ones that can run long.
             let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 16) {
@@ -105,42 +99,39 @@ struct DictationIslandContent: View {
                     } else {
                         RecordingDot()
                     }
-                    Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue)
+                    Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue, height: 44)
                         .frame(maxWidth: .infinity)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(isContinuation ? "Following up" : (isAssistant ? "Assistant" : "Listening"))
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(isAssistant ? Color.hudIndigo : .primary)
-                        Text(isContinuation
-                             ? "Continuing the conversation"
-                             : (isAssistant ? "Speak your instruction" : deviceManager.activeInputDeviceName()))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        // Mode chip — dictation only. Modes don't apply to
-                        // Assistant Mode (separate flow, separate prompt). The
-                        // "Tab → next" suffix only renders when Tab cycling will
-                        // actually work — i.e. when Accessibility is granted so
-                        // the CGEventTap can swallow Tab before it inserts a tab
-                        // character into the focused app. Without AX we'd be
-                        // promising a feature we can't deliver.
-                        if !isAssistant {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        if isAssistant {
+                            Text(isContinuation ? "Following up" : "Assistant")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.hudIndigo)
+                            Text(isContinuation ? "Continuing the conversation" : "Speak your instruction")
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            // Mode chip — dictation only. Modes don't apply to
+                            // Assistant Mode (separate flow, separate prompt).
+                            // The "Tab → next" suffix only renders when Tab
+                            // cycling will actually work — i.e. when
+                            // Accessibility is granted so the CGEventTap can
+                            // swallow Tab before it inserts a tab character
+                            // into the focused app. Without AX we'd be
+                            // promising a feature we can't deliver.
                             let canCycle = TextInjector.hasAccessibilityPermission()
                             ModeChip(
                                 name: state.pipeline.currentMode.name,
                                 nextName: canCycle ? state.pipeline.nextCycleMode?.name : nil
                             )
+                            Text(deviceManager.activeInputDeviceName())
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
-                        // Same Esc-cancel discoverability hint as the
-                        // StatusRow states. Sits below the mode chip so it
-                        // doesn't separate the chip from its subtitle.
-                        Text("Press Esc to cancel")
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 1)
                     }
-                    .frame(maxWidth: 200, alignment: .trailing)
+                    .frame(maxWidth: 180, alignment: .trailing)
                 }
                 // The preview well is RESERVED for the whole recording (with
                 // a quiet placeholder until words arrive) rather than
@@ -148,8 +139,11 @@ struct DictationIslandContent: View {
                 // the island around the waveform row, which read as the
                 // whole HUD jumping. Gated on the interim setting so users
                 // who've turned the preview off never see the empty well.
+                // Compact well: no caption (the bordered italic text already
+                // reads as a draft) and the viewport sized so the top line
+                // isn't clipped.
                 if state.settings.realtimeInterimEnabled {
-                    InterimPreview(text: interim)
+                    InterimPreview(text: interim, compact: true)
                 }
             }
         case .transcribing:
@@ -242,7 +236,7 @@ private struct StatusRow: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
                 // Escape-cancel discoverability hint. Surfaced on every
-                // "waiting" state — same set the EscapeCancelMonitor
+                // "waiting" state — same set the KeyInterceptMonitor
                 // listens on — so when something runs slow (or wedges)
                 // the user already knows how to bail.
                 Text("Press Esc to cancel")
@@ -260,7 +254,7 @@ private struct StatusRow: View {
 /// Compact pill that names the active dictation mode, plus a "Tab → <next>"
 /// suffix when the cycle has more than one entry. Renders inline in the HUD's
 /// trailing column during `.recording` (dictation flow only).
-private struct ModeChip: View {
+struct ModeChip: View {
     let name: String
     let nextName: String?
 
@@ -304,25 +298,39 @@ private struct ModeChip: View {
 ///
 /// The well is styled as a subtle bordered "draft" zone so it isn't mistaken
 /// for the final transcript that actually gets pasted.
-private struct InterimPreview: View {
+struct InterimPreview: View {
     let text: String
+    /// Lines the well shows before it scrolls. The island reserves three;
+    /// the bottom pill one.
+    var visibleLines: CGFloat = 3
+    /// Drops the "PREVIEW" caption and tightens the well's padding — for
+    /// the pill, where a single italic line already reads as a draft and
+    /// every point of height shows.
+    var compact: Bool = false
 
-    /// Vertical room per line of the preview font (~11 pt SF Rounded). Three
-    /// slots → the well shows three lines; beyond that the ScrollView scrolls.
+    /// Vertical room per line of the preview font (~11 pt SF Rounded).
     private static let lineSlot: CGFloat = 14.5
-    private static let visibleLines: CGFloat = 3
+    /// Clear space under the newest line — see the `Color.clear` spacer
+    /// below. The compact well adds this to its viewport height: the scroll
+    /// pins the spacer's bottom edge, so a viewport of exactly N line slots
+    /// shows N − ⅓ lines and clips the ascenders off the top one. With
+    /// three lines that only nicks the oldest visible line; with two it's
+    /// the whole preview reading as "cut off".
+    private static let bottomInset: CGFloat = 5
     private static let bottomAnchor = "interim-preview-bottom"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: "ellipsis.bubble")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Text("PREVIEW")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                    .tracking(0.4)
+            if !compact {
+                HStack(spacing: 4) {
+                    Image(systemName: "ellipsis.bubble")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    Text("PREVIEW")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .tracking(0.4)
+                }
             }
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
@@ -340,20 +348,20 @@ private struct InterimPreview: View {
                         // the well's border instead of sitting flush against it,
                         // and so italic descenders don't clip at the scroll edge.
                         Color.clear
-                            .frame(height: 5)
+                            .frame(height: Self.bottomInset)
                             .id(Self.bottomAnchor)
                     }
                 }
                 .scrollIndicators(.hidden)
-                .frame(height: Self.lineSlot * Self.visibleLines)
+                .frame(height: Self.lineSlot * visibleLines + (compact ? Self.bottomInset : 0))
                 .onChange(of: text) { _, _ in
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
+        .padding(.horizontal, compact ? 8 : 9)
+        .padding(.top, compact ? 4 : 6)
+        .padding(.bottom, compact ? 5 : 8)
         .background(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
@@ -365,7 +373,7 @@ private struct InterimPreview: View {
     }
 }
 
-private struct RecordingDot: View {
+struct RecordingDot: View {
     @State private var on = false
     var body: some View {
         // Pulse via scale + opacity, NOT an animated `.shadow(radius:)`. A

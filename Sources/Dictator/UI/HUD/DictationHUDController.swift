@@ -2,47 +2,57 @@ import AppKit
 import SwiftUI
 import Observation
 
-/// Owns the island panel — successor to the retired `HUDController`, same
-/// observation loop and key-monitor plumbing. One tenant now that Meetings
-/// has its own app: the dictation pipeline (transient states, following the
-/// mouse screen — the island appears where the user's attention is when they
-/// hit the hotkey). Dictator Meetings runs its own `CoachIslandController`
-/// over the same shared `IslandPanel`.
+/// Owns the dictation HUD panel — one panel, one observation loop, three
+/// looks. `HUDStyle` picks the look: the notch island (top-centre, flush
+/// with the screen edge, sliding out from behind it) or one of the two
+/// bottom-anchored compact styles (popping up just above the Dock). This
+/// controller only positions the fixed-size canvas and flips
+/// `context.revealed`; every visual difference lives in the SwiftUI views
+/// (`IslandView`, `CompactHUDView`) that `DictationHUDRootView` switches
+/// between.
 ///
-/// All visual morphing happens inside `IslandView`'s springs — this
-/// controller only shows/hides/repositions the fixed-size panel.
+/// Successor to `IslandController` (itself the successor to the retired
+/// `HUDController`) — the key-monitor plumbing is carried over.
+/// Dictator Meetings runs its own `CoachIslandController` over the same
+/// shared `IslandPanel`.
 @MainActor
-final class IslandController {
+final class DictationHUDController {
     private let panel: IslandPanel
     private let state: AppState
-    private let context = IslandContext()
+    private let context = HUDContext()
     private var observationTask: Task<Void, Never>?
+    /// The style the panel is currently positioned for. Compared against the
+    /// setting on every update so a change in Settings moves the (tucked,
+    /// invisible) panel to its new home straight away, not on the next
+    /// dictation.
+    private var positionedStyle: HUDStyle?
 
     /// Escape-to-cancel while the pipeline is cancellable; Tab cycles the
-    /// dictation mode during `.recording`. Carried over from HUDController
-    /// unchanged, including the tight lifecycle gating.
-    private let escapeMonitor = EscapeCancelMonitor()
+    /// dictation mode during `.recording`. Both swallow the key so it never
+    /// reaches the app being dictated into (see `KeyInterceptMonitor`); the
+    /// tight lifecycle gating below keeps the intercept window short.
+    private let escapeMonitor = KeyInterceptMonitor(key: .escape, fallback: .passiveGlobalMonitor, localPolicy: .passThrough)
     private var escapeActive = false
-    private let recordingMonitor = RecordingKeyMonitor()
+    private let recordingMonitor = KeyInterceptMonitor(key: .tab, fallback: .off, localPolicy: .swallow)
     private var recordingMonitorActive = false
 
     init(state: AppState) {
         self.state = state
         self.panel = IslandPanel()
-        let host = NSHostingView(rootView: IslandView(context: context).environment(state))
+        let host = NSHostingView(rootView: DictationHUDRootView(context: context).environment(state))
         // Fill the panel's content rect at all sizes (the SwiftUI shape
         // inside does its own sizing against this canvas).
         host.autoresizingMask = [.width, .height]
         host.frame = panel.contentLayoutRect
         panel.contentView = host
         // The panel lives on screen permanently: tucked, it's fully
-        // invisible (transparent window, shape parked above the screen
-        // edge, mouse-transparent), and never ordering it out is what makes
-        // the emergence animation reliable — an orderOut/orderFront cycle
-        // rebuilds the window's layer tree, and Core Animation renders
-        // changes against freshly attached layers at their final values
-        // (the "reveal only animated the first time" bug). With the window
-        // always present, the tucked frame is always the committed state
+        // invisible (transparent window, shape parked out of view,
+        // mouse-transparent), and never ordering it out is what makes the
+        // reveal animation reliable — an orderOut/orderFront cycle rebuilds
+        // the window's layer tree, and Core Animation renders changes
+        // against freshly attached layers at their final values (the
+        // "reveal only animated the first time" bug). With the window
+        // always present, the tucked state is always the committed state
         // for the spring to depart from.
         position(on: activeScreen())
         panel.alphaValue = 1
@@ -67,11 +77,13 @@ final class IslandController {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let resumed = ResumedFlag()
             withObservationTracking {
-                // Everything that changes show/hide, screen, or mouse policy.
-                // The 1 Hz snapshot and nudge churn are deliberately NOT read
-                // here — IslandView observes those itself; the controller
-                // only reacts to structural changes.
+                // Everything that changes show/hide, screen, placement or
+                // mouse policy. The 1 Hz snapshot and nudge churn are
+                // deliberately NOT read here — the views observe those
+                // themselves; the controller only reacts to structural
+                // changes.
                 _ = self.state.pipeline.state
+                _ = self.state.settings.hudStyle
             } onChange: {
                 guard resumed.markResumed() else { return }
                 continuation.resume()
@@ -83,7 +95,7 @@ final class IslandController {
         let s = state.pipeline.state
         let dictationActive = s.isActive || isTerminal(s)
 
-        // The dictation island never needs key-window status — nothing on it
+        // The dictation HUD never needs key-window status — nothing on it
         // takes typed input.
         if panel.allowsKey {
             panel.allowsKey = false
@@ -120,6 +132,12 @@ final class IslandController {
         let targetScreen = activeScreen()
         let shouldShow = dictationActive
 
+        // A style change re-homes the panel immediately, even while tucked,
+        // so the next reveal departs from the right place.
+        if positionedStyle != state.settings.hudStyle {
+            position(on: targetScreen)
+        }
+
         // Stateless reconciliation: the desired visibility is compared
         // against `context.revealed` itself — no separate bookkeeping flag
         // to desync. If an intermediate state change is ever missed (the
@@ -138,11 +156,15 @@ final class IslandController {
         return false
     }
 
-    /// Reveal: a touch of spring overshoot (the "pop" — the shape's top
-    /// bleed absorbs it). Retract: a quick clean tuck; bounce on the way
+    /// Island reveal: a touch of spring overshoot (the "pop" — the shape's
+    /// top bleed absorbs it). Retract: a quick clean tuck; bounce on the way
     /// out reads as hesitation.
     private static let revealSpring = Animation.spring(response: 0.55, dampingFraction: 0.70)
     private static let retractSpring = Animation.spring(response: 0.36, dampingFraction: 1.0)
+    /// Compact styles pop rather than slide, so the reveal is shorter with a
+    /// little overshoot on the scale; the dismiss is a plain quick settle.
+    private static let popSpring = Animation.spring(response: 0.42, dampingFraction: 0.72)
+    private static let dismissSpring = Animation.spring(response: 0.26, dampingFraction: 1.0)
 
     private func show() {
         // Re-assert cross-Space behavior + z-order every show — macOS
@@ -151,34 +173,51 @@ final class IslandController {
         // just refreshes its standing.
         panel.collectionBehavior = IslandPanel.crossSpaceBehavior
         panel.orderFrontRegardless()
-        // The observable mutation carries the transaction — IslandView's
-        // offset animates with it. No sequencing needed: the window is
-        // always on screen, so the tucked "from" frame is already the
-        // committed state.
-        withAnimation(Self.revealSpring) {
+        // The observable mutation carries the transaction — the mounted
+        // view's reveal modifiers animate with it. No sequencing needed: the
+        // window is always on screen, so the tucked "from" state is already
+        // the committed state.
+        let bottom = state.settings.hudStyle.isBottomAnchored
+        withAnimation(bottom ? Self.popSpring : Self.revealSpring) {
             context.revealed = true
         }
     }
 
     private func hide() {
-        withAnimation(Self.retractSpring) {
+        let bottom = state.settings.hudStyle.isBottomAnchored
+        withAnimation(bottom ? Self.dismissSpring : Self.retractSpring) {
             context.revealed = false
         }
     }
 
-    /// Anchor the canvas top-centre, flush with the screen's top edge, and
-    /// hand the screen's notch geometry to the view. No-op when nothing
-    /// changed (this runs on every structural update).
+    /// Park the canvas for the current style and hand the screen's notch
+    /// geometry to the view. Island: top-centre, flush with the screen's top
+    /// edge. Compact styles: bottom-centre of the *visible* frame (above the
+    /// Dock), with the shape's rest gap given by `HUDStyle.bottomInset` —
+    /// the canvas itself sits `CompactHUDView.shadowBleed` lower so the
+    /// shape's drop shadow has room below it. No-op when nothing changed
+    /// (this runs on every structural update).
     private func position(on screen: NSScreen?) {
         guard let screen else { return }
+        let style = state.settings.hudStyle
         let size = IslandPanel.canvasSize
-        let origin = NSPoint(
-            x: screen.frame.midX - size.width / 2,
-            y: screen.frame.maxY - size.height
-        )
+        let origin: NSPoint
+        if style.isBottomAnchored {
+            let visible = screen.visibleFrame
+            origin = NSPoint(
+                x: visible.midX - size.width / 2,
+                y: visible.minY + CGFloat(style.bottomInset) - CompactHUDView.shadowBleed
+            )
+        } else {
+            origin = NSPoint(
+                x: screen.frame.midX - size.width / 2,
+                y: screen.frame.maxY - size.height
+            )
+        }
         if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
         let geometry = NotchGeometry.of(screen)
         if context.geometry != geometry { context.geometry = geometry }
+        positionedStyle = style
     }
 
     /// Mouse-cursor screen, the most reliable "where is the user looking"

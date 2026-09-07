@@ -13,6 +13,11 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The notch island is tidier while listening: the meter row is one line (mode chip over the mic name, no "Listening" caption) and the live preview lost its caption and its clipped top line, so the island is a little shorter.
+- Settings now say "Not synced between Macs" instead of "Per Mac" for machine-specific options.
+- Pressing Esc to cancel a dictation no longer also sends Escape to the app you're dictating into (so it won't close a popover or find bar there). Needs the Accessibility permission paste already uses.
+- New HUD styles: Settings → General → HUD shows a picture of each — the Notch island, a Small island, a compact Bottom pill and a tiny Mini badge — and you click the one you want. The bottom styles pop up just above the Dock, handier on large monitors where the island sits too high.
+
 - The assistant now knows the current date and time, so "draft a note for next Friday" resolves to the right day.
 - Fixed: the modes list in Settings → Dictation clipped its last row and left a gap above the first.
 - The Polished style is now a single AI pass instead of two, so it finishes in about half the time on slower Macs. The progress labels now match the style names: Polishing and Paragraphs.

@@ -1,24 +1,5 @@
 import SwiftUI
 
-/// Observable bridge from `IslandController` (which knows the screen) to the
-/// SwiftUI content (which needs the screen's notch geometry). The controller
-/// writes; the view reads.
-///
-/// Dictation-only since Meetings moved into its own app — the meeting coach
-/// has its own `CoachIslandContext` over there, driving a second panel built
-/// from the same shared `IslandPanel` / `NotchGeometry` primitives.
-@MainActor
-@Observable
-final class IslandContext {
-    var geometry = NotchGeometry(hasNotch: false, notchWidth: 0, topInset: 24)
-    /// Drives the emergence animation: false = island tucked up behind the
-    /// screen's top edge (inside the notch, where there is one), true =
-    /// dropped down into view. Mutated only by the controller, inside
-    /// withAnimation — and it doubles as the controller's source of truth
-    /// for "is the island out", so there's no separate flag to desync.
-    var revealed = false
-}
-
 /// The island itself: a black shape anchored to the top-centre of the
 /// screen, springing between sizes as content changes. On notched screens
 /// it sits flush to the top edge at least as wide as the notch — black on
@@ -29,7 +10,11 @@ final class IslandContext {
 struct IslandView: View {
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let context: IslandContext
+    let context: HUDContext
+    /// The "Small island" style: same chrome, notch merge and slide, at
+    /// two-thirds the width, hosting the compact single-row content the
+    /// bottom pill uses instead of the full `DictationIslandContent`.
+    var compact = false
 
     /// The last non-hidden mode, retained so the retract animation has
     /// content to slide away — by the time we're hiding, `mode` itself has
@@ -83,6 +68,10 @@ struct IslandView: View {
         .offset(y: reduceMotion || context.revealed ? 0 : -(islandHeight + 32))
         .opacity(reduceMotion && !context.revealed ? 0 : 1)
         .environment(\.colorScheme, .dark)
+        // Seed on mount too: with the HUD style switched mid-dictation the
+        // view can be created while the pipeline is already live, and
+        // `onChange` alone would leave it blank until the next transition.
+        .onAppear { if mode != .hidden { displayMode = mode } }
         .onChange(of: mode) { _, new in
             if new != .hidden { displayMode = new }
         }
@@ -137,31 +126,49 @@ struct IslandView: View {
             // Taller while the interim-preview well is reserved (recording
             // with the setting on); the one height morph happens at
             // recording start/end, never mid-recording.
-            DictationIslandContent()
-                .frame(height: dictationHeight)
-                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
+            Group {
+                if compact {
+                    // No hover-cancel in the glyph slot here: the island's
+                    // ear is its pointer cancel target.
+                    CompactHUDContent(style: .islandSmall, hovering: false)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    DictationIslandContent()
+                }
+            }
+            .frame(height: dictationHeight)
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
         }
     }
 
     private var dictationHeight: CGFloat {
-        if case .recording = state.pipeline.state,
-           state.settings.realtimeInterimEnabled {
-            return 150
+        let previewing: Bool = {
+            if case .recording = state.pipeline.state { return state.settings.realtimeInterimEnabled }
+            return false
+        }()
+        if compact {
+            // One 24 pt row + 10 pt padding; with the two-line preview well
+            // (43 pt) and its 6 pt gap underneath.
+            return previewing ? 93 : 44
         }
-        return 96
+        // 44 pt meter row + 14 pt padding; with the three-line preview well
+        // (58 pt) and its 6 pt gap underneath.
+        return previewing ? 140 : 90
     }
 
     private func width(for mode: Mode, geo _: NotchGeometry) -> CGFloat {
         switch mode {
         case .hidden: 0
-        case .dictation: 520
+        case .dictation: compact ? 360 : 520
         }
     }
 }
 
 /// The cancel target that lives in the island's right "ear", at notch level.
 /// A roomy invisible hit-zone (the whole corner) around a faint ✕ that
-/// brightens on hover. Cancelling is also bound to Esc by `EscapeCancelMonitor`,
+/// brightens on hover. Cancelling is also bound to Esc by `KeyInterceptMonitor`,
 /// so this is the pointer affordance for the same action.
 private struct CancelEarButton: View {
     let topInset: CGFloat

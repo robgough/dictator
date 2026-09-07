@@ -27,7 +27,7 @@ struct ModelsPane: View {
             case .memory: MemoryModelsPane()
             }
 
-            SectionFootnote("Model choice is per Mac.")
+            SectionFootnote("Model choice isn't synced between Macs.")
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
         }

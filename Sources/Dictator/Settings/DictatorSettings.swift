@@ -88,6 +88,56 @@ enum ScratchpadWidth: String, Codable, Sendable, Hashable, CaseIterable, Identif
     }
 }
 
+/// Where the dictation HUD lives and how much room it takes. The notch
+/// island is the full-size surface; the two bottom styles are for people on
+/// large external displays, where a top-centre HUD sits too far from the
+/// text they're dictating into.
+///
+/// - `island`: black island dropping down from the top-centre / notch.
+/// - `islandSmall`: the same island at two-thirds the width and a single
+///   content row — the pill's layout on the island's chrome.
+/// - `pill`: compact frosted pill that pops up near the bottom-centre — the
+///   spirit of the original HUD at roughly half the size, with a one-line
+///   live preview when that's enabled.
+/// - `mini`: the smallest indicator that still shows every stage — a dark
+///   badge near the bottom-centre with a tiny meter, no text while listening.
+enum HUDStyle: String, Codable, Sendable, Hashable, CaseIterable, Identifiable {
+    case island
+    case islandSmall
+    case pill
+    case mini
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .island: return "Notch island"
+        case .islandSmall: return "Small island"
+        case .pill: return "Bottom pill"
+        case .mini: return "Mini badge"
+        }
+    }
+
+    /// True for the styles anchored near the bottom of the screen (the
+    /// controller positions the panel and picks the reveal spring off this).
+    var isBottomAnchored: Bool {
+        switch self {
+        case .island, .islandSmall: return false
+        case .pill, .mini: return true
+        }
+    }
+
+    /// Gap between the screen's visible bottom edge (above the Dock) and the
+    /// bottom of the shape, for the bottom-anchored styles.
+    var bottomInset: Double {
+        switch self {
+        case .island, .islandSmall: return 0
+        case .pill: return 64
+        case .mini: return 44
+        }
+    }
+}
+
 struct DictatorSettings: Codable, Equatable {
     var transcriptionEngine: TranscriptionEngine
     var whisperModelID: String
@@ -215,6 +265,12 @@ struct DictatorSettings: Codable, Equatable {
     /// clamped to the screen at display time so it's safe across differently
     /// sized Macs.
     var scratchpadWidth: ScratchpadWidth = .small
+
+    /// Which HUD shows while a dictation or assistant request is in flight.
+    /// Per-Mac: the reason to switch is the display attached to this machine
+    /// (a notch island reads right on a MacBook, a bottom pill on a 32"
+    /// monitor), so it shouldn't follow the user to their other Macs.
+    var hudStyle: HUDStyle = .island
 
     /// Set to true by `load()` when the persisted blob existed but failed to
     /// decode. While true, `persist()` is a no-op — we refuse to overwrite
@@ -384,6 +440,7 @@ struct DictatorSettings: Codable, Equatable {
         self.assistantMemoryEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantMemoryEnabled) ?? d.assistantMemoryEnabled
         self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
         self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
+        self.hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? d.hudStyle
     }
 
     /// Builds [Quick, Write] from a pre-modes persisted blob. Write inherits
@@ -1256,6 +1313,7 @@ struct DictatorSettings: Codable, Equatable {
         case assistantPersona, assistantMemoryEnabled
         case scratchpadEnabled
         case scratchpadWidth
+        case hudStyle
     }
 
     /// Keys that exist only in pre-rename persisted blobs. We never emit
@@ -1345,6 +1403,7 @@ struct DictatorSettings: Codable, Equatable {
         "vocabulary",                  // legacy migration scratch — empty after migration
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
+        "hudStyle",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

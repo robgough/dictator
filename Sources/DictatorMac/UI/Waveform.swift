@@ -10,14 +10,29 @@ struct Waveform: View {
     /// each side is being heard; the dictation HUD keeps the livelier,
     /// slightly-boosted default.
     var honest: Bool = false
-    @State private var bars: [Double] = Array(repeating: 0.05, count: barCount)
-    private static let barCount = 28
+    /// Bar count and canvas height. The defaults are the full-size meter
+    /// (island HUD, Settings, meetings); the compact HUD styles pass fewer,
+    /// shorter bars so the meter fits a single 30–40 pt row.
+    let barCount: Int
+    let height: CGFloat
+    @State private var bars: [Double]
+
+    init(level: Float, tint: Color = .accentColor, honest: Bool = false, barCount: Int = 28, height: CGFloat = 52) {
+        self.level = level
+        self.tint = tint
+        self.honest = honest
+        self.barCount = barCount
+        self.height = height
+        _bars = State(initialValue: Array(repeating: 0.05, count: barCount))
+    }
 
     var body: some View {
         Canvas { ctx, size in
-            let gap: CGFloat = 3
-            let totalGap = gap * CGFloat(Self.barCount - 1)
-            let barWidth = max(2, (size.width - totalGap) / CGFloat(Self.barCount))
+            // Tighter gaps on the compact meters so ten bars don't read as
+            // a picket fence.
+            let gap: CGFloat = height < 30 ? 2 : 3
+            let totalGap = gap * CGFloat(barCount - 1)
+            let barWidth = max(2, (size.width - totalGap) / CGFloat(barCount))
             let midY = size.height / 2
 
             for (i, value) in bars.enumerated() {
@@ -28,7 +43,7 @@ struct Waveform: View {
                 ctx.fill(shape, with: .color(tint))
             }
         }
-        .frame(height: 52)
+        .frame(height: height)
         .onChange(of: level, initial: false) { _, new in
             tick(with: Double(new))
         }

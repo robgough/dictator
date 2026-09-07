@@ -6,8 +6,8 @@ import KeyboardShortcuts
 
 /// General: the settings that aren't about a single flow — permissions, who
 /// you are, the instruction line that applies everywhere, delivery behaviour,
-/// the Scratchpad, where synced data lives, and the per-Mac performance
-/// trade-offs.
+/// the HUD style, the Scratchpad, where synced data lives, and the per-Mac
+/// performance trade-offs.
 ///
 /// The dictation and assistant hotkeys deliberately live with their flows
 /// (Dictation → Modes, Assistant) rather than here.
@@ -60,11 +60,19 @@ struct GeneralPane: View {
                     }
                 }
                 .onChange(of: s.settings.audioInterruption) { _, _ in state.save() }
-                .help("Per Mac. Pausing asks for one-time Automation permission per app.")
+                .help("Not synced between Macs. Pausing asks for one-time Automation permission per app.")
             } header: {
                 Text("Behaviour")
             } footer: {
                 SectionFootnote("Auto ducks the output when it can, otherwise pauses Spotify or Music.")
+            }
+
+            Section {
+                HUDStyleGallery()
+            } header: {
+                Text("HUD")
+            } footer: {
+                SectionFootnote("Not synced between Macs.")
             }
 
             Section {
@@ -117,7 +125,7 @@ struct GeneralPane: View {
             } header: {
                 Text("Performance")
             } footer: {
-                SectionFootnote("Per Mac: pre-loading keeps ~3 GB resident so the first dictation is instant.")
+                SectionFootnote("Not synced between Macs. Pre-loading keeps ~3 GB resident so the first dictation is instant.")
             }
         }
         .formStyle(.grouped)
