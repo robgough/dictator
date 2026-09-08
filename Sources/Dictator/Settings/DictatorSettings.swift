@@ -300,7 +300,7 @@ struct DictatorSettings: Codable, Equatable {
         syncedDirectoryPath: nil,
         assistantTriggerMode: .rightOption,
         userName: "",
-        modes: [.quick, .standard, .polished, .messages],
+        modes: [.quick, .clean, .polished, .messages],
         defaultModeID: DictationMode.standardID,
         assistantPromptAddendum: "",
         assistantPromptOverride: nil,
@@ -415,7 +415,12 @@ struct DictatorSettings: Codable, Equatable {
         // from the legacy fields (so tuned prompts and pass settings survive
         // intact) and a locked Quick mode that skips every LLM pass.
         if let decodedModes = try c.decodeIfPresent([DictationMode].self, forKey: .modes), !decodedModes.isEmpty {
-            self.modes = decodedModes
+            // The seed mode with `standardID` was called "Standard" until
+            // v2026.9.3; it's now "Clean", matching its style. Idempotent, and
+            // a no-op for anyone who renamed it themselves — see
+            // `DictationMode.renamingSeedStandardMode`. The new name is written
+            // back on the next `persist()`.
+            self.modes = DictationMode.renamingSeedStandardMode(decodedModes)
         } else {
             self.modes = Self.synthesiseLegacyModes(from: decoder)
         }

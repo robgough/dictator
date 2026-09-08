@@ -84,7 +84,7 @@ struct DictationPass: Equatable, Sendable {
 /// mid-recording with a key (default: Tab).
 ///
 /// Fresh installs seed a curated set: **Quick** (`isLocked == true`, `.raw` —
-/// the transcript through cues + vocabulary, the floor), **Standard**
+/// the transcript through cues + vocabulary, the floor), **Clean**
 /// (`.clean`, the default), **Polished** (`.polished`) and **Messages**
 /// (`.messages`, bound to the common chat apps). Users can add more from the
 /// "+" gallery (`galleryTemplates`).
@@ -226,6 +226,10 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// Stable IDs for the curated seed modes. Fresh installs get all of these;
     /// equivalents can also be added later from the "+" gallery, which mints
     /// fresh ids so the user can keep several.
+    /// Named `standardID` for historical reasons: the mode it identifies was
+    /// called "Standard" until v2026.9.3, when it was renamed "Clean" to match
+    /// its style. The *value* must never change — it's the identity existing
+    /// installs (and `defaultModeID`) are stored against.
     static let standardID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let polishedID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
     static let messagesID = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
@@ -444,8 +448,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         id: quickID, name: "Quick", isLocked: true, style: .raw)
 
     /// The everyday default for fresh installs: one Format pass.
-    static let standard = DictationMode(
-        id: standardID, name: "Standard", style: .clean)
+    static let clean = DictationMode(
+        id: standardID, name: "Clean", style: .clean)
 
     /// Format + Polish: drops fillers and false starts.
     static let polished = DictationMode(
@@ -477,6 +481,31 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
             DictationMode(id: UUID(), name: "Custom", style: .custom,
                           customPrompt: DictatorSettings.builtinFormattingPrompt),
         ]
+    }
+}
+
+// MARK: - "Standard" → "Clean" rename (v2026.9.3)
+
+extension DictationMode {
+    /// Renames the seed mode from "Standard" to "Clean" so its name matches its
+    /// style, the way Polished and Messages already do.
+    ///
+    /// Runs on every settings decode and is idempotent: it only fires on the
+    /// mode carrying `standardID` *and* still holding the untouched built-in
+    /// name "Standard". Once renamed the guard no longer matches, and a mode the
+    /// user renamed themselves never matched in the first place, so their name
+    /// is left alone. The id is deliberately unchanged — `defaultModeID`, app
+    /// bindings and history all key off it.
+    ///
+    /// Deletable once no installed copy could still be holding the old name.
+    static func renamingSeedStandardMode(_ modes: [DictationMode]) -> [DictationMode] {
+        guard let index = modes.firstIndex(where: {
+            $0.id == standardID && $0.name == "Standard"
+        }) else { return modes }
+        var renamed = modes
+        renamed[index].name = "Clean"
+        NSLog("[Dictator] Modes migration: seed mode \"Standard\" renamed to \"Clean\".")
+        return renamed
     }
 }
 

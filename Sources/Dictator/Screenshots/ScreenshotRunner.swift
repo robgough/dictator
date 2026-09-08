@@ -65,7 +65,7 @@ enum ScreenshotRunner {
         settings.preloadModelsOnLaunch = false
         settings.modes = [
             DictationMode(id: DictationMode.quickID, name: "Quick", isLocked: true, style: .raw),
-            DictationMode(id: DictationMode.standardID, name: "Standard", style: .clean),
+            DictationMode(id: DictationMode.standardID, name: "Clean", style: .clean),
             DictationMode(id: DictationMode.polishedID, name: "Polished", style: .polished),
             DictationMode(
                 id: DictationMode.messagesID,

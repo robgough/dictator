@@ -114,7 +114,7 @@ private struct DictationModesTab: View {
                     Button("Reset", role: .destructive) { resetModesToDefaults() }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Replaces every mode with the built-in set: Quick, Standard, Polished and Messages. Custom prompts and app bindings are lost.")
+                    Text("Replaces every mode with the built-in set: Quick, Clean, Polished and Messages. Custom prompts and app bindings are lost.")
                 }
             } header: {
                 Text("Modes")

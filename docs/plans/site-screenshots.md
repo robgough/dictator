@@ -90,7 +90,7 @@ app's *own* window — no Screen Recording grant, which is the whole point.
 All of it is invented. No real contact, client, meeting or dictation appears.
 
 - **`Sources/Dictator/Screenshots/ScreenshotRunner.swift`** — the Dictator side.
-  `seedSettings()` builds five modes (Quick/Raw, Standard/Clean, Polished,
+  `seedSettings()` builds five modes (Quick/Raw, Clean, Polished,
   Messages bound to Slack + Signal + Messages, Email/Polished bound to Mail with
   "Always use British spelling" as extra instructions), a user name of
   "Sam Okafor" and the Notch-island HUD style. `seedConversation()` writes one

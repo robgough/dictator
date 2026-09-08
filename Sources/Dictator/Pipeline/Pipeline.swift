@@ -70,7 +70,7 @@ final class Pipeline {
     /// for the rest of the pipeline run so mid-recording cycling (Step 2)
     /// affects only the current recording, and post-finish settings churn
     /// can't change pass behaviour underneath us.
-    private(set) var currentMode: DictationMode = .standard
+    private(set) var currentMode: DictationMode = .clean
 
     /// Fired after every successful Assistant Mode turn so the host can show
     /// (or refresh) the result window. `surfaceWindow` is true when the

@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- The built-in Standard mode is now called Clean, matching the style it uses. If you renamed it yourself, your name is kept.
 
 ## v2026.9.2 — 2026-09-07
 
