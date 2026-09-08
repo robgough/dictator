@@ -788,7 +788,8 @@ jobs:
               "${{ steps.version.outputs.version }}" \
               --element-id latest-meetings-release-link \
               --tag-prefix meetings-v \
-              --download-id download-meetings --asset Dictator-Meetings.dmg
+              --download-id download-meetings --download-id download-meetings-footer \
+              --asset Dictator-Meetings.dmg
 
       - name: Commit appcast + changelog + site back
         run: |

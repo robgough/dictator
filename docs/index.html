@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Dictator — Local-first dictation for Mac and iPhone</title>
-    <meta name="description" content="Local-first dictation for Mac and iPhone. Hold a hotkey on macOS or tap a key on the iOS keyboard, speak, release — text lands at your cursor. Transcription and language models run entirely on-device.">
+    <title>Dictator — Local-first dictation, meetings and keyboard for Mac and iPhone</title>
+    <meta name="description" content="Three free, local-first apps: dictation for the Mac, meeting notes for the Mac, and a dictation keyboard for iPhone. Speech and language models run entirely on your own device — no account, no subscription, nothing uploaded.">
     <link rel="canonical" href="https://dictator.robgough.net/">
     <link rel="icon" type="image/png" href="media/dictator-icon.png">
     <link rel="apple-touch-icon" href="media/dictator-icon.png">
@@ -12,27 +12,25 @@
     <meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)">
 
     <!-- Open Graph -->
-    <!-- TODO: og-card.png still visually says "macOS" only. Regenerate from
-         media/og-card.html once we want the social preview to reflect iOS too. -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Dictator">
     <meta property="og:url" content="https://dictator.robgough.net/">
     <meta property="og:title" content="Dictator — Talk to your Mac. Not the cloud.">
-    <meta property="og:description" content="A free, open-source local-first dictation app for macOS and iOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta property="og:description" content="Free, local-first dictation for the Mac, meeting notes that write themselves, and a dictation keyboard for iPhone. Everything runs on your own device.">
     <meta property="og:image" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:secure_url" content="https://dictator.robgough.net/media/og-card.png">
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Dictator — local-first dictation for macOS and iOS. Free, open source, runs on Apple Silicon.">
+    <meta property="og:image:alt" content="Dictator — local-first dictation for Mac and iPhone, plus Dictator Meetings. Free, open source, runs on Apple Silicon.">
     <meta property="og:locale" content="en_GB">
 
     <!-- Twitter / X -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Dictator — Talk to your Mac. Not the cloud.">
-    <meta name="twitter:description" content="A free, open-source local-first dictation app for macOS and iOS. Hold a hotkey, speak, release — text lands where your cursor is. All on-device.">
+    <meta name="twitter:description" content="Free, local-first dictation for the Mac, meeting notes that write themselves, and a dictation keyboard for iPhone. Everything runs on your own device.">
     <meta name="twitter:image" content="https://dictator.robgough.net/media/og-card.png">
-    <meta name="twitter:image:alt" content="Dictator — local-first dictation for macOS and iOS. Free, open source, runs on Apple Silicon.">
+    <meta name="twitter:image:alt" content="Dictator — local-first dictation for Mac and iPhone, plus Dictator Meetings. Free, open source, runs on Apple Silicon.">
 
     <!-- Structured data -->
     <script type="application/ld+json">
@@ -40,11 +38,11 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "Dictator",
-        "description": "A free, open-source local-first dictation app for macOS and iOS. Transcription and language models run entirely on-device.",
+        "description": "Free, local-first dictation for the Mac, meeting notes (Dictator Meetings) for the Mac, and a dictation keyboard for iPhone. Transcription and language models run entirely on-device.",
         "url": "https://dictator.robgough.net/",
         "downloadUrl": "https://github.com/robgough/dictator/releases/download/v2026.9.2/Dictator.dmg",
         "applicationCategory": "ProductivityApplication",
-        "operatingSystem": "macOS 26+, iOS",
+        "operatingSystem": "macOS 26+, iOS 26+",
         "image": "https://dictator.robgough.net/media/og-card.png",
         "offers": {
             "@type": "Offer",
@@ -90,17 +88,21 @@
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
-        /* Platform toggle — content scoping. Both Mac and iPhone copy live
-           in the DOM at all times; <body data-platform="..."> toggles which
-           stream is visible. Default is Mac (set via JS on load, with hash
-           support: /#ios → iPhone, /#mac or no hash → Mac). Using a body
-           attribute (rather than two separate pages) keeps the toggle
-           reactive without a navigation, and lets shared sections render
-           regardless. */
+        /* Platform toggle — content scoping. All three streams (Mac,
+           Meetings, iPhone) live in the DOM at all times;
+           <body data-platform="..."> toggles which one is visible. Default
+           is Mac, with hash support: /#mac, /#meetings, /#ios (or /#iphone).
+           Using a body attribute (rather than three separate pages) keeps
+           the toggle reactive without a navigation, and lets shared
+           sections — the author bio, the footer — render regardless. */
+        body[data-platform="mac"] .platform-meetings,
         body[data-platform="mac"] .platform-ios { display: none !important; }
-        body[data-platform="ios"] .platform-mac { display: none !important; }
+        body[data-platform="meetings"] .platform-mac,
+        body[data-platform="meetings"] .platform-ios { display: none !important; }
+        body[data-platform="ios"] .platform-mac,
+        body[data-platform="ios"] .platform-meetings { display: none !important; }
         /* Segmented control modelled on Apple's product-comparison pill
-           switcher. Pill-shaped container, two equal-width segments, the
+           switcher. Pill-shaped container, three equal-width segments, the
            active one carries a filled pill. Sized to read clearly on both
            desktop and phone; intentionally narrower than the hero so it
            reads as navigation, not the headline. */
@@ -113,6 +115,7 @@
             border: 1px solid var(--border);
             border-radius: 999px;
             margin: 0 0 32px;
+            max-width: 100%;
         }
         .platform-switch button {
             appearance: none;
@@ -124,12 +127,16 @@
             font-size: 13.5px;
             font-weight: 600;
             color: var(--fg-faint);
-            padding: 7px 18px;
+            padding: 7px 16px;
             border-radius: 999px;
             cursor: pointer;
             line-height: 1;
             transition: color 0.12s ease, background 0.12s ease;
-            min-width: 84px;
+            min-width: 78px;
+            white-space: nowrap;
+        }
+        @media (max-width: 420px) {
+            .platform-switch button { min-width: 0; padding: 7px 13px; font-size: 13px; }
         }
         .platform-switch button:hover { color: var(--fg-dim); }
         .platform-switch button[aria-selected="true"] {
@@ -269,6 +276,9 @@
             font-weight: 600;
             margin: 28px 0 14px;
         }
+        @media (max-width: 460px) {
+            h1 { font-size: 36px; }
+        }
         /* Gradient on the second line of the hero — same treatment as the
            OG/social card so the look matches when people share the page. */
         h1 .accent {
@@ -305,10 +315,8 @@
             color: var(--fg-faint);
             font-size: 13px;
         }
-        /* Platform download row — Mac and iPhone CTAs sit side by side. On
-           narrow viewports they stack so neither badge gets squashed. The
-           macOS .cta keeps its existing pill shape; the App Store badge is
-           the standard black Apple-style pill. */
+        /* Platform download row. On narrow viewports the columns stack so
+           neither the macOS pill nor the App Store badge gets squashed. */
         .download-row {
             display: flex;
             flex-wrap: wrap;
@@ -375,7 +383,7 @@
         }
         /* In-situ product screenshot — reuses .demo-frame for the bordered,
            shadowed, rounded chrome, wrapped in a <figure> so it can carry a
-           caption. Used by the Scratchpad section. */
+           caption. */
         figure.shot {
             margin: 24px 0 0;
         }
@@ -385,6 +393,50 @@
             color: var(--fg-dim);
             line-height: 1.5;
             text-align: center;
+        }
+        /* ---- Screenshot placeholder slots -------------------------------
+           A slot whose <img> carries `data-shot="…"` instead of `src="…"`
+           renders as an obviously-unfinished dashed frame with a label,
+           and requests nothing over the network. To activate a slot, take
+           the screenshot, drop it at the path named in data-shot, and
+           rename that one attribute to `src`. The image then shows and
+           .shot-pending hides itself (adjacent-sibling rule below); drop
+           the `shot--placeholder` class from the <figure> to lose the
+           dashed border too.
+           ------------------------------------------------------------- */
+        figure.shot--placeholder .demo-frame {
+            border: 2px dashed color-mix(in oklab, var(--accent) 38%, var(--border));
+            background: color-mix(in oklab, var(--accent) 4%, var(--card));
+            box-shadow: none;
+        }
+        figure.shot img:not([src]) { display: none; }
+        figure.shot img[src] + .shot-pending { display: none; }
+        .shot-pending {
+            margin: 0;
+            padding: 44px 24px 46px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .shot-pending .shot-pending-label {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--fg-dim);
+            max-width: 460px;
+            line-height: 1.4;
+        }
+        .shot-pending .shot-pending-tag {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            background: color-mix(in oklab, var(--accent) 12%, transparent);
+            border-radius: 999px;
+            padding: 3px 10px;
         }
         /* "Watch the walkthrough" link under the demo. Plain anchor with
            an inline SVG play glyph — no YouTube thumbnail or iframe, so
@@ -465,8 +517,11 @@
             max-width: 620px;
             margin: 0 0 28px;
         }
-        /* Two-column grid used by Assistant mode (REPLACE/DRAFT) and the
-           local-first trade-off cards. Collapses on narrow viewports. */
+        section > p {
+            max-width: 620px;
+        }
+        /* Two-column grid used by the mode cards and the trade-off cards.
+           Collapses on narrow viewports. */
         .two-col {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -496,9 +551,9 @@
         .tradeoff-card ul li { margin: 8px 0; }
         .tradeoff-card ul li strong { color: var(--fg); font-weight: 600; }
         .tradeoff-card.pros { border-color: color-mix(in oklab, var(--accent) 35%, var(--border)); }
-        /* Mode cards (Replace / Draft) — the heading itself becomes a small
-           tinted pill, so the per-mode colour is clearly carried by the
-           label rather than by a coloured stripe on the card. */
+        /* Mode cards — the heading itself becomes a small tinted pill, so
+           the per-mode colour is carried by the label rather than by a
+           coloured stripe on the card. */
         .mode {
             background: var(--card);
             border: 1px solid var(--border);
@@ -524,11 +579,78 @@
             font-size: 15px;
             line-height: 1.55;
         }
+        /* Say → Get example pair. Used inside the style cards so every
+           claim about "how much the AI is allowed to touch" is shown
+           rather than described. */
+        .ba {
+            margin: 14px 0 0;
+            display: grid;
+            gap: 7px;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+        }
+        .ba p {
+            margin: 0;
+            display: grid;
+            grid-template-columns: 34px 1fr;
+            gap: 10px;
+            align-items: baseline;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .ba p b {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 9.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--fg-faint);
+        }
+        .ba .said span { color: var(--fg-dim); font-style: italic; }
+        .ba .got span { color: var(--fg); }
+        .ba .got b { color: var(--accent); }
+        /* Spoken cue → typed result table. Two-column grid: label |
+           examples. */
+        .cue-list {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 10px 20px;
+            margin: 0 0 24px;
+            padding: 16px 18px 15px;
+            background: color-mix(in oklab, var(--accent) 5%, var(--bg));
+            border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--border));
+            border-radius: 10px;
+            align-items: baseline;
+        }
+        .cue-list dt {
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: color-mix(in oklab, var(--accent) 85%, var(--fg));
+            margin: 0;
+        }
+        .cue-list dd {
+            margin: 0;
+            font-size: 13.5px;
+            color: var(--fg-dim);
+            line-height: 1.6;
+        }
+        .cue-list dd b { color: var(--fg); font-weight: 500; }
+        @media (max-width: 460px) {
+            .cue-list {
+                grid-template-columns: 1fr;
+                gap: 2px;
+            }
+            .cue-list dt { margin-top: 10px; }
+            .cue-list dt:first-of-type { margin-top: 0; }
+        }
         /* Models table — and Requirements per-platform sub-headings, which
            use the same compact rounded h3 treatment so the visual rhythm
            between sections is consistent. */
         .models h3,
-        #requirements h3 {
+        .reqs-section h3 {
             font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
             font-size: 15px;
             font-weight: 600;
@@ -537,9 +659,7 @@
             letter-spacing: 0;
             margin: 28px 0 10px;
         }
-        /* First sub-heading inside Requirements sits directly under the h2
-           and doesn't want the 28px top margin its siblings get. */
-        #requirements h3:first-of-type { margin-top: 0; }
+        .reqs-section h3:first-of-type { margin-top: 0; }
         .table-wrap {
             overflow-x: auto;
             border: 1px solid var(--border);
@@ -586,6 +706,7 @@
             color: var(--fg-faint);
             font-size: 13px;
             line-height: 1.55;
+            max-width: 620px;
         }
         /* RAM guidance callouts. `.callout` is the base (subtle tinted box);
            `.callout.warn` ramps the colour up to amber so the "this won't
@@ -599,6 +720,7 @@
             font-size: 14px;
             line-height: 1.55;
             color: var(--fg);
+            max-width: 620px;
         }
         .callout strong { font-weight: 600; }
         .callout.warn {
@@ -609,24 +731,6 @@
             .callout.warn {
                 background: color-mix(in oklab, #f59e0b 14%, var(--bg));
             }
-        }
-        /* "Very early preview" pill on the Meetings heading — same amber as
-           .callout.warn so the heading badge and the caveat box read as one
-           signal. */
-        .preview-pill {
-            display: inline-block;
-            vertical-align: baseline;
-            margin-left: 8px;
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            padding: 2px 8px;
-            border-radius: 999px;
-            color: #92400e;
-            background: color-mix(in oklab, #f59e0b 22%, transparent);
-        }
-        @media (prefers-color-scheme: dark) {
-            .preview-pill { color: #fbbf24; }
         }
         .ram-tiers {
             display: grid;
@@ -722,220 +826,16 @@
             }
             .author-avatar { width: 96px; height: 96px; }
         }
-        .pipeline-footnote {
-            margin: 24px 0 0;
-            color: var(--fg-faint);
-            font-size: 14px;
-            line-height: 1.55;
-        }
-        /* ============================================================
-           Alternative compact pipeline diagram. Sits below the detailed
-           waterfall so the two designs can be compared. Each stage is a
-           compact tile; clicking a tile loads its description into the
-           single detail panel below. JS handles the active state and
-           detail-panel content swap.
-           ============================================================ */
-        .pipe-flow {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 8px;
-            margin: 0 0 24px;
-        }
-        @media (max-width: 720px) {
-            .pipe-flow { grid-template-columns: repeat(3, 1fr); }
-        }
-        @media (max-width: 460px) {
-            .pipe-flow { grid-template-columns: repeat(2, 1fr); }
-        }
-        .pipe-tile {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 10px;
-            padding: 18px 10px 14px;
-            background: var(--card);
-            border: 1.5px solid var(--border);
-            border-radius: 14px;
-            cursor: pointer;
-            font-family: inherit;
-            color: var(--fg);
-            text-align: center;
-            transition: transform 0.14s ease, border-color 0.14s ease,
-                        background 0.14s ease, box-shadow 0.14s ease;
-            --stage-color: var(--accent);
-        }
-        .pipe-tile:hover {
-            transform: translateY(-2px);
-            border-color: color-mix(in oklab, var(--stage-color) 45%, var(--border));
-        }
-        .pipe-tile:focus-visible {
-            outline: 2px solid var(--stage-color);
-            outline-offset: 3px;
-        }
-        .pipe-tile.active {
-            border-color: var(--stage-color);
-            background: color-mix(in oklab, var(--stage-color) 7%, var(--card));
-            box-shadow: 0 6px 18px -10px color-mix(in oklab, var(--stage-color) 70%, transparent);
-        }
-        /* Stage-index badge in the top-left corner — communicates the
-           pipeline order at a glance even when tiles wrap onto multiple
-           grid rows. */
-        .pipe-tile::before {
-            content: attr(data-step);
-            position: absolute;
-            top: 8px;
-            left: 10px;
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 10px;
-            font-weight: 700;
-            color: var(--fg-faint);
-            letter-spacing: 0.04em;
-        }
-        .pipe-icon-lg {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            display: grid;
-            place-items: center;
-            background: color-mix(in oklab, var(--stage-color) 16%, transparent);
-            color: var(--stage-color);
-            box-shadow: 0 0 0 1px color-mix(in oklab, var(--stage-color) 18%, transparent);
-        }
-        .pipe-icon-lg svg { width: 22px; height: 22px; }
-        .pipe-name {
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 13.5px;
-            font-weight: 600;
-            color: var(--fg);
-        }
-        .pipe-meta {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 4px;
-        }
-        .tile-pill {
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 9px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            padding: 2px 7px;
-            border-radius: 999px;
-            white-space: nowrap;
-        }
-        .tile-pill.stt   { background: color-mix(in oklab, #007AFF 14%, transparent); color: #007AFF; }
-        .tile-pill.det   { background: color-mix(in oklab, #34C759 14%, transparent); color: #34C759; }
-        .tile-pill.llm   { background: color-mix(in oklab, #AF52DE 14%, transparent); color: #AF52DE; }
-        .tile-pill.opt   { background: color-mix(in oklab, var(--fg-faint) 14%, transparent); color: var(--fg-faint); }
-        /* Detail panel — single slot that swaps content based on the
-           clicked tile. No coloured-stripe-on-the-side chrome (too
-           dashboard-y); the cloned stage icon in the head carries the
-           identity, plus a faint stage-tinted drop shadow for depth that
-           matches the active tile treatment. */
-        .pipe-detail {
-            position: relative;
-            padding: 22px 24px 24px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            --stage-color: var(--accent);
-            box-shadow: 0 12px 30px -22px color-mix(in oklab, var(--stage-color) 65%, transparent);
-            transition: box-shadow 0.2s ease;
-        }
-        .pipe-detail-head {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin: 0 0 14px;
-        }
-        /* Icon cloned from the active tile into the panel head — same
-           component, sized down a touch so it sits beside the title
-           rather than dominating it. */
-        .pipe-detail-head .pipe-icon-lg {
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-        }
-        .pipe-detail-head .pipe-icon-lg svg {
-            width: 19px;
-            height: 19px;
-        }
-        .pipe-detail-title {
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 19px;
-            font-weight: 600;
-            color: var(--fg);
-            margin: 0;
-        }
-        .pipe-detail-desc {
-            margin: 0;
-            color: var(--fg-dim);
-            font-size: 14.5px;
-            line-height: 1.55;
-        }
-        .pipe-detail-guard {
-            display: block;
-            margin-top: 14px;
-            color: var(--fg-faint);
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .pipe-detail-guard strong {
-            color: var(--fg-dim);
-            font-weight: 600;
-        }
-        /* Spoken-cue category breakdown — used inside the Substitute stage's
-           detail description. Two-column grid: label | examples. Picks up
-           the active stage colour from the detail panel's --stage-color. */
-        .cue-list {
-            display: grid;
-            grid-template-columns: max-content 1fr;
-            gap: 10px 20px;
-            margin: 16px 0 4px;
-            padding: 16px 18px 15px;
-            background: color-mix(in oklab, var(--stage-color) 5%, var(--bg));
-            border: 1px solid color-mix(in oklab, var(--stage-color) 20%, var(--border));
-            border-radius: 10px;
-            align-items: baseline;
-        }
-        .cue-list dt {
-            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: color-mix(in oklab, var(--stage-color) 85%, var(--fg));
-            margin: 0;
-        }
-        .cue-list dd {
-            margin: 0;
-            font-size: 13.5px;
-            color: var(--fg-dim);
-            line-height: 1.55;
-        }
-        @media (max-width: 460px) {
-            .cue-list {
-                grid-template-columns: 1fr;
-                gap: 2px;
-            }
-            .cue-list dt {
-                margin-top: 8px;
-            }
-            .cue-list dt:first-of-type {
-                margin-top: 0;
-            }
-        }
-        /* Followup paragraph after the cue-list — slightly tighter top
-           margin than a standalone <p> would have, so the visual rhythm
-           between the list and the closing prose is right. */
-        .pipe-detail-desc + .cue-list { margin-top: 14px; }
-        .cue-list + .pipe-detail-desc { margin-top: 12px; }
         .features {
             display: grid;
             gap: 14px;
+        }
+        /* Two-up variant for the longer problem grids. */
+        .features.pair {
+            grid-template-columns: 1fr 1fr;
+        }
+        @media (max-width: 640px) {
+            .features.pair { grid-template-columns: 1fr; }
         }
         .feature {
             background: var(--card);
@@ -952,6 +852,15 @@
             margin: 0;
             color: var(--fg-dim);
             font-size: 14.5px;
+        }
+        .feature p + p { margin-top: 8px; }
+        .feature p code,
+        .lede code,
+        section > p code {
+            background: color-mix(in oklab, var(--fg) 6%, transparent);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 12.5px;
         }
         .reqs {
             display: flex;
@@ -993,6 +902,55 @@
             border-radius: 50%;
             background: var(--accent);
             flex-shrink: 0;
+        }
+        /* Cross-link card — points from one app's stream at another's tab.
+           Reads as a signpost, not a second hero. */
+        .crosslink {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            padding: 20px 22px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.12s ease, border-color 0.12s ease;
+        }
+        .crosslink:hover {
+            transform: translateY(-1px);
+            border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+        }
+        .crosslink img {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            flex-shrink: 0;
+        }
+        .crosslink .crosslink-text { flex: 1 1 auto; }
+        .crosslink strong {
+            display: block;
+            font-family: "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--fg);
+            margin-bottom: 2px;
+        }
+        .crosslink span {
+            display: block;
+            font-size: 14px;
+            color: var(--fg-dim);
+            line-height: 1.5;
+        }
+        .crosslink .crosslink-arrow {
+            color: var(--fg-faint);
+            font-size: 18px;
+            flex-shrink: 0;
+            transition: transform 0.12s ease, color 0.12s ease;
+        }
+        .crosslink:hover .crosslink-arrow { transform: translateX(2px); color: var(--accent); }
+        @media (max-width: 460px) {
+            .crosslink { flex-wrap: wrap; }
         }
         /* FAQ — collapsible <details> blocks styled to match the rest of
            the card-based sections. Native disclosure triangle is hidden;
@@ -1083,12 +1041,11 @@
         footer a:hover { color: var(--fg); }
         footer .sep { color: var(--border); }
 
-        /* iPhone screenshot strip — sits between #ios-modes and
-           #ios-pipeline. Horizontal scroll on mobile so phones don't
-           squash; even row on desktop. Each shot is the raw simulator
-           capture at 276×600, with rounded corners + a soft shadow
-           rather than a phone-frame chrome (cleaner, less assets to
-           maintain than chasing Apple's frame kit). */
+        /* iPhone screenshot strip. Horizontal scroll on mobile so phones
+           don't squash; wrapped row on desktop. Each shot is the raw
+           simulator capture scaled to 276×600, with rounded corners + a
+           soft shadow rather than a phone-frame chrome (cleaner, less
+           assets to maintain than chasing Apple's frame kit). */
         .ios-screens-row {
             display: flex;
             gap: 24px;
@@ -1130,7 +1087,7 @@
         }
         @media (min-width: 920px) {
             /* On wider screens, hide the scroll affordance and centre
-               the row — desktops fit all four shots comfortably. */
+               the row — desktops fit the shots comfortably. */
             .ios-screens-row {
                 overflow-x: visible;
                 justify-content: center;
@@ -1138,26 +1095,32 @@
             }
         }
     </style>
-    <!-- Set body.data-platform before paint so we never flash both
-         content streams together while the deferred script downloads.
-         Inline, synchronous, tiny. Mirrors the logic at the bottom of
-         the file but only sets the attribute on <html> (since <body>
-         isn't parsed yet) — the bottom script then reconciles. -->
+    <!-- Set html.data-platform before paint so we never flash two content
+         streams together while the deferred script downloads. Inline,
+         synchronous, tiny. Mirrors the logic at the bottom of the file but
+         only sets the attribute on <html> (since <body> isn't parsed yet) —
+         the bottom script then reconciles. -->
     <script>
         (function () {
             var h = (location.hash || '').toLowerCase();
-            var platform = (h === '#ios' || h === '#iphone') ? 'ios' : 'mac';
+            var platform = 'mac';
+            if (h === '#iphone' || h === '#tradeoff-ios' || h.indexOf('#ios') === 0) platform = 'ios';
+            else if (h.indexOf('#meetings') === 0) platform = 'meetings';
             document.documentElement.setAttribute('data-platform', platform);
         })();
     </script>
     <style>
         /* Mirror the body[data-platform=...] rules on <html> so the
-           pre-paint inline script can already hide the inactive stream
+           pre-paint inline script can already hide the inactive streams
            without waiting for the body to parse. The deferred script
            later promotes the attribute to <body>; both selectors stay
            valid so there's no flash. */
+        html[data-platform="mac"] .platform-meetings,
         html[data-platform="mac"] .platform-ios { display: none !important; }
-        html[data-platform="ios"] .platform-mac { display: none !important; }
+        html[data-platform="meetings"] .platform-mac,
+        html[data-platform="meetings"] .platform-ios { display: none !important; }
+        html[data-platform="ios"] .platform-mac,
+        html[data-platform="ios"] .platform-meetings { display: none !important; }
     </style>
     <!-- Fathom - beautiful, simple website analytics -->
     <script src="https://cdn.usefathom.com/script.js" data-site="EKDHPBIR" defer></script>
@@ -1167,12 +1130,10 @@
 <nav class="toc platform-mac" aria-label="On this page (Mac)">
     <p class="toc-label">On this page</p>
     <ul>
-        <li><a href="#hotkeys">Two hotkeys</a></li>
-        <li><a href="#pipeline">The pipeline</a></li>
-        <li><a href="#modes">Dictation modes</a></li>
-        <li><a href="#context">Context awareness</a></li>
+        <li><a href="#fixes">The small stuff</a></li>
+        <li><a href="#modes">Styles &amp; modes</a></li>
         <li><a href="#assistant">Assistant mode</a></li>
-        <li><a href="#meetings">Dictator Meetings</a></li>
+        <li><a href="#fits">Fits how you work</a></li>
         <li><a href="#scratchpad">Scratchpad</a></li>
         <li><a href="#models">Choose your models</a></li>
         <li><a href="#tradeoff">Local-first, honestly</a></li>
@@ -1181,11 +1142,25 @@
         <li><a href="#requirements">Requirements</a></li>
     </ul>
 </nav>
+<nav class="toc platform-meetings" aria-label="On this page (Dictator Meetings)">
+    <p class="toc-label">On this page</p>
+    <ul>
+        <li><a href="#meetings-what">What it does</a></li>
+        <li><a href="#meetings-coach">The private coach</a></li>
+        <li><a href="#meetings-files">Just files</a></li>
+        <li><a href="#meetings-writer">Who writes the notes</a></li>
+        <li><a href="#meetings-tradeoff">Local-first, honestly</a></li>
+        <li><a href="#why">Why I built this</a></li>
+        <li><a href="#meetings-faq">FAQ</a></li>
+        <li><a href="#meetings-requirements">Requirements</a></li>
+    </ul>
+</nav>
 <nav class="toc platform-ios" aria-label="On this page (iPhone)">
     <p class="toc-label">On this page</p>
     <ul>
         <li><a href="#ios-keyboard">The keyboard</a></li>
-        <li><a href="#ios-modes">Dictate &amp; Assist</a></li>
+        <li><a href="#ios-modes">In the app</a></li>
+        <li><a href="#ios-fixes">The small stuff</a></li>
         <li><a href="#ios-screens">Screens</a></li>
         <li><a href="#ios-pipeline">How it works</a></li>
         <li><a href="#tradeoff-ios">Local-first, honestly</a></li>
@@ -1197,11 +1172,14 @@
 <div class="wrap">
     <!-- Platform toggle. Real <button>s in an ARIA tablist so screen readers
          announce the role; hash-routing in JS keeps deep links working
-         (dictator.robgough.net/#ios lands on iPhone). -->
-    <div class="platform-switch" role="tablist" aria-label="Choose platform">
+         (dictator.robgough.net/#meetings lands on Dictator Meetings). -->
+    <div class="platform-switch" role="tablist" aria-label="Choose app">
         <button type="button" role="tab" data-platform-target="mac" aria-selected="true">Mac</button>
+        <button type="button" role="tab" data-platform-target="meetings" aria-selected="false">Meetings</button>
         <button type="button" role="tab" data-platform-target="ios" aria-selected="false">iPhone</button>
     </div>
+
+    <!-- ============ Mac content stream ============ -->
 
     <header class="platform-mac">
         <div class="brand-row">
@@ -1209,7 +1187,7 @@
             <span class="logo">Dictator</span>
         </div>
         <h1>Talk to your Mac.<br><span class="accent">Not the cloud.</span></h1>
-        <p class="tagline">A free, open-source local-first dictation app for the Mac. Hold a hotkey, speak, release — and the text lands wherever your cursor is. Transcription and language models run entirely on-device.</p>
+        <p class="tagline">Hold a key, say what you mean, let go. The words land where your cursor is — punctuated, tidied, and spelled the way the rest of your document spells things. Speech and language models run on your Mac. Free, open source, no account.</p>
 
         <div class="download-row">
             <div class="download-col">
@@ -1224,56 +1202,18 @@
         </p>
 
         <ul class="feature-chips" aria-label="At a glance">
-            <li class="chip">Fully on-device</li>
+            <li class="chip">Nothing leaves your Mac</li>
             <li class="chip">Any text field, any app</li>
-            <li class="chip">Context-aware</li>
-            <li class="chip">Custom modes, per app</li>
-            <li class="chip">Multi-turn assistant</li>
-            <li class="chip">Meetings (separate app)</li>
-            <li class="chip">Floating scratchpad</li>
+            <li class="chip">Spoken punctuation &amp; emoji</li>
+            <li class="chip">Fillers dropped</li>
+            <li class="chip">Paragraphs, not a wall of text</li>
+            <li class="chip">A style per app</li>
+            <li class="chip">Edit text by talking to it</li>
             <li class="chip">Free &amp; open source</li>
         </ul>
 
         <p class="preview-note">
             <strong>Active development.</strong> Things may still be rough in spots, and some behaviour will change between versions. Feedback (bugs, papercuts, "this should do X") is genuinely welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
-        </p>
-    </header>
-
-    <header class="platform-ios">
-        <div class="brand-row">
-            <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
-            <span class="logo">Dictator</span>
-        </div>
-        <h1>Talking to yourself.<br><span class="accent">No cloud.</span></h1>
-        <p class="tagline">A dictation keyboard for iPhone. Tap once to dictate, tap again to reshape what's already there with a spoken instruction. Transcription runs on the Apple Neural Engine; the cleanup pass uses Apple Intelligence. Nothing leaves the device.</p>
-
-        <div class="download-row">
-            <div class="download-col">
-                <a class="app-store-badge"
-                   href="https://apps.apple.com/app/dictator-voice-typing/id6772823676"
-                   aria-label="Download Dictator for iPhone on the App Store">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 156 52" role="img" aria-hidden="true" focusable="false">
-                        <rect x="0" y="0" width="156" height="52" rx="9" ry="9" fill="#000"/>
-                        <rect x="0.5" y="0.5" width="155" height="51" rx="8.5" ry="8.5" fill="none" stroke="#a6a6a6" stroke-width="1"/>
-                        <path fill="#fff" d="M30.6 27.1c0-3 2.5-4.5 2.6-4.5-1.4-2-3.6-2.3-4.4-2.3-1.9-.2-3.6 1.1-4.6 1.1-.9 0-2.4-1.1-3.9-1-2 0-3.9 1.2-4.9 3-2.1 3.7-.5 9.1 1.5 12.1 1 1.5 2.2 3.1 3.8 3 1.5-.1 2-1 3.9-1 1.8 0 2.3 1 3.9.9 1.6 0 2.6-1.5 3.6-2.9 1.1-1.7 1.6-3.3 1.6-3.4-.1 0-3.1-1.2-3.1-4.7zm-3-8.7c.8-1 1.4-2.5 1.2-3.9-1.2.1-2.7.8-3.6 1.8-.8.9-1.5 2.4-1.3 3.8 1.4.1 2.8-.7 3.7-1.7z"/>
-                        <text x="42" y="18" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="8" letter-spacing="0.2">Download on the</text>
-                        <text x="42" y="38" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" letter-spacing="0.1">App Store</text>
-                    </svg>
-                </a>
-                <span class="col-meta">iPhone with Apple Intelligence · iOS 26+</span>
-            </div>
-        </div>
-
-        <ul class="feature-chips" aria-label="At a glance">
-            <li class="chip">Fully on-device</li>
-            <li class="chip">System keyboard</li>
-            <li class="chip">Dictate &amp; Assist</li>
-            <li class="chip">Apple Neural Engine</li>
-            <li class="chip">~460 MB total</li>
-        </ul>
-
-        <p class="preview-note">
-            <strong>Out now on the App Store.</strong> Spotted a bug or a papercut? Email <a href="mailto:hello@robgough.net">hello@robgough.net</a> — feedback is genuinely welcome.
         </p>
     </header>
 
@@ -1304,191 +1244,238 @@
         </p>
     </section>
 
-    <section id="hotkeys" class="platform-mac">
-        <h2>Two hotkeys</h2>
-        <p class="lede">Two hotkeys, two jobs. Dictation drops new text where the cursor is. Assistant edits the text that's already there.</p>
-        <p>You bind each hotkey in Settings — typically a Fn key for dictation, a different chord for assistant. The menu-bar HUD tells you which one is live while you hold the key, and which pipeline stage it's currently working on.</p>
+    <section id="fixes" class="platform-mac">
+        <h2>The small stuff</h2>
+        <p class="lede">Getting the words right is the easy half. The annoying half is everything around them — the "um"s, the literal word "comma", the stray capital in the middle of a sentence, the wall of text.</p>
+        <p>Here's the list of things you'd otherwise spend the rest of your life fixing by hand.</p>
 
-        <div class="two-col">
-            <div class="mode" style="--mode-color: #007AFF;">
-                <h3>Dictation</h3>
-                <p>Hold the dictation hotkey, speak, release — the transcript (plus any cleanup passes you've enabled) lands at your cursor. Works in any text field, in any app. The next section walks through the pipeline.</p>
+        <dl class="cue-list">
+            <dt>Punctuation</dt>
+            <dd>"comma" → <b>,</b> · "new paragraph" → <b>a blank line</b> · "open quote"…"close quote" → <b>“ ”</b> · "em dash" → <b>—</b></dd>
+            <dt>Emoji</dt>
+            <dd>"fire emoji" → <b>🔥</b> · "thumbs up emoji" → <b>👍</b> — every standard emoji by name, around 3,700 of them</dd>
+            <dt>Times</dt>
+            <dd>"ten thirty AM" → <b>10:30am</b> · "sixteen hundred hours" → <b>1600 hours</b></dd>
+            <dt>Money</dt>
+            <dd>"five dollars" → <b>$5</b> · "twenty euros" → <b>€20</b> · "sixteen hundred pounds" → <b>£1600</b></dd>
+            <dt>Numbers</dt>
+            <dd>"twenty thousand and sixty two" → <b>20062</b> · "four four seven seven seven" → <b>44777</b> · but "four times a day" stays in words, because that's how you'd write it</dd>
+        </dl>
+
+        <p style="margin: 0 0 24px;">All five families are independent switches, so you can keep punctuation and turn emoji off. They're deterministic — no model involved — so they work even with every AI pass disabled.</p>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>The "um"s go</h3>
+                <p>Every style except Raw drops "um", "uh", "er" and "erm" on the way past. Words that carry actual meaning or voice — "yeah", "okay", "so" — stay, unless you've asked for the more aggressive Polished style.</p>
             </div>
-            <div class="mode" style="--mode-color: #5e5ce6;">
-                <h3>Assistant</h3>
-                <p>A separate hotkey, optionally with text selected. Speak an instruction — Dictator either replaces the selection in place ("tighten this") or drafts something new to the clipboard ("reply with a polite no").</p>
+            <div class="feature">
+                <h3>A question stays a question</h3>
+                <p>Dictate "why is the build failing?" into a document and a naive cleanup model will helpfully try to <em>answer</em> you. Question-shaped dictation skips the rewrite entirely, and the prompts are walled off from acting on instructions found in your speech — "tell me a joke" gets punctuated, not performed.</p>
+            </div>
+            <div class="feature">
+                <h3>Chat casing, in chat</h3>
+                <p>A two-word Slack reply shouldn't arrive as "Ok." — nobody types that. In the Messages style, six words or fewer keep their casual casing and lose the trailing full stop. "I" keeps its capital, obviously.</p>
+            </div>
+            <div class="feature">
+                <h3>No phantom leading space</h3>
+                <p>Empty compose boxes in Signal and in Firefox's web editors expose their greyed-out "Message" placeholder as if it were real text, so a naive dictation tool lands with a stray space in front of it. Dictator checks three separate signals before deciding there's anything before your cursor.</p>
+            </div>
+            <div class="feature">
+                <h3>Lands mid-sentence properly</h3>
+                <p>Dictating into the middle of a line adds a leading space only if the words would otherwise glue onto the previous one, drops the automatic capital and the trailing full stop when you're continuing a sentence, and never doubles a space that was already there.</p>
+            </div>
+            <div class="feature">
+                <h3>Names spelled your way</h3>
+                <p>Dictator reads a little of the text around your cursor and hands the distinctive names and terms to the model, so "Siobhán" comes back with her accent on, even though speech recognition dropped it. Nothing read this way is stored or transcribed.</p>
+            </div>
+            <div class="feature">
+                <h3>A ramble becomes paragraphs</h3>
+                <p>Past roughly 60 words you get paragraph breaks. The model is only allowed to reply with the sentence <em>numbers</em> that should start a new paragraph, so applying it is a pure whitespace edit — it is structurally impossible for a word to change. Very long dictations are handled in chunks so the ending doesn't get quietly summarised.</p>
+            </div>
+            <div class="feature">
+                <h3>A safety net when it goes wrong</h3>
+                <p>Every AI pass is checked afterwards: enough of your original words have to survive, and the text isn't allowed to balloon. If a pass fails the check it's thrown away, the earlier version is used, and the HUD tells you it happened. Nothing gets silently rewritten into something you didn't say.</p>
+            </div>
+            <div class="feature">
+                <h3>Words it always mishears</h3>
+                <p>Your own dictionary handles the names, jargon and the words your accent trips over. There's a mic button in Settings, so you can just say the word it keeps getting wrong and let it fill in the "Heard" side for you.</p>
+            </div>
+            <div class="feature">
+                <h3>Cues, even with no AI at all</h3>
+                <p>Punctuation, numbers, times, currency, emoji and your dictionary are plain deterministic text replacement. Turn the language model off completely and all of it still works.</p>
             </div>
         </div>
-    </section>
 
-    <section id="pipeline" class="pipeline platform-mac">
-        <h2>The pipeline</h2>
-        <p class="lede">From audio to written text — and the cleanup that makes it readable — all on your Mac.</p>
-        <p>Most dictation apps either stop at the raw transcript or send it through a paid cloud LLM to clean it up. Dictator runs the whole pipeline locally, and every language-model pass after the transcription has a deterministic safety net: if the model drifts beyond a measurable threshold, that pass reverts. Click any stage below to see what happens there.</p>
-
-        <div class="pipe-flow" role="tablist" aria-label="Pipeline stages">
-            <button class="pipe-tile active" type="button" role="tab" data-step="01" data-stage-index="0" aria-selected="true" aria-controls="pipe-detail" style="--stage-color: #007AFF;">
-                <div class="pipe-icon-lg" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-                </div>
-                <div class="pipe-name">Transcribe</div>
-                <div class="pipe-meta">
-                    <span class="tile-pill stt">STT</span>
-                </div>
-            </button>
-            <button class="pipe-tile" type="button" role="tab" data-step="02" data-stage-index="1" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #34C759;">
-                <div class="pipe-icon-lg" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-                </div>
-                <div class="pipe-name">Substitute</div>
-                <div class="pipe-meta">
-                    <span class="tile-pill det">Det</span>
-                    <span class="tile-pill opt">Opt</span>
-                </div>
-            </button>
-            <button class="pipe-tile" type="button" role="tab" data-step="03" data-stage-index="2" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #AF52DE;">
-                <div class="pipe-icon-lg" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 5.4L19 9l-5.4 1.6L12 16l-1.6-5.4L5 9l5.4-1.6z"/><path d="M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7z" opacity="0.7"/></svg>
-                </div>
-                <div class="pipe-name">Format</div>
-                <div class="pipe-meta">
-                    <span class="tile-pill llm">LLM</span>
-                    <span class="tile-pill opt">Opt</span>
-                </div>
-            </button>
-            <button class="pipe-tile" type="button" role="tab" data-step="04" data-stage-index="3" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #FF2D55;">
-                <div class="pipe-icon-lg" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
-                </div>
-                <div class="pipe-name">Grammar</div>
-                <div class="pipe-meta">
-                    <span class="tile-pill llm">LLM</span>
-                    <span class="tile-pill opt">Opt</span>
-                </div>
-            </button>
-            <button class="pipe-tile" type="button" role="tab" data-step="05" data-stage-index="4" aria-selected="false" aria-controls="pipe-detail" style="--stage-color: #30B0C7;">
-                <div class="pipe-icon-lg" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
-                </div>
-                <div class="pipe-name">Structure</div>
-                <div class="pipe-meta">
-                    <span class="tile-pill llm">LLM</span>
-                    <span class="tile-pill opt">Opt</span>
-                </div>
-            </button>
+        <div class="callout">
+            <strong>The text around your cursor stays on your Mac.</strong> It goes to the local model for that one run and is never written to disk. Password fields are never read. Apps that don't expose their text to Accessibility — some Electron apps, Google Docs, terminals — simply work without it; you just lose the extra polish. It's a per-mode switch, on by default.
         </div>
-
-        <div class="pipe-detail" id="pipe-detail" role="tabpanel" aria-live="polite">
-            <!-- Populated by JS on click. Initial render also handled by JS to keep the
-                 content source single. -->
-        </div>
-
-        <p class="pipeline-footnote">The cleanup passes (Format, Grammar, Structure) are the kind of feature most dictation apps charge a subscription for. Here they're included, local, and inspectable.</p>
     </section>
 
     <section id="modes" class="platform-mac">
-        <h2>Dictation modes</h2>
-        <p class="lede">Not every dictation needs the same amount of cleanup. Each mode picks a style — how much the AI is allowed to touch — and you can add your own modes for the contexts you reach for.</p>
-        <p>A style controls the shape of the output; a mode pairs a style with its own extra instructions, spoken-cue settings, and an "auto-activate for these apps" list. Fresh installs seed four modes — Quick, Standard, Polished, and Messages — and you can duplicate or add more from Settings.</p>
+        <h2>Styles &amp; modes</h2>
+        <p class="lede">One cleanup level can't serve both a text to your partner and an email to a client. Pick how much the AI is allowed to touch — per app, if you like.</p>
+        <p>A <strong>style</strong> decides the shape of the output. A <strong>mode</strong> pairs a style with its own extra instructions, its own spoken-cue switches, and a list of apps it should switch itself on for.</p>
 
         <div class="two-col">
             <div class="mode" style="--mode-color: #f59e0b;">
                 <h3>Raw</h3>
-                <p>No AI pass at all. Spoken cues ("comma", "new paragraph", "fire emoji") and your vocabulary substitutions still apply, so it's not literally unprocessed — just the fastest path from speech to pasted text. Quick mode uses this style.</p>
+                <p>No model at all. Spoken cues and your dictionary still apply, so it isn't literally unprocessed — it's the fastest path from speech to text, and the one to use for languages the cleanup models handle poorly.</p>
+                <div class="ba">
+                    <p class="said"><b>Say</b><span>"let's ship it friday comma before the demo"</span></p>
+                    <p class="got"><b>Get</b><span>let's ship it friday, before the demo</span></p>
+                </div>
+            </div>
+            <div class="mode" style="--mode-color: #007AFF;">
+                <h3>Clean</h3>
+                <p>Punctuation, capitals, fillers gone. Every content word is kept — nothing paraphrased, nothing reordered. A couple of unambiguous typos (a missing apostrophe, "the the") get fixed.</p>
+                <div class="ba">
+                    <p class="said"><b>Say</b><span>"um so we should probably ship this on friday i think before the demo"</span></p>
+                    <p class="got"><b>Get</b><span>So we should probably ship this on Friday, I think, before the demo.</span></p>
+                </div>
             </div>
             <div class="mode" style="--mode-color: #10b981;">
                 <h3>Polished</h3>
-                <p>Punctuation, grammar, and structure, all cleaned up — hesitation fillers and false starts dropped by default. The most AI touches a transcript gets.</p>
-            </div>
-        </div>
-
-        <p style="margin-top: 18px;">Between those two sit Clean (punctuation and formatting, lighter-touch than Polished) and Messages (casual register kept, no trailing full stop on short one-liners, never invents a greeting or sign-off — built for chat apps). Custom drops the built-in styles entirely and runs a prompt you write yourself. Every built-in style shares one set of prompts, so improvements reach every mode that uses it automatically; a mode's own Extra instructions box layers your tweaks on top without forking the whole prompt.</p>
-
-        <p>Long dictations (roughly 60 words and up) get paragraph breaks automatically — the AI only chooses where to break, it can't reword a single line — and very long ones are chunked so the ending doesn't get truncated or quietly summarised.</p>
-
-        <p>Cycle the active mode mid-recording with a key (Tab by default) — start in Polished, decide partway through it should've been Raw, tap once and the rest of the recording switches. Modes can also auto-activate based on the focused app: bind a Slack mode to Slack, an Email mode to Mail.app, and Dictator picks the right one as you start to record.</p>
-    </section>
-
-    <section id="context" class="platform-mac">
-        <h2>Context awareness</h2>
-        <p class="lede">Both hotkeys can see a little of the text around your cursor — read through the same Accessibility access used for pasting — so what Dictator writes fits what's already on the page.</p>
-        <p>When you start a dictation or trigger the assistant, Dictator takes a quick, read-only look at the text either side of the insertion point or selection, and mines the distinctive names and terms from a wider sweep of the document. None of it is transcribed or stored; it's handed to the local model purely as context for that one run, then discarded.</p>
-
-        <div class="two-col">
-            <div class="mode" style="--mode-color: #007AFF;">
-                <h3>When you dictate</h3>
-                <p>Names and terminology come out spelled the way the rest of your document spells them — an accented name like Siobhán is restored even when speech recognition drops the accent. And dictating into the middle of a sentence joins cleanly: the leading space, capitalisation, and trailing full stop adapt to exactly where the caret sits, instead of a stray capital or a doubled space.</p>
+                <p>Clean's rules, plus discourse fillers ("you know", "kind of"), false starts corrected, and wordiness tightened. Reads as written English rather than a transcript. One pass, not two, so it isn't slower.</p>
+                <div class="ba">
+                    <p class="said"><b>Say</b><span>"we need three — sorry, four people, and, you know, due to the fact that the demo is friday"</span></p>
+                    <p class="got"><b>Get</b><span>We need four people, and because the demo is on Friday…</span></p>
+                </div>
             </div>
             <div class="mode" style="--mode-color: #5e5ce6;">
-                <h3>When you ask the assistant</h3>
-                <p>The assistant sees what surrounds your selection too, so "reply to this" knows which message you mean and "make a list here" knows what the document is about — and it spells names and terms to match. Always on whenever Accessibility can read the app.</p>
+                <h3>Messages</h3>
+                <p>Built for chat. Never adds a greeting or a sign-off you didn't say. "lol", "ok", "omg" and "idk" survive exactly as spoken. A single short sentence gets no full stop — a "?" or "!" is kept.</p>
+                <div class="ba">
+                    <p class="said"><b>Say</b><span>"yeah ok sounds good"</span></p>
+                    <p class="got"><b>Get</b><span>yeah ok sounds good</span></p>
+                </div>
             </div>
         </div>
 
-        <div class="callout" style="margin-top: 18px;">
-            <strong>Stays on your Mac.</strong> The surrounding text only ever goes to the local model and is never written to disk. Password fields are never read, and apps that don't expose their text to Accessibility (some Electron apps, Google Docs, terminals) simply work without it — nothing breaks, you just lose the extra polish. For dictation it's a per-mode toggle, on by default; the assistant uses it whenever it can.
-        </div>
+        <p style="margin-top: 18px;"><strong>Custom</strong> drops the built-in styles and runs a prompt you write yourself. Every built-in style shares one set of prompts, so improvements reach every mode using it — and a mode's <strong>Extra instructions</strong> box layers your own tweak on top without forking the whole thing. "Always use British spelling" is one line, and it survives every future update.</p>
+
+        <p>Modes can auto-activate for the app you're in: a Messages mode bound to Slack and Signal, a Polished mode bound to Mail. Or cycle mid-recording with a key (Tab by default) — start in Polished, realise halfway through it should have been Raw, tap once and the rest of the recording switches.</p>
+
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/mac/modes.png"
+                     alt="Dictator's Settings window on the Dictation → Modes pane: a reorderable list of modes, each with a style badge and the apps it auto-activates for."
+                     width="1600" height="1100" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: Settings → Dictation → Modes — the mode list with style badges and per-app chips</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
+            </div>
+            <figcaption>Modes in Settings. Drag to set precedence — the first one whose app list matches what you're typing into wins.</figcaption>
+        </figure>
     </section>
 
-    <section id="assistant" class="assistant platform-mac">
+    <section id="assistant" class="platform-mac">
         <h2>Assistant mode</h2>
-        <p class="lede">A second hotkey for editing text by speaking to it.</p>
-        <p>Hold the assistant hotkey, speak an instruction, release. If you had text selected when you triggered it, Dictator sees both — the selection and the instruction — and the local LLM decides what kind of response you want.</p>
+        <p class="lede">A second hotkey for editing text by talking to it. Select something, say what you want done, let go.</p>
+        <p>If you had text selected, Dictator sees both the selection and your instruction, and works out which of these you meant.</p>
 
         <div class="two-col">
             <div class="mode" style="--mode-color: #5e5ce6;">
                 <h3>Replace</h3>
-                <p>"Tighten this." "Translate to French." "Fix the comma splice." The selection is replaced in place — and Dictator re-selects the new text so you can iterate ("now make it shorter") without reaching for the mouse.</p>
+                <p>"Tighten this." "Translate to French." "Fix the comma splice." The selection is replaced in place — and re-selected afterwards, so you can carry straight on with "now make it shorter" without touching the mouse.</p>
             </div>
             <div class="mode" style="--mode-color: #ff9f0a;">
                 <h3>Draft</h3>
-                <p>"Reply to this with a polite no." "Summarise these notes." "Draft an email about X." The result lands on the clipboard, or in a small floating window you can read and copy from when there's nowhere obvious to paste.</p>
+                <p>"Reply to this with a polite no." "Summarise these notes." The result goes to the clipboard, or a small floating window you can read and copy from — never over the top of something you didn't mean to overwrite.</p>
             </div>
         </div>
 
-        <p style="margin-top: 18px;">Conversations are multi-turn: follow-ups extend the same thread, with automatic compaction once the model's context window starts filling. Recent conversations are one click away in the menu-bar dropdown.</p>
+        <div class="features pair" style="margin-top: 14px;">
+            <div class="feature">
+                <h3>It remembers</h3>
+                <p>Say "remember that I always sign off Cheers, Rob" and it does — from then on. Memory is a plain <code>assistant-memory.md</code> file in your synced folder, so you can read it, edit it, or delete a line you'd rather it forgot. One switch turns it off.</p>
+            </div>
+            <div class="feature">
+                <h3>It knows what day it is</h3>
+                <p>"Draft a note for next Friday" resolves to the actual date. Small thing; the first time a model gets it wrong you notice.</p>
+            </div>
+            <div class="feature">
+                <h3>It has a personality — and it's yours</h3>
+                <p>Warm, direct and dry by default, and fully editable in Settings. It shapes drafts and small talk, but never leaks into your own text when it's rewriting it.</p>
+            </div>
+            <div class="feature">
+                <h3>Conversations, not one-shots</h3>
+                <p>Follow-ups extend the same thread, with automatic compaction when the model's context fills up. Recent conversations are one click away in the menu bar.</p>
+            </div>
+        </div>
+
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/mac/assistant-draft.png"
+                     alt="Assistant mode's small floating result window showing a drafted reply, over the app the text was dictated from."
+                     width="1600" height="1000" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: Assistant mode's floating result window with a drafted reply</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
+            </div>
+            <figcaption>Draft results land in a small floating window when there's nowhere obvious to paste them.</figcaption>
+        </figure>
     </section>
 
-    <section id="meetings" class="meetings platform-mac">
-        <img class="brand-icon" src="media/dictator-meetings-icon.png" alt="" width="64" height="64">
-        <h2>Dictator Meetings</h2>
-        <p class="lede">A separate app for calls: record both sides, get a transcript split by speaker, and have the notes written for you — on your Mac, by default with nothing leaving it.</p>
-        <p>Start a recording and Dictator Meetings captures your microphone and the call audio itself, whichever app the call is in. When it ends you get a transcript with each speaker named, and Markdown notes — summary, discussion, decisions, action items with owners — written by a local model. While the call is still running it keeps a rough first pass of the notes going, so you can glance at what's been agreed without leaving the conversation.</p>
+    <section id="fits" class="platform-mac">
+        <h2>Fits how you work</h2>
+        <p class="lede">The details that decide whether you actually use a dictation app twenty times a day, or twice.</p>
 
-        <div class="download-row">
-            <div class="download-col">
-                <a class="cta" id="download-meetings" href="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.1/Dictator-Meetings.dmg">Download Dictator Meetings →</a>
-                <span class="col-meta">Free · Apple Silicon · macOS 26+ · Works alone or alongside Dictator</span>
+        <div class="features pair">
+            <div class="feature">
+                <h3>Hold it, or tap it</h3>
+                <p>Hold the key past a third of a second and it's classic push-to-talk. A quick tap latches on instead, so a five-minute dictation doesn't mean five minutes of holding a key down. Tap again to stop.</p>
+            </div>
+            <div class="feature">
+                <h3>Esc cancels — and stops there</h3>
+                <p>Hitting Esc to bail out of a dictation used to also close the popover or find bar in the app behind it. Now it's swallowed while the dictation is still cancellable, and passed through the rest of the time.</p>
+            </div>
+            <div class="feature">
+                <h3>Four HUDs, pick your monitor</h3>
+                <p>A notch island that merges into the MacBook notch, a smaller version, a pill at the bottom, or a mini badge. The bottom ones exist because on a tall external display the island sits somewhere you're not looking. A live preview of the transcript runs in the HUD as you speak.</p>
+            </div>
+            <div class="feature">
+                <h3>Sounds you can live with</h3>
+                <p>Five sets — Classic, Glass, Soft, Wood, Minimal — each with a play button so you can audition them without recording anything. A tap on press, a rising pair when the mic goes live, a chord when the text lands.</p>
+            </div>
+            <div class="feature">
+                <h3>History that shows the work</h3>
+                <p>"What did the AI actually change?" is answerable: history keeps every stage a dictation went through, labelled with the pass and the style that produced it — not just the final output.</p>
+            </div>
+            <div class="feature">
+                <h3>Follows you between Macs</h3>
+                <p>Modes, prompts, hotkeys, dictionary, recent dictations and assistant threads live in <code>~/Documents/Dictator/</code>. If that folder is in iCloud Drive or Dropbox they're on your other Mac too. Model choices stay per-machine, because a 16 GB Air and a 64 GB Studio want different answers.</p>
+            </div>
+            <div class="feature">
+                <h3>Actually offline</h3>
+                <p>Once the models are on disk the network is irrelevant — no quiet re-validation call on every load, no "checking for updates" before it'll let you speak. It works on a plane and on hotel wifi that's pretending to work.</p>
+            </div>
+            <div class="feature">
+                <h3>Updates without an App Store</h3>
+                <p>In-app update checks against a signed feed. No review queue between a fix and you having it.</p>
             </div>
         </div>
-        <p class="release-row">
-            Latest release: <a id="latest-meetings-release-link" href="https://github.com/robgough/dictator/releases/tag/meetings-v2026.9.1">v2026.9.1</a>
-            · <a href="https://github.com/robgough/dictator/releases">All releases</a>
-        </p>
 
-        <div class="features">
-            <div class="feature">
-                <h3>Both sides of the call</h3>
-                <p>Your mic on one track, the call's audio on the other — Zoom, Meet, Teams, FaceTime, a browser tab, it doesn't matter. Echo from your speakers is cleaned up afterwards, so headphones are optional.</p>
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/mac/hud-styles.png"
+                     alt="Dictator's Settings window on General → HUD: a gallery of the four HUD styles — notch island, small island, bottom pill and mini badge — with the current one selected."
+                     width="1600" height="1100" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: Settings → General → HUD — the four-style gallery with a live picker</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
             </div>
-            <div class="feature">
-                <h3>Who said what</h3>
-                <p>Speakers are separated on-device and named from the conversation. Voices are remembered between meetings, so a regular is recognised the next time, and a matching calendar event fills in the title and attendees.</p>
-            </div>
-            <div class="feature">
-                <h3>Notes you'd actually send</h3>
-                <p>Clean Markdown with sections you choose per meeting type — stand-up, one-to-one, client call, or your own. A private coach tracks talk balance and pace, and a notes assistant answers questions about what was said.</p>
-            </div>
-        </div>
-
-        <p style="margin-top: 22px;">Notes are written by Dictator's already-loaded model when it's running (the two apps share it over a local socket, so you never hold two copies in memory), or by Dictator Meetings' own local model, or Apple's on-device model. If you want a bigger model for the final write-up you can add OpenAI, OpenRouter, or Anthropic — opt-in per notes step, with API keys kept in the macOS Keychain and never written into synced settings. Transcripts only leave your Mac when you've deliberately chosen a cloud provider.</p>
-        <p class="pipeline-footnote">Recordings, transcripts and notes are files in your synced folder. Audio stays on the Mac that recorded it; notes and transcripts follow you to your other Macs. Everything in a meeting can be exported as Markdown or deleted in one go.</p>
+            <figcaption>The HUD gallery in Settings. Each card shows what you'll actually see while you talk.</figcaption>
+        </figure>
     </section>
 
     <section id="scratchpad" class="platform-mac">
         <h2>Scratchpad</h2>
-        <p class="lede">A blank note, one keystroke away. Press a shortcut (⌥X by default) and a plain-text pad slides in from the edge of the screen; press it again, hit Esc, or click away and it slides back out.</p>
-        <p>It's for the thought you need to get down <em>now</em> — a phone number, a half-formed idea, something pasted out of a call — without hunting for a window or a file to put it in. The pad floats above everything and follows you between Spaces, and because it takes your typing without pulling focus from the app underneath, you can jot into it without losing your place in whatever you were doing. You can dictate straight into it, too.</p>
+        <p class="lede">A blank note, one keystroke away. Press ⌥X and a plain-text pad slides in from the edge of the screen; press it again, hit Esc, or click away and it slides back out.</p>
+        <p>It's for the thought you need down <em>now</em> — a phone number, a half-formed idea, something pasted out of a call — without hunting for a window or deciding where to file it. The pad floats above everything, follows you between Spaces, and takes your typing without pulling focus from the app underneath, so you don't lose your place. You can dictate straight into it.</p>
 
         <figure class="shot">
             <div class="demo-frame">
@@ -1496,16 +1483,27 @@
                      alt="Dictator on macOS: the Scratchpad note slid in from the right edge with a few lines of text, a meeting's written-up notes open behind it, and the dictation HUD listening at the bottom of the screen."
                      width="1440" height="810" loading="lazy">
             </div>
-            <figcaption>The Scratchpad slid in at the right — with a meeting's notes open behind it and a dictation in progress. All on the one Mac, all at once.</figcaption>
+            <figcaption>The Scratchpad slid in at the right — with a meeting's notes open behind it and a dictation in progress.</figcaption>
         </figure>
 
-        <p style="margin-top: 22px;">There's just one pad, kept as <code>scratchpad.md</code> alongside your other settings. If that folder syncs through iCloud Drive it rides along to your other Macs, so the note you started on the laptop is there on the desktop. Width is up to you (Small, Medium, or Large), and the shortcut, width, and an on/off toggle live in Settings → General.</p>
+        <p style="margin-top: 22px;">There's one pad, kept as <code>scratchpad.md</code> alongside your other settings, so the note you started on the laptop is there on the desktop. Four widths (Small, Medium, Large, Extra large), and the shortcut, width and an on/off switch live in Settings → General.</p>
+    </section>
+
+    <section class="platform-mac" aria-label="Dictator Meetings">
+        <a class="crosslink" href="#meetings">
+            <img src="media/dictator-meetings-icon.png" alt="" width="52" height="52">
+            <span class="crosslink-text">
+                <strong>On calls a lot? There's a second app.</strong>
+                <span>Dictator Meetings records both sides of a call, works out who said what, and writes the notes. Separate download, same local-first rules.</span>
+            </span>
+            <span class="crosslink-arrow" aria-hidden="true">→</span>
+        </a>
     </section>
 
     <section id="models" class="models platform-mac">
         <h2>Choose your models</h2>
-        <p class="lede">Two engines for speech-to-text, six small instruction-tuned LLMs for the cleanup passes — or no LLM at all.</p>
-        <p>All weights are downloaded on first use and stored in <code>~/Library/Application Support/Dictator/Models/</code>. You can mix and match: smaller transcription model with a bigger LLM, or vice versa.</p>
+        <p class="lede">Two speech engines, and either Apple's on-device model or one of six local LLMs for the cleanup — or no LLM at all.</p>
+        <p>Weights download on first use and live in <code>~/Library/Application Support/Dictator/Models/</code>. Mix and match freely.</p>
 
         <h3>Speech-to-text</h3>
         <div class="table-wrap">
@@ -1514,39 +1512,31 @@
                     <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
+                    <tr><td class="model-name">Parakeet TDT v3 (multilingual)</td><td class="size">475 MB</td> <td class="size">~700 MB</td>  <td class="note">Default. Apple Neural Engine, ~60–70× realtime. 25 European languages.</td></tr>
+                    <tr><td class="model-name">Parakeet TDT v2 (English)</td>    <td class="size">475 MB</td>  <td class="size">~700 MB</td>  <td class="note">Slightly better English accuracy than v3.</td></tr>
                     <tr><td class="model-name">Whisper Tiny (English)</td>       <td class="size">75 MB</td>   <td class="size">~150 MB</td>  <td class="note">Fastest, lowest accuracy.</td></tr>
                     <tr><td class="model-name">Whisper Base (English)</td>       <td class="size">140 MB</td>  <td class="size">~250 MB</td>  <td class="note">Good balance for short utterances.</td></tr>
-                    <tr><td class="model-name">Whisper Small (English)</td>      <td class="size">470 MB</td>  <td class="size">~700 MB</td>  <td class="note">Solid accuracy. The default if you switch the engine to Whisper.</td></tr>
-                    <tr><td class="model-name">Whisper Large v3 Turbo</td>       <td class="size">1.5 GB</td>  <td class="size">~2 GB</td>    <td class="note">Best quality, multilingual.</td></tr>
-                    <tr><td class="model-name">Parakeet TDT v3 (multilingual)</td><td class="size">475 MB</td> <td class="size">~700 MB</td>  <td class="note">Default. Runs on the Apple Neural Engine. ~60–70× realtime. 25 European languages.</td></tr>
-                    <tr><td class="model-name">Parakeet TDT v2 (English)</td>    <td class="size">475 MB</td>  <td class="size">~700 MB</td>  <td class="note">Slightly better English accuracy than v3.</td></tr>
+                    <tr><td class="model-name">Whisper Small (English)</td>      <td class="size">470 MB</td>  <td class="size">~700 MB</td>  <td class="note">Solid accuracy. The default if you switch to Whisper.</td></tr>
+                    <tr><td class="model-name">Whisper Large v3 Turbo</td>       <td class="size">1.5 GB</td>  <td class="size">~2 GB</td>    <td class="note">Best quality, around 100 languages.</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <h3>Language model — used for the cleanup passes and Assistant mode</h3>
-        <p>By default — when Apple Intelligence is enabled — Dictator routes its language-model passes through Apple's on-device foundation model. It's shared with Apple Intelligence (system-resident), so the in-process RAM cost is effectively zero and there's no per-app language-model download. The MLX models listed below are an alternative if you'd rather pick a specific model, or aren't using Apple Intelligence; the RAM tiers and table on the rest of this section refer to them.</p>
-        <div class="callout warn">
-            <strong>RAM matters if you pick MLX.</strong> Running an MLX language model
-            alongside the transcription model eats a real chunk of memory. The first-run
-            setup wizard detects how much RAM your Mac has and picks defaults that won't
-            push you into swap — but if you override them in Settings, the picker shows
-            a "Fits / Tight / Too large" chip per model so the cost is visible before
-            you commit.
-        </div>
+        <h3>Language model — the cleanup passes and Assistant mode</h3>
+        <p>With Apple Intelligence enabled, Dictator uses Apple's on-device foundation model: nothing extra to download, and effectively no in-process RAM cost because the system already has it loaded. The MLX models below are the alternative if you'd rather choose your own, or aren't using Apple Intelligence.</p>
 
         <div class="ram-tiers">
             <div class="ram-tier lean">
                 <h4>16 GB <span class="tag">Minimum</span></h4>
-                <p>Default is <strong>Llama 3.2 1B</strong>. Comfortable with the 1B model and the full pipeline running; the 3B works if Dictator is the only memory-hungry app open at the time.</p>
+                <p>Default is <strong>Llama 3.2 1B</strong>. The 3B works too if Dictator is the only memory-hungry thing open.</p>
             </div>
             <div class="ram-tier balanced">
                 <h4>24 GB <span class="tag">Recommended</span></h4>
-                <p>Default is <strong>Llama 3.2 3B</strong>. Plenty of headroom for the full setup, with room left for everything else you'd usually have open. <strong>Gemma 4 E2B</strong> also fits comfortably if you want a quality step up.</p>
+                <p>Default is <strong>Llama 3.2 3B</strong>, with room left for everything else you'd have open. <strong>Gemma 4 E2B</strong> also fits.</p>
             </div>
             <div class="ram-tier generous">
                 <h4>32 GB+ <span class="tag">Generous</span></h4>
-                <p>Comfortable with <strong>Gemma 4 E4B</strong> — the highest-quality model Dictator offers — or <strong>Qwen 2.5 7B</strong>, with zero swap pressure even with a long Assistant-mode conversation in flight.</p>
+                <p><strong>Gemma 4 E4B</strong> — the best Dictator offers — or <strong>Qwen 2.5 7B</strong>, with no swap pressure.</p>
             </div>
         </div>
 
@@ -1556,18 +1546,18 @@
                     <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Min Mac RAM</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting; weaker on grammar and Assistant tasks.</td></tr>
-                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Recommended on 24 GB+. Good balance of quality and speed.</td></tr>
+                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting, weaker on assistant work.</td></tr>
+                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Good balance of quality and speed.</td></tr>
                     <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Alternative 3B with a different prose style.</td></tr>
-                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality output, noticeably slower. Plan for 32 GB.</td></tr>
-                    <tr><td class="model-name">Gemma 4 E2B (QAT 4-bit)</td><td class="size">4.4 GB</td> <td class="size">~4 GB</td>    <td class="size">24 GB</td> <td class="note">Google's latest, derived from Gemini 3. Strong for its size — the download includes vision towers that are dropped at load, so it runs lighter than the file size suggests.</td></tr>
-                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">The best-quality model Dictator offers. Same Gemini 3 lineage as the E2B, with more effective parameters. Also the model <a href="#meetings">Dictator Meetings</a> recommends for local notes.</td></tr>
-                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">—</td>     <td class="note">Disables every LLM pass. Raw transcript ships through (dictionary substitution still applies). Pick this if you prefer Whisper's output straight, or want zero LLM overhead.</td></tr>
+                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality, noticeably slower.</td></tr>
+                    <tr><td class="model-name">Gemma 4 E2B (QAT 4-bit)</td><td class="size">4.4 GB</td> <td class="size">~4 GB</td>    <td class="size">24 GB</td> <td class="note">Gemini 3 lineage. Runs lighter than the download size suggests.</td></tr>
+                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">Best quality on offer. Also what Dictator Meetings recommends.</td></tr>
+                    <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">—</td>     <td class="note">No LLM passes at all. Cues and your dictionary still apply.</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <p class="table-footnote">All language models are 4-bit quantised via MLX; the Gemma 4 pair are Google's quantisation-aware-trained releases, which hold up noticeably better at 4-bit than post-training quants. The <strong>RAM</strong> column is how much the loaded model itself consumes at steady-state, with modest context lengths; long Assistant-mode conversations grow as the KV cache fills. The <strong>Min Mac RAM</strong> column is the total physical memory we'd want your <em>whole machine</em> to have before recommending the model — enough to keep the LLM resident and still leave headroom for the OS, your browser, and whatever else you have open.</p>
+        <p class="table-footnote"><strong>RAM</strong> is what the loaded model costs at steady state; long assistant conversations grow beyond it as the context fills. <strong>Min Mac RAM</strong> is how much memory your whole machine wants before we'd recommend that model. The first-run wizard picks a default that fits your Mac, and if you override it the picker shows a Fits / Tight / Too large chip per row.</p>
     </section>
 
     <section id="tradeoff" class="tradeoff platform-mac">
@@ -1578,21 +1568,237 @@
             <div class="tradeoff-card pros">
                 <h3>What you get</h3>
                 <ul>
-                    <li><strong>Privacy.</strong> Audio, transcripts, prompts, and conversation history never leave the device. No telemetry, no analytics, no account.</li>
-                    <li><strong>Cost.</strong> Free after the model downloads. No subscription, no API key, no per-token billing, no surprise bill at the end of the month.</li>
-                    <li><strong>Offline.</strong> Works on a plane, in a hotel, on a train through a tunnel. Once the models are on disk, the network is irrelevant.</li>
-                    <li><strong>Predictable.</strong> A vendor can't deprecate the model out from under you or quietly change its behaviour.</li>
-                    <li><strong>Inspectable.</strong> Open source, so you can see what runs, when, and on what data.</li>
+                    <li><strong>Privacy.</strong> Audio, transcripts, prompts and conversation history never leave the device. No telemetry, no analytics, no account.</li>
+                    <li><strong>Cost.</strong> Free after the model downloads. No subscription, no API key, no per-token billing.</li>
+                    <li><strong>Offline.</strong> Works on a plane, in a hotel, on a train through a tunnel.</li>
+                    <li><strong>Predictable.</strong> Nobody can deprecate the model out from under you or change its behaviour overnight.</li>
+                    <li><strong>Inspectable.</strong> Open source, so you can see what runs, when, and on what.</li>
                 </ul>
             </div>
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>RAM.</strong> With Apple's foundation model handling the LLM passes, any Apple Intelligence–capable Mac is fine. With an MLX model instead, 16 GB minimum for the 1B option; 24 GB+ for the 3B; more for the larger ones.</li>
-                    <li><strong>Speed.</strong> A small local model takes a couple of seconds per pass. Frontier cloud models like Claude finish in milliseconds — they have orders-of-magnitude more compute behind them.</li>
-                    <li><strong>Ceiling.</strong> Apple's foundation model and a small MLX model — even Gemma 4 E4B — are not Claude. For dictation cleanup they're plenty; for genuinely hard text massaging the frontier still wins.</li>
-                    <li><strong>First run.</strong> The transcription model (~500 MB) downloads on first dictation. If you opt for an MLX language model in place of Apple's, that's another 0.8–6.7 GB depending on size.</li>
-                    <li><strong>Heat.</strong> Sustained inference uses the GPU and Apple Neural Engine. Your Mac will get warm under repeated use.</li>
+                    <li><strong>RAM.</strong> With Apple's foundation model doing the LLM work, any Apple Intelligence–capable Mac is fine. With an MLX model instead: 16 GB minimum, 24 GB+ for the 3B, more above that.</li>
+                    <li><strong>Speed.</strong> A small local model takes a second or two per pass. A frontier cloud model has orders of magnitude more compute behind it.</li>
+                    <li><strong>Ceiling.</strong> Apple's model and a small MLX model — even Gemma 4 E4B — are not Claude. For dictation cleanup they're plenty; for genuinely hard text work the frontier still wins.</li>
+                    <li><strong>First run.</strong> The speech model (~500 MB) downloads on first dictation. An MLX language model is another 0.8–6.7 GB on top.</li>
+                    <li><strong>Heat.</strong> Sustained inference uses the GPU and Neural Engine. Your Mac will get warm under heavy use.</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============ Dictator Meetings content stream ============ -->
+
+    <header class="platform-meetings">
+        <div class="brand-row">
+            <img class="brand-icon" src="media/dictator-meetings-icon.png" alt="" width="64" height="64">
+            <span class="logo">Dictator Meetings</span>
+        </div>
+        <h1>Be in the meeting.<br><span class="accent">Not taking notes.</span></h1>
+        <p class="tagline">Records both sides of a call, works out who said what, and writes the notes — on your Mac. No bot joins the call, nothing is uploaded, and the notes come out as Markdown files you own.</p>
+
+        <div class="download-row">
+            <div class="download-col">
+                <a class="cta" id="download-meetings" href="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.1/Dictator-Meetings.dmg">Download Dictator Meetings →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+ · Works alone or alongside Dictator</span>
+            </div>
+        </div>
+
+        <p class="release-row">
+            Latest release: <a id="latest-meetings-release-link" href="https://github.com/robgough/dictator/releases/tag/meetings-v2026.9.1">v2026.9.1</a>
+            · <a href="https://github.com/robgough/dictator/releases">All releases</a>
+        </p>
+
+        <ul class="feature-chips" aria-label="At a glance">
+            <li class="chip">No headphones needed</li>
+            <li class="chip">Speakers named, and remembered</li>
+            <li class="chip">Notes while you're still talking</li>
+            <li class="chip">Templates per meeting type</li>
+            <li class="chip">A coach only you see</li>
+            <li class="chip">Plain Markdown files</li>
+            <li class="chip">Free &amp; open source</li>
+        </ul>
+
+        <p class="preview-note">
+            <strong>Its own app, its own updates.</strong> Meetings used to live inside Dictator; it's now a separate download with its own release channel. It works on its own — and if Dictator is running, Meetings borrows the model it already has loaded rather than holding a second copy in memory. Feedback welcome at <a href="mailto:hello@robgough.net">hello@robgough.net</a>.
+        </p>
+    </header>
+
+    <section id="meetings-what" class="platform-meetings">
+        <h2>What it does</h2>
+        <p class="lede">Press record before the call. Everything below happens without you thinking about it again.</p>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>Both sides, no headphones</h3>
+                <p>Your mic on one track, the call's own audio on the other — Zoom, Meet, Teams, FaceTime, a browser tab, it doesn't matter which. Most recorders make you wear headphones so the other person's voice doesn't bleed into your mic; here the leak is measured (its actual delay and loudness) and cancelled from the audio, and anything that still slips through is dropped afterwards by comparing voice identity between the two tracks. On headphones it switches itself off — there's nothing to cancel.</p>
+            </div>
+            <div class="feature">
+                <h3>The two tracks line up</h3>
+                <p>Mic and call recordings rarely start at the same instant. They're time-aligned before merging, so you don't get the same sentence twice or a line handed to the wrong person.</p>
+            </div>
+            <div class="feature">
+                <h3>Who said what — with names</h3>
+                <p>Speakers are separated on-device, then "Speaker 1" is replaced with a real name when someone is introduced or addressed ("thanks, Rory"). A guessed name carries a small sparkle so you can spot it and correct it; a name you typed yourself is never overwritten.</p>
+            </div>
+            <div class="feature">
+                <h3>It remembers voices</h3>
+                <p>Once someone has a name, that voice is remembered on your Mac and they're named automatically next time. A People editor lists everyone stored, merges duplicates, and forgets anyone — voice included — when you ask.</p>
+            </div>
+            <div class="feature">
+                <h3>The calendar fills in the rest</h3>
+                <p>With calendar access (asked once, and optional), a matched event names the meeting properly instead of guessing from the transcript, and fills in attendees, companies and times. The scheduled finish is also what lets the coach nudge you when you're wrapping up with key points still open.</p>
+            </div>
+            <div class="feature">
+                <h3>Notes now, and notes after</h3>
+                <p>A rough pass of the notes builds while you're still on the call, so you can glance at what's been agreed without leaving the conversation — and it corrects itself mid-call if a decision reverses or a number is restated. When the call ends, the full notes are written fresh from the cleaned-up transcript.</p>
+            </div>
+            <div class="feature">
+                <h3>A template per meeting type</h3>
+                <p>A stand-up and a job interview don't want the same sections — so an interview gets Company, Candidate, Open questions and Quotes, while a 1-on-1 doesn't. Built-in styles cover 1-on-1s, stand-ups, retros, client calls, brainstorms, interviews and podcasts; write your own with plain headings, or let Auto-detect pick from what was actually said.</p>
+            </div>
+            <div class="feature">
+                <h3>Ask the notes a question</h3>
+                <p>Hold the assistant hotkey on a meeting you're looking at and say "what did we decide about pricing?" — or "group the action items by owner", which shows you a preview before it changes anything.</p>
+            </div>
+            <div class="feature">
+                <h3>What was on the shared screen</h3>
+                <p>Off by default. Turn it on and Meetings keeps a low-frame-rate capture of the shared window — not your whole display — and throws away every frame that didn't change. What's left is a filmstrip in the meeting, linked into the transcript at the moment it appeared, and included when you export.</p>
+            </div>
+        </div>
+
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/meetings/live-recording.png"
+                     alt="Dictator Meetings recording a call: live notes building on the left, input level meters and a live transcript on the right, the coach strip along the top."
+                     width="1600" height="1000" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: a call in progress — live notes on the left, levels and live transcript on the right, coach strip visible</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
+            </div>
+            <figcaption>Mid-call. The left side is already writing the notes; the right side is the transcript as it happens.</figcaption>
+        </figure>
+
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/meetings/notes.png"
+                     alt="A finished meeting in Dictator Meetings: summary, discussion, decisions and action items with owners, alongside the speaker-split transcript."
+                     width="1600" height="1000" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: a finished meeting — Notes tab with sections and action items with owners</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
+            </div>
+            <figcaption>After the call: summary, discussion, decisions, and action items with an owner against each.</figcaption>
+        </figure>
+    </section>
+
+    <section id="meetings-coach" class="platform-meetings">
+        <h2>The private coach</h2>
+        <p class="lede">A quiet second opinion on how you're handling the conversation — that nobody else ever sees.</p>
+        <p>Most of us have no idea we talked for eleven minutes straight, or cut someone off three times, or raced through the bit that mattered.</p>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>While you're in it</h3>
+                <p>A small strip shows elapsed time and how the talking is split. Occasionally it drops a one-line nudge — monologuing, interrupting, dominating, racing — and then goes quiet again rather than nagging.</p>
+            </div>
+            <div class="feature">
+                <h3>The things you meant to cover</h3>
+                <p>A key-points checklist ticks itself off as the conversation actually covers each one. Paste in a markdown list before the call, pull a saved set, or flag something mid-meeting.</p>
+            </div>
+            <div class="feature">
+                <h3>Afterwards</h3>
+                <p>A Coach tab with the conversation metrics and a short written read on how the meeting went — the bit a colleague would tell you if you asked them nicely.</p>
+            </div>
+            <div class="feature">
+                <h3>It stays yours</h3>
+                <p>None of it goes into the notes, and none of it goes into an export. One switch turns the whole thing off, and another turns off just the in-call strip if you find it distracting.</p>
+            </div>
+        </div>
+
+        <figure class="shot shot--placeholder">
+            <div class="demo-frame">
+                <img data-shot="media/meetings/coach.png"
+                     alt="The Coach tab in Dictator Meetings: a talk-balance chart, the key-points scorecard, and a short written read on the meeting."
+                     width="1600" height="1000" loading="lazy">
+                <p class="shot-pending">
+                    <span class="shot-pending-label">Screenshot: the Coach tab — talk balance, key-points scorecard, written read</span>
+                    <span class="shot-pending-tag">Coming</span>
+                </p>
+            </div>
+            <figcaption>The Coach tab, after the call. Never part of the notes, never part of an export.</figcaption>
+        </figure>
+    </section>
+
+    <section id="meetings-files" class="platform-meetings">
+        <h2>Just files</h2>
+        <p class="lede">Every meeting is a folder with <code>notes.md</code> and <code>transcript.md</code> in it, written as the call runs. No database, no proprietary format, nothing to export from if you stop using it.</p>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>Readable while you're still talking</h3>
+                <p>Because the Markdown is written as the meeting goes, another app watching that folder can pick the notes up in near-real time. The share menu also bundles notes, transcript and any screenshots into a portable folder.</p>
+            </div>
+            <div class="feature">
+                <h3>Syncs where it should</h3>
+                <p>Notes, transcripts and screenshots ride along to your other Macs through the same synced folder as Dictator's settings. The big audio file stays on the Mac that recorded it — when you open a synced meeting elsewhere, playback tells you which Mac has it.</p>
+            </div>
+            <div class="feature">
+                <h3>Deletes itself if you want</h3>
+                <p>Two separate settings, both off by default: delete a whole meeting after N days, or drop just the audio after N days and keep the words. Useful if you record a lot and would rather not accumulate months of call audio.</p>
+            </div>
+            <div class="feature">
+                <h3>Nothing joins your call</h3>
+                <p>There's no bot in the participant list and no meeting link to paste anywhere. It's your Mac recording its own audio. Telling the people you're with is on you — in some places it's the law.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="meetings-writer" class="platform-meetings">
+        <h2>Who writes the notes</h2>
+        <p class="lede">Local by default. Cloud only if you deliberately choose it, one step at a time.</p>
+        <p>Live notes and final notes are two independent slots, so you can have a small fast model keeping up during the call and something heavier doing the write-up afterwards.</p>
+
+        <div class="two-col">
+            <div class="mode" style="--mode-color: #10b981;">
+                <h3>On your Mac</h3>
+                <p>Dictator's already-loaded model over a local socket (so the two apps never hold two copies of one model), Dictator Meetings' own local model, or Apple's on-device model. If the preferred one isn't available it falls down that chain automatically rather than failing.</p>
+            </div>
+            <div class="mode" style="--mode-color: #ff9f0a;">
+                <h3>Or a cloud model, if you ask</h3>
+                <p>OpenAI, OpenRouter or Anthropic can be pointed at either slot when you want a bigger model for the final write-up. Keys are stored in the macOS Keychain — never in the settings files that sync between your Macs.</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <strong>Your transcript only leaves the Mac if you point a step at a cloud provider.</strong> Out of the box, no step does. Audio never leaves regardless — it isn't uploaded to anything, ever.
+        </div>
+    </section>
+
+    <section id="meetings-tradeoff" class="tradeoff platform-meetings">
+        <h2>Local-first, honestly</h2>
+        <p class="lede">Recording and writing up a meeting on your own machine costs you something. Here's what.</p>
+
+        <div class="two-col">
+            <div class="tradeoff-card pros">
+                <h3>What you get</h3>
+                <ul>
+                    <li><strong>Nobody else hears it.</strong> No transcription service, no vendor retention policy, no bot in the call for the other side to notice.</li>
+                    <li><strong>Cost.</strong> Free. Not "free for 300 minutes a month".</li>
+                    <li><strong>Files you own.</strong> Markdown and audio in a folder, readable in twenty years by anything.</li>
+                    <li><strong>Works offline.</strong> A call over a VPN on bad hotel wifi still gets written up.</li>
+                </ul>
+            </div>
+            <div class="tradeoff-card">
+                <h3>What you give up</h3>
+                <ul>
+                    <li><strong>RAM.</strong> Good notes want a capable model — Gemma 4 E4B on 32 GB is the recommendation. Apple's on-device model can do it, but it's a smaller model and the notes are noticeably plainer.</li>
+                    <li><strong>Patience, once.</strong> A long meeting takes a while to process after it ends — cleaning the audio, working out speakers, then writing. It's not instant like a cloud service with a datacentre behind it.</li>
+                    <li><strong>Imperfect speakers.</strong> Diarisation is good, not perfect. Heavy crosstalk and similar-sounding voices still need a correction now and then — which is why names are editable and stick.</li>
+                    <li><strong>Disk.</strong> Call audio adds up. The retention settings exist for exactly this reason.</li>
                 </ul>
             </div>
         </div>
@@ -1600,110 +1806,216 @@
 
     <!-- ============ iPhone content stream ============ -->
 
+    <header class="platform-ios">
+        <div class="brand-row">
+            <img class="brand-icon" src="media/dictator-icon.png" alt="" width="64" height="64">
+            <span class="logo">Dictator</span>
+        </div>
+        <h1>Talking to yourself.<br><span class="accent">No cloud.</span></h1>
+        <p class="tagline">A dictation keyboard for iPhone, and the app behind it. Tap the mic, talk, then tap Paste to drop the words in — with spoken punctuation, emoji by name, and times written the way you'd type them. Transcription runs on the Neural Engine. Nothing leaves the phone.</p>
+
+        <div class="download-row">
+            <div class="download-col">
+                <a class="app-store-badge"
+                   href="https://apps.apple.com/app/dictator-voice-typing/id6772823676"
+                   aria-label="Download Dictator for iPhone on the App Store">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 156 52" role="img" aria-hidden="true" focusable="false">
+                        <rect x="0" y="0" width="156" height="52" rx="9" ry="9" fill="#000"/>
+                        <rect x="0.5" y="0.5" width="155" height="51" rx="8.5" ry="8.5" fill="none" stroke="#a6a6a6" stroke-width="1"/>
+                        <path fill="#fff" d="M30.6 27.1c0-3 2.5-4.5 2.6-4.5-1.4-2-3.6-2.3-4.4-2.3-1.9-.2-3.6 1.1-4.6 1.1-.9 0-2.4-1.1-3.9-1-2 0-3.9 1.2-4.9 3-2.1 3.7-.5 9.1 1.5 12.1 1 1.5 2.2 3.1 3.8 3 1.5-.1 2-1 3.9-1 1.8 0 2.3 1 3.9.9 1.6 0 2.6-1.5 3.6-2.9 1.1-1.7 1.6-3.3 1.6-3.4-.1 0-3.1-1.2-3.1-4.7zm-3-8.7c.8-1 1.4-2.5 1.2-3.9-1.2.1-2.7.8-3.6 1.8-.8.9-1.5 2.4-1.3 3.8 1.4.1 2.8-.7 3.7-1.7z"/>
+                        <text x="42" y="18" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="8" letter-spacing="0.2">Download on the</text>
+                        <text x="42" y="38" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" letter-spacing="0.1">App Store</text>
+                    </svg>
+                </a>
+                <span class="col-meta">iPhone · iOS 26+ · ~460 MB speech model</span>
+            </div>
+        </div>
+
+        <ul class="feature-chips" aria-label="At a glance">
+            <li class="chip">Nothing leaves the phone</li>
+            <li class="chip">Works in any app</li>
+            <li class="chip">Dictate &amp; Assist</li>
+            <li class="chip">Types fine without Full Access</li>
+            <li class="chip">Scratchpad syncs with the Mac</li>
+            <li class="chip">No background recording</li>
+        </ul>
+
+        <p class="preview-note">
+            <strong>Out now on the App Store.</strong> Spotted a bug or a papercut? Email <a href="mailto:hello@robgough.net">hello@robgough.net</a> — feedback is genuinely welcome.
+        </p>
+    </header>
+
     <section id="ios-keyboard" class="platform-ios">
         <h2>The keyboard</h2>
-        <p class="lede">A system keyboard with two buttons. Tap the mic to dictate; tap the wand to reshape what's already in the field.</p>
-        <p>Install Dictator from the App Store, add the keyboard in Settings, and switch to it whenever you want voice. It works in any text field, in any app — Mail, Messages, Notes, Slack, Safari, third-party editors. There's nothing for the host app to integrate; the keyboard does its job and gets out of the way.</p>
+        <p class="lede">A system keyboard with three extra keys: a mic to dictate, a wand to reshape text you've copied, and a Paste key that drops the result exactly where you want it.</p>
+        <p>Add it in Settings once and it's available in any text field, in any app — Mail, Messages, Notes, Slack, Safari, whatever you write in. There's nothing for the host app to integrate.</p>
 
         <div class="two-col">
             <div class="mode" style="--mode-color: #007AFF;">
                 <h3>Dictate</h3>
-                <p>Tap the red mic to start, tap to stop. Dictator transcribes locally, tidies the result with one optional Apple Intelligence cleanup pass, and inserts the text at your cursor. Comma, full stop, new paragraph and the other spoken cues are honoured.</p>
+                <p>Tap the red mic, talk, tap to stop. It's transcribed on the phone, tidied by one optional Apple Intelligence pass, and put on your clipboard — then you tap Paste to place it. "Comma", "new paragraph", "fire emoji" and the rest are honoured.</p>
             </div>
             <div class="mode" style="--mode-color: #5e5ce6;">
                 <h3>Assist</h3>
-                <p>Tap the purple wand and speak an instruction. "Make this less formal." "Translate to French." "Tighten it up." Dictator transforms the field's text in place, with an Undo button on the keyboard for one-tap revert.</p>
+                <p>Copy the text you want changed first — the key says "Copy first" until you have — then tap the wand and speak an instruction: "make this less formal", "translate to French", "tighten it up". The rewrite comes back on the clipboard, ready for Paste.</p>
             </div>
         </div>
 
-        <p style="margin-top: 18px;">Both buttons hand briefly to the main app to record — iOS doesn't let a keyboard hold the microphone — and the result is written back into the field the moment you return. The round-trip takes a beat; the keyboard shows you what's happening while it works.</p>
+        <div class="features pair" style="margin-top: 14px;">
+            <div class="feature">
+                <h3>It types, even without Full Access</h3>
+                <p>Granting a keyboard "Full Access" sounds alarming, and plenty of people won't do it. So the keyboard works as an ordinary letters-and-numbers keyboard without it, with a slim banner explaining that dictation is the part that needs it.</p>
+            </div>
+            <div class="feature">
+                <h3>Paste shows you what it'll paste</h3>
+                <p>Before you tap it, the Paste key previews the text and its word count — your last dictation, something from another app, or "nothing on the clipboard". You put the cursor where you want it, or select what you want replaced, and tap once. No auto-paste landing somewhere you didn't expect.</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <strong>Why it flashes over to the app for a second.</strong> iOS doesn't let a keyboard extension open the microphone at all — that's an Apple rule, not a design choice. So the keyboard hands off to the Dictator app, which records, transcribes, and puts the result on your clipboard; you're returned to where you were, and the Paste key drops it in when you're ready. That's the round-trip you see, and it's why the mic keys need Full Access. Assist works from the clipboard for a related reason: iOS only lets a keyboard see a sliding window of the text around your cursor, which quietly ate the middle of long selections — copying first is the only route that behaves the same in every app.
+        </div>
     </section>
 
     <section id="ios-modes" class="platform-ios">
-        <h2>Two modes, one keyboard</h2>
-        <p class="lede">Dictate adds new text. Assist changes the text that's already there. Both use the same on-device pipeline.</p>
-        <p>Same idea as the Mac app's two hotkeys, mapped to two keys on the keyboard. Dictate is for "I need to put something in this field." Assist is for "I've already written something; rewrite it like this." Either is a single tap away wherever you can type.</p>
-        <p>If you'd rather use the app on its own — say you want to dictate without switching keyboards — the main app has the same recorder built in, plus a searchable history of every transcript and assist turn from the last week.</p>
+        <h2>In the app</h2>
+        <p class="lede">The app is the recorder the keyboard uses — and a decent voice notepad in its own right.</p>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>The transcript builds up</h3>
+                <p>Each press of Dictate adds to what's already there instead of wiping it, so you can capture a thought over several goes while you're walking. A floating Clear starts fresh; Undo reverses the last dictation or Assist.</p>
+            </div>
+            <div class="feature">
+                <h3>Fix things by voice</h3>
+                <p>Dictation lands at the cursor, or replaces whatever you've selected — so correcting a line means selecting it and saying the right version, not poking at it with your thumb.</p>
+            </div>
+            <div class="feature">
+                <h3>Scratchpad, shared with the Mac</h3>
+                <p>The same pad you get with ⌥X on the Mac, as a tab on your phone. Dictate into it, reword a paragraph with the assistant, or type with a slim quick-keyboard. It has its own undo and redo.</p>
+            </div>
+            <div class="feature">
+                <h3>History and Vocabulary, one tap away</h3>
+                <p>Both are top-level tabs rather than buried in Settings: a searchable week of transcripts and assists, and the list of words to always spell your way.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="ios-fixes" class="platform-ios">
+        <h2>The small stuff</h2>
+        <p class="lede">The same spoken cues as the Mac app — the same code, in fact — plus a few things phones get wrong.</p>
+
+        <dl class="cue-list">
+            <dt>Punctuation</dt>
+            <dd>"comma" → <b>,</b> · "new paragraph" → <b>a blank line</b> · "question mark" → <b>?</b> · "em dash" → <b>—</b></dd>
+            <dt>Emoji</dt>
+            <dd>"fire emoji" → <b>🔥</b> · "thumbs up emoji" → <b>👍</b> — every standard emoji by name</dd>
+            <dt>Times &amp; money</dt>
+            <dd>"ten thirty AM" → <b>10:30am</b> · "five dollars" → <b>$5</b> · "twenty euros" → <b>€20</b></dd>
+            <dt>Numbers</dt>
+            <dd>"twenty thousand and sixty two" → <b>20062</b> · "four four seven seven seven" → <b>44777</b></dd>
+        </dl>
+
+        <div class="features pair">
+            <div class="feature">
+                <h3>It stops when you leave</h3>
+                <p>There's deliberately no background-audio mode. Switch apps or lock the phone mid-recording and it finishes transcribing what it already heard and puts it on your clipboard — it does not carry on listening out of sight.</p>
+            </div>
+            <div class="feature">
+                <h3>English, or the rest of Europe</h3>
+                <p>First launch asks which speech model you want: English-only, which doesn't split its capacity across other languages, or multilingual (French, German, Spanish, Italian, Dutch and more). Change your mind later in Settings.</p>
+            </div>
+            <div class="feature">
+                <h3>The first download survives real life</h3>
+                <p>That ~460 MB model keeps downloading if you switch apps or lock the phone, and resumes after a dropped connection or a relaunch. It shows MB, total size and rate, with Pause and Cancel — and warns you before starting on cellular.</p>
+            </div>
+            <div class="feature">
+                <h3>Each cue family is a switch</h3>
+                <p>Every cue family — punctuation, numbers, times, currency, emoji — is an independent switch on its own Substitutions page, exactly like the Mac app.</p>
+            </div>
+        </div>
     </section>
 
     <section id="ios-screens" class="platform-ios">
-        <h2>What it looks like</h2>
-        <p class="lede">Brief tour. The keyboard, the recorder, the history of every transcript and assist.</p>
+        <h2>Screens</h2>
+        <p class="lede">The recorder, the keyboard, the Scratchpad, and a week of history.</p>
         <div class="ios-screens-row">
             <figure>
-                <img src="media/ios-screenshots/idle.png"
-                     alt="Dictator's main screen with red Dictate and purple Assist buttons"
-                     width="276" height="600" loading="lazy">
-                <figcaption>The main screen. Hold to dictate or to reshape what's selected.</figcaption>
-            </figure>
-            <figure>
                 <img src="media/ios-screenshots/dictating.png"
-                     alt="Mid-recording: a dashed ring spins around the active button"
+                     alt="The Dictator app with a finished transcript in the field above the Dictate and Assist buttons"
                      width="276" height="600" loading="lazy">
-                <figcaption>The ring confirms you're being heard. Release to transcribe.</figcaption>
+                <figcaption>The transcript builds up across presses — keep going, then copy the lot.</figcaption>
             </figure>
             <figure>
                 <img src="media/ios-screenshots/keyboard.png"
-                     alt="The Dictator keyboard with two large buttons and a row of secondary keys"
+                     alt="The Dictator keyboard showing the Paste key with a preview of the text and its word count, above the Dictate and Assist keys"
                      width="276" height="600" loading="lazy">
-                <figcaption>The keyboard. Tap once, talk, the result lands in the field you were typing in.</figcaption>
+                <figcaption>The keyboard. Paste previews what's about to land before you tap it.</figcaption>
+            </figure>
+            <figure>
+                <img src="media/ios-screenshots/scratchpad.png"
+                     alt="The Scratchpad tab with a note open"
+                     width="276" height="600" loading="lazy">
+                <figcaption>Scratchpad. Point it at the same shared folder as the Mac and the note stays in step.</figcaption>
             </figure>
             <figure>
                 <img src="media/ios-screenshots/history.png"
                      alt="History list showing past dictation and assist entries"
                      width="276" height="600" loading="lazy">
-                <figcaption>A week's worth of transcripts kept locally. Searchable.</figcaption>
+                <figcaption>A week of transcripts, kept on the phone. Searchable.</figcaption>
             </figure>
         </div>
     </section>
 
     <section id="ios-pipeline" class="platform-ios">
         <h2>How it works</h2>
-        <p class="lede">Audio in, text out, all on the iPhone. Two stages: transcribe, then optionally tidy.</p>
+        <p class="lede">Audio in, text out, all on the iPhone. Transcribe, then optionally tidy.</p>
 
         <div class="features">
             <div class="feature">
-                <h3>Transcribe (Parakeet, on the Apple Neural Engine)</h3>
-                <p>The audio is transcribed by FluidAudio's Parakeet TDT v3 model running on the Apple Neural Engine — fast, cool, and battery-friendly. The model downloads on first use (~460 MB) and stays on disk. Spoken cues like "comma" and "new paragraph" are honoured deterministically before the model sees the text.</p>
+                <h3>Transcribe — Parakeet, on the Neural Engine</h3>
+                <p>Your audio is transcribed by FluidAudio's Parakeet model running on the Apple Neural Engine: fast, cool, and easy on the battery. It downloads once (~460 MB) and stays on the phone. Spoken cues are applied deterministically before any model sees the text.</p>
             </div>
             <div class="feature">
-                <h3>Tidy (Apple Intelligence, optional)</h3>
-                <p>If Apple Intelligence is enabled, one pass through the system's on-device foundation model removes filler words and "um"s without changing what you said. A guard reverts the pass if the model drifts from the source. Toggle it off in Settings if you'd rather keep the raw transcript.</p>
+                <h3>Tidy — Apple Intelligence, optional</h3>
+                <p>One pass through the system's on-device model removes filler words without changing what you said, and a guard reverts the pass if it drifts from the source. Turn it off in Settings if you'd rather keep the raw transcript.</p>
             </div>
             <div class="feature">
-                <h3>Assist (Apple Intelligence)</h3>
-                <p>The wand button feeds the field's text plus your spoken instruction to the same foundation model, which returns a transformed version. The keyboard replaces the original in place and surfaces an Undo so you can step back without thinking about it.</p>
+                <h3>Assist — Apple Intelligence</h3>
+                <p>In the app, the wand feeds the transcript field's text plus your spoken instruction to that same on-device model and replaces it in place, with an Undo so you can step back without thinking about it. From the keyboard it works on what you copied, and hands the rewrite back on the clipboard.</p>
             </div>
         </div>
 
-        <p class="pipeline-footnote">Nothing leaves the device. The keyboard talks to the main app over a shared App Group container; the app talks to Parakeet and Apple Intelligence locally. No accounts, no servers, no telemetry.</p>
+        <p class="table-footnote">Nothing leaves the device. The keyboard talks to the app through a shared container; the app talks to Parakeet and Apple Intelligence locally. No accounts, no servers, no telemetry.</p>
     </section>
 
     <section id="tradeoff-ios" class="tradeoff platform-ios">
         <h2>Local-first, honestly</h2>
-        <p class="lede">Same trade-off as the Mac app, slightly different shape on iPhone.</p>
+        <p class="lede">Same trade-off as the Mac app, slightly different shape on a phone.</p>
 
         <div class="two-col">
             <div class="tradeoff-card pros">
                 <h3>What you get</h3>
                 <ul>
-                    <li><strong>Privacy.</strong> Audio, transcripts, and your assist instructions never leave the iPhone. No accounts, no telemetry, no analytics.</li>
-                    <li><strong>Cost.</strong> One-off App Store price, no subscription, no per-token billing.</li>
-                    <li><strong>Offline.</strong> Once the speech model is on disk, it works on a plane or in the Underground.</li>
-                    <li><strong>Speed.</strong> Parakeet on the Apple Neural Engine is fast — typically faster than typing, even on a short utterance.</li>
+                    <li><strong>Privacy.</strong> Audio, transcripts and your instructions never leave the iPhone. No account, no telemetry.</li>
+                    <li><strong>Offline.</strong> Once the speech model is on disk it works on a plane or in the Underground.</li>
+                    <li><strong>Speed.</strong> Parakeet on the Neural Engine is quick — usually faster than typing, even for a short message.</li>
+                    <li><strong>No surprise listening.</strong> No background audio mode, so it can't record when you're not looking at it.</li>
                 </ul>
             </div>
             <div class="tradeoff-card">
                 <h3>What you give up</h3>
                 <ul>
-                    <li><strong>Apple Intelligence required for cleanup.</strong> The tidy and assist passes use Apple's on-device foundation model. Without Apple Intelligence enabled, you still get the raw transcript — just no LLM polish.</li>
-                    <li><strong>Hand-off latency.</strong> iOS doesn't let a keyboard extension hold the microphone, so the keyboard launches the app to record. It's quick, but it's not instant.</li>
-                    <li><strong>Full Access permission.</strong> The keyboard needs Allow Full Access (Settings → General → Keyboard → Keyboards → Dictator) so it can launch the app. It doesn't transmit anything off the device.</li>
-                    <li><strong>First run.</strong> Speech model (~460 MB) downloads on first dictation. The app warns you if you're on cellular.</li>
+                    <li><strong>Apple Intelligence for the clever parts.</strong> The tidy pass and Assist use Apple's on-device model, which needs an iPhone 15 Pro or newer. Without it you still get dictation and the spoken cues; Assist simply hides itself.</li>
+                    <li><strong>Hand-off latency.</strong> iOS won't let a keyboard hold the mic, so the keyboard launches the app to record. It's quick, but it isn't instant.</li>
+                    <li><strong>Full Access for dictation.</strong> Typing works without it; the mic keys don't, because that hand-off is what Full Access permits. Nothing is transmitted off the phone either way.</li>
+                    <li><strong>First run.</strong> The ~460 MB speech model downloads before your first dictation.</li>
                 </ul>
             </div>
         </div>
     </section>
+
+    <!-- ============ Shared: author, FAQs, requirements, footer ============ -->
 
     <section id="why" class="author">
         <h2>Why I built this</h2>
@@ -1718,6 +2030,8 @@
 
                 <p>Assistant mode is the second piece of magic — the kind that feels obvious the moment you've used it. Select some text, hold a different hotkey, and ask for the change you want out loud. For a one-word fix, typing is still quicker. But for anything substantive, there's no real comparison. You speak the instruction, the rewrite lands in place, and you're already onto the next thing.</p>
 
+                <p>Meetings came out of the same impulse. I wanted the notes without a bot in the call, without uploading a client conversation to somebody's API, and without paying per minute for the privilege. It's a separate app now because it's a genuinely different job — but it plays by the same rules.</p>
+
                 <p>Voice input is going to be a core part of how we use computers — alongside the keyboard and mouse, not replacing them. The big platforms will get there eventually, and when they do it'll feel obvious. Until then, Dictator is a way to live in that future today, on the device you already own. I hope you find it useful — and thank you for giving it a try.</p>
             </div>
         </div>
@@ -1725,41 +2039,41 @@
 
     <section id="faq" class="faq platform-mac">
         <h2>FAQ</h2>
-        <p class="lede">A few common questions before you commit a few hundred MB of disk.</p>
+        <p class="lede">A few things worth knowing before you commit a few hundred MB of disk.</p>
 
         <details>
-            <summary>Does it work in my favourite app?</summary>
-            <p>Almost certainly. Dictator pastes via a synthetic ⌘V, so anywhere you can paste from the clipboard — Mail, Slack, Notion, Apple Notes, Google Docs in the browser, VS Code, Xcode, terminals — Dictator can drop text. The handful of apps that explicitly block paste won't accept it. If you haven't granted Accessibility permission, Dictator falls back to clipboard-only and tells you why in the HUD.</p>
+            <summary>Does it work in every app?</summary>
+            <p>Almost. Dictator pastes with a synthetic ⌘V, so anywhere you can paste — Mail, Slack, Notion, Apple Notes, Google Docs in a browser, VS Code, Xcode, terminals — it can drop text. The handful of apps that explicitly block paste won't accept it. Without Accessibility permission it falls back to putting the text on your clipboard and tells you why in the HUD.</p>
+        </details>
+
+        <details>
+            <summary>What if the AI mangles something?</summary>
+            <p>Every language-model pass is checked afterwards against what went in: enough of your original words have to survive, and the output isn't allowed to grow much. A pass that fails is discarded and the previous version is used instead, with a note in the HUD. If you'd rather it never touched your words at all, the Raw style skips the model entirely — you still get spoken punctuation and your dictionary. And history keeps every intermediate stage, so you can always see exactly what changed.</p>
+        </details>
+
+        <details>
+            <summary>Do I need Apple Intelligence?</summary>
+            <p>No. If it's on, Dictator uses Apple's on-device model for the cleanup passes, which costs you nothing extra in disk or memory. If it's off — or your Mac doesn't support it — pick one of the MLX models instead (16 GB of RAM and up), or choose "None" and use Dictator as a straight transcriber with spoken cues and your dictionary.</p>
         </details>
 
         <details>
             <summary>Does it read what's on my screen?</summary>
-            <p>Only the text right around your cursor or selection — see <a href="#context">Context awareness</a>. When you start a dictation or trigger the assistant, Dictator uses the macOS Accessibility API to read a small window of text either side of the insertion point; it does not use screen recording or OCR, and it never captures anything visual. What it reads goes only to the on-device model for that one run and is never stored. Password fields are excluded, apps that don't expose their text are simply skipped, and for dictation you can turn it off per mode.</p>
+            <p>Only the text right around your cursor or selection, through the same macOS Accessibility API used to paste. No screen recording, no OCR, nothing visual. What it reads goes to the on-device model for that one run and is never stored. Password fields are excluded, apps that don't expose their text are skipped, and for dictation you can turn it off per mode.</p>
         </details>
 
         <details>
             <summary>What languages does it transcribe?</summary>
-            <p>The default engine — Parakeet TDT v3 on the Apple Neural Engine — covers 25 European languages. For wider reach, switch to Whisper Large v3 Turbo in Settings (around 100 languages). The LLM cleanup passes are English-centric, so for other languages you'll usually want Quick mode (no LLM polish) — the raw transcript ships through with your spoken cues and vocabulary still applied.</p>
+            <p>The default engine — Parakeet TDT v3 on the Neural Engine — covers 25 European languages. For wider reach, switch to Whisper Large v3 Turbo in Settings (around 100 languages). The cleanup styles are English-centric, so for other languages you'll usually want a Raw-style mode: the transcript ships through with your spoken cues and dictionary still applied.</p>
         </details>
 
         <details>
-            <summary>Can I integrate it with Raycast, Shortcuts, or a script?</summary>
-            <p>Partly. There are <code>dictator://settings</code> and <code>dictator://onboarding</code> URL schemes you can deep-link from anywhere that opens URLs — Raycast, Alfred, Shortcuts, a Bash script. The macOS Services menu also has a "Learn Word in Dictator…" entry, so right-click → Services on a selected word adds a custom-dictionary rule without leaving the app you're in. Triggering a recording itself is still hotkey-driven — there's no scripting API to start one today.</p>
-        </details>
-
-        <details>
-            <summary>What about my second Mac?</summary>
-            <p>Modes, prompts, hotkeys, vocabulary, recent dictations, and assistant threads live in <code>~/Documents/Dictator/</code>. If your Documents folder syncs through iCloud Drive, Dropbox, or anything similar, those settings follow you between Macs. Model picks and onboarding state stay per-Mac in Application Support — every machine has its own RAM budget, and you'd usually want different defaults on a 16 GB MacBook Air vs a 64 GB Studio.</p>
+            <summary>Can I use it with Raycast, Shortcuts, or a script?</summary>
+            <p>Partly. There are <code>dictator://settings</code> and <code>dictator://onboarding</code> URL schemes you can deep-link from anywhere that opens URLs. The macOS Services menu also has a "Learn Word in Dictator…" entry, so right-click → Services on a selected word adds a dictionary rule without leaving the app you're in. Starting a recording is still hotkey-driven — there's no scripting API for that yet.</p>
         </details>
 
         <details>
             <summary>Will my Mac get hot?</summary>
-            <p>For a quick dictation, no — transcription is fast and each LLM pass takes a couple of seconds. Sustained use (long Assistant-mode conversations, back-to-back long dictations) uses the GPU and Apple Neural Engine meaningfully; your Mac warms up like it does during any heavy local inference. The Apple Foundation Model option offloads the LLM passes to a system-shared model, which keeps Dictator's own footprint smaller if heat or battery is your main concern.</p>
-        </details>
-
-        <details>
-            <summary>How accurate is the transcription?</summary>
-            <p>Parakeet TDT v3 (the default) runs on the Apple Neural Engine at 60–70× realtime — fast, cool, and accurate across everyday and conversational speech. Parakeet TDT v2 trades the multilingual coverage for slightly better English accuracy. Prefer Whisper? Whisper Small is a solid alternative, and Whisper Large v3 Turbo gives the best accuracy and the widest language coverage (around 100 languages). The "Choose your models" section above has concrete sizes and RAM numbers for each option.</p>
+            <p>For a quick dictation, no. Sustained use — long assistant conversations, back-to-back long dictations — uses the GPU and Neural Engine meaningfully, and your Mac warms up like it does during any heavy local inference. Apple's foundation model keeps Dictator's own footprint smaller if heat or battery is your main concern.</p>
         </details>
 
         <details>
@@ -1768,15 +2082,66 @@
         </details>
     </section>
 
-    <section id="requirements" class="platform-mac">
+    <section id="requirements" class="reqs-section platform-mac">
         <h2>Requirements</h2>
         <p class="reqs">
             <span><strong>Apple Silicon</strong> Mac</span>
             <span><strong>macOS 26</strong> or newer</span>
             <span><strong>Apple Intelligence</strong> enabled — or 16 GB+ RAM to run an MLX language model instead</span>
-            <span><strong>~500 MB</strong> of disk for the transcription model</span>
+            <span><strong>~500 MB</strong> of disk for the speech model</span>
         </p>
-        <p class="table-footnote">With Apple Intelligence enabled, Dictator routes its language-model passes through Apple's on-device foundation model — system-resident, shared across every app that uses the framework, so the in-process RAM cost is effectively zero. The MLX models are available in Settings if you'd rather not use Apple Intelligence: the 1B option fits a 16 GB Mac comfortably, the 3B option wants 24 GB+, and there's a "Fits / Tight / Too large" chip per row so the cost is visible before you switch.</p>
+        <p class="table-footnote">With Apple Intelligence on, the language-model passes go through Apple's system-resident model, so the in-process RAM cost is effectively zero. The MLX models are there in Settings if you'd rather not use it: the 1B fits a 16 GB Mac comfortably, the 3B wants 24 GB+, and each row carries a Fits / Tight / Too large chip so the cost is visible before you switch.</p>
+    </section>
+
+    <section id="meetings-faq" class="faq platform-meetings">
+        <h2>FAQ</h2>
+        <p class="lede">A few things people ask before recording their first call.</p>
+
+        <details>
+            <summary>Which calling apps does it work with?</summary>
+            <p>All of them. Meetings records the audio your Mac is playing plus your microphone, so the app in the middle is irrelevant — Zoom, Google Meet, Teams, FaceTime, a call in a browser tab, or a phone on speaker next to the laptop. There's no integration to set up and no plugin to install.</p>
+        </details>
+
+        <details>
+            <summary>Do I need Dictator as well?</summary>
+            <p>No — Dictator Meetings is a standalone app with its own settings and its own updates. If you do have Dictator running, Meetings borrows the language model it already has loaded over a local socket, so you never pay for two copies of the same model in memory. A dictation always takes priority: it interrupts an in-progress meeting write-up at the next word and Meetings picks up again afterwards.</p>
+        </details>
+
+        <details>
+            <summary>Does the other side know they're being recorded?</summary>
+            <p>Not from anything Dictator does. Nothing joins the call, there's no participant to notice and no "recording" banner in Zoom. That makes telling people your responsibility — and in a number of countries and US states, a legal requirement. Please tell them.</p>
+        </details>
+
+        <details>
+            <summary>Where do the files live?</summary>
+            <p>In your synced Dictator folder, one folder per meeting, containing <code>notes.md</code>, <code>transcript.md</code>, and the audio. Nothing is in a database or a proprietary format. Notes and transcripts sync to your other Macs; the audio stays on the Mac that recorded it.</p>
+        </details>
+
+        <details>
+            <summary>It got a speaker's name wrong — can I fix it?</summary>
+            <p>Yes, and it sticks. A name Meetings guessed is flagged with a small sparkle so you can spot it; a name you type by hand is never overwritten, and it carries forward to future meetings with that voice. The People editor lets you merge two records that turned out to be the same person, or forget someone entirely.</p>
+        </details>
+
+        <details>
+            <summary>Do I have to wear headphones?</summary>
+            <p>No — that's rather the point. The other person's voice coming out of your speakers and back into your mic is measured and cancelled, and anything left over is dropped by comparing voice identity between the two tracks. If you <em>are</em> on headphones it turns itself off, because there's nothing to cancel.</p>
+        </details>
+
+        <details>
+            <summary>Can I make the notes look how I want?</summary>
+            <p>Yes. Pick a built-in style per meeting type — 1-on-1, stand-up, retro, client call, brainstorm, interview, podcast — or write your own template with plain headings, starting from a duplicate of a built-in. Auto-detect will also pick one for you based on what the meeting actually turned out to be.</p>
+        </details>
+    </section>
+
+    <section id="meetings-requirements" class="reqs-section platform-meetings">
+        <h2>Requirements</h2>
+        <p class="reqs">
+            <span><strong>Apple Silicon</strong> Mac</span>
+            <span><strong>macOS 26</strong> or newer</span>
+            <span><strong>Microphone and system-audio</strong> permission (asked once)</span>
+            <span><strong>A local language model</strong> — Apple Intelligence, or 24 GB+ RAM for a capable MLX model (32 GB for the recommended Gemma 4 E4B)</span>
+        </p>
+        <p class="table-footnote">Notes quality tracks the model doing the writing: Apple's on-device model works and costs nothing, but a capable MLX model — Gemma 4 E4B on a 32 GB Mac is the recommendation — writes noticeably better notes. If Dictator is installed and running, Meetings uses whatever model it already has loaded instead of a second one. Recordings need disk: budget for the calls you keep, or let the retention settings clear them out.</p>
     </section>
 
     <section id="ios-faq" class="faq platform-ios">
@@ -1784,45 +2149,54 @@
         <p class="lede">A few common questions about the iPhone app.</p>
 
         <details>
+            <summary>Which iPhones does it run on?</summary>
+            <p>Dictation works on any iPhone running iOS 26 or newer. Assist and the optional tidy pass use Apple's on-device foundation model, which needs an Apple Intelligence–capable iPhone — as of writing, iPhone 15 Pro / Pro Max and the iPhone 16 line and newer. On an older phone the Assist button hides itself and a note explains why, rather than failing when you tap it.</p>
+        </details>
+
+        <details>
+            <summary>Does it work on iPad?</summary>
+            <p>Not yet — Dictator is an iPhone app today. If iPad support matters to you, say so at <a href="mailto:hello@robgough.net">hello@robgough.net</a>; it helps me judge what to build next.</p>
+        </details>
+
+        <details>
             <summary>Why does the keyboard need Full Access?</summary>
-            <p>iOS keyboard extensions can't open the microphone themselves, so when you tap the mic button the keyboard launches Dictator's main app to record. That launch requires <code>RequestsOpenAccess</code> — Apple's term for "this keyboard is allowed to talk to its host app." Full Access doesn't grant network access or anything else; Dictator doesn't make network calls.</p>
+            <p>iOS keyboard extensions can't open the microphone themselves, so tapping the mic launches Dictator's app to record — and that hand-off is exactly what Full Access permits. It doesn't grant network access, and Dictator makes no network calls. Without it the keyboard still types perfectly well; you just don't get the mic keys.</p>
         </details>
 
         <details>
             <summary>What does the round-trip look like?</summary>
-            <p>Tap the mic on the keyboard. The Dictator app pops to the foreground, captures audio, transcribes locally, then disappears. You return to whatever app you were typing in, and the keyboard inserts the result at your cursor. The whole thing takes a second or two for a short utterance, longer for a paragraph.</p>
+            <p>Tap the mic on the keyboard. The Dictator app comes to the front, captures the audio, transcribes it locally, copies the result to your clipboard, then gets out of the way. You're back in the app you were typing in, and the keyboard's Paste key — showing a preview of what's about to land — drops it wherever you put the cursor. A second or two for a short message; longer for a paragraph.</p>
         </details>
 
         <details>
             <summary>What if Apple Intelligence isn't enabled?</summary>
-            <p>Dictation still works — you get the raw Parakeet transcript with spoken cues applied. The optional tidy pass and the Assist button both need Apple Intelligence, so those features are hidden when it's off. The app reminds you that it's available in Settings → Apple Intelligence &amp; Siri if you want to flip it on later.</p>
+            <p>Dictation still works — you get the transcript with your spoken cues applied. The tidy pass and Assist need Apple Intelligence, so they're hidden while it's off, and Settings links you to where to enable it if you change your mind.</p>
         </details>
 
         <details>
-            <summary>Which iPhones does it run on?</summary>
-            <p>Any iPhone with Apple Intelligence support running iOS 26 or newer. As of writing that's iPhone 15 Pro / Pro Max and the iPhone 16 line. Older iPhones don't have the Apple Neural Engine resources Parakeet needs, nor the on-device foundation model Assist relies on.</p>
+            <summary>Does it keep recording when I switch apps?</summary>
+            <p>No, deliberately. There's no background-audio mode in the app at all. If you leave mid-recording it finishes transcribing what it captured and copies that to your clipboard, rather than continuing to listen while you're somewhere else.</p>
         </details>
 
         <details>
             <summary>Where do my transcripts live?</summary>
-            <p>In the Dictator app, in a local history scoped to the last seven days. You can browse it, copy any past transcript back to the clipboard, or clear it from Settings. Nothing syncs off the device.</p>
+            <p>On the phone, in a history scoped to the last seven days. Browse it, copy anything back to the clipboard, or clear it from Settings. The Scratchpad is the one thing that travels — it syncs with the Mac app's Scratchpad through your shared folder.</p>
         </details>
 
         <details>
-            <summary>Does it work with my AirPods or a wired mic?</summary>
-            <p>Yes. The recorder uses whatever input route iOS hands it — built-in mic, AirPods, USB-C mic, Bluetooth headset. There's no input picker; iOS routes for you.</p>
+            <summary>Does it work with AirPods or a wired mic?</summary>
+            <p>Yes. It records from whatever input route iOS hands it — built-in mic, AirPods, USB-C mic, Bluetooth headset. There's no input picker; iOS routes for you.</p>
         </details>
     </section>
 
-    <section id="ios-requirements" class="platform-ios">
+    <section id="ios-requirements" class="reqs-section platform-ios">
         <h2>Requirements</h2>
         <p class="reqs">
-            <span><strong>iPhone</strong> with Apple Intelligence support</span>
-            <span><strong>iOS 26</strong> or newer</span>
-            <span><strong>Apple Intelligence</strong> enabled (for tidy and Assist passes)</span>
-            <span><strong>~460 MB</strong> of disk for the transcription model</span>
+            <span><strong>iPhone</strong> running <strong>iOS 26</strong> or newer</span>
+            <span><strong>Apple Intelligence</strong> for the tidy pass and Assist (iPhone 15 Pro or newer)</span>
+            <span><strong>~460 MB</strong> of disk for the speech model</span>
         </p>
-        <p class="table-footnote">Transcription runs locally via Parakeet on the Apple Neural Engine; the optional tidy pass and Assist use Apple Intelligence's on-device foundation model. The keyboard needs Allow Full Access enabled (Settings → General → Keyboard → Keyboards → Dictator) so it can hand off to the main app for recording — it doesn't transmit anything off the device.</p>
+        <p class="table-footnote">Transcription runs locally on the Neural Engine and works on any iOS 26 iPhone. The keyboard needs Allow Full Access (Settings → General → Keyboard → Keyboards → Dictator) before its mic keys work, because that's what lets it hand off to the app to record — it doesn't transmit anything off the phone. iPad isn't supported today.</p>
     </section>
 
     <section class="final-cta platform-mac" aria-label="Download for Mac">
@@ -1836,9 +2210,20 @@
         </div>
     </section>
 
+    <section class="final-cta platform-meetings" aria-label="Download Dictator Meetings">
+        <h2>Record your next call</h2>
+        <p>Free, open source, and the notes never leave your Mac.</p>
+        <div class="download-row" style="justify-content: center;">
+            <div class="download-col" style="align-items: center;">
+                <a class="cta" id="download-meetings-footer" href="https://github.com/robgough/dictator/releases/download/meetings-v2026.9.1/Dictator-Meetings.dmg">Get Dictator Meetings →</a>
+                <span class="col-meta">Free · Apple Silicon · macOS 26+</span>
+            </div>
+        </div>
+    </section>
+
     <section class="final-cta platform-ios" aria-label="Download on the App Store">
         <h2>Try it</h2>
-        <p>On-device dictation and Assist for iPhone. Everything stays on the device.</p>
+        <p>On-device dictation and Assist for iPhone. Everything stays on the phone.</p>
         <div class="download-row" style="justify-content: center;">
             <div class="download-col" style="align-items: center;">
                 <a class="app-store-badge"
@@ -1866,11 +2251,11 @@
     </footer>
 </div>
 <script>
-    // Platform toggle. Mac/iPhone segmented control at the top of the
-    // page; URL hash drives initial state and survives shares. Both
-    // content streams live in the DOM at once — CSS hides the inactive
-    // one via body[data-platform="..."]. pushState keeps the back
-    // button useful between platforms without scrolling away.
+    // Platform toggle. Mac / Meetings / iPhone segmented control at the top
+    // of the page; the URL hash drives the initial state and survives
+    // shares. All three content streams live in the DOM at once — CSS hides
+    // the inactive ones via body[data-platform="..."]. pushState keeps the
+    // back button useful between apps without scrolling away.
     (function () {
         var body = document.body;
         var buttons = document.querySelectorAll('.platform-switch [data-platform-target]');
@@ -1878,9 +2263,9 @@
 
         function apply(platform, options) {
             options = options || {};
-            // Whitelist — anything else (a stale hash to an old anchor,
-            // a typo) falls back to Mac, which is the mature one.
-            if (platform !== 'ios') platform = 'mac';
+            // Whitelist — anything else (a stale hash to an old anchor, a
+            // typo) falls back to Mac, which is the flagship.
+            if (platform !== 'ios' && platform !== 'meetings') platform = 'mac';
             body.setAttribute('data-platform', platform);
             document.documentElement.setAttribute('data-platform', platform);
             buttons.forEach(function (b) {
@@ -1888,28 +2273,26 @@
                 b.setAttribute('aria-selected', match ? 'true' : 'false');
             });
             if (options.updateHash) {
-                // Use '/' for the default to keep the address bar tidy;
-                // pushState so back-button traverses Mac↔iPhone.
-                var target = platform === 'ios' ? '#ios' : '#mac';
+                var target = '#' + (platform === 'ios' ? 'ios' : platform);
                 if (location.hash !== target) {
                     history.pushState({ platform: platform }, '', target);
                 }
             }
         }
 
-        // Read initial state from the URL hash. A bare '/' or any
-        // non-recognised hash → Mac. We also recognise '#mac' explicitly
-        // so people can deep-link both directions.
+        // Read initial state from the URL hash. Any '#ios…' anchor (there
+        // are several older ones out in the wild) lands on iPhone, any
+        // '#meetings…' anchor on Meetings, and everything else on Mac.
         function platformFromHash() {
             var h = (location.hash || '').toLowerCase();
-            if (h === '#ios' || h === '#iphone') return 'ios';
+            if (h === '#iphone' || h === '#tradeoff-ios' || h.indexOf('#ios') === 0) return 'ios';
+            if (h.indexOf('#meetings') === 0) return 'meetings';
             return 'mac';
         }
 
         buttons.forEach(function (b) {
             b.addEventListener('click', function () {
-                var target = b.getAttribute('data-platform-target');
-                apply(target, { updateHash: true });
+                apply(b.getAttribute('data-platform-target'), { updateHash: true });
             });
         });
 
@@ -1924,152 +2307,36 @@
     })();
 
     // Highlight the TOC entry for whichever section is currently in the
-    // upper third of the viewport. The wide rootMargin (negative top + bottom)
-    // means a section is only "active" once its top crosses ~25% down the
-    // viewport, which feels right when reading — you're past the heading, into
-    // the body of that section.
-    // Compact pipeline diagram — click a tile to render its details into
-    // the single detail panel below. Stage content lives in JS so the source
-    // of truth is one place; tile DOM only holds the visual chrome.
-    (function () {
-        // Stage descriptions are trusted HTML (we author them, not user input),
-        // so render injects them raw. Lets Substitute use a <dl> category
-        // breakdown without having to mark up via JS string concatenation.
-        var stages = [
-            {
-                title: 'Transcribe',
-                color: '#007AFF',
-                kindLabel: 'Speech-to-text',
-                kindClass: 'stt',
-                optional: false,
-                desc: '<p class="pipe-detail-desc">WhisperKit or Parakeet (FluidAudio on the Apple Neural Engine) turns your audio into a raw transcript. Both engines run locally; models download once and stay on disk. Pick the one that matches the trade-off you want between accuracy and latency.</p>',
-                guard: null
-            },
-            {
-                title: 'Substitute',
-                color: '#34C759',
-                kindLabel: 'Deterministic',
-                kindClass: 'det',
-                optional: true,
-                desc:
-                    '<p class="pipe-detail-desc">Spoken cues become symbols, deterministically — no model involved. Five independent toggles per mode let you mix and match exactly what gets substituted; turn all five off and the raw transcript flows through unchanged.</p>' +
-                    '<dl class="cue-list">' +
-                        '<dt>Punctuation</dt>' +
-                        '<dd>"comma" → ",", "new paragraph" → ↵, "question mark" → "?", "em dash" → "—"</dd>' +
-                        '<dt>Numbers</dt>' +
-                        '<dd>"twenty thousand and sixty two" → "20062", "five plus three" → "5 + 3"</dd>' +
-                        '<dt>Times</dt>' +
-                        '<dd>"ten AM" → "10am", "fourteen forty-five hours" → "1445 hours"</dd>' +
-                        '<dt>Currency</dt>' +
-                        '<dd>"five dollars" → "$5", "twenty euros" → "€20", "sixteen hundred pounds" → "£1600"</dd>' +
-                        '<dt>Emojis</dt>' +
-                        '<dd>"fire emoji" → 🔥, "thumbs up emoji" → 👍 — every standard emoji by name (~3,700)</dd>' +
-                    '</dl>' +
-                    '<p class="pipe-detail-desc">Your custom dictionary plugs in here too — case-insensitive whole-word replacements for names, jargon, and the words your accent always trips up. Runs in Quick mode too, so even with every LLM pass off, what you say is what you get.</p>',
-                guard: null
-            },
-            {
-                title: 'Format',
-                color: '#AF52DE',
-                kindLabel: 'Language model',
-                kindClass: 'llm',
-                optional: true,
-                desc: '<p class="pipe-detail-desc">An on-device LLM punctuates, capitalises, and tidies obvious grammar slips. Uses Apple\'s on-device foundation model when Apple Intelligence is enabled, or one of the supported MLX models as an alternative. Skipped entirely for question-shaped input.</p>',
-                guard: '60% of input anchor words must survive, and the word count can\'t grow by more than 15% + 3. Otherwise the substituted transcript is passed through unchanged.'
-            },
-            {
-                title: 'Grammar',
-                color: '#FF2D55',
-                kindLabel: 'Language model',
-                kindClass: 'llm',
-                optional: true,
-                desc: '<p class="pipe-detail-desc">Fixes contractions, subject-verb agreement, duplicate words — the small things you\'d tidy by hand. Off by default; toggle from Settings.</p>',
-                guard: 'Word-level edit distance from the input. Reverts if drift exceeds your threshold (15% by default).'
-            },
-            {
-                title: 'Structure',
-                color: '#30B0C7',
-                kindLabel: 'Language model',
-                kindClass: 'llm',
-                optional: true,
-                desc: '<p class="pipe-detail-desc">Paragraph breaks and bullet lists for longer dictations — useful when you\'re talking out an email or a memo, not a one-liner.</p>',
-                guard: 'Strict word-sequence equality after lowercasing. Reverts on any word change — bullets and breaks only, never rewording.'
-            }
-        ];
-        var tiles = document.querySelectorAll('.pipe-tile');
-        var detail = document.getElementById('pipe-detail');
-        if (!tiles.length || !detail) return;
-
-        function escapeHTML(s) {
-            return s
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-        }
-
-        function render(index) {
-            var s = stages[index];
-            var tile = tiles[index];
-            // Clone the tile's icon so we don't keep a second copy of the
-            // SVG markup in JS. The detail panel's --stage-color cascades
-            // down to the cloned .pipe-icon-lg, so colours stay consistent.
-            var iconEl = tile && tile.querySelector('.pipe-icon-lg');
-            var iconHTML = iconEl ? iconEl.outerHTML : '';
-            detail.style.setProperty('--stage-color', s.color);
-            var optionalHTML = s.optional
-                ? '<span class="tile-pill opt">Optional</span>'
-                : '';
-            var guardHTML = s.guard
-                ? '<div class="pipe-detail-guard"><strong>Guard:</strong> ' + escapeHTML(s.guard) + '</div>'
-                : '';
-            detail.innerHTML =
-                '<div class="pipe-detail-head">' +
-                    iconHTML +
-                    '<h3 class="pipe-detail-title">' + escapeHTML(s.title) + '</h3>' +
-                    '<span class="tile-pill ' + s.kindClass + '">' + escapeHTML(s.kindLabel) + '</span>' +
-                    optionalHTML +
-                '</div>' +
-                s.desc +
-                guardHTML;
-        }
-
-        tiles.forEach(function (tile, i) {
-            tile.addEventListener('click', function () {
-                tiles.forEach(function (t) {
-                    t.classList.remove('active');
-                    t.setAttribute('aria-selected', 'false');
-                });
-                tile.classList.add('active');
-                tile.setAttribute('aria-selected', 'true');
-                render(i);
-            });
-        });
-
-        render(0);
-    })();
-
+    // upper third of the viewport. The wide rootMargin (negative top +
+    // bottom) means a section is only "active" once its top crosses ~25%
+    // down the viewport, which feels right when reading. Each of the three
+    // per-platform TOCs has its own link for shared anchors like #why, so
+    // ids map to a list of links, not a single one.
     (function () {
         var sections = document.querySelectorAll('section[id]');
         var links = document.querySelectorAll('.toc a');
         if (!sections.length || !links.length) return;
-        var linkById = {};
+        var linksById = {};
         links.forEach(function (a) {
-            linkById[a.getAttribute('href').slice(1)] = a;
+            var id = a.getAttribute('href').slice(1);
+            (linksById[id] = linksById[id] || []).push(a);
         });
         var visible = new Set();
+        var orderedIds = Array.prototype.map.call(sections, function (s) { return s.id; });
         var observer = new IntersectionObserver(function (entries) {
             entries.forEach(function (e) {
                 if (e.isIntersecting) visible.add(e.target.id);
                 else visible.delete(e.target.id);
             });
-            // Pick the first section (in document order) that's currently in
-            // the active band. Falls back to the last visible if none are.
-            var orderedIds = Array.from(sections).map(function (s) { return s.id; });
+            // First section (in document order) that's currently in the
+            // active band wins.
             var activeId = orderedIds.find(function (id) { return visible.has(id); });
+            // Nothing in the band (a gap between sections, e.g. the
+            // cross-link card) — keep the last highlight rather than
+            // flickering the whole list off.
+            if (!activeId || !linksById[activeId]) return;
             links.forEach(function (a) { a.classList.remove('active'); });
-            if (activeId && linkById[activeId]) {
-                linkById[activeId].classList.add('active');
-            }
+            linksById[activeId].forEach(function (a) { a.classList.add('active'); });
         }, { rootMargin: '-25% 0px -65% 0px', threshold: 0 });
         sections.forEach(function (s) { observer.observe(s); });
     })();
