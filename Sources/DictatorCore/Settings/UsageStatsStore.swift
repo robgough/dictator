@@ -298,11 +298,11 @@ public final class UsageStatsStore {
         loaded = true
 
         if deviceID.isEmpty {
-            if let stored = UserDefaults.standard.string(forKey: Self.deviceIDKey), !stored.isEmpty {
+            if let stored = AppDefaults.shared.string(forKey: Self.deviceIDKey), !stored.isEmpty {
                 deviceID = stored
             } else {
                 let fresh = UUID().uuidString
-                UserDefaults.standard.set(fresh, forKey: Self.deviceIDKey)
+                AppDefaults.shared.set(fresh, forKey: Self.deviceIDKey)
                 deviceID = fresh
             }
         }
@@ -353,13 +353,7 @@ public final class UsageStatsStore {
         // iOS: by default keep stats in the app sandbox alongside the
         // history store. The shared-folder opt-in (Settings → Shared
         // folder on iOS) overrides this via `bootstrap(customDirectory:)`.
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Dictator", isDirectory: true)
+        return AppSupportPaths.dictator
         #endif
     }
 

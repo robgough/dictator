@@ -400,14 +400,7 @@ struct MeetingsSettings: Codable, Equatable {
     /// purpose — meeting audio, models and the local settings files all live
     /// under the one folder, and the storage paths do not change across the
     /// app split.
-    nonisolated static func appSupportDirectory() -> URL {
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support")
-        return support.appendingPathComponent("Dictator", isDirectory: true)
-    }
+    nonisolated static func appSupportDirectory() -> URL { AppSupportPaths.dictator }
 
     // MARK: - Load
 

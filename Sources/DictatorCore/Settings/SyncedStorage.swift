@@ -55,6 +55,9 @@ enum SyncedStorage {
     /// sync provider) the contents sync automatically. `nonisolated` so
     /// the settings loader can use it before AppState is ready.
     nonisolated static var defaultDirectory: URL {
+        // Screenshot mode rebases the whole synced folder onto a throwaway
+        // directory so a capture can never read or write the user's own.
+        if let override = ScreenshotMode.syncedDirectoryOverride { return override }
         // `homeDirectoryForCurrentUser` is macOS-only; `NSHomeDirectory()`
         // works on both platforms and returns the sandbox home on iOS.
         let documents = FileManager.default
@@ -94,11 +97,7 @@ enum SyncedStorage {
     static func migrateFromAppSupport(filename: String) {
         let target = fileURL(for: filename)
         guard !FileManager.default.fileExists(atPath: target.path) else { return }
-        let supportDir = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support")
-        let source = supportDir
+        let source = AppSupportPaths.base
             .appendingPathComponent("Dictator", isDirectory: true)
             .appendingPathComponent(filename)
         guard FileManager.default.fileExists(atPath: source.path) else { return }

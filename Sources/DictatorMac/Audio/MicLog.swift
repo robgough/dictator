@@ -21,14 +21,7 @@ enum MicLog {
     private static let trimToBytes = 128 * 1024
 
     private static let fileURL: URL = {
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support")
-        return support
-            .appendingPathComponent("Dictator", isDirectory: true)
-            .appendingPathComponent("mic-diagnostics.log")
+        AppSupportPaths.dictator.appendingPathComponent("mic-diagnostics.log")
     }()
 
     private static let stampFormatter: DateFormatter = {

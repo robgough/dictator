@@ -54,10 +54,7 @@ enum MeetingStorage {
     /// always lives here; when no synced folder is configured, the synced text
     /// files collapse onto it too.
     private static func appSupportMeetingsRoot() -> URL {
-        let fm = FileManager.default
-        let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
-        return (base ?? fm.temporaryDirectory)
-            .appendingPathComponent("Dictator/Meetings", isDirectory: true)
+        AppSupportPaths.dictator.appendingPathComponent("Meetings", isDirectory: true)
     }
 
     /// Root for the synced per-meeting folders (meta.json, transcript.json).

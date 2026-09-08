@@ -248,6 +248,29 @@ final class MeetingSession: Identifiable {
         }
     }
 
+    /// Screenshot mode only (see `MeetingsScreenshotRunner`): drop this session
+    /// into a mid-recording state with canned live notes, transcript and coach
+    /// signals, without opening a microphone, a system tap or a model.
+    /// No-op in a normal launch.
+    func applyScreenshotFixture(
+        elapsed: TimeInterval,
+        micLevel: Float,
+        systemLevel: Float,
+        transcriber: MeetingLiveTranscriber?,
+        notes: MeetingNotesAccumulator?,
+        coach: MeetingCoachEngine?,
+        pad: String
+    ) {
+        guard ScreenshotMode.isActive else { return }
+        self.liveTranscriber = transcriber
+        self.notesAccumulator = notes
+        self.coachEngine = coach
+        self.padText = pad
+        self.micHeard = true
+        self.systemHeard = true
+        self.state = .recording(elapsed: elapsed, micLevel: micLevel, sysLevel: systemLevel)
+    }
+
     // MARK: - Live recording
 
     /// Begin capture. The session takes care of probing system-audio-

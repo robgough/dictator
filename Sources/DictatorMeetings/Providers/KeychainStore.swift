@@ -20,6 +20,10 @@ enum KeychainStore {
     /// The stored key for a provider, or nil when there isn't one. Searches
     /// synchronizable and non-synchronizable items alike.
     static func get(account: String) -> String? {
+        // Screenshot mode never touches the real keychain — an unsigned
+        // capture build asking for the signed app's items raises a password
+        // prompt, and it has no business reading them anyway.
+        if ScreenshotMode.isActive { return nil }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -43,6 +47,7 @@ enum KeychainStore {
     /// the Providers tab so the row can say "Key saved" without ever rendering
     /// one.
     static func has(account: String) -> Bool {
+        if ScreenshotMode.isActive { return false }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -64,6 +69,7 @@ enum KeychainStore {
     /// than silently leaving the provider keyless.
     @discardableResult
     static func set(_ value: String?, account: String, synchronizable: Bool) -> Bool {
+        if ScreenshotMode.isActive { return false }
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         delete(account: account)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return true }
@@ -93,6 +99,7 @@ enum KeychainStore {
 
     /// Removes a provider's key, both the local and the synchronizable item.
     static func delete(account: String) {
+        if ScreenshotMode.isActive { return }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

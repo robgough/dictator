@@ -2,10 +2,8 @@ import Foundation
 
 enum ModelStorage {
     static func root() -> URL {
-        let fm = FileManager.default
-        let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = (base ?? fm.temporaryDirectory).appendingPathComponent("Dictator/Models", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppSupportPaths.dictator.appendingPathComponent("Models", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 

@@ -73,7 +73,15 @@ struct TranscriptView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .quickLookPreview($screenshotQuickLook)
-        .onAppear { loadAudio() }
+        .onAppear {
+            loadAudio()
+            // Screenshot mode opens a specific tab; nil in a normal launch.
+            switch MeetingsScreenshotRunner.detailTab {
+            case "coach": tab = .coach
+            case "notes": tab = .notes
+            default: break
+            }
+        }
         .onDisappear { player.unload() }
         .onChange(of: meta.id) { _, _ in
             loadAudio()

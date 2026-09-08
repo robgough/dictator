@@ -20,12 +20,7 @@ enum LLMSocket {
     /// `~/Library/Application Support/Dictator/` — the same per-Mac directory
     /// that holds the models, the local settings file and the mic log. Not
     /// `ModelStorage.root()`, which is the `Models/` subfolder.
-    static var directory: URL {
-        let fm = FileManager.default
-        let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                               appropriateFor: nil, create: true)
-        return (base ?? fm.temporaryDirectory).appendingPathComponent("Dictator", isDirectory: true)
-    }
+    static var directory: URL { AppSupportPaths.dictator }
 
     /// Absolute filesystem path of the socket. `sockaddr_un.sun_path` is 104
     /// bytes on Darwin; this path is ~60 for a normal home directory, so there

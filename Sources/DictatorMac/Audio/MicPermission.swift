@@ -13,7 +13,8 @@ enum MicPermission {
     /// Snapshot of the current authorization state. Polled by the Settings
     /// row so the UI updates when the user grants/revokes from System Settings.
     static func status() -> AVAuthorizationStatus {
-        AVCaptureDevice.authorizationStatus(for: .audio)
+        if ScreenshotMode.isActive { return .authorized }
+        return AVCaptureDevice.authorizationStatus(for: .audio)
     }
 
     /// Triggers the macOS permission prompt. Only meaningful when status is

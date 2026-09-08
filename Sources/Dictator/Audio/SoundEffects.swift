@@ -189,12 +189,8 @@ final class SoundEffects: @unchecked Sendable {
     /// `~/Library/Application Support/Dictator/SoundCues/`. Mirrors the
     /// resolution `MicLog` / `ModelStorage` use.
     private static func cueDirectory() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                appropriateFor: nil, create: true))
-            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let dir = base.appendingPathComponent("Dictator/SoundCues", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppSupportPaths.dictator.appendingPathComponent("SoundCues", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 

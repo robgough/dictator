@@ -16,6 +16,9 @@ struct GeneralPane: View {
 
     var body: some View {
         @Bindable var s = state
+        // ScrollViewReader wraps the Form purely so screenshot mode can scroll
+        // a named section into view (see `ScreenshotRunner`). Inert otherwise.
+        ScrollViewReader { proxy in
         Form {
             Section("Permissions") {
                 AccessibilityStatusRow()
@@ -72,6 +75,7 @@ struct GeneralPane: View {
             } footer: {
                 SectionFootnote("Not synced between Macs.")
             }
+            .id(GeneralPane.hudSectionID)
 
             Section {
                 Toggle("Play sounds", isOn: $s.settings.playSounds)
@@ -138,7 +142,12 @@ struct GeneralPane: View {
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
+        .onAppear { ScreenshotScroll.register(proxy) }
+        }
     }
+
+    /// Anchor the screenshot runner scrolls to for the HUD-gallery shot.
+    static let hudSectionID = "screenshot-hud-section"
 }
 
 /// Row that shows where Dictator's synced data lives and lets the user

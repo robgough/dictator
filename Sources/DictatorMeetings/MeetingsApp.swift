@@ -32,7 +32,10 @@ struct DictatorMeetingsApp: App {
     /// tears the status item down and rebuilds it on every change, and the
     /// setting's footnote promises "takes effect on the next launch" for
     /// exactly that reason.
+    // `&& !ScreenshotMode.isActive`: a capture run must not drop a second
+    // Meetings glyph into the user's menu bar.
     @State private var menuBarInserted = MeetingsAppState.shared.settings.showMenuBarStatus
+        && !ScreenshotMode.isActive
 
     init() {
         // Storage must be pointed at the synced folder before the Meetings
@@ -40,6 +43,9 @@ struct DictatorMeetingsApp: App {
         // AppDelegate's launch hook fires. `bootstrap()` re-calls this as a
         // no-op.
         MeetingsAppState.shared.prepareStorage()
+        // Developer-only screenshot mode: write the fixture meetings before the
+        // window's first store scan. Inert in a normal launch.
+        MeetingsScreenshotRunner.seed()
     }
 
     var body: some Scene {
@@ -182,6 +188,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coachIsland: CoachIslandController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Developer-only screenshot mode: render one window to a PNG and exit.
+        // Deliberately ahead of the single-instance guard — the capture runs
+        // alongside the user's installed copy and must not quit or relaunch it
+        // — and it never reaches `bootstrap()`, so no models, no audio, no
+        // provider warm-up and no coach island.
+        if ScreenshotMode.isActive {
+            MeetingsScreenshotRunner.run()
+            return
+        }
+
         // Single-instance guard, same as Dictator's. Two copies with the same
         // bundle ID can run side by side when they live at different paths —
         // the installed ~/Applications build alongside a DerivedData ⌘R build,

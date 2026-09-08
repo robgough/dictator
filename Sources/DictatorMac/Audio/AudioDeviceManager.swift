@@ -185,7 +185,7 @@ final class AudioDeviceManager {
 
     private func loadKnown() {
         guard
-            let data = UserDefaults.standard.data(forKey: Self.storageKey),
+            let data = AppDefaults.shared.data(forKey: Self.storageKey),
             let decoded = try? JSONDecoder().decode([AudioDevice].self, from: data)
         else {
             // First launch (or wiped settings): seed with just the System
@@ -216,6 +216,6 @@ final class AudioDeviceManager {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(knownDevices) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        AppDefaults.shared.set(data, forKey: Self.storageKey)
     }
 }

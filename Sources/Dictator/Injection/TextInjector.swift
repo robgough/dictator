@@ -79,7 +79,10 @@ final class TextInjector {
     }
 
     static func hasAccessibilityPermission() -> Bool {
-        AXIsProcessTrusted()
+        // Screenshot mode renders the granted state rather than asking (and
+        // rather than showing a "grant permission" banner in a marketing shot).
+        if ScreenshotMode.isActive { return true }
+        return AXIsProcessTrusted()
     }
 
     /// Whether the system-wide focused UI element is an editable text input.

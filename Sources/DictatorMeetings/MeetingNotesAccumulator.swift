@@ -163,6 +163,17 @@ final class MeetingNotesAccumulator {
         self.notesEnabled = notesEnabled
     }
 
+    /// Screenshot mode only (see `MeetingsScreenshotRunner`): fold a canned
+    /// outline in as though a pass had just produced it, without an LLM and
+    /// without starting the cadence loop. No-op in a normal launch.
+    func applyScreenshotFixture(markdown: String, lastUpdate: Date) {
+        guard ScreenshotMode.isActive else { return }
+        merge(Self.parseGroups(markdown))
+        liveNotes = render()
+        rebuildOutline()
+        lastUpdateAt = lastUpdate
+    }
+
     /// Warm the engine and start the cadence loop. Safe to call once.
     func start() {
         guard loopTask == nil else { return }

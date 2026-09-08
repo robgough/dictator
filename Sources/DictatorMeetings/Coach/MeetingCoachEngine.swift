@@ -143,6 +143,16 @@ final class MeetingCoachEngine {
         checklist.filter { $0.source == .suggested && $0.status != .dismissed }
     }
 
+    /// Screenshot mode only (see `MeetingsScreenshotRunner`): publish a canned
+    /// snapshot and checklist without any audio, transcript or publish loop.
+    /// No-op in a normal launch.
+    func applyScreenshotFixture(snapshot: MeetingCoachSignals.Snapshot,
+                                checklist: [CoachChecklistEntry]) {
+        guard ScreenshotMode.isActive else { return }
+        self.snapshot = snapshot
+        self.checklist = checklist
+    }
+
     /// Begin the clock + the 1 Hz publish loop. Called from the recorder's
     /// onReady (when capture actually starts), so t=0 is real audio time.
     func start() {

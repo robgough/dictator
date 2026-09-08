@@ -13,7 +13,9 @@ struct DictatorApp: App {
     // update schedule.
 
     var body: some Scene {
-        MenuBarExtra {
+        // `isInserted` is false only in screenshot mode, so a capture run
+        // doesn't drop a second Dictator glyph in the user's menu bar.
+        MenuBarExtra(isInserted: .constant(!ScreenshotMode.isActive)) {
             MenuBarContent()
                 .environment(appState)
                 .onOpenURL { url in handleURL(url) }
@@ -88,6 +90,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Developer-only screenshot mode: seed fixtures, render one window to
+        // a PNG, exit. Deliberately ahead of the single-instance guard — the
+        // capture runs alongside the user's installed copy and must not quit,
+        // relaunch or disturb it — and it never reaches `bootstrap()`, so no
+        // hotkeys, no LLM socket, no models, no permission checks.
+        if ScreenshotMode.isActive {
+            ScreenshotRunner.run()
+            return
+        }
+
         // Single-instance guard. Two copies with the same bundle ID can run
         // side by side when they live at different paths — the installed
         // ~/Applications build alongside a DerivedData ⌘R build, say —

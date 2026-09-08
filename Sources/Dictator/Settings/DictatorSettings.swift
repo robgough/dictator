@@ -1462,14 +1462,7 @@ struct DictatorSettings: Codable, Equatable {
     }
 
     nonisolated static func localFileURL() -> URL {
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support")
-        return support
-            .appendingPathComponent("Dictator", isDirectory: true)
-            .appendingPathComponent("local-settings.json")
+        AppSupportPaths.dictator.appendingPathComponent("local-settings.json")
     }
 
     @MainActor
@@ -1485,7 +1478,7 @@ struct DictatorSettings: Codable, Equatable {
 
         // No file pair yet → first launch on this build. Try to migrate
         // from the old UserDefaults blob.
-        if let data = UserDefaults.standard.data(forKey: legacyUserDefaultsKey) {
+        if let data = AppDefaults.shared.data(forKey: legacyUserDefaultsKey) {
             do {
                 var migrated = try JSONDecoder().decode(DictatorSettings.self, from: data)
                 migrated.resolveHotkeyConflicts()
@@ -1499,7 +1492,7 @@ struct DictatorSettings: Codable, Equatable {
                 let stamp = ISO8601DateFormatter().string(from: Date())
                     .replacingOccurrences(of: ":", with: "-")
                 let recoveryKey = "\(legacyUserDefaultsKey).recovered-\(stamp)"
-                UserDefaults.standard.set(data, forKey: recoveryKey)
+                AppDefaults.shared.set(data, forKey: recoveryKey)
                 NSLog("[Dictator] Settings UserDefaults decode failed (\(error)). Preserved as '\(recoveryKey)'. Loading defaults; persist() suspended until corruption is acknowledged.")
                 var settings = freshInstallDefaults()
                 settings.persistSuspendedDueToCorruption = true

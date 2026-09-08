@@ -123,6 +123,9 @@ struct MeetingsRootView: View {
             }
         }
         .onAppear {
+            // Screenshot mode picks the meeting (or installs a fabricated live
+            // session) the capture is meant to show. Inert otherwise.
+            MeetingsScreenshotRunner.configure(selection: $selectedID, liveSession: $liveSession)
             store.refresh()
             consumePendingRecordingRequest()
             consumePendingStopRequest()

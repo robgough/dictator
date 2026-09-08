@@ -223,6 +223,14 @@ final class MeetingLiveTranscriber {
         self.isRunning = true
     }
 
+    /// Screenshot mode only (see `MeetingsScreenshotRunner`): commit canned
+    /// lines as though they had been transcribed, with no audio and no model.
+    /// No-op in a normal launch.
+    func applyScreenshotFixture(lines: [(speaker: String, text: String)]) {
+        guard ScreenshotMode.isActive else { return }
+        for line in lines { appendLine(speaker: line.speaker, text: line.text) }
+    }
+
     /// Receive mono Float32 mic audio (at the device's native rate) from
     /// `MeetingMicRecorder`. Called from the off-main capture queue — we
     /// resample to 16 kHz here, then hop to the main actor to touch the chunk
