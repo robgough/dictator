@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Regenerate the six Mac screenshots on docs/index.html from the real apps.
+# Regenerate the Mac screenshots from the real apps — the six on
+# docs/index.html, plus `demo-history`, which isn't on the page but keeps the
+# Demo-mode fixtures visible.
 #
 #   ./scripts/mac-screenshots.sh
 #
@@ -12,7 +14,7 @@
 #      stripped, so the build cannot overwrite (or ad-hoc re-sign) the user's
 #      installed ~/Applications/Dictator.app and Dictator Meetings.app;
 #   2. builds both schemes into a scratch derived-data directory;
-#   3. runs each app six times, once per shot, with a throwaway data root —
+#   3. runs each app once per shot, with a throwaway data root —
 #      every settings / history / meeting / model / keychain path is redirected
 #      there, so a capture never reads or writes the user's own data, and the
 #      single-instance guard is skipped so the user's running copies are left
@@ -115,7 +117,7 @@ shoot() {
   fi
 }
 
-for shot in modes hud-styles assistant-draft; do
+for shot in modes hud-styles assistant-draft demo-history; do
   shoot "$DICTATOR_APP" "Dictator" "$shot"
 done
 for shot in live-recording notes coach; do
@@ -144,6 +146,8 @@ place() {
 place modes           docs/media/mac/modes.png
 place hud-styles      docs/media/mac/hud-styles.png
 place assistant-draft docs/media/mac/assistant-draft.png
+# Not referenced by docs/index.html — a look at the Demo-mode fixtures.
+place demo-history    docs/media/mac/demo-history.png
 place live-recording  docs/media/meetings/live-recording.png
 place notes           docs/media/meetings/notes.png
 place coach           docs/media/meetings/coach.png

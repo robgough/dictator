@@ -113,8 +113,10 @@ private struct AssistantResultView: View {
     @State private var history = ConversationHistory.shared
     @State private var copyFeedback = false
 
+    /// Demo mode resolves fixture threads by id first, so the window opens on
+    /// fictional content while a recording is running.
     private var conversation: Conversation? {
-        history.conversation(id: conversationID)
+        DemoMode.shared.conversation(id: conversationID, real: history.conversation(id: conversationID))
     }
 
     var body: some View {
@@ -252,7 +254,9 @@ private struct TurnRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let context = turn.context {
+            // Captured context is the user's own screen — never shown while
+            // demo mode is on.
+            if let context = turn.context, !DemoMode.shared.isOn {
                 ContextNote(context: context)
             }
             HStack(alignment: .top, spacing: 6) {

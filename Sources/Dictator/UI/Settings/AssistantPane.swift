@@ -13,7 +13,11 @@ struct AssistantPane: View {
     /// Read through `AssistantMemory` rather than cached in `@State`: the file
     /// is hand-editable, so the store re-reads it when its mtime moves and the
     /// count follows without this view having to watch anything.
-    private var memoryCount: Int { AssistantMemory.shared.entries.count }
+    /// Routed through `DemoMode` so a recording shows the fictional facts (and
+    /// "Open file" a fictional file) instead of the user's own.
+    private var memoryCount: Int {
+        DemoMode.shared.memoryLines(real: AssistantMemory.shared.entries).count
+    }
 
     var body: some View {
         @Bindable var s = state
@@ -78,7 +82,7 @@ struct AssistantPane: View {
                 if s.settings.assistantMemoryEnabled {
                     LabeledContent(memoryCount == 1 ? "1 remembered" : "\(memoryCount) remembered") {
                         HStack(spacing: 8) {
-                            Button("Open file") { AssistantMemory.shared.openInEditor() }
+                            Button("Open file") { DemoMode.shared.openMemoryFile() }
                             Button("Forget all…") { showForgetConfirm = true }
                                 .disabled(memoryCount == 0)
                         }
@@ -114,7 +118,7 @@ struct AssistantPane: View {
         .confirmationDialog("Forget everything the assistant remembers?",
                             isPresented: $showForgetConfirm,
                             titleVisibility: .visible) {
-            Button("Forget All", role: .destructive) { AssistantMemory.shared.forgetAll() }
+            Button("Forget All", role: .destructive) { DemoMode.shared.forgetAllMemory() }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This clears assistant-memory.md. It can't be undone.")

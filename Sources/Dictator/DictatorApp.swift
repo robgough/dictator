@@ -33,16 +33,19 @@ struct DictatorApp: App {
 
     }
 
-    /// Routes incoming `dictator://…` URLs. Two hosts handled today:
-    /// `settings` opens the Settings window and `onboarding` re-shows the
-    /// wizard. Anything else is logged and ignored. (`dictator://meetings` is
-    /// gone — meetings live in Dictator Meetings, which answers
-    /// `dictator-meetings://`.)
+    /// Routes incoming `dictator://…` URLs. Three hosts handled today:
+    /// `settings` opens the Settings window, `onboarding` re-shows the wizard,
+    /// and `demo?on=1` / `demo?on=0` drives Demo mode (no parameter toggles) so
+    /// a recording script can switch it without touching Settings. Anything
+    /// else is logged and ignored. (`dictator://meetings` is gone — meetings
+    /// live in Dictator Meetings, which answers `dictator-meetings://`.)
     private func handleURL(_ url: URL) {
         guard url.scheme?.lowercased() == "dictator" else { return }
         switch url.host?.lowercased() {
         case "settings":
             SettingsWindowController.shared.show()
+        case "demo":
+            DemoMode.handleURL(url)
         case "onboarding", "setup", "wizard":
             NSApp.activate(ignoringOtherApps: true)
             appState.showOnboarding()
@@ -59,10 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // services-menu invocation. `NSApp.servicesProvider` is `weak`.
     private let learnWordProvider = LearnWordProvider()
 
-    /// Routes `dictator://…` URLs. Two hosts handled:
+    /// Routes `dictator://…` URLs. Three hosts handled:
     /// `dictator://settings` opens the Settings window; `dictator://onboarding`
-    /// (or `setup` / `wizard`) re-shows the first-run wizard. Useful both as
-    /// a deep-link target for support docs and for automation.
+    /// (or `setup` / `wizard`) re-shows the first-run wizard; and
+    /// `dictator://demo?on=1` / `?on=0` switches Demo mode on or off (with no
+    /// `on` parameter it toggles). Useful both as a deep-link target for
+    /// support docs and for automation.
     ///
     /// `.onOpenURL` on a MenuBarExtra scene doesn't fire for `LSUIElement`
     /// apps, so we handle URLs here in the AppDelegate.
@@ -80,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSApp.setActivationPolicy(.regular)
                     SettingsWindowController.shared.show()
                 }
+            case "demo":
+                DemoMode.handleURL(url)
             case "onboarding", "setup", "wizard":
                 NSApp.activate(ignoringOtherApps: true)
                 AppState.shared.showOnboarding()

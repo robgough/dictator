@@ -9,10 +9,12 @@ struct MenuBarContent: View {
     @State private var conversations = ConversationHistory.shared
     @State private var modelManager = ModelManager.shared
     @State private var justCopied: UUID?
+    private let demo = DemoMode.shared
 
     var body: some View {
         @Bindable var s = state
         VStack(alignment: .leading, spacing: 10) {
+            if demo.isOn { demoBanner }
             header
             Divider()
             statusRow
@@ -25,12 +27,12 @@ struct MenuBarContent: View {
                 modePicker(bindable: $s)
             }
 
-            if !conversations.conversations.isEmpty {
+            if !demo.conversations(real: conversations.conversations).isEmpty {
                 Divider()
                 conversationsList
             }
 
-            if !history.records.isEmpty {
+            if !demo.historyIsEmpty(real: history.records) {
                 Divider()
                 recentList
             }
@@ -206,7 +208,7 @@ struct MenuBarContent: View {
             .textCase(.uppercase)
 
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(history.mostRecent(5)) { record in
+            ForEach(demo.history(real: history.records).prefix(5)) { record in
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(record.final, forType: .string)
@@ -221,6 +223,32 @@ struct MenuBarContent: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// The one place demo mode is visible as itself: a small pill at the top of
+    /// the dropdown, with a way out. Everything else in the UI looks exactly as
+    /// it normally does, so a recording doesn't advertise that it's staged.
+    private var demoBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "theatermasks.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text("Demo")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+            Text("showing fictional content")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button("Turn off") { demo.setOn(false) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.orange)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.orange.opacity(0.14))
+        )
     }
 
     private var header: some View {
@@ -307,9 +335,9 @@ struct MenuBarContent: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Spacer()
-            if conversations.conversations.count > 1 {
+            if demo.conversations(real: conversations.conversations).count > 1 {
                 Button("Clear all") {
-                    conversations.clear()
+                    demo.clearConversations { conversations.clear() }
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .medium))
@@ -318,11 +346,11 @@ struct MenuBarContent: View {
         }
 
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(conversations.mostRecent(5)) { convo in
+            ForEach(demo.conversations(real: conversations.conversations).prefix(5)) { convo in
                 ConversationRow(
                     conversation: convo,
                     onOpen: { state.openConversation(id: convo.id) },
-                    onDelete: { conversations.remove(id: convo.id) }
+                    onDelete: { demo.removeConversation(id: convo.id) { conversations.remove(id: convo.id) } }
                 )
             }
         }

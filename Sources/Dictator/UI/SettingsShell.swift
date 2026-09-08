@@ -248,8 +248,12 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
     /// a focus request the pane applies.
     @objc private func addDictionaryEntry() {
         let new = VocabularyEntry(pattern: "", replacement: "")
-        VocabularyStore.shared.entries.insert(new, at: 0)
-        AppState.shared.save()
+        // Demo mode keeps new rules in its own overlay — the user's real
+        // vocabulary.json is never written while it's on.
+        DemoMode.shared.insertVocabularyEntry(new) {
+            VocabularyStore.shared.entries.insert(new, at: 0)
+            AppState.shared.save()
+        }
         model.dictionarySort = .asEntered
         model.dictionarySearch = ""
         if let searchItem = window?.toolbar?.items.first(where: { $0.itemIdentifier == .dictionarySearch }) as? NSSearchToolbarItem {
@@ -400,6 +404,6 @@ private struct HistoryClearButton: View {
         } label: {
             Label("Clear", systemImage: "trash")
         }
-        .disabled(history.records.isEmpty)
+        .disabled(DemoMode.shared.historyIsEmpty(real: history.records))
     }
 }

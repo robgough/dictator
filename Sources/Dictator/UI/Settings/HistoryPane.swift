@@ -7,6 +7,9 @@ import AppKit
 struct HistoryPane: View {
     @State private var history = DictationHistory.shared
     @State private var expanded: UUID?
+    /// Demo mode swaps the user's real dictations for fictional ones — see
+    /// `DemoMode`. Reads and mutations both route through it.
+    private let demo = DemoMode.shared
     /// The Clear button lives in the window toolbar (SettingsShell) and only
     /// on this tab; the toolbar sets `confirmHistoryClear` and this pane
     /// presents the destructive confirmation.
@@ -14,7 +17,8 @@ struct HistoryPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if history.records.isEmpty {
+            let records = demo.history(real: history.records)
+            if records.isEmpty {
                 ContentUnavailableView(
                     "No dictations yet",
                     systemImage: "clock.arrow.circlepath",
@@ -24,7 +28,7 @@ struct HistoryPane: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(history.records) { record in
+                        ForEach(records) { record in
                             HistoryRow(
                                 record: record,
                                 isExpanded: expanded == record.id,
@@ -32,7 +36,7 @@ struct HistoryPane: View {
                                     expanded = expanded == record.id ? nil : record.id
                                 },
                                 remove: {
-                                    history.remove(id: record.id)
+                                    demo.removeHistory(id: record.id) { history.remove(id: record.id) }
                                     if expanded == record.id { expanded = nil }
                                 }
                             )
@@ -43,14 +47,14 @@ struct HistoryPane: View {
                 }
                 // Count lives here, not in the toolbar — bare text as a
                 // toolbar item gets a liquid-glass capsule on macOS 26.
-                SectionFootnote("\(history.records.count) kept; 7 days, 500 max.")
+                SectionFootnote("\(records.count) kept; 7 days, 500 max.")
                     .padding(.horizontal, 20)
                     .padding(.vertical, 10)
             }
         }
         .confirmationDialog("Clear all history?", isPresented: $shell.confirmHistoryClear) {
             Button("Clear", role: .destructive) {
-                history.clear()
+                demo.clearHistory { history.clear() }
                 expanded = nil
             }
             Button("Cancel", role: .cancel) {}

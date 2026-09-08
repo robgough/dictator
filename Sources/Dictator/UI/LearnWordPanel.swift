@@ -49,6 +49,10 @@ final class LearnWordPanelController: NSObject, NSWindowDelegate {
         } else {
             store.entries.append(entry)
         }
+        // A word learned during a demo really is added to the user's
+        // dictionary; mirror it into the demo overlay so the Dictionary pane
+        // shows it there too.
+        DemoMode.shared.noteVocabularyAdded(entry)
     }
 
     private func ensureWindow() -> NSWindow {

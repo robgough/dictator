@@ -125,7 +125,28 @@ final class ScratchpadController: NSObject, NSWindowDelegate {
     /// has already copied `scratchpad.md` across, so bootstrap flushes any
     /// pending edit to the old location, then reloads from the new one.
     func relocate(to directory: URL) {
+        // While demo mode is on the note lives in a throwaway folder; switching
+        // demo mode off re-points at whatever the synced folder is by then.
+        guard !DemoMode.shared.isOn else { return }
         model.bootstrap(customDirectory: directory)
+    }
+
+    /// Demo mode's Scratchpad handling. The pad is the one demo surface the
+    /// user can type into, so it can't be a read-only overlay: instead the
+    /// model is re-pointed at a throwaway temp folder seeded with the fixture
+    /// note. Typing, autosave and the reload-on-open path all behave exactly as
+    /// normal — they just read and write a file under `/tmp` that nobody keeps.
+    /// The real `scratchpad.md` is flushed before the switch (bootstrap saves
+    /// to the OLD location first) and untouched until demo mode goes off.
+    func applyDemoMode(_ on: Bool) {
+        if on {
+            let directory = DemoMode.scratchpadDirectory()
+            let note = directory.appendingPathComponent(ScratchpadStore.filename)
+            try? DemoMode.scratchpadNote.write(to: note, atomically: true, encoding: .utf8)
+            model.bootstrap(customDirectory: directory)
+        } else {
+            model.bootstrap(customDirectory: SyncedStorage.directory)
+        }
     }
 
     // The panel losing key focus (the user clicked into another app) is a good

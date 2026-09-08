@@ -42,6 +42,9 @@ struct DictionaryPane: View {
     /// change came from the UI itself or from an external file edit / sync
     /// drop the vnode watcher picked up).
     @State private var store = VocabularyStore.shared
+    /// Demo mode shows fictional rules and keeps every edit in its own
+    /// overlay — see `DemoMode`.
+    private let demo = DemoMode.shared
 
     /// Search text, sort order, and the add-entry action live in the window
     /// toolbar (SettingsShell); this pane reads them off the shared model.
@@ -93,8 +96,8 @@ struct DictionaryPane: View {
                 Text("Add words from any app")
                     .help("Select text in any app, then right-click \u{2192} Services \u{2192} \u{201C}Learn Word in Dictator\u{2026}\u{201D}.")
                 Spacer()
-                Text(countLabel(total: store.entries.count,
-                                shown: filteredEntries(from: store.entries).count))
+                Text(countLabel(total: entries.count,
+                                shown: filteredEntries(from: entries).count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -117,8 +120,14 @@ struct DictionaryPane: View {
     /// helpers that expect a Binding. Writes flow through the store's
     /// debounced save path, so a stream of edits coalesces to one disk write.
     private var vocabBinding: Binding<[VocabularyEntry]> {
-        Binding(get: { store.entries }, set: { store.entries = $0 })
+        Binding(
+            get: { demo.vocabulary(real: store.entries) },
+            set: { new in demo.setVocabulary(new) { store.entries = $0 } }
+        )
     }
+
+    /// What the pane is showing — the user's rules, or demo mode's.
+    private var entries: [VocabularyEntry] { demo.vocabulary(real: store.entries) }
 
     private func countLabel(total: Int, shown: Int) -> String {
         if total == 0 { return "" }
@@ -152,10 +161,10 @@ struct DictionaryPane: View {
                             CompactDictionaryRow(
                                 entry: entryBinding(id: entry.id, in: vocabulary),
                                 focused: $focusedFieldID,
-                                onChange: { state.save() },
+                                onChange: { if !demo.isOn { state.save() } },
                                 onRemove: {
                                     vocabulary.wrappedValue.removeAll { $0.id == entry.id }
-                                    state.save()
+                                    if !demo.isOn { state.save() }
                                 }
                             )
                             .id(entry.id)

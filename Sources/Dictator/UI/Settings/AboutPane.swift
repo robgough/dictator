@@ -10,6 +10,7 @@ struct AboutPane: View {
             VStack(alignment: .leading, spacing: 22) {
                 AboutHeader(updater: updater)
                 AboutStats()
+                AboutDemoMode()
                 AboutAuthor()
                 AboutPrivacy()
                 AboutCredits()
@@ -17,6 +18,27 @@ struct AboutPane: View {
             }
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The Demo mode switch. Session-only and never persisted, so it reads and
+/// writes `DemoMode.shared` directly rather than going through settings — see
+/// `DemoMode` for why that's deliberate.
+private struct AboutDemoMode: View {
+    private let demo = DemoMode.shared
+
+    var body: some View {
+        AboutSection(title: "Demo mode") {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Demo mode", isOn: Binding(
+                    get: { demo.isOn },
+                    set: { demo.setOn($0) }
+                ))
+                .toggleStyle(.switch)
+                .font(.callout)
+                SectionFootnote("Shows fictional history, conversations, memory and dictionary in place of your own. For recordings and screenshots. Off again when Dictator quits.")
+            }
         }
     }
 }

@@ -49,6 +49,7 @@ enum ScreenshotRunner {
         case "modes":           captureSettings(tab: .modes)
         case "hud-styles":      captureHUDStyles()
         case "assistant-draft": captureAssistantDraft()
+        case "demo-history":    captureDemoHistory()
         default:
             NSLog("[Screenshot] Unknown shot '\(ScreenshotMode.shot ?? "")' for Dictator")
             exit(64)
@@ -57,67 +58,28 @@ enum ScreenshotRunner {
 
     // MARK: - Fixture data (fictional; never the user's own)
 
+    /// The fixtures live in `DemoFixtures`, shared with the user-facing Demo
+    /// mode — one cast, one set of facts, so a marketing shot and a recorded
+    /// demo can never drift apart.
     private static func seedSettings() {
-        var settings = DictatorSettings.defaults
-        settings.userName = "Sam Okafor"
-        settings.hudStyle = .island
-        settings.hasCompletedOnboarding = true
-        settings.preloadModelsOnLaunch = false
-        settings.modes = [
-            DictationMode(id: DictationMode.quickID, name: "Quick", isLocked: true, style: .raw),
-            DictationMode(id: DictationMode.standardID, name: "Clean", style: .clean),
-            DictationMode(id: DictationMode.polishedID, name: "Polished", style: .polished),
-            DictationMode(
-                id: DictationMode.messagesID,
-                name: "Messages",
-                appBundleIDs: [
-                    "com.tinyspeck.slackmacgap",
-                    "org.whispersystems.signal-desktop",
-                    "com.apple.MobileSMS",
-                ],
-                style: .messages
-            ),
-            DictationMode(
-                id: UUID(uuidString: "2C1F9A64-0F2C-4C3E-9B10-9D6B7E5A4C21")!,
-                name: "Email",
-                appBundleIDs: ["com.apple.mail"],
-                style: .polished,
-                extraInstructions: "Always use British spelling."
-            ),
-        ]
-        settings.defaultModeID = DictationMode.standardID
-        AppState.shared.settings = settings
-        AppState.shared.pipeline.settingsChanged(settings)
+        AppState.shared.settings = DemoFixtures.settings()
+        AppState.shared.pipeline.settingsChanged(AppState.shared.settings)
     }
 
     /// A one-turn assistant conversation whose reply is a short drafted email.
     private static func seedConversation() -> UUID {
-        let turn = ConversationTurn(
-            id: UUID(),
-            timestamp: Date().addingTimeInterval(-40),
-            instruction: "Draft a polite reply saying I can't make Thursday and suggesting Tuesday instead.",
-            selection: """
-            Hi Sam — are you free Thursday at 3pm to walk through the Q3 roadmap \
-            before we take it to the wider team?
-            """,
-            mode: .draft,
-            reply: """
-            Hi Priya,
-
-            Thanks for pulling this together. Thursday afternoon is out for me \
-            unfortunately — I'm tied up with the Northwind renewal until the \
-            evening.
-
-            Could we do Tuesday instead? I'm free any time after 10am, and that \
-            still leaves us a clear week before the wider review.
-
-            Cheers,
-            Sam
-            """
-        )
-        let conversation = Conversation.new(firstTurn: turn)
+        let conversation = Conversation.new(firstTurn: DemoFixtures.draftReplyTurn())
         ConversationHistory.shared.append(conversation)
         return conversation.id
+    }
+
+    /// The dictation-history fixtures, written into this capture process's
+    /// throwaway store (`DICTATOR_SCREENSHOT_DATA` rebases every path), oldest
+    /// first so the store's newest-first ordering comes out right.
+    private static func seedHistory() {
+        for record in DemoFixtures.historyRecords().reversed() {
+            DictationHistory.shared.append(record)
+        }
     }
 
     // MARK: - Shots
@@ -132,6 +94,14 @@ enum ScreenshotRunner {
         ScreenshotWindowCapture.place(window, size: NSSize(width: 940, height: 600))
         ScreenshotWindowCapture.settle(seconds: 1.0)
         write(window)
+    }
+
+    /// Settings -> Dictation -> History with the demo fixtures in it. Not used
+    /// on the marketing site — it exists so the fixtures that back Demo mode
+    /// can be eyeballed the same way every other shot is.
+    private static func captureDemoHistory() {
+        seedHistory()
+        captureSettings(tab: .history)
     }
 
     private static func captureHUDStyles() {
