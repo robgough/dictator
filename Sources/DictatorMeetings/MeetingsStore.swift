@@ -36,25 +36,37 @@ final class MeetingsStore {
         MeetingAudioCompactor.shared.sweepOnce()
     }
 
+    /// What the UI lists. Identical to `metas` normally; while demo mode is on
+    /// it's the fixtures plus anything recorded since (see `MeetingsDemoMode`).
+    /// The list, its search and the sidebar's empty state all read this rather
+    /// than `metas`, which stays the real on-disk set.
+    var visibleMetas: [MeetingMeta] {
+        MeetingsDemoMode.shared.meetings(real: metas)
+    }
+
     /// Look up by UUID for the detail pane.
     func meta(id: UUID) -> MeetingMeta? {
-        metas.first(where: { $0.id == id })
+        MeetingsDemoMode.shared.meta(id: id, real: metas.first(where: { $0.id == id }))
     }
 
     /// Persist `meta` to disk and refresh the in-memory list.
     func upsert(_ meta: MeetingMeta) {
-        try? MeetingStorage.writeMeta(meta)
-        if let idx = metas.firstIndex(where: { $0.id == meta.id }) {
-            metas[idx] = meta
-        } else {
-            metas.insert(meta, at: 0)
+        MeetingsDemoMode.shared.upsert(meta) {
+            try? MeetingStorage.writeMeta(meta)
+            if let idx = metas.firstIndex(where: { $0.id == meta.id }) {
+                metas[idx] = meta
+            } else {
+                metas.insert(meta, at: 0)
+            }
         }
     }
 
     /// Delete the meeting folder and drop it from the in-memory list.
     func delete(id: UUID) {
-        MeetingStorage.deleteMeeting(id: id)
-        metas.removeAll { $0.id == id }
+        MeetingsDemoMode.shared.delete(id: id) {
+            MeetingStorage.deleteMeeting(id: id)
+            metas.removeAll { $0.id == id }
+        }
     }
 
     /// Rewrite every speaker link from one person to another, in memory and
@@ -83,10 +95,12 @@ final class MeetingsStore {
     /// reads the new type. Silent no-op for unknown ids or when the
     /// type is unchanged.
     func setMeetingType(id: UUID, type: MeetingTypeID) {
-        guard let idx = metas.firstIndex(where: { $0.id == id }) else { return }
-        guard metas[idx].meetingType != type else { return }
-        metas[idx].meetingType = type
-        try? MeetingStorage.writeMeta(metas[idx])
+        MeetingsDemoMode.shared.setMeetingType(id: id, type: type) {
+            guard let idx = metas.firstIndex(where: { $0.id == id }) else { return }
+            guard metas[idx].meetingType != type else { return }
+            metas[idx].meetingType = type
+            try? MeetingStorage.writeMeta(metas[idx])
+        }
     }
 
     /// Apply the user's auto-delete policy. 0 = never.

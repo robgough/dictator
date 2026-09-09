@@ -8,6 +8,23 @@ struct PeopleEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var store = PeopleStore.shared
     @State private var pendingMerge: PendingMerge?
+    /// While demo mode is on this pane shows fixture people and every edit
+    /// here lands in the demo overlay — `people.json` is never read or written
+    /// by any of it. See `MeetingsDemoMode`.
+    @State private var demo = MeetingsDemoMode.shared
+
+    /// The people this pane lists: the real store normally, the fixtures while
+    /// demo mode is on.
+    private var visiblePeople: [PersonRecord] { demo.people(real: store.people) }
+
+    /// Same test as `PeopleStore.peopleMatching(name:)`, run over whatever is
+    /// on screen — the duplicate-name warning has to follow the demo overlay.
+    private func sameNameCount(as person: PersonRecord) -> Int {
+        let key = person.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return visiblePeople.filter {
+            $0.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == key
+        }.count
+    }
 
     /// A merge the user has picked but not yet confirmed. Confirmation is
     /// deliberate where the speaker-chip merge has none: a wrong speaker
@@ -24,14 +41,14 @@ struct PeopleEditor: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("People")
                     .font(.title3.weight(.semibold))
-                if !store.people.isEmpty {
-                    Text("\(store.people.count) \(store.people.count == 1 ? "person" : "people")")
+                if !visiblePeople.isEmpty {
+                    Text("\(visiblePeople.count) \(visiblePeople.count == 1 ? "person" : "people")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if store.people.isEmpty {
+            if visiblePeople.isEmpty {
                 Text("Nobody yet. People appear here as meetings are processed — a named speaker's voice is remembered, so they're recognised next time.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -39,7 +56,7 @@ struct PeopleEditor: View {
             } else {
                 ScrollView {
                     VStack(spacing: 6) {
-                        ForEach(store.people) { person in
+                        ForEach(visiblePeople) { person in
                             row(person)
                         }
                     }
@@ -64,8 +81,13 @@ struct PeopleEditor: View {
                 title: Text("Merge “\(merge.source.name)” into “\(merge.target.name)”?"),
                 message: Text("Their emails and voice samples are combined into one person, and past meetings carry over. This can't be undone."),
                 primaryButton: .destructive(Text("Merge")) {
-                    store.merge(id: merge.source.id, into: merge.target.id)
-                    MeetingsStore.shared.repointPerson(from: merge.source.id, to: merge.target.id)
+                    // Merging a fixture person stays in the demo overlay —
+                    // `repointPerson` would otherwise rewrite every real
+                    // meeting's meta.json on disk.
+                    demo.mergePeople(source: merge.source.id, into: merge.target.id) {
+                        store.merge(id: merge.source.id, into: merge.target.id)
+                        MeetingsStore.shared.repointPerson(from: merge.source.id, to: merge.target.id)
+                    }
                 },
                 secondaryButton: .cancel()
             )
@@ -78,11 +100,15 @@ struct PeopleEditor: View {
                 HStack(spacing: 4) {
                     TextField("Name", text: Binding(
                         get: { person.name },
-                        set: { store.rename(id: person.id, to: $0) }
+                        set: { newName in
+                            demo.renamePerson(id: person.id, to: newName) {
+                                store.rename(id: person.id, to: newName)
+                            }
+                        }
                     ))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .medium))
-                    if store.peopleMatching(name: person.name).count > 1 {
+                    if sameNameCount(as: person) > 1 {
                         Image(systemName: "person.crop.circle.badge.exclamationmark")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -102,7 +128,7 @@ struct PeopleEditor: View {
             }
             Spacer()
             Button {
-                store.delete(id: person.id)
+                demo.deletePerson(id: person.id) { store.delete(id: person.id) }
             } label: {
                 Image(systemName: "trash")
                     .foregroundStyle(.secondary)
@@ -119,7 +145,7 @@ struct PeopleEditor: View {
         .contextMenu {
             // Same idiom as the speaker chips — and like there, an empty
             // builder would mean no menu at all, so always show something.
-            let targets = store.people.filter { $0.id != person.id }
+            let targets = visiblePeople.filter { $0.id != person.id }
             if !targets.isEmpty {
                 Menu("Merge into") {
                     ForEach(targets) { target in

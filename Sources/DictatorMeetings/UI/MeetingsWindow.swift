@@ -21,6 +21,9 @@ struct MeetingsRootView: View {
     @Environment(MeetingsAppState.self) private var state
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var store = MeetingsStore.shared
+    /// Session-only demo mode. Observed here for the sidebar pill and so the
+    /// list re-renders the moment it's switched on or off.
+    @State private var demo = MeetingsDemoMode.shared
     @State private var selectedID: UUID?
     @State private var liveSession: MeetingSession?
     @State private var searchText = ""
@@ -151,6 +154,19 @@ struct MeetingsRootView: View {
         .onChange(of: state.pendingStopRecording) { _, isPending in
             if isPending { consumePendingStopRequest() }
         }
+        // Demo mode switching either way changes which meetings exist, so drop
+        // any selection and cached session that no longer does — otherwise a
+        // fixture stays on screen after the switch goes off (the cache is keyed
+        // by id and knows nothing about demo mode). A live or processing
+        // session is kept: it's the user's real recording either way.
+        .onChange(of: demo.isOn) { _, _ in
+            sessionCache.byID = sessionCache.byID.filter { _, session in
+                session.isLive || session.isProcessing
+            }
+            if let id = selectedID, !store.visibleMetas.contains(where: { $0.id == id }) {
+                selectedID = nil
+            }
+        }
         .alert("Download the Parakeet speech model", isPresented: $showingParakeetGate) {
             Button("Download") {
                 ModelManager.shared.downloadParakeet(
@@ -264,8 +280,8 @@ struct MeetingsRootView: View {
     /// that" case from already-loaded metadata.
     private var filteredMetas: [MeetingMeta] {
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return store.metas }
-        return store.metas.filter { m in
+        guard !q.isEmpty else { return store.visibleMetas }
+        return store.visibleMetas.filter { m in
             m.title.lowercased().contains(q)
                 || (m.notes?.markdown.lowercased().contains(q) ?? false)
                 || (m.summary?.narrative.lowercased().contains(q) ?? false)
@@ -275,12 +291,16 @@ struct MeetingsRootView: View {
     @ViewBuilder
     private var sidebar: some View {
         VStack(spacing: 0) {
+            // The one place demo mode is visible as itself inside the window —
+            // and the window is the thing being recorded, so it has to be here.
+            // Everything below it looks exactly as it normally does.
+            if demo.isOn { DemoSidebarPill() }
             // Pinned "return to recording" banner while a meeting records and
             // the user has navigated away to browse another.
             if let live = liveSession, live.isLive, selectedID != live.id {
                 RecordingReturnBanner(session: live) { selectedID = live.id }
             }
-            if store.metas.isEmpty {
+            if store.visibleMetas.isEmpty {
                 // SwiftUI renders the empty state in the detail pane; the
                 // sidebar collapses to a hint.
                 VStack(alignment: .leading, spacing: 6) {
@@ -605,6 +625,43 @@ struct MeetingsRootView: View {
             // runImport drives off-main re-encode → .captured → processor.
             await session.runImport(from: url, parakeetModelID: modelID)
         }
+    }
+}
+
+/// The demo-mode indicator, pinned above the meetings list. Deliberately small
+/// and orange rather than a full banner: it has to be unmistakable in a screen
+/// recording (so a viewer knows the meetings aren't real) without dominating
+/// the shot it appears in. Mirrors the pill in Dictator's menu-bar dropdown,
+/// and carries the same way out.
+private struct DemoSidebarPill: View {
+    private let demo = MeetingsDemoMode.shared
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "theatermasks.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text("Demo")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+            Text("showing fictional content")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Spacer(minLength: 0)
+            Button("Turn off") { demo.setOn(false) }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.orange)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.orange.opacity(0.14))
+        )
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 }
 

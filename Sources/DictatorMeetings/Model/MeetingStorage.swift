@@ -50,6 +50,28 @@ enum MeetingStorage {
     /// meeting I/O, then only read.
     nonisolated(unsafe) static var syncedBaseURL: URL?
 
+    /// Demo mode's throwaway root, and the handful of fixture meeting ids that
+    /// resolve to it (see `MeetingsDemoMode`). Those ids — and *only* those —
+    /// have their folders redirected here, so the fixture meetings can be read,
+    /// edited and deleted through the ordinary storage path without a byte
+    /// reaching the user's real meetings. Every other id, including a meeting
+    /// genuinely recorded during a demo, resolves normally. Set on the first
+    /// switch-on and left in place afterwards, so a late write against a
+    /// fixture id can't fall through to the real folder once demo mode is off.
+    /// `nonisolated(unsafe)` for the same reason as `syncedBaseURL`: set on the
+    /// main actor when the switch is flipped, then only read.
+    nonisolated(unsafe) static var demoRoot: URL?
+    nonisolated(unsafe) static var demoIDs: Set<UUID> = []
+
+    /// The demo folder for `id`, or nil when demo mode is off / `id` is a real
+    /// meeting. Created on demand, like the real per-meeting folders.
+    private static func demoFolder(for id: UUID) -> URL? {
+        guard let demoRoot, demoIDs.contains(id) else { return nil }
+        let dir = demoRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     /// The per-Mac Application Support base for `Dictator/Meetings`. Audio
     /// always lives here; when no synced folder is configured, the synced text
     /// files collapse onto it too.
@@ -80,6 +102,7 @@ enum MeetingStorage {
 
     /// Synced folder for a specific meeting (meta + transcript). Created on demand.
     static func folder(for id: UUID) -> URL {
+        if let demo = demoFolder(for: id) { return demo }
         let dir = meetingsRoot().appendingPathComponent(id.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -87,6 +110,7 @@ enum MeetingStorage {
 
     /// Local folder for a specific meeting's audio tracks. Created on demand.
     static func audioFolder(for id: UUID) -> URL {
+        if let demo = demoFolder(for: id) { return demo }
         let dir = audioRoot().appendingPathComponent(id.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

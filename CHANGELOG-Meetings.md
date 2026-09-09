@@ -14,7 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- New Demo mode in Settings swaps your meetings, notes, transcripts and people for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator Meetings quits.
 
 ## v2026.9.1 — 2026-09-07
 

@@ -111,8 +111,32 @@ private struct GeneralTab: View {
             } footer: {
                 SectionFootnote("Puts a small item in the menu bar with Record / Stop and a way back to this window — it turns red while a meeting is recording. Takes effect on the next launch.")
             }
+
+            DemoModeSection()
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The Demo mode switch. Session-only and never persisted, so it reads and
+/// writes `MeetingsDemoMode.shared` directly rather than going through
+/// settings — see `MeetingsDemoMode` for why that's deliberate. It sits at the
+/// foot of General rather than on the About tab, which here is a centred splash
+/// with nowhere sensible to put a control.
+private struct DemoModeSection: View {
+    @State private var demo = MeetingsDemoMode.shared
+
+    var body: some View {
+        Section {
+            Toggle("Demo mode", isOn: Binding(
+                get: { demo.isOn },
+                set: { demo.setOn($0) }
+            ))
+        } header: {
+            Text("Demo mode")
+        } footer: {
+            SectionFootnote("Shows fictional meetings, notes, transcripts and people in place of your own. For recordings and screenshots. Off again when Dictator Meetings quits.")
+        }
     }
 }
 

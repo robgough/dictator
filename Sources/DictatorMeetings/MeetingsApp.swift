@@ -149,8 +149,22 @@ private struct MeetingsRootHost: View {
 /// window, without hunting for the app in the Dock mid-call.
 private struct MeetingsMenuBarContent: View {
     @Environment(MeetingsAppState.self) private var state
+    @State private var demo = MeetingsDemoMode.shared
 
     var body: some View {
+        // Demo mode's pill, as close as a `.menu`-style MenuBarExtra allows:
+        // AppKit renders these as menu items, so it's a disabled caption row
+        // plus the way out rather than a drawn capsule. It stays first, and
+        // only shows while demo mode is on.
+        if demo.isOn {
+            Text("Demo · showing fictional content")
+            Button {
+                demo.setOn(false)
+            } label: {
+                Label("Turn off Demo Mode", systemImage: "theatermasks.fill")
+            }
+            Divider()
+        }
         if state.isRecordingMeeting {
             Button("Stop Recording") {
                 state.requestStopRecording()
@@ -240,6 +254,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "settings":
                 NSApp.activate(ignoringOtherApps: true)
                 MeetingsAppState.shared.openSettingsAction?()
+            case "demo":
+                // `?on=1` / `?on=0`, or bare to toggle — so a recording script
+                // can stage the app without touching Settings.
+                MeetingsDemoMode.handleURL(url)
             default:
                 NSLog("[DictatorMeetings] Ignoring unknown URL: \(url.absoluteString)")
             }
