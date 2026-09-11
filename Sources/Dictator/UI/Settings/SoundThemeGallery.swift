@@ -21,21 +21,31 @@ struct SoundThemeGallery: View {
     }
 }
 
+@MainActor
 private struct SoundThemeCard: View {
     let theme: SoundTheme
     let selected: Bool
     let action: () -> Void
+    let envelope: [Float]
     @State private var hovering = false
-    @State private var envelope: [Float] = []
 
     private static let imageRadius: CGFloat = 8
     private static let ringInset: CGFloat = 4
+    private static let waveHeight: CGFloat = 44
+    private static let barMaxHeight: CGFloat = 32
+
+    init(theme: SoundTheme, selected: Bool, action: @escaping () -> Void) {
+        self.theme = theme
+        self.selected = selected
+        self.action = action
+        self.envelope = SoundThemeEnvelopes.envelope(for: theme)
+    }
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
                 waveform
-                    .frame(height: 44)
+                    .frame(height: Self.waveHeight)
                     .frame(maxWidth: .infinity)
                     .background(
                         RoundedRectangle(cornerRadius: Self.imageRadius, style: .continuous)
@@ -68,26 +78,23 @@ private struct SoundThemeCard: View {
         .help(theme.detail)
         .accessibilityLabel(theme.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .task { envelope = await SoundThemeEnvelopes.envelope(for: theme) }
     }
 
     /// Peak envelope of the theme's start cue as a row of bars: the honest
-    /// picture of how long and how sharp the set is.
+    /// picture of how long and how sharp the set is. Plain shapes rather than
+    /// a `Canvas` — a Canvas hosted in the AppKit settings shell doesn't
+    /// always repaint when its data changes, so the cards sat blank until a
+    /// hover forced a redraw.
     private var waveform: some View {
-        Canvas { ctx, size in
-            guard !envelope.isEmpty else { return }
-            let n = envelope.count
-            let inset: CGFloat = 8
-            let gap: CGFloat = 1.5
-            let barW = max(1, (size.width - 2 * inset - gap * CGFloat(n - 1)) / CGFloat(n))
-            let maxH = size.height - 12
-            let tint = selected ? Color.brandBlue : Color.secondary.opacity(0.7)
-            for (i, v) in envelope.enumerated() {
-                let h = max(1.5, CGFloat(v) * maxH)
-                let rect = CGRect(x: inset + CGFloat(i) * (barW + gap), y: size.height / 2 - h / 2, width: barW, height: h)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: barW / 2), with: .color(tint))
+        HStack(spacing: 1.5) {
+            ForEach(Array(envelope.enumerated()), id: \.offset) { _, value in
+                Capsule(style: .continuous)
+                    .fill(selected ? Color.brandBlue : Color.secondary.opacity(0.7))
+                    .frame(height: max(1.5, CGFloat(value) * Self.barMaxHeight))
+                    .frame(maxWidth: .infinity)
             }
         }
+        .padding(.horizontal, 8)
         .accessibilityHidden(true)
     }
 
@@ -106,20 +113,18 @@ private struct SoundThemeCard: View {
     }
 }
 
-/// Renders each theme's start-cue envelope once, off the main thread, and
-/// keeps it for the session — five renders of a few milliseconds each, but
-/// not worth repeating every time the pane opens. Main-actor state (the
-/// cards' `.task` runs there), so the cache needs no lock; only the render
-/// itself hops off.
+/// Renders each theme's start-cue envelope once and keeps it for the session
+/// — a couple of milliseconds per theme in a release build, and not worth
+/// repeating every time the pane opens. Rendered synchronously on demand so a
+/// card always has its bars on its very first draw; main-actor state, so the
+/// cache needs no lock.
 @MainActor
 private enum SoundThemeEnvelopes {
     private static var cache: [SoundTheme: [Float]] = [:]
 
-    static func envelope(for theme: SoundTheme) async -> [Float] {
+    static func envelope(for theme: SoundTheme) -> [Float] {
         if let hit = cache[theme] { return hit }
-        let env = await Task.detached(priority: .utility) {
-            SoundSynth.envelope(.start, theme: theme, bins: 28)
-        }.value
+        let env = SoundSynth.envelope(.start, theme: theme, bins: 28)
         cache[theme] = env
         return env
     }

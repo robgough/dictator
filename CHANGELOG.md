@@ -15,6 +15,7 @@ entries as plain bullet lines.
 
 - New Demo mode in Settings → About swaps your history, conversations, memory, dictionary and scratchpad for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator quits.
 - The built-in Standard mode is now called Clean, matching the style it uses. If you renamed it yourself, your name is kept.
+- The sound set waveforms in Settings → General now appear as soon as the page opens, instead of staying blank until you hover over a card.
 
 ## v2026.9.2 — 2026-09-07
 
