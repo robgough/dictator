@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dates you speak now come out as dates: "I'm free from the second to the fourth" becomes "I'm free from the 2nd to the 4th", and "you're free next week on the second" becomes "on the 2nd" — no month needed anywhere in the sentence. Ordinals that aren't dates keep their words, so "that's the second time this month" is left alone. Needs a style that uses the language model (Clean, Polished, Messages or your own prompt); Raw is unchanged.
+- Short dictations that end in a number keep their formatting again. The full stop the formatter correctly adds to "see you at 10" was being read as a change to the number itself, and the whole pass was thrown away for it.
+- Phone codes and negative numbers spoken as "plus 44" or "minus 3" now come out as "+44" and "-3", which they never actually did before.
 - New Demo mode in Settings → About swaps your history, conversations, memory, dictionary and scratchpad for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator quits.
 - The built-in Standard mode is now called Clean, matching the style it uses. If you renamed it yourself, your name is kept.
 - The sound set waveforms in Settings → General now appear as soon as the page opens, instead of staying blank until you hover over a card.

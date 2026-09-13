@@ -1045,8 +1045,12 @@ final class Pipeline {
     /// What's still measured: substantive substitutions and additions of
     /// content words, which is where actual hallucination would show up.
     private static func wordEditFractionStrippingFillers(from a: String, to b: String) -> Double {
-        let aw = wordSequence(a).filter { !grammarFillerStripSet.contains($0) }
-        let bw = wordSequence(b).filter { !grammarFillerStripSet.contains($0) }
+        // Date ordinals are canonicalised to their spoken words on both sides
+        // first, so "the twenty first" → "the 21st" costs nothing here either.
+        let aw = DateOrdinals.canonicalised(wordSequence(a))
+            .filter { !grammarFillerStripSet.contains($0) }
+        let bw = DateOrdinals.canonicalised(wordSequence(b))
+            .filter { !grammarFillerStripSet.contains($0) }
         let n = max(aw.count, bw.count)
         guard n > 0 else { return 0 }
         return Double(wordLevenshtein(aw, bw)) / Double(n)
@@ -1099,18 +1103,41 @@ final class Pipeline {
     /// stable fingerprint of "the numbers in this text".
     private static func numberSignature(_ text: String) -> [String] {
         guard let regex = try? Regex("[0-9][0-9.,]*[A-Za-z]*") else { return [] }
-        return text.matches(of: regex).map { String(text[$0.range]).lowercased() }.sorted()
+        return text.matches(of: regex)
+            // Trailing dots and commas belong to the sentence, not the number:
+            // the character class has to admit them for "1,600" and "2.5", and
+            // then swallows the punctuation in "at 10." as well. Left in, the
+            // gate saw "10" become "10." and reverted the pass — so a short
+            // dictation ending in a number lost its formatting to the full stop
+            // the formatter had just correctly added.
+            .map { String(text[$0.range]).lowercased()
+                    .replacing(/[.,]+$/, with: "") }
+            .filter { !$0.isEmpty }
+            .sorted()
     }
 
-    /// True when `after` carries exactly the same numbers as `before`. Used to
-    /// gate the content-preserving passes: small local models like to
-    /// "prose-ify" numbers — spelling "4x" out to "four times", "3" to
-    /// "three" — and SpokenCues can't undo that afterwards (the word "times"
-    /// is ambiguous and bare word-numbers are deliberately never re-digitised).
+    /// True when `after` carries the same numbers as `before`. Used to gate the
+    /// content-preserving passes: small local models like to "prose-ify"
+    /// numbers — spelling "4x" out to "four times", "3" to "three" — and
+    /// SpokenCues can't undo that afterwards (the word "times" is ambiguous and
+    /// bare word-numbers are deliberately never re-digitised).
     /// Arithmetic/currency the formatter applied stays stable here because the
     /// digit tokens survive ("5 plus 3" → "5 + 3" keeps {3, 5}).
+    ///
+    /// The one asymmetry: a spoken day ordinal is allowed to ARRIVE as digits.
+    /// Writing "on the second" as "on the 2nd" is a change only the model can
+    /// make — whether an ordinal is a date depends on the sentence, not on any
+    /// pattern we could match — so an exact-signature gate would revert every
+    /// dictated date the formatter got right. `DateOrdinals` bounds the licence
+    /// tightly: only ordinals the input actually spoke, only as many as it
+    /// spoke, and never the other way round. Digits that turn back into words
+    /// still fail, which is what this gate was built for.
     private static func numbersPreserved(_ before: String, _ after: String) -> Bool {
-        numberSignature(before) == numberSignature(after)
+        DateOrdinals.signaturesMatch(
+            before: numberSignature(before),
+            after: numberSignature(after),
+            promotable: DateOrdinals.promotableOrdinals(in: wordSequence(before))
+        )
     }
 
     /// Detects the common failure where Pass 1 answers the user's question instead
@@ -1138,7 +1165,11 @@ final class Pipeline {
 
         let anchors = anchorWords(raw)
         guard anchors.count >= 3 else { return true }
-        let outputSet = Set(fmtWords)
+        // The output's words, plus the spoken form of any date ordinal in it:
+        // a "second" that came back as "2nd" has survived, not vanished. On a
+        // short dictation like "free from the second to the fourth" that's two
+        // of four anchors, which alone would fail the check.
+        let outputSet = DateOrdinals.anchorSet(fmtWords)
         let hits = anchors.filter { outputSet.contains($0) }
         return Double(hits.count) / Double(anchors.count) >= 0.6
     }

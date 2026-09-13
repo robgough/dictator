@@ -251,25 +251,29 @@ enum SpokenCues {
     }()
 
     /// Unary "plus N" / "minus N" at the start of a numeric token:
-    /// "plus 44" → "+44", "minus 3" → "-3". Negative lookbehind keeps the
-    /// binary case ("5 plus 3" → "5 + 3", which has already fired by the
-    /// time we run) from being re-interpreted as "5 +3". `\d` here means
-    /// the *immediately* preceding char isn't a digit — adequate because
-    /// `applyDigitArithmetic` runs first inside the iteration loop, so
-    /// any "<digit> plus <digit>" has already collapsed to "<digit> + <digit>".
+    /// "plus 44" → "+44", "minus 3" → "-3". The leading `(^|[^0-9])` keeps
+    /// the binary case ("5 plus 3" → "5 + 3", which has already fired by the
+    /// time we run) from being re-interpreted as "5 +3": the char before the
+    /// operator must not be a digit. It's matched-and-re-emitted rather than
+    /// written as the lookbehind it reads like — a `(?<!…)` in a pattern built
+    /// from a String at runtime doesn't compile, `try? Regex(_:)` returns nil,
+    /// and the whole pass silently becomes a no-op. (It did, for a while.)
+    /// Belt and braces anyway: `applyDigitArithmetic` runs first inside the
+    /// iteration loop, so any "<digit> plus <digit>" has already collapsed.
     private static func applyUnaryArithmeticPrefix(_ text: String) -> String {
         guard let regex = unaryArithmeticRegex else { return text }
         return text.replacing(regex) { match in
-            guard let op = match.output[1].substring,
-                  let n = match.output[2].substring
+            guard let prefix = match.output[1].substring,
+                  let op = match.output[2].substring,
+                  let n = match.output[3].substring
             else { return String(match.output[0].substring ?? "") }
             let glyph = op.lowercased() == "minus" ? "-" : "+"
-            return "\(glyph)\(n)"
+            return "\(prefix)\(glyph)\(n)"
         }
     }
 
     nonisolated(unsafe) private static let unaryArithmeticRegex: Regex<AnyRegexOutput>? = {
-        let pattern = "(?<![0-9])\\b(plus|minus)[ \\t]+(\\d+(?:\\.\\d+)?)\\b"
+        let pattern = "(^|[^0-9])\\b(plus|minus)[ \\t]+(\\d+(?:\\.\\d+)?)\\b"
         return try? Regex(pattern).ignoresCase()
     }()
 
