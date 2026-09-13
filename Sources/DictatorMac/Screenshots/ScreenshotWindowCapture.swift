@@ -53,18 +53,45 @@ enum ScreenshotWindowCapture {
 
     /// Put a window fully on-screen at a fixed size, so captures are
     /// reproducible and never clipped by the screen edge.
+    ///
+    /// `size` is a floor-checked request, not a command: see `clamped(_:for:)`
+    /// for why asking for less than the content minimum can abort the app.
     static func place(_ window: NSWindow, size: NSSize) {
         // Drop any frame-autosave name first: resizing a window that saves its
         // frame would write into the user's real preferences and move their own
         // copy's window next time they open it.
         window.setFrameAutosaveName("")
-        window.setContentSize(size)
+        window.setContentSize(clamped(size, for: window))
         guard let screen = window.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         let frame = window.frame
         let x = visible.minX + max(0, (visible.width - frame.width) / 2)
         let y = visible.minY + max(0, (visible.height - frame.height) / 2)
         window.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
+    }
+
+    /// Raise a requested content size to the window's own minimum.
+    ///
+    /// Sizing a SwiftUI window below the minimum its content declares (the
+    /// Meetings window asks for 1000pt so its three columns can all be
+    /// satisfied) does not simply produce a small window. The hosting views
+    /// report the shortfall back through
+    /// `SplitViewChildController.hostingView(_:didUpdateMinSize:maxSize:)`,
+    /// which invalidates layout from *inside* the window's update-constraints
+    /// display-cycle phase; AppKit throws from `_postWindowNeedsUpdateConstraints`
+    /// and the app aborts on an uncaught exception. Three Dictator Meetings
+    /// crashes on 2026-09-08 were exactly this, from a capture run that asked
+    /// for a narrow window.
+    ///
+    /// `contentMinSize` is only meaningful once SwiftUI has pushed the content
+    /// minimum onto the window, so this is a floor and not a guarantee — call
+    /// `place` after the window has laid out at least once. It is still worth
+    /// having: it turns "ask for the wrong size and the app dies" into "ask for
+    /// the wrong size and get the smallest legal one".
+    private static func clamped(_ size: NSSize, for window: NSWindow) -> NSSize {
+        let floor = window.contentMinSize
+        return NSSize(width: max(size.width, floor.width),
+                      height: max(size.height, floor.height))
     }
 
     // MARK: - Capture
