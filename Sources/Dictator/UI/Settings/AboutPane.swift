@@ -124,20 +124,31 @@ private struct AboutHeader: View {
 
 /// "Check for Updates…" button on the About pane. Mirrors Sparkle's
 /// `canCheckForUpdates` state so it greys out while a check is in flight.
+///
+/// On a build the release workflow didn't stamp there is no updater running
+/// (see `UpdaterGate`), which would leave a permanently dead button. Say so
+/// instead — on a local build "updates are off" is the correct answer, not a
+/// failure.
 private struct CheckForUpdatesButton: View {
     let updater: SPUUpdater
 
     @State private var canCheck = true
 
     var body: some View {
-        Button {
-            updater.checkForUpdates()
-        } label: {
-            Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+        if UpdaterGate.isReleaseBuild {
+            Button {
+                updater.checkForUpdates()
+            } label: {
+                Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .controlSize(.small)
+            .disabled(!canCheck)
+            .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
+        } else {
+            Text("Local build — automatic updates off")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .controlSize(.small)
-        .disabled(!canCheck)
-        .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
     }
 }
 

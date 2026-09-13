@@ -9,11 +9,11 @@ import Sparkle
 /// to both, and there's no state worth sharing anyway.
 @MainActor
 enum SparkleUpdater {
-    static let controller = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    /// `UpdaterGate` decides whether the update schedule starts at all: a
+    /// build the release workflow didn't stamp would otherwise read as
+    /// permanently out of date and replace itself with the last release,
+    /// quitting to do it. See `UpdaterGate`.
+    static let controller = UpdaterGate.makeUpdaterController()
 }
 
 /// Dictator Meetings — the standalone meeting recorder / note-taker.
@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Start Sparkle's background update schedule (first touch creates the
-        // controller with `startingUpdater: true`).
+        // controller; `UpdaterGate` decides whether it actually starts).
         _ = SparkleUpdater.controller
 
         // Settings load (with the one-time import from Dictator on first run),

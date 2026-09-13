@@ -44,13 +44,13 @@ final class SettingsShellModel {
 /// window controller can reach the updater for the About pane. First touch
 /// starts the background update schedule; `AppDelegate` touches it at launch,
 /// preserving the old app-init timing.
+///
+/// `UpdaterGate` decides whether the schedule starts at all: a build the
+/// release workflow didn't stamp would otherwise read as permanently out of
+/// date and replace itself with the last release. See `UpdaterGate`.
 @MainActor
 enum SparkleUpdater {
-    static let controller = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    static let controller = UpdaterGate.makeUpdaterController()
 }
 
 /// The Settings window, owned outright in AppKit rather than via SwiftUI's

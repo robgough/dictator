@@ -909,14 +909,23 @@ private struct AboutTab: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 420)
-            Button {
-                updater.checkForUpdates()
-            } label: {
-                Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+            // On a build the release workflow didn't stamp there is no
+            // updater running (see `UpdaterGate`), which would leave a
+            // permanently dead button. Say so instead.
+            if UpdaterGate.isReleaseBuild {
+                Button {
+                    updater.checkForUpdates()
+                } label: {
+                    Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .controlSize(.small)
+                .disabled(!canCheck)
+                .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
+            } else {
+                Text("Local build — automatic updates off")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .controlSize(.small)
-            .disabled(!canCheck)
-            .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
             Link("dictator.robgough.net", destination: URL(string: "https://dictator.robgough.net")!)
                 .font(.callout)
             Spacer(minLength: 0)

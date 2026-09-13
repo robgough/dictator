@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // Start Sparkle's background update schedule (first touch creates the
-        // controller with `startingUpdater: true`).
+        // controller; `UpdaterGate` decides whether it actually starts).
         _ = SparkleUpdater.controller
 
         let state = AppState.shared
