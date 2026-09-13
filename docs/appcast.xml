@@ -612,6 +612,27 @@
                 type="application/octet-stream"
                 sparkle:edSignature="CRcMHBt8F4MumtcXiGGZ7vkUKYNTIycsoEY0s8PH80UaChHqHNqyH12rZ+dbWTMYQTZCa4lMwAo7HmSsj9RRCQ==" />
         </item>
+        <item>
+            <title>Version 2026.9.3</title>
+            <pubDate>Sun, 13 Sep 2026 03:32:28 +0000</pubDate>
+            <sparkle:version>39</sparkle:version>
+            <sparkle:shortVersionString>2026.9.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>Dates you speak now come out as dates: &quot;I&#x27;m free from the second to the fourth&quot; becomes &quot;I&#x27;m free from the 2nd to the 4th&quot;, and &quot;you&#x27;re free next week on the second&quot; becomes &quot;on the 2nd&quot; — no month needed anywhere in the sentence. Ordinals that aren&#x27;t dates keep their words, so &quot;that&#x27;s the second time this month&quot; is left alone. Needs a style that uses the language model (Clean, Polished, Messages or your own prompt); Raw is unchanged.</li>
+  <li>Short dictations that end in a number keep their formatting. The full stop the formatter correctly adds to &quot;see you at 10&quot; was being read as a change to the number itself, and the whole pass was thrown away for it.</li>
+  <li>Phone codes and negative numbers spoken as &quot;plus 44&quot; or &quot;minus 3&quot; now come out as &quot;+44&quot; and &quot;-3&quot;, which they never actually did before.</li>
+  <li>New Demo mode in Settings → About swaps your history, conversations, memory, dictionary and scratchpad for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator quits.</li>
+  <li>The built-in Standard mode is now called Clean, matching the style it uses. If you renamed it yourself, your name is kept.</li>
+  <li>The sound set waveforms in Settings → General now appear as soon as the page opens, instead of staying blank until you hover over a card.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/v2026.9.3/Dictator.dmg"
+                length="14021753"
+                type="application/octet-stream"
+                sparkle:edSignature="DAgu3ChFSnWxh6WGnjkDOW6IQumqXz/6Q2/cF7ruJnqZug4r1+BOpzr6y/yBnBSPSnVgGhf478hugxqKvyp2AA==" />
+        </item>
+    
     
     
     
