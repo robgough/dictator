@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The message box, and the recording panel that replaces it while dictating.
@@ -18,22 +19,21 @@ struct ChatComposer: View {
     private var dictation: ChatDictation { shell.dictation }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             if let error = shell.engine.errorMessage ?? dictation.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
             }
 
-            if dictation.isActive {
-                RecordingPanel(dictation: dictation)
-            } else {
-                inputRow
-                modelFootnote
-            }
+            inputRow
+                .padding(12)
+
+            footer
         }
-        .padding(12)
-        .animation(.easeInOut(duration: 0.18), value: dictation.isActive)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: dictation.isActive)
         .onAppear {
             dictation.onTranscript = { text, send in
                 // Append: dictating twice, or dictating after typing, should
@@ -51,64 +51,137 @@ struct ChatComposer: View {
         .onChange(of: shell.selectedThreadID) { dictation.cancel() }
     }
 
+    /// Text field and its two buttons — or, while dictating, the recorder
+    /// growing out of where the microphone was.
+    ///
+    /// The recorder replaces the *field*, not the whole bar. Taking over the
+    /// full width made it look like a modal state change for something that is
+    /// just another way of typing; expanding a pill out of the mic button and
+    /// fading the field reads as the same row doing a different job. The footer
+    /// stays put throughout, so the model never disappears mid-sentence.
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button(action: dictation.begin) {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Dictate a message")
-            .disabled(dictation.phase == .transcribing)
+            if dictation.isActive {
+                Spacer(minLength: 0)
+                RecordingPill(dictation: dictation)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.25, anchor: .trailing)
+                            .combined(with: .opacity),
+                        removal: .opacity))
 
-            TextField("Message", text: $shell.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .font(.system(size: 13))
-                .focused(isFocused)
-                .onSubmit(send)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
+                iconButton("xmark", size: 13, help: "Discard", action: dictation.cancel)
+                    .keyboardShortcut(.cancelAction)
 
-            if shell.engine.isBusy {
-                Button(action: shell.engine.cancel) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 22))
-                }
-                .buttonStyle(.plain)
-                .help("Stop")
-            } else {
-                Button(action: send) {
+                Button { dictation.finish(send: true) } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 22))
                 }
                 .buttonStyle(.plain)
-                .disabled(shell.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Send")
+                .keyboardShortcut(.defaultAction)
+                .disabled(dictation.phase == .transcribing)
+                .help("Stop and send")
+            } else {
+                TextField("Message", text: $shell.draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .font(.system(size: 13))
+                    .focused(isFocused)
+                    .onSubmit(send)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
+                    .transition(.opacity)
+
+                if shell.engine.isBusy {
+                    Button(action: shell.engine.cancel) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop")
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(shell.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Send")
+                }
+
+                iconButton("mic.fill", size: 17, help: "Dictate a message",
+                           action: dictation.begin)
+                    .disabled(dictation.phase == .transcribing)
             }
         }
     }
 
-    /// Which model is answering, always visible.
-    ///
-    /// Small but never hidden: the quality gap between a 2B and a 12B is the
-    /// single biggest thing shaping what comes back, and someone who has
-    /// forgotten which one they're on has no way to calibrate what they read.
-    @ViewBuilder
-    private var modelFootnote: some View {
-        let id = state.settings.llmModelID
-        let name = ModelCatalog.llm(id: id)?.displayName ?? id
-        HStack(spacing: 4) {
-            Image(systemName: "cpu")
-            Text("\(name) · running on this Mac")
+    private func iconButton(
+        _ symbol: String, size: CGFloat, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
         }
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
-        .padding(.leading, 38)
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    /// The strip under the message box: which model is answering, and a way
+    /// into this chat's folder.
+    ///
+    /// Always visible, including while dictating — the model is the single
+    /// biggest thing shaping what comes back, and hiding it the moment someone
+    /// starts talking is exactly when they'd want to check.
+    @ViewBuilder
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "cpu")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(modelName)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("· on this Mac")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 8)
+
+            Button(action: openFilesFolder) {
+                Label("Chat files", systemImage: "folder")
+                    .font(.caption2)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Show this chat's files in Finder")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.3))
+    }
+
+    private var modelName: String {
+        let id = state.settings.llmModelID
+        return ModelCatalog.llm(id: id)?.displayName ?? id
+    }
+
+    /// Opens the chat's folder, making it first if nothing has been saved yet —
+    /// otherwise the button does nothing on a new chat, which reads as broken.
+    private func openFilesFolder() {
+        guard let id = shell.selectedThreadID,
+              let thread = ChatStore.shared.thread(id: id),
+              let folder = try? ChatFiles.folder(for: thread)
+        else { return }
+        if thread.filesFolderName != folder.folderName {
+            var updated = thread
+            updated.filesFolderName = folder.folderName
+            ChatStore.shared.upsert(updated)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([folder.url])
     }
 
     private func send() {
@@ -117,69 +190,48 @@ struct ChatComposer: View {
     }
 }
 
-/// Takes over the composer while recording.
+/// The recorder: a pill that grows out of the microphone button.
 ///
-/// The text field goes away entirely: there is nothing to type into mid-
-/// sentence, and leaving it there implies otherwise. What replaces it is a
-/// live meter — proof it is hearing you — and the only two decisions that
-/// matter, throw it away or send it.
-private struct RecordingPanel: View {
+/// Sized to its content rather than to the window. The first version stretched
+/// across the whole row, which at 900pt gave 35pt-wide bars and read as a bar
+/// chart of nothing in particular — and taking over the full bar made a second
+/// way of typing look like a modal state change.
+private struct RecordingPill: View {
     let dictation: ChatDictation
     @State private var elapsed: TimeInterval = 0
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
+    /// The assistant's own colour, not a generic recording red.
+    ///
+    /// `CaptureKind.assistant.tint` is what every other live meter in the app
+    /// wears when the assistant is listening — the HUD, the island, the
+    /// Settings sidebar badge — so matching it keeps one colour per flow across
+    /// the whole app.
+    private static let tint = CaptureKind.assistant.tint
+
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: dictation.cancel) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 9) {
+            if dictation.phase == .transcribing {
+                ProgressView().controlSize(.small)
+                Text("Transcribing…")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(.quaternary, in: .circle)
-                    .contentShape(Circle())
+            } else {
+                Circle()
+                    .fill(Self.tint)
+                    .frame(width: 7, height: 7)
+                    .opacity(dictation.phase == .recording ? 1 : 0.35)
+                Waveform(level: dictation.level, tint: Self.tint, barCount: 40, height: 18)
+                    .frame(width: 180)
+                Text(timestamp)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
-            .help("Discard")
-
-            HStack(spacing: 10) {
-                if dictation.phase == .transcribing {
-                    ProgressView().controlSize(.small)
-                    Text("Transcribing…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 7, height: 7)
-                        .opacity(dictation.phase == .recording ? 1 : 0.35)
-                    Waveform(level: dictation.level, tint: .red, barCount: 24, height: 22)
-                    Text(timestamp)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
-
-            Button {
-                dictation.finish(send: true)
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(.tint, in: .circle)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.defaultAction)
-            .disabled(dictation.phase == .transcribing)
-            .help("Stop and send")
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
         .onReceive(tick) { _ in
             guard let started = dictation.startedAt else { return }
             elapsed = Date().timeIntervalSince(started)

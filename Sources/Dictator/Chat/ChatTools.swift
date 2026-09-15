@@ -79,6 +79,141 @@ enum BuiltInChatTools {
                 ))
         }
 
+        tools.append(
+            tool(
+                name: "create_file",
+                displayName: "Save a file",
+                detail: "Writes a file into the “Chat Files” folder in your Dictator folder.",
+                description: "Save text to a file — notes, Markdown, JSON, CSV, a script. It always goes in the user's “Chat Files” folder; you cannot choose a location, and you cannot overwrite an existing file (a clashing name gets a number added). Give the filename with its extension.",
+                parameters: [
+                    "name": [
+                        "type": "string",
+                        "description": "Filename with extension, e.g. meeting-notes.md or data.json. No folders.",
+                    ] as [String: any Sendable],
+                    "contents": [
+                        "type": "string",
+                        "description": "The full text to write.",
+                    ] as [String: any Sendable],
+                ],
+                required: ["name", "contents"],
+                safe: true
+            ))
+
+        tools.append(
+            tool(
+                name: "list_files",
+                displayName: "List this chat's files",
+                detail: "Lists the files this conversation has made.",
+                description: "List the files in this conversation's folder. Use it before changing a file, or when the user refers to something made earlier in the chat.",
+                parameters: [:],
+                required: [],
+                safe: true
+            ))
+
+        tools.append(
+            tool(
+                name: "read_file",
+                displayName: "Read a file",
+                detail: "Reads back a file from this conversation.",
+                description: "Read a file this conversation made. Do this before updating one — never rewrite a file from memory of what you wrote earlier, because the user may have edited it and earlier messages may no longer be in your context.",
+                parameters: [
+                    "name": [
+                        "type": "string",
+                        "description": "The filename, e.g. notes.md.",
+                    ] as [String: any Sendable]
+                ],
+                required: ["name"],
+                safe: true
+            ))
+
+        tools.append(
+            tool(
+                name: "update_file",
+                displayName: "Update a file",
+                detail: "Replaces the contents of a file in this conversation.",
+                description: "Replace the entire contents of a file this conversation already made. Read it first. Use this — not create_file — when the user asks to change, add to, or fix an existing file, otherwise they end up with two versions.",
+                parameters: [
+                    "name": [
+                        "type": "string",
+                        "description": "The filename to replace, e.g. notes.md.",
+                    ] as [String: any Sendable],
+                    "contents": [
+                        "type": "string",
+                        "description": "The complete new contents. This replaces the file, so include everything that should remain.",
+                    ] as [String: any Sendable],
+                ],
+                required: ["name", "contents"],
+                safe: true
+            ))
+
+        tools.append(
+            tool(
+                name: "delete_file",
+                displayName: "Delete a file",
+                detail: "Moves a file in this conversation's folder to the Trash.",
+                description: "Delete a file from this conversation's folder. It goes to the Trash, so it can be recovered. Only do this when the user has asked for it.",
+                parameters: [
+                    "name": [
+                        "type": "string",
+                        "description": "The filename to delete, e.g. notes.md.",
+                    ] as [String: any Sendable]
+                ],
+                required: ["name"],
+                // Destructive, so it asks — even though the Trash makes it
+                // recoverable. "Tidy up those files" landing on the wrong one
+                // is a bad surprise whether or not it can be undone.
+                safe: false
+            ))
+
+        tools.append(
+            tool(
+                name: "fetch_url",
+                displayName: "Read a web page",
+                detail: "Opens a web address and reads the text on it.",
+                description: "Fetch a public web page and read its text. Use it when the user gives you a link, or refers to something you'd need to look up on a page you know the address of. You cannot search the web — you can only open an address.",
+                parameters: [
+                    "url": [
+                        "type": "string",
+                        "description": "The full web address, e.g. https://example.com/page.",
+                    ] as [String: any Sendable]
+                ],
+                required: ["url"],
+                safe: true
+            ))
+
+        // Listed with the names of the user's actual shortcuts, because a tool
+        // the model can't see the options for is a tool it won't reach for.
+        let shortcuts = ShortcutsBridge.available()
+        if !shortcuts.isEmpty {
+            let names = shortcuts.prefix(60).map { "“\($0)”" }.joined(separator: ", ")
+            tools.append(
+                tool(
+                    name: "run_shortcut",
+                    displayName: "Run a shortcut",
+                    detail: "Runs one of the user's own Shortcuts.",
+                    description: "Run one of the user's Shortcuts on this Mac and return whatever it produces. This is how you reach Reminders, Calendar, Notes, Home and anything else they have automated. Available shortcuts: \(names). Use the name exactly. Only run one when the user has asked for something it plainly does.",
+                    parameters: [
+                        "name": [
+                            "type": "string",
+                            "description": "The exact name of the shortcut to run.",
+                        ] as [String: any Sendable],
+                        "input": [
+                            "type": "string",
+                            "description": "Optional text to pass to the shortcut as its input.",
+                        ] as [String: any Sendable],
+                    ],
+                    required: ["name"],
+                    // The one built-in that asks. Everything else here reads
+                    // the user's own data on their own machine; a shortcut can
+                    // do anything they have ever automated — send a message,
+                    // move a file, spend money — and it is chosen by a model
+                    // that this app's own banner warns confidently invents
+                    // things. One click, showing exactly which shortcut and
+                    // with what, is proportionate to that.
+                    safe: false
+                ))
+        }
+
         if settings.assistantMemoryEnabled {
             tools.append(
                 tool(
@@ -238,6 +373,19 @@ enum BuiltInChatTools {
             guard !fact.isEmpty else { return "No fact was given, so nothing was stored." }
             let stored = AssistantMemory.shared.remember(fact)
             return stored ? "Stored: \(fact)" : "Already remembered, so nothing changed."
+
+        case "create_file":
+            // Handled by the engine, which needs the structured outcome to
+            // attach the file to the transcript.
+            return "ERROR: create_file is dispatched by ChatEngine."
+
+        case "fetch_url":
+            return await WebFetcher.fetch(arguments["url"]?.stringValue ?? "")
+
+        case "run_shortcut":
+            let name = arguments["name"]?.stringValue ?? ""
+            guard !name.isEmpty else { return "No shortcut name was given." }
+            return ShortcutsBridge.run(name: name, input: arguments["input"]?.stringValue)
 
         case "read_screen":
             guard let description = await readScreen() else {

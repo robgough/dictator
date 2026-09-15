@@ -35,6 +35,9 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     var toolDenied: Bool = false
     /// Which MCP server (or `nil` for a built-in tool) ran this.
     var serverName: String?
+    /// A file this tool call produced, shown in the transcript as something the
+    /// user can read and act on rather than a path in a sentence.
+    var producedFile: ProducedFile?
 
     init(
         id: UUID = UUID(),
@@ -45,7 +48,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         toolResult: String? = nil,
         toolFailed: Bool = false,
         toolDenied: Bool = false,
-        serverName: String? = nil
+        serverName: String? = nil,
+        producedFile: ProducedFile? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -56,6 +60,28 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         self.toolFailed = toolFailed
         self.toolDenied = toolDenied
         self.serverName = serverName
+        self.producedFile = producedFile
+    }
+}
+
+/// A file the assistant wrote.
+///
+/// The path is stored, not the contents: the file is the real artefact, it
+/// lives in the user's own folder, and they may well edit it after the fact —
+/// so the transcript reads it back when it renders rather than keeping a stale
+/// copy of what was written.
+struct ProducedFile: Codable, Hashable, Sendable {
+    var name: String
+    var path: String
+    var byteCount: Int
+
+    var url: URL { URL(fileURLWithPath: path) }
+    var stillExists: Bool { FileManager.default.fileExists(atPath: path) }
+
+    var fileExtension: String { url.pathExtension.lowercased() }
+
+    var sizeDescription: String {
+        ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
     }
 }
 
@@ -82,6 +108,19 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     var modelID: String?
     /// User-set title. When nil the first user message stands in.
     var customTitle: String?
+    /// Name of this chat's folder under `<synced>/Chat Files/`, assigned the
+    /// first time it produces a file. Stored rather than derived because the
+    /// title can change and the folder must not — every path already written
+    /// into the transcript points inside it.
+    var filesFolderName: String?
+    /// A folder the user pointed this chat at — their project, their notes,
+    /// wherever the work actually lives. When set it replaces the chat's own
+    /// folder as the working directory.
+    ///
+    /// Crucially this is *theirs*, not ours: deleting the chat must never
+    /// delete it, which is the one place the two cases must not be treated
+    /// alike.
+    var workingDirectoryPath: String?
 
     init(
         id: UUID = UUID(),

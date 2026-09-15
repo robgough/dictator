@@ -198,7 +198,9 @@ final class ChatEngine {
 
             let wire = Self.renderForModel(
                 thread: thread,
-                systemPrompt: Self.systemPrompt(settings: settings(), toolset: toolset),
+                systemPrompt: Self.systemPrompt(
+                    settings: settings(), toolset: toolset,
+                    workingDirectoryDescription: workingDirectoryDescription(threadID: threadID)),
                 budgetTokens: engineInputBudget(toolset: toolset)
             )
 
@@ -380,7 +382,14 @@ final class ChatEngine {
         activity = .runningTool(tool.displayName)
         let output: String
         var failed = false
-        if call.name == ChatToolset.findToolsTool.name {
+        if ["create_file", "update_file", "read_file", "list_files", "delete_file"]
+            .contains(call.name) {
+            // Dispatched here rather than in BuiltInChatTools because the
+            // transcript entry carries the resulting file, and only the loop
+            // owns the transcript.
+            output = runFileTool(call: call, entry: &entry, threadID: threadID)
+            failed = output.hasPrefix("ERROR:")
+        } else if call.name == ChatToolset.findToolsTool.name {
             // Handled here rather than in BuiltInChatTools because it mutates
             // the turn's tool list, which is state the loop owns.
             output = toolset.loadTools(matching: call.arguments["query"]?.stringValue ?? "")
@@ -413,6 +422,59 @@ final class ChatEngine {
         entry.toolResult = Self.truncateToolOutput(output)
         entry.toolFailed = failed
         updateEntry(entry, threadID: threadID)
+    }
+
+    /// The file tools, all scoped to this chat's own folder.
+    ///
+    /// Dispatched here rather than in `BuiltInChatTools` because they need the
+    /// thread — its folder, and (for writes) the transcript entry that carries
+    /// the resulting file card.
+    private func runFileTool(
+        call: ChatWireToolCall, entry: inout ChatMessage, threadID: UUID
+    ) -> String {
+        guard let thread = store.thread(id: threadID) else {
+            return "ERROR: this conversation no longer exists."
+        }
+        let folder: (url: URL, folderName: String?)
+        do {
+            folder = try ChatFiles.workingDirectory(for: thread)
+        } catch {
+            return "ERROR: \(error.localizedDescription)"
+        }
+        if let name = folder.folderName, thread.filesFolderName != name {
+            var updated = thread
+            updated.filesFolderName = name
+            store.upsert(updated)
+        }
+
+        let name = call.arguments["name"]?.stringValue ?? ""
+        let contents = call.arguments["contents"]?.stringValue ?? ""
+
+        switch call.name {
+        case "list_files":
+            return ChatFileWriter.list(in: folder.url)
+
+        case "read_file":
+            return ChatFileWriter.read(name: name, in: folder.url)
+
+        case "delete_file":
+            return ChatFileWriter.delete(name: name, in: folder.url)
+
+        case "create_file", "update_file":
+            let outcome = call.name == "create_file"
+                ? ChatFileWriter.write(name: name, contents: contents, in: folder.url)
+                : ChatFileWriter.update(name: name, contents: contents, in: folder.url)
+            if case .written(let url, let bytes, _) = outcome {
+                // An updated file gets a card too — the user should see the
+                // version that now exists, not the one from three messages ago.
+                entry.producedFile = ProducedFile(
+                    name: url.lastPathComponent, path: url.path, byteCount: bytes)
+            }
+            return outcome.modelDescription
+
+        default:
+            return "ERROR: \(call.name) isn't a file tool."
+        }
     }
 
     private func updateEntry(_ entry: ChatMessage, threadID: UUID) {
@@ -466,6 +528,15 @@ final class ChatEngine {
     /// round. Ignoring it is how a thread that looks short overflows the
     /// model's window and starts producing nonsense — especially on Gemma 4
     /// 12B, whose 32K is the tightest in the catalog.
+    /// Where the file tools will operate, phrased for the prompt. nil when the
+    /// chat is using its own folder, which needs no explanation.
+    private func workingDirectoryDescription(threadID: UUID) -> String? {
+        guard let thread = store.thread(id: threadID),
+              let path = thread.workingDirectoryPath
+        else { return nil }
+        return "the folder “\((path as NSString).abbreviatingWithTildeInPath)”"
+    }
+
     private func engineInputBudget(toolset: ChatToolset) -> Int {
         let total = MLXLLMServiceHolder.shared.assistantInputTokenBudget
         return max(1_500, total - toolset.estimatedPromptTokens)
@@ -586,7 +657,9 @@ final class ChatEngine {
         return trimmed
     }
 
-    static func systemPrompt(settings: DictatorSettings, toolset: ChatToolset) -> String {
+    static func systemPrompt(
+        settings: DictatorSettings, toolset: ChatToolset, workingDirectoryDescription: String? = nil
+    ) -> String {
         var prompt = """
         You are Dictator's assistant, running entirely on \(NSFullUserName())'s Mac. \
         You are talking to them in a chat window.
@@ -596,6 +669,15 @@ final class ChatEngine {
         Never invent facts about the user, their files or their calendar: \
         if you need something you don't have, use a tool or say you don't know.
         """
+
+        if let directory = workingDirectoryDescription {
+            prompt += """
+
+
+            The file tools work in \(directory). Paths are relative to it — \
+            "notes.md" or "src/main.swift" — and nothing outside it is reachable.
+            """
+        }
 
         if !toolset.advertised.isEmpty {
             prompt += """

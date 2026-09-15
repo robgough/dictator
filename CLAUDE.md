@@ -122,6 +122,60 @@ so does the menu bar's Chat item and `dictator://chat`.
   uncancellable prefill that the next pass then queues behind. (This is why
   `ChatSession`, which keeps a KV cache, was not used — a cancelled generation
   leaves the cache holding half a turn.)
+- **Replies are rendered as blocks, not one string.** `ChatMarkdown.parse`
+  splits fenced code from prose before anything is displayed;
+  `AttributedString(markdown:)` does inline markdown only, so a fenced block
+  arrived with its backticks intact and its newlines folded away — a script
+  written line by line became one line. `CodeHighlighter` is a deliberately
+  shallow tokeniser (comments, strings, numbers, per-language keywords) that
+  returns ranges, so it stays testable without SwiftUI.
+- **Each chat owns a folder** — `<synced>/Chat Files/<slug>-<id6>/` (`ChatFiles`).
+  The name is fixed on first use and stored on the thread, never derived live:
+  titles change, and a renamed folder would invalidate every path already
+  written into the transcript. Deleting a chat offers to delete its files and
+  says where they are; "delete all chats" never touches files. The card's export is a
+  **copy**, not a move: the chat folder is a *working* directory, and the
+  assistant may be asked to change the file again — it can only do that to a
+  file it still has. What the user takes out is a point-in-time snapshot, and
+  going stale is what a snapshot is for. (This was built as a move first and
+  was wrong: it left the chat unable to edit its own work.)
+- **The chat can edit its own files**: `list_files`, `read_file`, `update_file`
+  alongside `create_file`. `update_file` is separate rather than an
+  `overwrite: true` flag, because overwriting is the one destructive operation
+  here and a flag gets set by accident.
+- **A chat works in its own folder.** `ChatThread.workingDirectoryPath` and
+  `ChatFiles.workingDirectory` can point one at a folder the user chose, and the
+  containment below already supports it, but **no UI sets it** — that's parked
+  until it can be a deliberate mode. `ChatFiles.ownsFolder` is the line that
+  matters when it comes back: deletion, and the delete confirmation's file
+  count, apply only to folders Dictator created.
+- **`ChatFileWriter.resolve` is the containment boundary**, and it is the thing
+  to be careful with. Subpaths are allowed (`src/main.swift`), but absolute
+  paths, `~`, any `..` component and hidden components are refused rather than
+  normalised, and the resolved parent is compared against the resolved root
+  **with symlinks followed** — a symlink inside the folder is otherwise a door
+  out of it. `scratch/tools-check/ContainmentCheck.swift` attacks it, including
+  that symlink case.
+- **`create_file` writes only inside the working directory.** The model picks the
+  filename, so it must not pick the *path*; anything containing a separator is
+  refused rather than repaired, the extension is allow-listed to
+  non-executable document types, and a clashing name gets a numbered sibling —
+  it never overwrites. The write returns a structured `Outcome`, not a
+  sentence, because the transcript renders the file itself (`ChatFileCard`:
+  preview, copy, open, reveal, save-a-copy) — one folder is Dictator's answer
+  to "where do files go", and the card is where the user overrides it. The card
+  re-reads from disk on each render rather than caching contents with the
+  message, so a file the user has since edited doesn't display stale text.
+- **Two tools reach outside the machine.** `fetch_url` (`WebFetcher`) opens a
+  public page: https/http only, loopback/link-local/private ranges refused
+  before *and* after redirects, size and character caps, and the page text is
+  returned explicitly fenced as untrusted quoted material — anyone can put
+  "ignore your instructions" on a web page. `run_shortcut` (`ShortcutsBridge`)
+  runs the user's own Shortcuts via `/usr/bin/shortcuts`; it needs no
+  entitlement because the shortcut asks for whatever *it* needs when it runs.
+  It is the **only built-in that requires approval** — everything else reads the
+  user's own data, whereas a shortcut can do anything they have ever automated.
+  Both are covered by `scratch/tools-check`, which symlinks the shipping source.
 - **Above ~24 tools the schemas are deferred.** Every tool's JSON schema is
   re-sent on *every round* (there's no prompt cache), so one 69-tool MCP server
   costs ~17K tokens per round — half of Gemma 4 12B's window before the user

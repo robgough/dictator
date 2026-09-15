@@ -8,6 +8,10 @@ struct ChatSidebar: View {
     @Environment(AppState.self) private var state
     @State private var store = ChatStore.shared
     @State private var confirmClearAll = false
+    /// Thread the user asked to delete, held while we ask what to do with its
+    /// files. Tying file lifetime to the chat is only fair if the destructive
+    /// half is visible at the moment of deleting.
+    @State private var pendingDelete: ChatThread?
 
     var body: some View {
         List(selection: selectionBinding) {
@@ -18,7 +22,7 @@ struct ChatSidebar: View {
                             .tag(thread.id)
                             .contextMenu {
                                 Button("Delete", role: .destructive) {
-                                    delete(thread.id)
+                                    requestDelete(thread)
                                 }
                             }
                     }
@@ -50,16 +54,41 @@ struct ChatSidebar: View {
             }
         }
         .confirmationDialog(
+            deletePrompt,
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let thread = pendingDelete {
+                Button("Delete Chat and Files", role: .destructive) {
+                    delete(thread, includingFiles: true)
+                    pendingDelete = nil
+                }
+                Button("Delete Chat, Keep Files") {
+                    delete(thread, includingFiles: false)
+                    pendingDelete = nil
+                }
+            }
+        } message: {
+            if let thread = pendingDelete, let folder = thread.filesFolderName {
+                Text("The files are in “Chat Files/\(folder)” in your Dictator folder. Keeping them leaves them there.")
+            }
+        }
+        .confirmationDialog(
             "Delete every chat?",
             isPresented: $confirmClearAll,
             titleVisibility: .visible
         ) {
             Button("Delete All", role: .destructive) {
+                // Chats go; files stay. Deleting every conversation is a
+                // tidy-up gesture, and silently taking a folder of documents
+                // with it is not what anybody means by it.
                 store.removeAll()
                 ChatWindowController.shared.newThread()
             }
         } message: {
-            Text("This can't be undone.")
+            Text("The chats go. Any files they made stay in your Chat Files folder.")
         }
     }
 
@@ -75,15 +104,31 @@ struct ChatSidebar: View {
         )
     }
 
-    private func delete(_ id: UUID) {
-        store.remove(id: id)
-        if shell.selectedThreadID == id {
+    /// Deletes straight away when there's nothing to lose; asks when there is.
+    private func requestDelete(_ thread: ChatThread) {
+        if ChatFiles.files(in: thread).isEmpty {
+            delete(thread, includingFiles: false)
+        } else {
+            pendingDelete = thread
+        }
+    }
+
+    private func delete(_ thread: ChatThread, includingFiles: Bool) {
+        if includingFiles { ChatFiles.deleteFolder(for: thread) }
+        store.remove(id: thread.id)
+        if shell.selectedThreadID == thread.id {
             if let next = store.threads.first {
                 ChatWindowController.shared.select(threadID: next.id)
             } else {
                 ChatWindowController.shared.newThread()
             }
         }
+    }
+
+    private var deletePrompt: String {
+        guard let thread = pendingDelete else { return "Delete this chat?" }
+        let count = ChatFiles.files(in: thread).count
+        return "Delete this chat and its \(count) file\(count == 1 ? "" : "s")?"
     }
 
     private struct Group {

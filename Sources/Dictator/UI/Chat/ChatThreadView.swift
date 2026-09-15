@@ -226,13 +226,7 @@ private struct ChatMessageRow: View {
                     .background(.tint.opacity(0.15), in: .rect(cornerRadius: 12))
             }
         case .assistant:
-            // Markdown parsing is skipped while the reply is still arriving:
-            // re-parsing a growing string on every token is pure waste, and
-            // half-written markdown renders wrong anyway (an unclosed ** turns
-            // the rest of the reply bold until the closing one lands). Parse
-            // once, when it's finished.
-            Text(liveText == nil ? markdown(text) : AttributedString(text))
-                .textSelection(.enabled)
+            ChatMarkdownView(text: text, isStreaming: liveText != nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
             ChatToolRow(message: message)
@@ -243,15 +237,6 @@ private struct ChatMessageRow: View {
         }
     }
 
-    /// Models reply in markdown when asked to. Rendering it inline keeps lists
-    /// and code readable; anything that won't parse falls back to plain text
-    /// rather than showing raw syntax.
-    private func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-    }
 }
 
 /// A tool call, collapsed to one line with the details on demand. Showing the
@@ -279,14 +264,24 @@ private struct ChatToolRow: View {
                             .padding(.vertical, 1)
                             .background(.quaternary, in: .capsule)
                     }
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    // The file card carries its own show/hide, so a second
+                    // chevron here would be two controls for one thing.
+                    if message.producedFile == nil {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             .buttonStyle(.plain)
+            .disabled(message.producedFile != nil)
 
-            if expanded {
+            // A produced file replaces the usual result blob: the card IS the
+            // result, and showing the model's "Saved notes.md…" sentence above
+            // it as well would just be the same fact twice.
+            if let file = message.producedFile {
+                ChatFileCard(file: file)
+            } else if expanded {
                 VStack(alignment: .leading, spacing: 4) {
                     if let summary = message.toolCall?.argumentSummary, !summary.isEmpty {
                         Text(summary)

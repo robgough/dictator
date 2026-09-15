@@ -13,6 +13,18 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The assistant can delete a file it made. It goes to the Trash, so a wrong one can be put straight back, and it asks first.
+- Under the message box you can now always see which model is answering, with a link to open that chat's files in Finder.
+- Dictating in chat no longer takes over the whole message bar: the recorder grows out of the microphone button at a sensible size and the typing field fades out behind it.
+
+
+- Code in chat replies is now shown as code: syntax highlighted, in a monospaced block with the language named and a copy button, and long lines scroll rather than wrap. Scripts used to arrive with their line breaks folded away, which made anything longer than a couple of lines unreadable.
+- The chat assistant can save files for you — Markdown, JSON, CSV, notes, scripts. Each chat gets its own folder inside “Chat Files” in your Dictator folder, so a conversation and everything it made stay together. The file appears in the conversation with its contents shown, and buttons to copy it, open it, show it in Finder, or save a copy somewhere permanent. It can also read back and change a file it made earlier, so asking for an edit changes the file rather than leaving you with two versions.
+- Deleting a chat that made files asks whether to delete them too, and tells you where they are. Clearing all chats never touches your files.
+
+- The chat assistant can run your Shortcuts. Whatever you've already automated — Reminders, Calendar, Notes, Home, a webhook — it can now reach, by name, and hand back whatever the shortcut produces. It asks before running one, since a shortcut can do anything you've ever built one to do.
+- The chat assistant can read a web page you give it the address of. It can't search the web, but if you paste a link or name a page, it can open it and answer from what's actually there.
+
 - Quick mode is quick again. It never used the screen-reading result — it runs no AI passes at all — but it was still waiting for one before pasting. Any mode with no AI passes now skips the screenshot entirely.
 - Asking the assistant about your journal or your recent dictations works. Both could only search for words, so “what did I journal yesterday” or “show me my recent entries” matched nothing and the assistant reported, wrongly, that there was nothing there. Ask without a search term and you get your most recent entries; you can also ask it to look back a set number of days.
 - Every chat now opens with a plain warning that you're talking to a small model running on your Mac, and that it will state untrue things confidently. It names the model too, so you know whether you're on the quick one or the careful one — and the model you're using is shown under the message box at all times.
