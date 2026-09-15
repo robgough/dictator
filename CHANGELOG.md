@@ -13,6 +13,22 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Quick mode is quick again. It never used the screen-reading result — it runs no AI passes at all — but it was still waiting for one before pasting. Any mode with no AI passes now skips the screenshot entirely.
+- Asking the assistant about your journal or your recent dictations works. Both could only search for words, so “what did I journal yesterday” or “show me my recent entries” matched nothing and the assistant reported, wrongly, that there was nothing there. Ask without a search term and you get your most recent entries; you can also ask it to look back a set number of days.
+- Every chat now opens with a plain warning that you're talking to a small model running on your Mac, and that it will state untrue things confidently. It names the model too, so you know whether you're on the quick one or the careful one — and the model you're using is shown under the message box at all times.
+- Dictating in chat takes over the message box while it listens: a live meter so you can see it's hearing you, a running time, and two buttons — throw it away, or send it.
+- Dictator now has a chat window. Click Dictator in the Dock, or pick Chat from the menu bar, and you get a proper conversation with the model already loaded on your Mac — past chats down the left, a new one a click away. Nothing leaves the machine.
+- The chat assistant can use tools. It can check the time, read your clipboard, search what you've dictated, search your journal, remember a fact, and — on a model that can see — look at the window behind Dictator and answer from it. Every tool it runs is shown in the conversation, with what it was given and what came back.
+- You can connect MCP servers, so the assistant can reach your own tools — files, a database, an API, anything that speaks Model Context Protocol. They can be a program on this Mac or a web address. Add them in Settings, Chat. Any passwords or tokens they need are kept in your Mac's keychain rather than in Dictator's settings, and you can switch a server to ask before it runs anything.
+- Chat never gets in the way of dictating. If you press the dictation key while a reply is being written, dictation takes the model immediately and the reply picks up again once you're done.
+- The microphone button in the chat box records straight into it. It skips everything a chat prompt doesn't need — no formatting passes, no reading your screen, no pasting — so it's quick, and it shows the level while it listens. Your spoken punctuation and dictionary still apply, and your usual dictation key still works here too.
+- Chat knows what day it is, so you can ask about yesterday or last week without it having to look the date up first.
+- ⌘, opens Settings from the chat window, and ⌘N starts a new chat.
+- Connecting a big MCP server no longer slows every reply to a crawl. Past about two dozen tools, Dictator stops describing all of them to the model every time it speaks and lets it search them instead — on a sixty-tool server that's around three times faster, with no loss in picking the right tool.
+- Stopping a reply now also stops a tool that's taking too long, rather than leaving the chat stuck until the server gives up.
+- Follow-up replies in a chat are faster, because Dictator no longer re-reads the whole conversation from scratch every time it speaks. The longer the conversation, the more this saves.
+- Chat needs one of the larger models, and says so plainly — along with which ones would work — rather than quietly doing nothing.
+
 - The menu bar's recent list now shows a microphone for dictations and the journal's book for journal entries, instead of a clipboard icon on everything. Journal entries no longer look like a dictation that failed to paste.
 - Your usage figures have moved out of About into their own Usage section — streaks, activity, word counts and local token totals. About had grown to the point where checking a version number meant scrolling past a fortnight of activity.
 - "Words a minute" is no longer nonsense. It was dividing every word you'd ever dictated by the far smaller amount of speech that had actually been timed, which on a long-standing install read as tens of thousands of words a minute. It now measures both halves over the same dictations, and starts fresh so the first figure you see is a real one.

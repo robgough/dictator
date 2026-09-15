@@ -32,6 +32,17 @@ final class AppState {
         return settings.assistantTriggerMode.label
     }
 
+    /// Human-readable form of the *dictation* hotkey, for hints like "Hold ⌥
+    /// to dictate". Mirrors `assistantHotkeyDisplay`.
+    var dictationHotkeyDisplay: String {
+        if settings.triggerMode == .keyboardShortcut {
+            let s = KeyboardShortcuts.getShortcut(for: .toggleDictation)?
+                .description.trimmingCharacters(in: .whitespaces)
+            return (s?.isEmpty == false) ? s! : "⌘⌥D"
+        }
+        return settings.triggerMode.label
+    }
+
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
     private let journalHotkey = HotkeyBinder(shortcutName: .toggleJournal)

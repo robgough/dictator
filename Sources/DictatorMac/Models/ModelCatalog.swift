@@ -71,6 +71,37 @@ struct LLMModel: Identifiable, Hashable, Sendable {
     /// image then spikes well above that for the duration of the read — about
     /// +2.8 GB on the 9B — because image prefill is transient, not resident.
     var visionCapable: Bool = false
+    /// This model can drive the Chat window: hold a multi-turn thread, decide
+    /// when a tool is needed, call it with the right arguments, and — the part
+    /// that actually separates models — *stop* calling and answer once it has
+    /// the result.
+    ///
+    /// **Measured, never inferred**, same rule as `visionCapable`. Verify with
+    /// `scratch/tool-call-check` before setting it.
+    ///
+    /// The measurement was a surprise and is worth recording, because it
+    /// contradicts the obvious assumption that only big models can do this:
+    /// **every current catalog model passes, down to Qwen 3.5 2B.** All four
+    /// scenarios (no-arg tool, tool with an argument, a question needing no
+    /// tool, and a chained question needing two different tools whose facts
+    /// both have to survive into the answer) pass on 2B, 4B, 9B, E4B and 12B.
+    /// Round-trip latency ranges from 0.4s (2B) to 4.8s (12B).
+    ///
+    /// What does NOT vary is whether the loop works; what varies is the prose.
+    /// The 2B's answers are terse and it buries facts; the 9B writes the
+    /// cleanest replies of the five. So this flag gates *capability*, not
+    /// quality — the Models pane says which models chat best.
+    ///
+    /// Off where untested, not where measured-and-failed: Gemma 4 E2B was never
+    /// run (it's the same QAT family as E4B, which passes, but "same family" is
+    /// exactly the inference this flag exists to forbid), and the legacy
+    /// entries are September-2024 models nobody should run an agent loop on.
+    ///
+    /// One caveat that cost a whole debugging cycle: this is only true when the
+    /// conversation is rebuilt with structured `tool_calls` (see
+    /// `ChatWireMessage`). Fed a bare `role: tool` message instead, both Gemma 4
+    /// sizes loop forever — they never see the result.
+    var chatCapable: Bool = false
 }
 
 /// Catalogue entry for a Parakeet ASR variant. The `id` is also FluidAudio's
@@ -143,9 +174,9 @@ enum ModelCatalog {
         // 2B and 9B are scaled from it by weight size, since measuring them
         // would mean pulling another 7.7 GB. Re-measure if either ever becomes
         // a default.
-        .init(id: "mlx-community/Qwen3.5-2B-4bit", displayName: "Qwen 3.5 2B (4-bit)", approxSizeMB: 1750, approxRAMMB: 1600, note: "Snappy; the light option", contextWindowTokens: 65_536),
-        .init(id: "mlx-community/Qwen3.5-4B-4bit", displayName: "Qwen 3.5 4B (4-bit)", approxSizeMB: 3060, approxRAMMB: 3000, note: "Recommended", contextWindowTokens: 65_536),
-        .init(id: "mlx-community/Qwen3.5-9B-4bit", displayName: "Qwen 3.5 9B (4-bit)", approxSizeMB: 5980, approxRAMMB: 5900, note: "Higher quality, and reads screenshots", contextWindowTokens: 65_536, meetingsCapable: true, visionCapable: true),
+        .init(id: "mlx-community/Qwen3.5-2B-4bit", displayName: "Qwen 3.5 2B (4-bit)", approxSizeMB: 1750, approxRAMMB: 1600, note: "Snappy; the light option", contextWindowTokens: 65_536, chatCapable: true),
+        .init(id: "mlx-community/Qwen3.5-4B-4bit", displayName: "Qwen 3.5 4B (4-bit)", approxSizeMB: 3060, approxRAMMB: 3000, note: "Recommended", contextWindowTokens: 65_536, chatCapable: true),
+        .init(id: "mlx-community/Qwen3.5-9B-4bit", displayName: "Qwen 3.5 9B (4-bit)", approxSizeMB: 5980, approxRAMMB: 5900, note: "Higher quality, and reads screenshots", contextWindowTokens: 65_536, meetingsCapable: true, visionCapable: true, chatCapable: true),
         // Gemma 4 runs on mlx-swift-lm's native gemma4 / gemma4_unified
         // architectures (3.31.4+). The checkpoints are multimodal — download
         // size includes vision/audio towers that are dropped at load, so
@@ -165,7 +196,7 @@ enum ModelCatalog {
         // size 32); E2B's MXFP4 repo was an empty upload when this was written
         // (rechecked 2026-09-15, still empty), so it ships the affine 4-bit QAT.
         .init(id: "mlx-community/gemma-4-E2B-it-qat-4bit", displayName: "Gemma 4 E2B QAT (4-bit)", approxSizeMB: 4400, approxRAMMB: 4000, note: "Gemini 3-derived; strong for its size", contextWindowTokens: 131_072, meetingsCapable: true),
-        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; recommended for Meetings", contextWindowTokens: 131_072, meetingsCapable: true),
+        .init(id: "mlx-community/gemma-4-E4B-it-qat-mxfp4", displayName: "Gemma 4 E4B QAT (MXFP4)", approxSizeMB: 6700, approxRAMMB: 6200, note: "Best quality; recommended for Meetings", contextWindowTokens: 131_072, meetingsCapable: true, chatCapable: true),
         // Gemma 4 12B is the dense "unified" model: encoder-free multimodal,
         // 48 layers, full attention every 6th layer. It needs a 32 GB machine
         // to be comfortable, which is why no tier recommends it automatically —
@@ -179,7 +210,7 @@ enum ModelCatalog {
         // disappoints: `-qat-mxfp4` (same size, faster kernels) and
         // `-qat-OptiQ-4bit` (~9 GB, sensitivity-aware mixed precision, but a
         // third-party toolkit and very new). Both want an A/B before shipping.
-        .init(id: "mlx-community/gemma-4-12B-it-qat-4bit", displayName: "Gemma 4 12B QAT (4-bit)", approxSizeMB: 11020, approxRAMMB: 11000, note: "Highest quality; needs 32 GB", contextWindowTokens: 32_768, meetingsCapable: true, visionCapable: true),
+        .init(id: "mlx-community/gemma-4-12B-it-qat-4bit", displayName: "Gemma 4 12B QAT (4-bit)", approxSizeMB: 11020, approxRAMMB: 11000, note: "Highest quality; needs 32 GB", contextWindowTokens: 32_768, meetingsCapable: true, visionCapable: true, chatCapable: true),
 
         // Superseded (all September 2024 vintage). Kept so existing installs
         // keep working — see `isLegacy`. Hidden from the pickers unless

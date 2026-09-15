@@ -1,0 +1,376 @@
+import SwiftUI
+
+/// The transcript plus the composer.
+struct ChatThreadView: View {
+    @Bindable var shell: ChatShellModel
+    @Environment(AppState.self) private var state
+    @State private var store = ChatStore.shared
+    @FocusState private var composerFocused: Bool
+
+    private var thread: ChatThread? {
+        shell.selectedThreadID.flatMap { store.thread(id: $0) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            transcript
+            Divider()
+            ChatComposer(
+                shell: shell,
+                isFocused: $composerFocused,
+                onSend: send
+            )
+        }
+        .sheet(item: approvalBinding) { pending in
+            ChatToolApprovalSheet(
+                pending: pending,
+                onApprove: { always in shell.engine.approve(always: always) },
+                onDeny: { shell.engine.deny() }
+            )
+        }
+        .onAppear { composerFocused = true }
+        .onChange(of: shell.selectedThreadID) { composerFocused = true }
+    }
+
+    private var approvalBinding: Binding<ChatEngine.PendingApproval?> {
+        Binding(
+            get: { shell.engine.pendingApproval },
+            // Dismissing the sheet any other way (Escape) is a denial, not a
+            // silent approval.
+            set: { if $0 == nil { shell.engine.deny() } }
+        )
+    }
+
+    @ViewBuilder
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ChatTrustWarning()
+                    if let notice = shell.modelSwitchNotice {
+                        ChatNoticeRow(text: notice, icon: "arrow.triangle.2.circlepath")
+                    }
+                    ForEach(thread?.messages ?? []) { message in
+                        // The reply currently streaming lives on the engine,
+                        // not the store — writing it per token would reorder
+                        // and re-render the whole thread list on every chunk.
+                        ChatMessageRow(
+                            message: message,
+                            liveText: message.id == shell.engine.streamingMessageID
+                                ? shell.engine.visibleStreamingText : nil
+                        )
+                        .id(message.id)
+                    }
+                    if shell.engine.activity != .idle {
+                        ChatActivityRow(activity: shell.engine.activity)
+                    }
+                    // A zero-height target to scroll to. Scrolling to the last
+                    // *message* was the bug: with a LazyVStack the row is sized
+                    // as it appears, so `scrollTo` aimed at a height that was
+                    // still changing and landed part-way up a long reply. An
+                    // empty anchor below everything has nothing to mis-measure.
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomAnchor)
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // Keeps the view pinned to the newest content as the thread grows,
+            // including on first open — without it a reopened chat starts at
+            // the top and you scroll down through your own history to find the
+            // end.
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: thread?.messages.count) { scrollToEnd(proxy) }
+            .onChange(of: shell.engine.streamingText) { throttledScrollToEnd(proxy) }
+            .onChange(of: shell.engine.activity) { scrollToEnd(proxy) }
+            .onChange(of: shell.selectedThreadID) {
+                // No animation when switching threads: animating a jump
+                // through someone else's conversation is just a smear.
+                scrollToEnd(proxy, animated: false)
+            }
+        }
+        .overlay(alignment: .center) {
+            // Only once there's a warning card above it to share the space
+            // with — centred on an empty thread it sat right under the
+            // warning and read as one crowded block.
+            if thread?.messages.isEmpty ?? true {
+                ChatEmptyState()
+                    .padding(.top, 60)
+            }
+        }
+    }
+
+    private static let bottomAnchor = "chat.bottom"
+
+    /// Scrolling on *every* token is what made a long reply feel like the
+    /// window had hung: `scrollTo` forces a layout pass over the whole
+    /// LazyVStack, and at thirty-odd tokens a second that is thirty full
+    /// layouts a second on top of the text changing. Ten a second tracks the
+    /// text just as well and leaves the main thread time to do anything else.
+    @State private var lastScroll = Date.distantPast
+
+    private func throttledScrollToEnd(_ proxy: ScrollViewProxy) {
+        let now = Date()
+        guard now.timeIntervalSince(lastScroll) > 0.1 else { return }
+        lastScroll = now
+        scrollToEnd(proxy, animated: false)
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        // Streaming fires this on every chunk, and animating each one leaves
+        // the scroll permanently chasing the text instead of tracking it.
+        if animated {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+        }
+    }
+
+    private func send() {
+        let text = shell.draft
+        shell.draft = ""
+        shell.engine.send(text)
+    }
+}
+
+/// Prompt suggestions on an empty thread. They double as documentation: most
+/// people won't guess that a local model can read their screen or their
+/// journal unless something says so.
+private struct ChatEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("Ask anything — it all stays on this Mac.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(
+                    [
+                        "What's on my screen right now?",
+                        "Summarise what I dictated this week.",
+                        "Draft a reply to the email behind this window.",
+                    ], id: \.self
+                ) { example in
+                    Text("“\(example)”")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct ChatNoticeRow: View {
+    let text: String
+    let icon: String
+
+    var body: some View {
+        Label(text, systemImage: icon)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
+    }
+}
+
+private struct ChatActivityRow: View {
+    let activity: ChatEngine.Activity
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var label: String {
+        switch activity {
+        case .idle: return ""
+        case .loadingModel: return "Loading the model…"
+        case .thinking: return "Thinking…"
+        case .streaming: return "Writing…"
+        case .awaitingApproval: return "Waiting for you…"
+        case .runningTool(let name): return "\(name)…"
+        // Worth saying plainly rather than showing a generic spinner: the
+        // reply genuinely has stopped, and it's because dictation won.
+        case .pausedForDictation: return "Paused — dictation is using the model"
+        }
+    }
+}
+
+private struct ChatMessageRow: View {
+    let message: ChatMessage
+    /// Non-nil while this message is the one being streamed.
+    var liveText: String?
+
+    private var text: String { liveText ?? message.text }
+
+    var body: some View {
+        switch message.kind {
+        case .user:
+            HStack {
+                Spacer(minLength: 60)
+                Text(text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.tint.opacity(0.15), in: .rect(cornerRadius: 12))
+            }
+        case .assistant:
+            // Markdown parsing is skipped while the reply is still arriving:
+            // re-parsing a growing string on every token is pure waste, and
+            // half-written markdown renders wrong anyway (an unclosed ** turns
+            // the rest of the reply bold until the closing one lands). Parse
+            // once, when it's finished.
+            Text(liveText == nil ? markdown(text) : AttributedString(text))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .tool:
+            ChatToolRow(message: message)
+        case .failure:
+            Label(message.text, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    /// Models reply in markdown when asked to. Rendering it inline keeps lists
+    /// and code readable; anything that won't parse falls back to plain text
+    /// rather than showing raw syntax.
+    private func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+    }
+}
+
+/// A tool call, collapsed to one line with the details on demand. Showing the
+/// arguments matters — the spec asks clients to show what a tool is being
+/// called with so people can spot a call they didn't want.
+private struct ChatToolRow: View {
+    let message: ChatMessage
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .foregroundStyle(tint)
+                    Text(headline)
+                        .font(.caption.weight(.medium))
+                    if let server = message.serverName {
+                        Text(server)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.quaternary, in: .capsule)
+                    }
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let summary = message.toolCall?.argumentSummary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let result = message.toolResult {
+                        Text(result)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 8))
+            }
+        }
+    }
+
+    private var headline: String {
+        if message.toolDenied { return "\(message.text) — declined" }
+        if message.toolFailed { return "\(message.text) — failed" }
+        if message.toolResult == nil { return "\(message.text)…" }
+        return message.text
+    }
+
+    private var icon: String {
+        if message.toolDenied { return "hand.raised" }
+        if message.toolFailed { return "exclamationmark.triangle" }
+        return "wrench.and.screwdriver"
+    }
+
+    private var tint: Color {
+        if message.toolDenied { return .secondary }
+        if message.toolFailed { return .orange }
+        return .accentColor
+    }
+}
+
+/// The standing warning at the top of every chat.
+///
+/// Deliberately unmissable, and deliberately not a one-off dismissible tip.
+/// A 2B–12B model running on a laptop is *several orders of magnitude* smaller
+/// than the assistants people have been trained by, and it fails in the worst
+/// possible way: fluently. It will invent a date, a name, a number or a quote
+/// and present it in exactly the same confident register as something true.
+/// Anyone who has only ever used frontier models has no reason to expect that,
+/// which is precisely why this can't be a footnote.
+///
+/// It names the model too — the gap between Qwen 3.5 2B and Gemma 4 12B is
+/// enormous, and "which one am I talking to" is the first thing you need to
+/// calibrate against.
+private struct ChatTrustWarning: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                Text("Check anything that matters")
+                    .fontWeight(.semibold)
+            }
+            .font(.callout)
+
+            Text("You're talking to \(modelName), running entirely on this Mac — nothing you type leaves it. It is also a tiny fraction of the size of ChatGPT or Claude, and it will state things that are simply untrue with total confidence: invented dates, names, numbers and quotes, written just as fluently as the parts it gets right. Treat every fact it gives you as unverified until you've checked it yourself. Don't act on its output where being wrong would cost you something.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(Color.yellow.mix(with: .primary, by: 0.55))
+        .frame(maxWidth: 520)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.yellow.opacity(0.13), in: .rect(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.yellow.opacity(0.35), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 4)
+    }
+
+    private var modelName: String {
+        let id = state.settings.llmModelID
+        return ModelCatalog.llm(id: id)?.displayName ?? id
+    }
+}

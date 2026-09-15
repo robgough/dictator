@@ -79,6 +79,16 @@ enum PipelineState: Equatable {
         default: true
         }
     }
+    /// True while audio is actually being captured — warming up or recording.
+    /// The Chat composer's dictate button follows this so it can't get stuck
+    /// lit when a capture ends by some route other than its own button.
+    var isCapturing: Bool {
+        switch self {
+        case .warmingUp, .recording: return true
+        default: return false
+        }
+    }
+
 }
 
 @MainActor
@@ -638,7 +648,18 @@ final class Pipeline {
         // One global switch for both dictation and the assistant, on by default.
         // `isSupported` is what actually decides most of the time: it's false
         // unless a model that can read images is loaded right now.
+        //
+        // Skipped outright when the mode runs no LLM passes. Vision exists to
+        // feed proper-noun spellings into a prompt — with no prompt there is
+        // nothing to feed, so the capture and its inference are pure cost, and
+        // `resolveVisionTerms` would still stop and wait for them before
+        // delivering. That's the whole of the Quick mode complaint: Quick is
+        // `.raw`, the fastest path in the app, and it was sitting behind a
+        // screenshot read whose result it then threw away. Keyed on the passes
+        // rather than on Quick's id so any `.raw` mode a user makes is just as
+        // fast.
         if settings.visionContextEnabled,
+           !currentMode.passes.isEmpty,
            WindowVisionContext.isSupported,
            ScreenRecordingPermission.hasAccess() {
             inFlight.visionAttempted = true
@@ -804,7 +825,7 @@ final class Pipeline {
         // skips, the delivery-time restore — sees the same merged term list.
         // Normally instant: the capture finished while we were transcribing.
         // When it hasn't, say so rather than leaving "Transcribing…" on screen.
-        if inFlight.visionTask != nil { state = .readingScreen }
+        if inFlight.visionTask != nil, !currentMode.passes.isEmpty { state = .readingScreen }
         await resolveVisionTerms()
 
         // The mode's LLM pipeline is the ordered pass list its STYLE resolves to
@@ -1382,6 +1403,15 @@ final class Pipeline {
     private func resolveVisionTerms() async {
         guard let task = inFlight.visionTask else { return }
         inFlight.visionTask = nil
+        // The mode can change after the capture was kicked off — the user
+        // cycles to Quick mid-sentence. With no LLM pass left to feed, the
+        // terms have no destination, so drop the task rather than stand here
+        // waiting on an inference whose result goes in the bin.
+        guard !currentMode.passes.isEmpty else {
+            task.cancel()
+            inFlight.visionAttempted = false
+            return
+        }
         inFlight.visionTerms = await task.value
     }
 

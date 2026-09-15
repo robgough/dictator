@@ -24,6 +24,35 @@ struct DictatorApp: App {
                 .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
+        // The app's real menu bar. Invisible while Dictator is an `.accessory`
+        // — which is nearly always — but the moment a window opens we flip to
+        // `.regular` and this is what people get. Without it, ⌘, did nothing in
+        // the Chat window, which is the one place in the app where someone is
+        // sitting in front of a window and reaching for it.
+        //
+        // `.appSettings` is replaced rather than added to, because there is no
+        // SwiftUI `Settings` scene to point at: the window is AppKit-owned (see
+        // `SettingsWindowController`).
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    NSApp.setActivationPolicy(.regular)
+                    SettingsWindowController.shared.show()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(after: .newItem) {
+                Button("New Chat") {
+                    ChatWindowController.shared.show()
+                    ChatWindowController.shared.newThread()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("Chat…") {
+                    ChatWindowController.shared.show()
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
+        }
 
         // Settings is NOT a SwiftUI `Settings` scene: the window is owned by
         // `SettingsWindowController` (SettingsShell.swift), which builds real
@@ -85,6 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSApp.setActivationPolicy(.regular)
                     SettingsWindowController.shared.show()
                 }
+            case "chat":
+                Task { @MainActor in ChatWindowController.shared.show() }
             case "demo":
                 DemoMode.handleURL(url)
             case "onboarding", "setup", "wizard":
@@ -94,6 +125,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[Dictator] Ignoring unknown URL: \(url.absoluteString)")
             }
         }
+    }
+
+    /// Clicking Dictator in the Dock (or double-clicking the app when it's
+    /// already running) opens the Chat window.
+    ///
+    /// Before this, an accessory app with no windows answered a reopen by
+    /// doing nothing at all — the app was already running, so Launch Services
+    /// had nothing to do, and the user got no feedback whatsoever. Chat is the
+    /// natural thing to show: it's the only window in the app someone would
+    /// want to sit in front of.
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication, hasVisibleWindows: Bool
+    ) -> Bool {
+        // Don't steal focus from a window the user already has open (Settings,
+        // an assistant result) — reopen fires for those too.
+        guard !hasVisibleWindows else { return true }
+        Task { @MainActor in ChatWindowController.shared.show() }
+        return true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -137,8 +186,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let title = win.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { return }
             // Defer the policy change a tick so the window-close animation
-            // doesn't race with hiding the dock icon.
+            // doesn't race with hiding the dock icon — and then only drop the
+            // dock icon if nothing else is still on screen. With Chat as a
+            // second titled window, closing one while the other is open used
+            // to take the app back to accessory with a visible window left
+            // behind, which loses its dock icon and its place in ⌘-Tab.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let stillOpen = NSApp.windows.contains { other in
+                    other !== win && other.isVisible
+                        && !other.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                guard !stillOpen else { return }
                 NSApp.setActivationPolicy(.accessory)
             }
         }
@@ -177,6 +235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Drop the LLM socket and unlink its file, so Dictator Meetings sees
         // "no socket" rather than connecting to a dead endpoint.
         LocalLLMServer.shared.stop()
+        // Flush any chat still inside its save debounce.
+        ChatStore.shared.flush()
+        // Kill every MCP subprocess we spawned. Synchronous on purpose: this
+        // method returns straight into exit(), so an async teardown would
+        // never run and the user would collect an orphaned `node` per quit.
+        MCPProcessReaper.terminateAll()
     }
 
     /// The already-running Dictator instance, if any, excluding this process.

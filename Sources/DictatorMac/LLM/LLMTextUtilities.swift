@@ -6,6 +6,64 @@ import Foundation
 /// marker convention — so the cleaning and parsing rules are engine-agnostic
 /// and live here rather than on either concrete service.
 enum LLMTextUtilities {
+    /// Strips a model's private reasoning from a chat reply.
+    ///
+    /// Two shapes in the catalog, and `clean` only knew about one:
+    ///
+    /// - **Qwen 3.5** emits `<think>…</think>`. Handled by `clean`.
+    /// - **Gemma 4 12B** emits `<|channel>thought … <channel|>` — a
+    ///   channel-tagged reasoning span that `clean` passes straight through.
+    ///   Measured in `scratch/tool-call-check`: the 12B prefixed *every*
+    ///   post-tool answer with it, even with `enable_thinking: false`. Left in,
+    ///   the chat window would show the model talking to itself above each
+    ///   reply. (The E-series doesn't do this; only the 12B "unified" build.)
+    ///
+    /// Chat-only, not folded into `clean`, because the dictation passes send
+    /// `enable_thinking: false` to templates that honour it and are validated
+    /// by gates that would reject a reasoning leak anyway — whereas a chat
+    /// reply is shown verbatim with nothing downstream to catch it.
+    /// Strips reasoning spans and nothing else.
+    ///
+    /// Split out from `cleanChatReply` because it has to run on *partial*
+    /// text, token by token, while a reply streams — and the rest of `clean`
+    /// must not: it strips code fences and wrapping quotes, which on a
+    /// half-arrived reply means tearing out an opening ``` before its closing
+    /// one exists and watching the text flicker as it lands.
+    ///
+    /// Handles both shapes, terminated or not. An *unterminated* span is the
+    /// important case here: mid-stream the model is still inside its
+    /// reasoning, and showing it is precisely the bug — the user sees
+    /// `<|channel>thought` appear in the transcript before the answer does.
+    static func stripReasoningSpans(_ raw: String) -> String {
+        var s = raw
+
+        while let open = s.range(of: "<|channel>"),
+              let close = s.range(of: "<channel|>", range: open.upperBound..<s.endIndex) {
+            s.removeSubrange(open.lowerBound..<close.upperBound)
+        }
+        if let open = s.range(of: "<|channel>") {
+            s = String(s[..<open.lowerBound])
+        }
+        if let close = s.range(of: "<channel|>", options: .backwards) {
+            s = String(s[close.upperBound...])
+        }
+
+        if let thinkEnd = s.range(of: "</think>", options: .backwards) {
+            s = String(s[thinkEnd.upperBound...])
+        } else if let thinkStart = s.range(of: "<think>") {
+            s = String(s[..<thinkStart.lowerBound])
+        }
+
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func cleanChatReply(_ raw: String) -> String {
+        var s = raw
+
+        s = stripReasoningSpans(s)
+        return clean(s)
+    }
+
     /// Strips wrapping artifacts the model occasionally emits — echoed
     /// `<<<...>>>` blocks, `Output:` labels, markdown code fences, surrounding
     /// quotes. Idempotent and safe to call on already-clean text.

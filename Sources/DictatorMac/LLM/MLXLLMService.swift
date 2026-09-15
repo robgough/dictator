@@ -45,6 +45,10 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
     /// True while `ensureLoaded` is running.
     private(set) var isLoading: Bool = false
     @ObservationIgnored private var container: ModelContainer?
+    /// Reused prefill state for the Chat window. Dropped whenever the loaded
+    /// model changes — cached keys and values mean nothing against different
+    /// weights.
+    @ObservationIgnored let chatPromptCache = ChatPromptCache()
 
     /// True when a model container is resident right now. The LLM socket
     /// server answers `status` with this (paired with `currentModelID`) so a
@@ -82,8 +86,33 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         )
     }
 
+    /// In-flight load, keyed by model id, so two callers racing for the same
+    /// model share one load instead of doing two.
+    ///
+    /// This became reachable when Chat landed: `AppState.preloadModels()` fires
+    /// a load at launch, and opening the Chat window immediately afterwards
+    /// fires another through `ensureReady()`. Both saw `container == nil`, both
+    /// loaded, and the machine briefly held two copies of a multi-gigabyte
+    /// model — on a 16 GB Mac that is the difference between working and
+    /// swapping.
+    @ObservationIgnored private var loadInFlight: (id: String, task: Task<Void, Error>)?
+
     func ensureLoaded(modelID: String, progress: (@Sendable @MainActor (Double) -> Void)? = nil) async throws {
         if currentModelID == modelID, container != nil { return }
+        if let inFlight = loadInFlight, inFlight.id == modelID {
+            return try await inFlight.task.value
+        }
+        let task = Task<Void, Error> { [weak self] in
+            try await self?.performLoad(modelID: modelID, progress: progress)
+        }
+        loadInFlight = (modelID, task)
+        defer { if loadInFlight?.id == modelID { loadInFlight = nil } }
+        try await task.value
+    }
+
+    private func performLoad(modelID: String, progress: (@Sendable @MainActor (Double) -> Void)? = nil) async throws {
+        if currentModelID == modelID, container != nil { return }
+        chatPromptCache.reset()
         container = nil
         currentModelID = nil
         isLoading = true
@@ -206,12 +235,14 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
     /// that has them mmap'ed.
     func unload(modelID: String) {
         guard currentModelID == modelID else { return }
+        chatPromptCache.reset()
         container = nil
         currentModelID = nil
     }
 
     /// `LLMEngine` protocol method — drops whatever's currently loaded.
     func unload() {
+        chatPromptCache.reset()
         container = nil
         currentModelID = nil
     }
@@ -575,5 +606,174 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             throw NSError(domain: "Dictator", code: 3, userInfo: [NSLocalizedDescriptionKey: "Summariser returned no text"])
         }
         return cleaned
+    }
+}
+
+// MARK: - Chat
+
+/// Streaming, tool-calling chat rounds for the Chat window.
+///
+/// `MLXLLMService` conforms; `AppleFoundationLLMService` deliberately does not
+/// (see `LLMChatStreaming`).
+extension MLXLLMService: LLMChatStreaming {
+    /// True when the *currently selected* model is one we've measured as able
+    /// to run a chat thread and an agent loop. Unlike `canReadImages` this does
+    /// not require the model to be resident: opening the Chat window is allowed
+    /// to trigger a load, because the user explicitly asked for it and is
+    /// looking at a window that can show progress. The dictation hot path is
+    /// the only place a cold load is unaffordable.
+    var canChat: Bool {
+        guard let id = modelID ?? currentModelID else { return false }
+        return ModelCatalog.llm(id: id)?.chatCapable ?? false
+    }
+
+    func streamChatRound(
+        messages: [ChatWireMessage],
+        tools: [ToolSpec],
+        maxTokens: Int,
+        cacheOwner: String,
+        onDelta: @MainActor @escaping (ChatStreamDelta) -> Void
+    ) async throws -> ChatRoundResult {
+        try await ensureReady()
+        guard let container else {
+            throw NSError(domain: "Dictator", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "LLM not loaded"
+            ])
+        }
+
+        // Rendered outside `perform`: `[String: any Sendable]` crosses the
+        // @Sendable boundary, and building it here keeps the closure small.
+        let wire = messages.map(\.templateMessage)
+        let toolSpecs: [ToolSpec]? = tools.isEmpty ? nil : tools
+
+        let cache = chatPromptCache
+
+        // Deltas travel on an AsyncStream rather than a per-chunk hop to the
+        // main actor. Generation runs inside `perform`, off-main; a
+        // `Task { @MainActor in … }` per token would deliver *unordered*, which
+        // in a chat window means visibly scrambled text. A stream's
+        // continuation preserves order.
+        let (stream, continuation) = AsyncStream<ChatStreamDelta>.makeStream()
+
+        // Run at .background so a dictation hotkey preempts this at the next
+        // token (LLMScheduler cancels, MLX stops, the caller gets .preempted
+        // and re-runs the round). Chat must never make someone wait to dictate.
+        let work = Task { @MainActor in
+            defer { continuation.finish() }
+            return try await LLMScheduler.shared.run(.background) {
+                // `Self.generateRound` is `nonisolated`, which is the whole
+                // point: see its own comment. Do not inline it back here.
+                try await Self.generateRound(
+                    container: container,
+                    messages: wire,
+                    tools: toolSpecs,
+                    maxTokens: maxTokens,
+                    cache: cache,
+                    cacheOwner: cacheOwner,
+                    continuation: continuation
+                )
+            }
+        }
+
+        // Drain on the main actor, in order, while generation runs.
+        for await delta in stream {
+            onDelta(delta)
+        }
+
+        // `work.value` is not cancellation-aware on its own. Without this
+        // handler, Stop (or closing the window) would leave the generation
+        // running to completion while still holding the scheduler's single
+        // background slot — so the next message failed with "already busy"
+        // several seconds later, for no reason the user could see.
+        let result = try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+        UsageStatsStore.shared.recordLLMTokens(
+            in: result.promptTokens, out: result.completionTokens)
+        return result
+    }
+
+    /// The actual generation, deliberately `nonisolated`.
+    ///
+    /// **This must not run on the main actor.** `ModelContainer.perform` is
+    /// backed by `SerialAccessContainer.read`, which awaits the closure
+    /// *without hopping executors* — so the closure runs wherever the caller
+    /// is. Called from the `@MainActor` body the scheduler requires, that put
+    /// prompt tokenization and the entire token loop on the main thread, and
+    /// the window froze for the length of every reply. A `nonisolated async`
+    /// method called from the main actor runs on the cooperative pool instead,
+    /// which is all it takes.
+    ///
+    /// Chunks travel out through `continuation` rather than a callback, so
+    /// nothing here needs main-actor access at all.
+    private nonisolated static func generateRound(
+        container: ModelContainer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        maxTokens: Int,
+        cache: ChatPromptCache,
+        cacheOwner: String,
+        continuation: AsyncStream<ChatStreamDelta>.Continuation
+    ) async throws -> ChatRoundResult {
+        try await container.perform { (ctx: ModelContext) -> ChatRoundResult in
+            let input = UserInput(
+                messages: messages,
+                tools: tools,
+                additionalContext: chatTemplateContext
+            )
+            let lmInput = try await ctx.processor.prepare(input: input)
+            let params = GenerateParameters(
+                maxTokens: maxTokens, temperature: 0.4, topP: 0.95)
+
+            // Reuse whatever of this prompt is already prefilled. Safe to fall
+            // back from at any point: a miss just prefills the lot, which is
+            // what every round did before this existed.
+            let promptTokens = lmInput.text.tokens.asArray(Int.self)
+            let prepared = try cache.prepare(
+                promptTokens: promptTokens, owner: cacheOwner,
+                model: ctx.model, parameters: params)
+            let seed = LMInput(tokens: MLXArray([promptTokens[promptTokens.count - 1]]))
+            let iterator = try TokenIterator(
+                input: seed, model: ctx.model, cache: prepared.cache, parameters: params)
+            let (stream, _) = MLXLMCommon.generateTask(
+                promptTokenCount: prepared.prefilled + 1,
+                modelConfiguration: ctx.configuration,
+                tokenizer: ctx.tokenizer,
+                iterator: iterator,
+                tools: tools)
+
+            var text = ""
+            var calls: [ChatWireToolCall] = []
+            var completionTokens = 0
+            var hitLimit = false
+            for await item in stream {
+                if Task.isCancelled { break }
+                switch item {
+                case .chunk(let piece):
+                    text += piece
+                    continuation.yield(.chunk(piece))
+                case .toolCall(let call):
+                    let wireCall = ChatWireToolCall(
+                        name: call.function.name,
+                        arguments: .object(
+                            call.function.arguments.mapValues(MCPJSON.from(jsonValue:)))
+                    )
+                    calls.append(wireCall)
+                    continuation.yield(.toolCall(wireCall))
+                case .info(let info):
+                    completionTokens = info.generationTokenCount
+                    hitLimit = info.stopReason == .length
+                }
+            }
+            return ChatRoundResult(
+                text: LLMTextUtilities.cleanChatReply(text),
+                toolCalls: calls,
+                promptTokens: promptTokens.count,
+                completionTokens: completionTokens,
+                hitTokenLimit: hitLimit
+            )
+        }
     }
 }

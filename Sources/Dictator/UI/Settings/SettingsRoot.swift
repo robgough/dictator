@@ -46,6 +46,7 @@ struct SettingsDetailRoot: View {
             case .dictation:  DictationPane(shell: shell)
             case .models:     ModelsPane(shell: shell)
             case .assistant:  AssistantPane()
+            case .chat:       ChatPane().settingsDetailPadding()
             case .journal:    JournalPane()
             case .scratchpad: ScratchpadPane()
             case .dictionary: DictionaryPane(shell: shell).settingsDetailPadding()
@@ -70,7 +71,10 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     // Usage sits next to About because both are things you look at rather than
     // configure; it was carved out of About once the stats grew to more than
     // half that page.
-    case general, dictation, models, assistant, journal, scratchpad, dictionary, usage, about
+    // Chat sits right after Assistant: it's the same idea (talk to the
+    // model) with a window instead of a selection, and its settings are the
+    // tools that make that worth doing.
+    case general, dictation, models, assistant, chat, journal, scratchpad, dictionary, usage, about
 
     var id: Self { self }
 
@@ -80,6 +84,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .dictation:  "Dictation"
         case .models:     "Models"
         case .assistant:  "Assistant"
+        case .chat:       "Chat"
         case .journal:    "Journal"
         case .scratchpad: "Scratchpad"
         case .dictionary: "Dictionary"
@@ -94,6 +99,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .dictation:  "mic.fill"
         case .models:     "cpu"
         case .assistant:  "wand.and.stars"
+        case .chat:       "bubble.left.and.bubble.right.fill"
         case .journal:    "book.closed.fill"
         case .scratchpad: "note.text"
         case .dictionary: "character.book.closed.fill"
@@ -116,6 +122,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .dictation:  .blue
         case .models:     .pink
         case .assistant:  .purple
+        case .chat:       .teal
         case .journal:    .mint
         case .scratchpad: .orange
         case .dictionary: .green

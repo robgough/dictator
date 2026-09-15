@@ -37,6 +37,20 @@ struct MenuBarContent: View {
                 recentList
             }
 
+            // Chat gets its own full-width row above the Meetings one. It's a
+            // destination, not a setting, and it's the only entry here that
+            // opens a window you sit in front of.
+            Divider()
+            Button {
+                ChatWindowController.shared.show()
+            } label: {
+                Label("Chat…", systemImage: "bubble.left.and.bubble.right")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .medium, design: .rounded))
+
             // Its own full-width row, and only when the app is actually
             // installed: squeezed into the footer next to Settings and Quit
             // the label wrapped, and users without Dictator Meetings have no

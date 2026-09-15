@@ -95,6 +95,68 @@ The two Mac apps are separate processes with separate bundle IDs (`net.robgough.
 
 Mode resolution at recording start is most-specific-first: **website** binding (`urlPatterns`, matched against the frontmost browser's URL via `BrowserURLReader`) beats **app** binding (`appBundleIDs`) beats `defaultModeID`. The URL read walks a browser's AX tree, so it's skipped entirely unless `settings.anyModeHasURLBinding` — this is the hotkey-press path, which has a documented history of main-thread stalls.
 
+### Chat, tools, and MCP
+
+`Sources/Dictator/Chat/` + `Sources/Dictator/UI/Chat/` + `Sources/DictatorMac/MCP/`.
+
+Dictator's chat window is an agent harness over whichever MLX model is already
+loaded. Clicking the app in the Dock opens it (`applicationShouldHandleReopen`);
+so does the menu bar's Chat item and `dictator://chat`.
+
+- **One round, not a loop, at the engine.** `LLMChatStreaming.streamChatRound`
+  (implemented by `MLXLLMService`, opt-in like `LLMUsageReporting` so the Apple
+  engine can't be handed a loop it can't run) does prompt → prose and/or tool
+  calls. The *loop* — tool dispatch, approval, round cap, persistence — is
+  `ChatEngine`, because all of that is app policy.
+- **Raw message dicts, not `Chat.Message`.** `ChatWireMessage` renders
+  `[String: any Sendable]` straight into the chat template. This is not a style
+  choice: `Chat.Message` can't carry `tool_calls`, and Gemma 4's template emits a
+  tool result *only* by scanning forward from an assistant message that has
+  them — without it the model never sees the result and calls the same tool
+  forever. Measured; see the `chat_tool_calling_findings` note.
+- **Chat runs at `LLMScheduler.background`, so dictation always wins.** Each
+  round re-renders the whole thread, which costs a prefill but makes a round
+  *idempotent* — a preempted round is simply re-run. `ChatEngine` waits for
+  `Pipeline.state == .idle` before retrying, because MLX only checks
+  cancellation inside the token loop: re-entering mid-dictation starts an
+  uncancellable prefill that the next pass then queues behind. (This is why
+  `ChatSession`, which keeps a KV cache, was not used — a cancelled generation
+  leaves the cache holding half a turn.)
+- **Above ~24 tools the schemas are deferred.** Every tool's JSON schema is
+  re-sent on *every round* (there's no prompt cache), so one 69-tool MCP server
+  costs ~17K tokens per round — half of Gemma 4 12B's window before the user
+  types. `ChatToolset` then advertises only the built-ins plus `find_tools`,
+  and puts a name+description **index** of the rest in the system prompt.
+  The index is load-bearing: `find_tools` *alone* made both Qwen models fail
+  half the scenarios, because a model shown one meta-tool doesn't know anything
+  else exists. With the index it's 3× faster than sending everything and just
+  as accurate (9B, chained question: 15.2s → 4.8s). Dispatch resolves against
+  the whole catalogue, never the advertised subset.
+- **Prefill is cached across the rounds of a turn** (`ChatPromptCache`). The
+  baseline holds the prompt *minus its final token* — `TokenIterator.prepare`
+  consumes everything it's handed, so caching the whole prompt and then seeding
+  generation with its last token processes that token twice and shifts every
+  position after it. Generation runs on a throwaway copy, so a preempted round
+  needs no rollback — which matters because rollback isn't available: Qwen 3.5's
+  linear-attention layers use `ArraysCache`, `isTrimmable == false`, so
+  `trimPromptCache` is a no-op on the models we recommend. **Exactly one copy
+  per round**: two cost more than the prefill they saved (8.4s → 20.3s on a 4.4K
+  prompt). Anything that makes the head of the prompt unstable defeats this —
+  which is why the clock lives on the newest user message, not in the system
+  prompt.
+- **`chatCapable` on `LLMModel` gates the window**, set only from
+  `scratch/tool-call-check`. Models without it keep today's behaviour and the
+  window explains why rather than hiding.
+- **MCP** is a hand-rolled stdio client (`MCPClient`, protocol `2025-06-18`), not
+  `modelcontextprotocol/swift-sdk` — that SDK pulls swift-nio plus
+  `swift-docc-plugin` on `branch: "main"`, and an unpinned branch in a shipping
+  graph is the swift-transformers diamond all over again. Servers start lazily
+  on first use, tools are namespaced `<serverNamespace>__<tool>`, every MCP tool
+  asks for approval until the user says "always", **env values live in the
+  keychain** (names only in `mcp-servers.json`, which is per-Mac, not synced),
+  and `MCPProcessReaper` SIGTERM/SIGKILLs the subprocesses synchronously at quit
+  because `applicationWillTerminate` returns straight into `exit()`.
+
 ### Two transcription engines behind one protocol
 
 `Transcription/ASREngine.swift` is the small surface (`download`, `ensureLoaded`, `unload`, `transcribe`, `currentModelID`, `isLoading`) both `TranscriptionService` (WhisperKit) and `ParakeetService` (FluidAudio CoreML on the ANE) conform to. Pipeline holds both and dispatches via `activeASR` based on `settings.transcriptionEngine`. The protocol omits WhisperKit's `prompt:` arg deliberately — prompt biasing is parked (see `whisper_prompt_biasing.md` in auto-memory), and Parakeet has no equivalent.
@@ -196,6 +258,8 @@ Several files moved from Application Support to the synced folder and are migrat
 - Conversation history (Assistant Mode multi-turn): `<synced>/conversations.json`.
 - Vocabulary: `<synced>/vocabulary.json`. Assistant memory: `<synced>/assistant-memory.md`. Correction suggestions: `<synced>/correction-suggestions.json`.
 - Usage stats: `<synced>/stats.json`, keyed per device so two Macs on iCloud Drive can't clobber each other's counters. `UsageStats` has a hand-written `Codable` plus a memberwise `+` and a `max()`-per-field merge — a new counter needs all of them or it won't persist or sum.
+- Chat threads: `<synced>/chats.json`. Capped at 200 threads, no age cap — a chat is a document people come back to, unlike an Assistant Mode conversation.
+- MCP servers: `~/Library/Application Support/Dictator/mcp-servers.json` (**per-Mac** — it holds absolute binary paths). Their environment *values* are keychain-only, under service `net.robgough.Dictator`, account `mcp.<serverID>.env.<KEY>`.
 - Audio device priority: `UserDefaults`, key `AudioDeviceManager.knownDevices.v1` — **not** a JSON file.
 - Dictator Meetings settings: same synced/local split as Dictator's own settings — synced envelope in `SyncedStorage.directory/meetings-settings.json`, per-Mac bits (retention days, model picks, onboarding state, the local-provider model ID) in `~/Library/Application Support/Dictator/meetings-local-settings.json`. On first launch (neither file exists) it one-time-imports the matching keys out of Dictator's own settings files. Meeting recordings/notes/transcripts and people data keep their existing paths (`<synced>/Meetings/`, `~/Library/Application Support/Dictator/Meetings/`) unchanged by the app split.
 - Dictator Meetings provider API keys: macOS Keychain only (see "Provider abstraction" above) — never in the settings JSON files above, synced or local.
@@ -206,6 +270,8 @@ Several files moved from Application Support to the synced folder and are migrat
 
 - `vlm-vision-check/` — loads a downloaded checkpoint through `VLMModelFactory` from the app's real on-disk layout, feeds it a screenshot, prints `phys_footprint`. **Run this before setting `visionCapable` on a catalog entry, and read the output** — a model that loads is not a model that answers usefully.
 - `gemma4-upstream-check/` — takes HF repo ids, downloads via the same Hub bridge the app uses, loads and generates. The fastest way to prove a new catalog model works end to end without launching Dictator.
+- `tool-call-check/` — per model: is the tool-call format inferred, does it emit a parseable call with the right arguments, and does it *stop* calling once fed a result. **Run this before setting `chatCapable`.** Takes a list of repo ids and downloads anything missing. Also runs the tool-list conditions (2 / 60 / find_tools / index + find_tools) that set `ChatToolset.deferAboveToolCount` — re-run it before changing that threshold.
+- `mcp-client-check/` — symlinks the app's real MCP sources and runs them against a deliberately awkward Python server (non-JSON banner, pagination, a server→client request, an `isError` tool, a tool that never replies). Run it a few times: the two transport bugs it caught were both intermittent.
 - `gemma4-qat-spike/` — the historical 3.31.3 + vendored-architecture reproduction, kept for context only; the vendored `Gemma4/` sources it mirrors were deleted when 3.31.4 landed native support.
 
 A spike that pins dependency versions must match `project.yml` exactly, or you're testing a different app than the one you ship.
