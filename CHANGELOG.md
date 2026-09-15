@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- A new chat no longer opens with its warning hanging in mid-air. Short content was being pinned to the bottom of the pane, so the warning sat just above the message box under a field of empty space, and moved again whenever anything re-drew.
+- The warning at the top of a chat is smaller and much quieter — one muted line instead of a bright yellow card. It says the same four things.
+
 - You can attach files to a chat. Use the paperclip next to the message box, or drag files anywhere onto the conversation. They're copied into that chat's folder, so the assistant can go back and read or change them later rather than only seeing them once.
 - Attached text files and PDFs are read and handed to the assistant with your message. Images are described by the model first, if the model you're using can see. Anything that can't be read says so on the attachment itself — a scanned PDF tells you it has no selectable text rather than quietly arriving empty.
 - An attachment on its own is a message: drag in a document, press send, and it'll read it.

@@ -68,6 +68,15 @@ struct ChatThreadView: View {
                     if let notice = shell.modelSwitchNotice {
                         ChatNoticeRow(text: notice, icon: "arrow.triangle.2.circlepath")
                     }
+                    // In the stack rather than centred over it. As an overlay
+                    // it floated independently of the warning, so the gap
+                    // between the two changed with the window height and the
+                    // pair drifted apart as you resized.
+                    if isEmpty {
+                        ChatEmptyState()
+                            .padding(.top, 56)
+                            .frame(maxWidth: .infinity)
+                    }
                     ForEach(thread?.messages ?? []) { message in
                         // The reply currently streaming lives on the engine,
                         // not the store — writing it per token would reorder
@@ -94,11 +103,15 @@ struct ChatThreadView: View {
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // Keeps the view pinned to the newest content as the thread grows,
-            // including on first open — without it a reopened chat starts at
-            // the top and you scroll down through your own history to find the
-            // end.
-            .defaultScrollAnchor(.bottom)
+            // Pins to the newest content as the thread grows, including on
+            // first open — without it a reopened chat starts at the top and you
+            // scroll down through your own history to find the end.
+            //
+            // Top when there's nothing to pin to, though. Bottom anchoring puts
+            // content *shorter than the pane* at the bottom of it, so a new
+            // chat hung its warning just above the composer under a field of
+            // empty space, and shifted it again on every re-layout.
+            .defaultScrollAnchor(isEmpty ? .top : .bottom)
             .onChange(of: thread?.messages.count) { scrollToEnd(proxy) }
             .onChange(of: shell.engine.streamingText) { throttledScrollToEnd(proxy) }
             .onChange(of: shell.engine.activity) { scrollToEnd(proxy) }
@@ -108,16 +121,9 @@ struct ChatThreadView: View {
                 scrollToEnd(proxy, animated: false)
             }
         }
-        .overlay(alignment: .center) {
-            // Only once there's a warning card above it to share the space
-            // with — centred on an empty thread it sat right under the
-            // warning and read as one crowded block.
-            if thread?.messages.isEmpty ?? true {
-                ChatEmptyState()
-                    .padding(.top, 60)
-            }
-        }
     }
+
+    private var isEmpty: Bool { thread?.messages.isEmpty ?? true }
 
     private static let bottomAnchor = "chat.bottom"
 
@@ -378,47 +384,48 @@ private struct ChatToolRow: View {
     }
 }
 
-/// The standing warning at the top of every chat.
+/// The standing caution at the top of every chat.
 ///
-/// Deliberately unmissable, and deliberately not a one-off dismissible tip.
-/// A 2B–12B model running on a laptop is *several orders of magnitude* smaller
-/// than the assistants people have been trained by, and it fails in the worst
-/// possible way: fluently. It will invent a date, a name, a number or a quote
-/// and present it in exactly the same confident register as something true.
-/// Anyone who has only ever used frontier models has no reason to expect that,
-/// which is precisely why this can't be a footnote.
+/// It stays for the life of the thread rather than being dismissible, because
+/// what it warns about doesn't stop being true once you've read it — a small
+/// local model is most dangerous on the fiftieth reply, when you've stopped
+/// checking.
 ///
-/// It names the model too — the gap between Qwen 3.5 2B and Gemma 4 12B is
-/// enormous, and "which one am I talking to" is the first thing you need to
-/// calibrate against.
+/// Which is exactly why it has to be quiet. It was a yellow card with a bold
+/// heading and a five-sentence paragraph: it shouted the first time and was
+/// scrolled past every time after. Now it's one muted line with the caution
+/// colour left on the icon alone — still the first thing on the page, no longer
+/// competing with the conversation.
 private struct ChatTrustWarning: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                Text("Check anything that matters")
-                    .fontWeight(.semibold)
-            }
-            .font(.callout)
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.yellow.mix(with: .secondary, by: 0.35))
+                .padding(.top, 1)
 
-            Text("You're talking to \(modelName), running entirely on this Mac — nothing you type leaves it. It is also a tiny fraction of the size of ChatGPT or Claude, and it will state things that are simply untrue with total confidence: invented dates, names, numbers and quotes, written just as fluently as the parts it gets right. Treat every fact it gives you as unverified until you've checked it yourself. Don't act on its output where being wrong would cost you something.")
-                .font(.caption)
-                .multilineTextAlignment(.center)
+            Text(warning)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(Color.yellow.mix(with: .primary, by: 0.55))
-        .frame(maxWidth: 520)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.yellow.opacity(0.13), in: .rect(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.yellow.opacity(0.35), lineWidth: 1)
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: 620, alignment: .leading)
+        .background(.quaternary.opacity(0.28), in: .rect(cornerRadius: 8))
         .frame(maxWidth: .infinity)
-        .padding(.bottom, 4)
+    }
+
+    /// Four facts, in the order they matter: it's private, it's small, it lies
+    /// fluently, check it. Cutting further starts dropping one of them.
+    private var warning: String {
+        "\(modelName) runs entirely on this Mac — nothing you type leaves it. "
+            + "It's also a tiny fraction of the size of ChatGPT or Claude, and it will state "
+            + "untrue things with complete confidence: invented dates, names, numbers and "
+            + "quotes, written as fluently as the parts it gets right. Check anything that matters."
     }
 
     private var modelName: String {
