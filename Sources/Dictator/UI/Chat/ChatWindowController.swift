@@ -246,8 +246,16 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
 
     private static let newChatItem = NSToolbarItem.Identifier("chat.new")
 
+    /// New Chat sits at the right-hand edge of the *sidebar*, not of the window.
+    ///
+    /// `sidebarTrackingSeparator` is what divides the two halves of a unified
+    /// toolbar, so putting the button before it keeps it over the thread list —
+    /// which is what it makes: a new row in that list. Over the transcript it
+    /// read as an action on the conversation you were reading. The
+    /// `flexibleSpace` ahead of it pushes it to the sidebar's trailing edge, so
+    /// it stays put as the divider is dragged.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarTrackingSeparator, .flexibleSpace, Self.newChatItem]
+        [.flexibleSpace, Self.newChatItem, .sidebarTrackingSeparator]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
