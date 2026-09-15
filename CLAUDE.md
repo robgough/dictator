@@ -209,6 +209,17 @@ so does the menu bar's Chat item and `dictator://chat`.
   else exists. With the index it's 3× faster than sending everything and just
   as accurate (9B, chained question: 15.2s → 4.8s). Dispatch resolves against
   the whole catalogue, never the advertised subset.
+- **The clock goes *after* the newest user message, and says what it's for.**
+  It's on the message rather than in the system prompt because the prompt's head
+  has to stay byte-stable for the cache — but prefixing it made the timestamp
+  the nearest antecedent for any pronoun, and "give me that as a JSON object"
+  after a list of cities returned `{day, date, time, timezone}`. Position alone
+  isn't enough: a small model shown an unexplained fact treats it as the
+  subject. `scratch/clock-anaphora-check` measures all three framings over 5
+  models — prefixed 3/15 pronoun scenarios, suffixed 11/15, suffixed **and
+  labelled** 15/15, with clock questions 15/15 throughout. Removing the clock
+  also fixes pronouns and is not an option: every model then states a
+  confidently wrong date rather than admitting it doesn't know.
 - **Prefill is cached across the rounds of a turn** (`ChatPromptCache`). The
   baseline holds the prompt *minus its final token* — `TokenIterator.prepare`
   consumes everything it's handed, so caching the whole prompt and then seeding
@@ -347,6 +358,11 @@ Several files moved from Application Support to the synced folder and are migrat
 - `vlm-vision-check/` — loads a downloaded checkpoint through `VLMModelFactory` from the app's real on-disk layout, feeds it a screenshot, prints `phys_footprint`. **Run this before setting `visionCapable` on a catalog entry, and read the output** — a model that loads is not a model that answers usefully.
 - `gemma4-upstream-check/` — takes HF repo ids, downloads via the same Hub bridge the app uses, loads and generates. The fastest way to prove a new catalog model works end to end without launching Dictator.
 - `tool-call-check/` — per model: is the tool-call format inferred, does it emit a parseable call with the right arguments, and does it *stop* calling once fed a result. **Run this before setting `chatCapable`.** Takes a list of repo ids and downloads anything missing. Also runs the tool-list conditions (2 / 60 / find_tools / index + find_tools) that set `ChatToolset.deferAboveToolCount` — re-run it before changing that threshold.
+- `clock-anaphora-check/` — renders the chat prompt four ways (clock prefixed,
+  suffixed, suffixed-and-labelled, absent) against scenarios that need the clock
+  and scenarios whose pronoun must resolve to the previous turn. Run it before
+  changing how the time is injected; the shipping framing is marked `[SHIPPING]`
+  and is byte-identical to `ChatEngine.withClock`.
 - `chat-merge-check/` — round-trips the real `conversations.json` through the
   shipping migration (`ChatThreadMigration.swift`, symlinked) and compares every
   turn field by field, plus the compaction split and the tool-messages-skipped

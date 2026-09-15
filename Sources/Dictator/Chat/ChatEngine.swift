@@ -547,6 +547,38 @@ final class ChatEngine {
         return max(1_500, total - toolset.estimatedPromptTokens)
     }
 
+    /// Attaches the time to the newest user message.
+    ///
+    /// The clock lives on the message, not in the system prompt: it's genuinely
+    /// a property of the message ("yesterday" means yesterday relative to when
+    /// it was *asked*), and the system prompt is the head of the prompt, which
+    /// a prompt cache needs byte-stable. A ticking clock at the front
+    /// invalidates the prefix on every round.
+    ///
+    /// **After the text, and labelled.** It used to be a bare line prefixed to
+    /// the message, and that reliably broke pronouns: "Give me the names of ten
+    /// UK cities" → a list → "Give me that as a JSON object" returned
+    /// `{day, date, time, timezone}`, because the nearest antecedent for "that"
+    /// was the timestamp sitting directly above it. Moving it after the text
+    /// helps; saying what it's for is what actually fixes it, because a small
+    /// model shown an unexplained fact treats it as the subject.
+    ///
+    /// Measured over 5 models × 3 pronoun scenarios in
+    /// `scratch/clock-anaphora-check`: prefixed 3/15, suffixed 11/15, suffixed
+    /// and labelled 15/15 — with the clock questions still 15/15. Dropping the
+    /// clock entirely fixes pronouns too and is not an option: without it every
+    /// model states a confidently wrong date (May 2024, October 2026) rather
+    /// than admitting it doesn't know.
+    private static func withClock(_ text: String, at timestamp: Date) -> String {
+        """
+        \(text)
+
+        [Ambient context, not part of the question above: right now it is \
+        \(Self.clock.string(from: timestamp)). Ignore this unless the question \
+        is about dates or times.]
+        """
+    }
+
     /// Flattens the stored transcript back into the message shape the chat
     /// template expects — which means folding each tool entry back into the
     /// assistant message that asked for it (see `ChatWireMessage` for why that
@@ -575,18 +607,6 @@ final class ChatEngine {
         for message in thread.messages {
             switch message.kind {
             case .user:
-                // The clock lives here, on the newest user message, not in the
-                // system prompt. Two reasons, and the second is the important
-                // one:
-                //
-                // 1. It is genuinely a property of the message — "yesterday"
-                //    means yesterday relative to when it was *asked*, which is
-                //    what the stored timestamp records.
-                // 2. The system prompt is the head of the prompt, and a clock
-                //    in it changes every minute. Anything that hopes to reuse a
-                //    prefill — the whole point of a prompt cache — needs that
-                //    head to be byte-stable. A ticking clock at the front
-                //    invalidates the prefix on literally every round.
                 var content = message.text
 
                 // A turn that came in through the Assistant hotkey was asked
@@ -604,7 +624,7 @@ final class ChatEngine {
                 }
 
                 if message.id == lastUserMessageID {
-                    content = "[Right now it is \(Self.clock.string(from: message.timestamp)).]\n\n\(content)"
+                    content = Self.withClock(content, at: message.timestamp)
                 }
                 wire.append(.user(content))
 

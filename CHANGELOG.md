@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Saying "that" in chat now means what you said, not what time it is. The assistant is told the current time alongside your message, and it was being told first — so "give me the names of ten UK cities", then "give me that as a JSON object", returned the date and time as JSON. The time is now placed after your message and marked as background information, which fixes it on every model without breaking questions that really are about the date.
+
 - Assistant Mode and chat are now one thing. Conversations you start with the assistant hotkey appear in the chat window's list alongside the ones you type, marked with a wand so you can tell where each came from. Your existing assistant conversations move across on first launch; nothing is lost.
 - An assistant reply that almost worked is no longer a dead end. "Continue in Chat" opens that conversation in the chat window, where the assistant can use tools, read your journal, fetch a page and write files — carrying on from what it already said rather than starting over.
 - Chat replies can be inserted back where you were working. Under every reply there's a button naming the app you came from; press it and the text is pasted at your cursor there, the same way Assistant Mode does it. If anything stops the paste landing — no text field focused, the app not coming forward — the text is on your clipboard and it tells you why.
