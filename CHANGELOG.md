@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- You can attach files to a chat. Use the paperclip next to the message box, or drag files anywhere onto the conversation. They're copied into that chat's folder, so the assistant can go back and read or change them later rather than only seeing them once.
+- Attached text files and PDFs are read and handed to the assistant with your message. Images are described by the model first, if the model you're using can see. Anything that can't be read says so on the attachment itself — a scanned PDF tells you it has no selectable text rather than quietly arriving empty.
+- An attachment on its own is a message: drag in a document, press send, and it'll read it.
+
 - A file the assistant writes no longer appears as a card inside a card. The contents were being rendered as if they were a code block in a reply, so you got a second frame, a second copy button and a redundant "HTML" label above a row already headed habit-tracker.html.
 - A long file no longer draws a card thousands of pixels tall. Its preview scrolls at the same height a Markdown one always did.
 - Hex colours in CSS and HTML are no longer greyed out as if they were comments, and neither is the rest of a line after a URL.

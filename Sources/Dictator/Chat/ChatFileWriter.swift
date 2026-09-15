@@ -147,7 +147,10 @@ enum ChatFileWriter {
     }
 
     /// `notes.md`, then `notes 2.md`, and so on.
-    private static func availableURL(for url: URL) -> URL {
+    ///
+    /// Shared with `ChatAttachments`, which has the same problem from the other
+    /// direction: attaching the same file twice must not overwrite the first.
+    nonisolated static func availableURL(for url: URL) -> URL {
         let directory = url.deletingLastPathComponent()
         guard FileManager.default.fileExists(atPath: url.path) else { return url }
         let base = url.deletingPathExtension().lastPathComponent

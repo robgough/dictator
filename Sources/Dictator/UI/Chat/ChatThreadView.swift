@@ -6,6 +6,7 @@ struct ChatThreadView: View {
     @Environment(AppState.self) private var state
     @State private var store = ChatStore.shared
     @FocusState private var composerFocused: Bool
+    @State private var dropTargeted = false
 
     private var thread: ChatThread? {
         shell.selectedThreadID.flatMap { store.thread(id: $0) }
@@ -30,7 +31,24 @@ struct ChatThreadView: View {
         }
         .onAppear { composerFocused = true }
         .onChange(of: shell.selectedThreadID) { composerFocused = true }
+        // The whole pane, not just the composer: people drop a file on the
+        // conversation, not on the text box.
+        .dropDestination(for: URL.self) { urls, _ in
+            shell.attach(urls)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .padding(6)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: dropTargeted)
     }
+
 
     private var approvalBinding: Binding<ChatEngine.PendingApproval?> {
         Binding(
@@ -131,8 +149,11 @@ struct ChatThreadView: View {
 
     private func send() {
         let text = shell.draft
+        let attachments = shell.pendingAttachments
         shell.draft = ""
-        shell.engine.send(text)
+        shell.pendingAttachments = []
+        shell.attachmentError = nil
+        shell.engine.send(text, attachments: attachments)
     }
 }
 
@@ -220,8 +241,19 @@ private struct ChatMessageRow: View {
             HStack {
                 Spacer(minLength: 60)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(text)
-                        .textSelection(.enabled)
+                    if !text.isEmpty {
+                        Text(text)
+                            .textSelection(.enabled)
+                    }
+                    // Under the text: you wrote the sentence, then said what it
+                    // was about. An attachment-only message shows just these.
+                    if !message.attachments.isEmpty {
+                        FlowRow(spacing: 6) {
+                            ForEach(message.attachments) { attachment in
+                                ChatAttachmentChip(attachment: attachment)
+                            }
+                        }
+                    }
                     // What the assistant hotkey was pointed at when this was
                     // spoken. Without it a migrated turn reads as "tighten
                     // this" with no sign of what "this" was — the instruction

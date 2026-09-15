@@ -152,6 +152,21 @@ so does the menu bar's Chat item and `dictator://chat`.
   request, not a fact, and pasting too early lands the text back in the chat
   window. Text goes on the clipboard *first*, so every failure path still leaves
   the user one ⌘V from what they asked for.
+- **Attachments land in the chat's folder and are read once** (`ChatAttachment`,
+  `ChatAttachments`). A file the user drags in is *copied* into the working
+  directory, so the ordinary file tools can reach it afterwards — an attachment
+  the model can only see in the prompt is one it can't be asked to edit.
+  Extraction happens at attach time and is **stored on the attachment**: a round
+  re-renders the whole thread, so deriving it at render time would re-parse a
+  PDF and re-run a vision pass on every round of every turn. Text is sniffed
+  (UTF-8, no NUL) rather than trusted by extension, because `.env`, `.log` and
+  extensionless files are all text; PDFs go through PDFKit; images reuse
+  `readImage`, the same vision-to-prose path as `read_screen`. Anything that
+  yields no text carries a `note` saying why, inlined for the model and shown on
+  the chip — a scanned PDF arriving as an empty string is the failure that
+  produces a confident answer about a document nobody read.
+  `scratch/attachment-check` covers classification, both extractors and the
+  no-clobber naming.
 - **Each chat owns a folder** — `<synced>/Chat Files/<slug>-<id6>/` (`ChatFiles`).
   The name is fixed on first use and stored on the thread, never derived live:
   titles change, and a renamed folder would invalidate every path already
@@ -363,6 +378,10 @@ Several files moved from Application Support to the synced folder and are migrat
   and scenarios whose pronoun must resolve to the previous turn. Run it before
   changing how the time is injected; the shipping framing is marked `[SHIPPING]`
   and is byte-identical to `ChatEngine.withClock`.
+- `attachment-check/` — classification (text sniffing, images, binaries),
+  text and PDF extraction including a PDF with no selectable text, truncation,
+  and `availableURL`'s no-clobber naming. Builds its PDFs rather than shipping
+  fixtures. Run it before changing what an attachment hands the model.
 - `chat-merge-check/` — round-trips the real `conversations.json` through the
   shipping migration (`ChatThreadMigration.swift`, symlinked) and compares every
   turn field by field, plus the compaction split and the tool-messages-skipped

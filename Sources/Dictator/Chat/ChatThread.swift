@@ -60,6 +60,16 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// outcome, and they differ whenever the paste couldn't land.
     var delivery: String?
 
+    // MARK: Attachments
+
+    /// Files the user brought in with this message. On the user message,
+    /// because they're part of what was asked.
+    ///
+    /// Each one lives in the chat's folder, so the assistant can go back and
+    /// read or change it later with the ordinary file tools rather than only
+    /// seeing whatever was inlined into the prompt at the time.
+    var attachments: [ChatAttachment] = []
+
     init(
         id: UUID = UUID(),
         kind: Kind,
@@ -74,7 +84,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         selection: String? = nil,
         context: CapturedContextInfo? = nil,
         deliveryMode: AssistantMode? = nil,
-        delivery: String? = nil
+        delivery: String? = nil,
+        attachments: [ChatAttachment] = []
     ) {
         self.id = id
         self.kind = kind
@@ -90,6 +101,7 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         self.context = context
         self.deliveryMode = deliveryMode
         self.delivery = delivery
+        self.attachments = attachments
     }
 }
 

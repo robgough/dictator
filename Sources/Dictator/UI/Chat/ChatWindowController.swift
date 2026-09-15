@@ -10,6 +10,15 @@ final class ChatShellModel {
     var selectedThreadID: UUID?
     /// Composer text, held here so the toolbar's "New chat" can clear it.
     var draft: String = ""
+    /// Files attached but not yet sent. Alongside the draft, and cleared with
+    /// it — they're half of the same unsent message.
+    var pendingAttachments: [ChatAttachment] = []
+    /// How many attachments are still being read. Extraction is async (a PDF
+    /// parse, or a whole vision pass for an image), so the composer shows this
+    /// rather than appearing to accept a file and doing nothing.
+    var attachmentsInFlight: Int = 0
+    /// Why the last attachment didn't make it, if it didn't.
+    var attachmentError: String?
     /// Set when the user picks a thread that was talking to a different model.
     var modelSwitchNotice: String?
 
@@ -23,6 +32,64 @@ final class ChatShellModel {
 
     init(engine: ChatEngine) {
         self.engine = engine
+    }
+
+    // MARK: - Attachments
+
+    /// Copies files into the current chat's folder and reads them.
+    ///
+    /// Lives here rather than on either view because both ways in end up in
+    /// the same place: the paperclip in the composer, and a drop anywhere on
+    /// the conversation.
+    ///
+    /// Serial on purpose. An image attachment runs a whole vision pass, and
+    /// two at once would queue behind each other inside the model container
+    /// anyway — while making the progress count lie about what's happening.
+    func attach(_ urls: [URL]) {
+        guard let id = selectedThreadID, let thread = ChatStore.shared.thread(id: id) else { return }
+        attachmentError = nil
+        attachmentsInFlight += urls.count
+        Task {
+            for url in urls {
+                do {
+                    pendingAttachments.append(try await ChatAttachments.attach(url, to: thread))
+                    rememberFolder(for: thread)
+                } catch {
+                    attachmentError = error.localizedDescription
+                }
+                attachmentsInFlight -= 1
+            }
+        }
+    }
+
+    /// Drops every unsent attachment, deleting the copies with them.
+    func discardPendingAttachments() {
+        for attachment in pendingAttachments {
+            try? FileManager.default.removeItem(at: attachment.url)
+        }
+        pendingAttachments = []
+        attachmentError = nil
+    }
+
+    func removeAttachment(_ attachment: ChatAttachment) {
+        pendingAttachments.removeAll { $0.id == attachment.id }
+        // The copy goes too. It was made for a message that isn't being sent,
+        // and leaving it would put a file in the chat's folder that nothing in
+        // the conversation mentions.
+        try? FileManager.default.removeItem(at: attachment.url)
+    }
+
+    /// The folder is created on first use, so its name has to be recorded the
+    /// same way saving a file does — otherwise deleting the chat wouldn't know
+    /// the attachments belonged to it.
+    private func rememberFolder(for thread: ChatThread) {
+        guard let folder = try? ChatFiles.folder(for: thread),
+              let current = ChatStore.shared.thread(id: thread.id),
+              current.filesFolderName != folder.folderName
+        else { return }
+        var updated = current
+        updated.filesFolderName = folder.folderName
+        ChatStore.shared.upsert(updated)
     }
 }
 
@@ -72,9 +139,15 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
         ChatStore.shared.pruneEmpty(keeping: thread.id)
         select(threadID: thread.id)
         model.draft = ""
+        model.discardPendingAttachments()
     }
 
     func select(threadID: UUID) {
+        // Attachments were copied into the folder of the thread that was open
+        // when they were added. Carrying them to another thread would send
+        // that thread a message pointing at another chat's files — and leave
+        // the copies orphaned in a folder nothing references.
+        if threadID != model.selectedThreadID { model.discardPendingAttachments() }
         model.selectedThreadID = threadID
         model.engine.threadID = threadID
         model.modelSwitchNotice = noticeForModelMismatch(threadID: threadID)

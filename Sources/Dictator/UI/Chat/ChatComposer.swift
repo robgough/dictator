@@ -20,12 +20,25 @@ struct ChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let error = shell.engine.errorMessage ?? dictation.errorMessage {
+            if let error = shell.engine.errorMessage ?? dictation.errorMessage
+                ?? shell.attachmentError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
+            }
+
+            // Above the box, not inside it: an attachment is a thing you've
+            // added to the message, and it stays visible while you type the
+            // sentence that goes with it.
+            if !shell.pendingAttachments.isEmpty || shell.attachmentsInFlight > 0 {
+                ChatPendingAttachments(
+                    attachments: shell.pendingAttachments,
+                    busyCount: shell.attachmentsInFlight,
+                    onRemove: shell.removeAttachment)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
             }
 
             inputRow
@@ -34,6 +47,7 @@ struct ChatComposer: View {
             footer
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: dictation.isActive)
+        .animation(.easeOut(duration: 0.18), value: shell.pendingAttachments)
         .onAppear {
             dictation.onTranscript = { text, send in
                 // Append: dictating twice, or dictating after typing, should
@@ -81,6 +95,9 @@ struct ChatComposer: View {
                 .disabled(dictation.phase == .transcribing)
                 .help("Stop and send")
             } else {
+                iconButton("paperclip", size: 15, help: "Attach files…", action: chooseFiles)
+                    .disabled(shell.engine.isBusy)
+
                 TextField("Message", text: $shell.draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
@@ -105,7 +122,7 @@ struct ChatComposer: View {
                             .font(.system(size: 22))
                     }
                     .buttonStyle(.plain)
-                    .disabled(shell.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSend)
                     .help("Send")
                 }
 
@@ -184,10 +201,33 @@ struct ChatComposer: View {
         NSWorkspace.shared.activateFileViewerSelecting([folder.url])
     }
 
+    /// An attachment with no typed message still sends: dragging a PDF in and
+    /// saying nothing plainly means "read this".
+    private var canSend: Bool {
+        !shell.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !shell.pendingAttachments.isEmpty
+    }
+
     private func send() {
-        guard !shell.engine.isBusy else { return }
+        guard !shell.engine.isBusy, canSend else { return }
         onSend()
     }
+
+    // MARK: - Attaching
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "These are copied into this chat's folder."
+        panel.prompt = "Attach"
+        panel.begin { response in
+            guard response == .OK else { return }
+            shell.attach(panel.urls)
+        }
+    }
+
 }
 
 /// The recorder: a pill that grows out of the microphone button.

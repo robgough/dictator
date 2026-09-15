@@ -98,9 +98,11 @@ final class ChatEngine {
 
     // MARK: - Sending
 
-    func send(_ text: String) {
+    func send(_ text: String, attachments: [ChatAttachment] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let threadID else { return }
+        // An attachment on its own is a message: dragging a PDF in and saying
+        // nothing plainly means "read this".
+        guard !trimmed.isEmpty || !attachments.isEmpty, let threadID else { return }
         guard !isBusy else { return }
         errorMessage = nil
 
@@ -111,7 +113,7 @@ final class ChatEngine {
         // "Continue in Chat" says the same thing more explicitly; this covers
         // picking it out of the sidebar and carrying on.
         if thread.origin == .assistant { thread.promoted = true }
-        thread.append(ChatMessage(kind: .user, text: trimmed))
+        thread.append(ChatMessage(kind: .user, text: trimmed, attachments: attachments))
         store.upsert(thread)
 
         turnTask = Task { await runTurn(threadID: threadID) }
@@ -547,6 +549,47 @@ final class ChatEngine {
         return max(1_500, total - toolset.estimatedPromptTokens)
     }
 
+    /// Folds attached files into the message that brought them.
+    ///
+    /// Inlined rather than left for `read_file` to find. A model that has to
+    /// decide to go and look at a file the user just dragged in will sometimes
+    /// answer without doing so, and there's no recovering from that — the user
+    /// has no way of knowing the file was ignored. The tools are still there
+    /// for the overflow, and the truncation note points at them by name.
+    ///
+    /// The extracted text is taken from the attachment as stored, never
+    /// re-derived: a round re-renders the whole thread, so deriving here would
+    /// re-run a vision pass or a PDF parse on every round of every turn.
+    private static func withAttachments(
+        _ text: String, _ attachments: [ChatAttachment]
+    ) -> String {
+        var out = text
+        for attachment in attachments {
+            let label: String
+            switch attachment.kind {
+            case .image: label = "Attached image"
+            case .pdf: label = "Attached PDF"
+            default: label = "Attached file"
+            }
+
+            if let body = attachment.text, !body.isEmpty {
+                let what = attachment.kind == .image
+                    ? "what it shows" : "its contents"
+                var block = "\n\n[\(label): \(attachment.name) — \(what) follow]\n\(body)"
+                if attachment.truncated {
+                    block += "\n[…truncated. The whole file is in your working directory — "
+                        + "use read_file(\"\(attachment.name)\") if you need the rest.]"
+                }
+                out += block
+            } else {
+                let why = attachment.note ?? "its contents couldn't be read"
+                out += "\n\n[\(label): \(attachment.name) — \(why). "
+                    + "It is in your working directory. Say so rather than guessing at it.]"
+            }
+        }
+        return out
+    }
+
     /// Attaches the time to the newest user message.
     ///
     /// The clock lives on the message, not in the system prompt: it's genuinely
@@ -621,6 +664,13 @@ final class ChatEngine {
                         [The text this was about:]
                         \(selection)
                         """
+                }
+
+                // Attachments are part of the question, so they go before the
+                // clock and after the instruction — the model should read
+                // "summarise this" then the thing, not the other way round.
+                if !message.attachments.isEmpty {
+                    content = Self.withAttachments(content, message.attachments)
                 }
 
                 if message.id == lastUserMessageID {
