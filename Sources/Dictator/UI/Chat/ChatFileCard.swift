@@ -107,6 +107,15 @@ struct ChatFileCard: View {
         .help(help)
     }
 
+    /// The file's contents, capped so a long one doesn't push the rest of the
+    /// conversation off the screen.
+    ///
+    /// Source goes through `ChatCodeView`, which is the highlighting *without*
+    /// the label, copy button and frame that a fenced block in a reply needs.
+    /// This used to hand the contents to `ChatMarkdownView` wrapped in a
+    /// synthetic ``` fence, which drew a second card inside this one, with a
+    /// second copy button and a redundant "HTML" label above a row already
+    /// headed `habit-tracker.html`.
     @ViewBuilder
     private var preview: some View {
         let contents = read()
@@ -116,19 +125,26 @@ struct ChatFileCard: View {
                 .foregroundStyle(.secondary)
                 .padding(10)
         } else if isMarkdown {
-            // Markdown is the common case and worth rendering properly —
-            // headings, lists and any fenced code inside it.
+            // Markdown is worth rendering properly — headings, lists, and any
+            // fenced code inside it, which *does* get the full block treatment
+            // because there it really is a block within a document.
             ScrollView {
                 ChatMarkdownView(text: contents)
                     .padding(10)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: Self.previewHeight)
         } else {
-            // Everything else is shown as source, which is what it is.
-            ChatMarkdownView(text: "```\(file.fileExtension)\n\(contents)\n```")
-                .padding(10)
+            // Everything else is source, and is shown as source.
+            ScrollView {
+                ChatCodeView(language: file.fileExtension, code: contents)
+            }
+            .frame(maxHeight: Self.previewHeight)
         }
     }
+
+    /// Both paths cap at the same height. The markdown one always did; the
+    /// source one didn't, so a 6 KB file drew a card thousands of points tall.
+    private static let previewHeight: CGFloat = 320
 
     private var isMarkdown: Bool {
         file.fileExtension == "md" || file.fileExtension == "markdown"

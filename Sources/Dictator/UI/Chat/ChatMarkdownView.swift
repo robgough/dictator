@@ -40,11 +40,14 @@ struct ChatMarkdownView: View {
     }
 }
 
-/// One fenced code block: language label, copy button, highlighted monospaced
-/// text that scrolls sideways rather than wrapping.
+/// One fenced code block *inside a reply*: language label, copy button, and a
+/// frame of its own.
 ///
-/// Wrapping is the wrong default for code — a wrapped line looks like two
-/// statements — so long lines scroll instead.
+/// All three exist because a code block in the middle of prose has nothing
+/// else around it to say what it is. Somewhere that already provides them —
+/// `ChatFileCard`, which names the file, draws a border and has its own copy
+/// button — wants `ChatCodeView` instead, or you get a card inside a card with
+/// two copy buttons.
 private struct CodeBlockView: View {
     let language: String?
     let code: String
@@ -75,13 +78,7 @@ private struct CodeBlockView: View {
             .padding(.vertical, 5)
             .background(.quaternary.opacity(0.5))
 
-            ScrollView(.horizontal, showsIndicators: true) {
-                Text(highlighted)
-                    .font(.system(size: 12, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            ChatCodeView(language: language, code: code)
         }
         .background(.quaternary.opacity(0.22))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -89,30 +86,6 @@ private struct CodeBlockView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 1)
         )
-    }
-
-    private var highlighted: AttributedString {
-        var output = AttributedString(code)
-        output.foregroundColor = .primary
-        for token in CodeHighlighter.tokens(in: code, language: language) {
-            guard let lower = AttributedString.Index(token.range.lowerBound, within: output),
-                  let upper = AttributedString.Index(token.range.upperBound, within: output)
-            else { continue }
-            output[lower..<upper].foregroundColor = colour(for: token.kind)
-        }
-        return output
-    }
-
-    /// Picked to stay legible in both appearances — SwiftUI's semantic colours
-    /// adapt, hand-mixed hex values don't.
-    private func colour(for kind: CodeHighlighter.Kind) -> Color {
-        switch kind {
-        case .keyword: return .pink
-        case .string: return .green
-        case .comment: return .secondary
-        case .number: return .orange
-        case .plain: return .primary
-        }
     }
 
     private func displayName(_ language: String) -> String {
@@ -140,6 +113,50 @@ private struct CodeBlockView: View {
         Task {
             try? await Task.sleep(for: .seconds(2))
             copied = false
+        }
+    }
+}
+
+/// Syntax-highlighted source, and nothing else — no label, no copy button, no
+/// frame.
+///
+/// Long lines scroll sideways rather than wrapping: wrapping is the wrong
+/// default for code, because a wrapped line reads as two statements.
+struct ChatCodeView: View {
+    let language: String?
+    let code: String
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Text(highlighted)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var highlighted: AttributedString {
+        var output = AttributedString(code)
+        output.foregroundColor = .primary
+        for token in CodeHighlighter.tokens(in: code, language: language) {
+            guard let lower = AttributedString.Index(token.range.lowerBound, within: output),
+                  let upper = AttributedString.Index(token.range.upperBound, within: output)
+            else { continue }
+            output[lower..<upper].foregroundColor = colour(for: token.kind)
+        }
+        return output
+    }
+
+    /// Picked to stay legible in both appearances — SwiftUI's semantic colours
+    /// adapt, hand-mixed hex values don't.
+    private func colour(for kind: CodeHighlighter.Kind) -> Color {
+        switch kind {
+        case .keyword: return .pink
+        case .string: return .green
+        case .comment: return .secondary
+        case .number: return .orange
+        case .plain: return .primary
         }
     }
 }

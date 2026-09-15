@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- A file the assistant writes no longer appears as a card inside a card. The contents were being rendered as if they were a code block in a reply, so you got a second frame, a second copy button and a redundant "HTML" label above a row already headed habit-tracker.html.
+- A long file no longer draws a card thousands of pixels tall. Its preview scrolls at the same height a Markdown one always did.
+- Hex colours in CSS and HTML are no longer greyed out as if they were comments, and neither is the rest of a line after a URL.
+
 - Saying "that" in chat now means what you said, not what time it is. The assistant is told the current time alongside your message, and it was being told first — so "give me the names of ten UK cities", then "give me that as a JSON object", returned the date and time as JSON. The time is now placed after your message and marked as background information, which fixes it on every model without breaking questions that really are about the date.
 
 - Assistant Mode and chat are now one thing. Conversations you start with the assistant hotkey appear in the chat window's list alongside the ones you type, marked with a wand so you can tell where each came from. Your existing assistant conversations move across on first launch; nothing is lost.

@@ -122,16 +122,24 @@ enum CodeHighlighter {
         "rb": "ruby", "py": "python", "js": "javascript", "ts": "javascript",
         "typescript": "javascript", "jsx": "javascript", "tsx": "javascript",
         "sh": "bash", "shell": "bash", "zsh": "bash", "console": "bash",
+        // `ChatFileCard` passes a file extension straight through as the
+        // language, so the extensions have to land on the same names fences do.
+        "htm": "html", "yml": "yaml", "markdown": "md",
     ]
 
     /// Line-comment markers per language. `#` is wrong for JavaScript and right
     /// for nearly everything else people paste.
+    ///
+    /// The languages returning nothing have no *line* comment at all — JSON has
+    /// none, HTML uses `<!-- -->`, CSS uses `/* */`. Guessing `#` or `//` for
+    /// them actively misleads: `#` greys out every CSS hex colour from the `#`
+    /// to the end of the line, and `//` does the same to the rest of any URL.
     private static func lineComment(for language: String?) -> [String] {
         switch language {
         case "swift", "javascript": return ["//"]
         case "ruby", "python", "bash", "yaml", "toml": return ["#"]
         case "sql": return ["--"]
-        case "json": return []
+        case "json", "html", "css", "xml", "svg": return []
         case nil: return ["//", "#"]
         default: return ["//", "#"]
         }
