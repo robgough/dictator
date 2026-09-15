@@ -1,16 +1,20 @@
 import Foundation
 import Observation
 
-/// Persisted chat threads, in the user's synced folder alongside
-/// `history.json` and `conversations.json`.
+/// Every conversation with the local model, however it started — the chat
+/// window or the Assistant hotkey. One store, in the user's synced folder
+/// alongside `history.json`.
 ///
-/// Retention differs from `ConversationHistory` on purpose. Assistant Mode
-/// conversations are ephemeral by design — you say a thing, it pastes, you move
-/// on — so they're capped at 20 entries / 14 days. A chat thread is a document:
-/// people come back to them, and silently deleting one a fortnight later would
-/// be a bug, not a tidy-up. So: a generous count cap, no age cap, and an
-/// explicit "Delete" in the UI. Threads are plain text; 200 of them is a
-/// couple of megabytes.
+/// Retention still differs by origin, because the two habits differ. An
+/// Assistant Mode turn is usually disposable — you say a thing, it pastes into
+/// Mail, you move on — so assistant threads are swept after 14 days. A chat
+/// thread is a document: people come back to them, and silently deleting one a
+/// fortnight later would be a bug rather than a tidy-up, so those have a count
+/// cap and no age cap at all.
+///
+/// The exception is `promoted`: opening an assistant thread in the chat window
+/// is the user saying it *is* a document, and it stops being swept from that
+/// moment. Threads are plain text, so 200 of them is a couple of megabytes.
 @MainActor
 @Observable
 final class ChatStore {
@@ -20,9 +24,18 @@ final class ChatStore {
     private(set) var threads: [ChatThread] = []
 
     private static let maxThreads = 200
+    /// How long an un-promoted assistant thread survives. Matches what
+    /// `ConversationHistory` used before the two stores merged, so nobody's
+    /// existing threads change lifetime on the day of the migration.
+    private static let assistantMaxAgeDays = 14
 
     private static var storeURL: URL {
         SyncedStorage.fileURL(for: "chats.json")
+    }
+
+    /// The old Assistant Mode store. Read once, then renamed aside.
+    private static var legacyConversationsURL: URL {
+        SyncedStorage.fileURL(for: "conversations.json")
     }
 
     /// Coalesces the writes a streaming reply would otherwise cause. A chat
@@ -32,6 +45,8 @@ final class ChatStore {
 
     private init() {
         load()
+        migrateLegacyConversations()
+        prune()
     }
 
     func thread(id: UUID) -> ChatThread? {
@@ -47,6 +62,16 @@ final class ChatStore {
         if threads.count > Self.maxThreads {
             threads = Array(threads.prefix(Self.maxThreads))
         }
+        scheduleSave()
+    }
+
+    /// Marks a thread as something the user has decided to keep. Called when an
+    /// assistant thread is opened in the chat window — see `ChatThread.promoted`.
+    func promote(id: UUID) {
+        guard let index = threads.firstIndex(where: { $0.id == id }),
+              !threads[index].promoted
+        else { return }
+        threads[index].promoted = true
         scheduleSave()
     }
 
@@ -80,6 +105,60 @@ final class ChatStore {
         saveTask?.cancel()
         saveTask = nil
         persist()
+    }
+
+    // MARK: - Retention
+
+    /// Sweeps assistant threads the user never promoted. Chat threads are never
+    /// swept by age — only by the count cap in `upsert`.
+    private func prune() {
+        let cutoff = Calendar.current.date(
+            byAdding: .day, value: -Self.assistantMaxAgeDays, to: Date()) ?? .distantPast
+        let before = threads.count
+        threads.removeAll { thread in
+            thread.origin == .assistant && !thread.promoted && thread.updatedAt < cutoff
+        }
+        if threads.count != before { scheduleSave() }
+    }
+
+    // MARK: - Migration
+
+    /// Folds the old `conversations.json` into this store, once.
+    ///
+    /// Assistant Mode and the chat window kept separate stores until they were
+    /// recognised as the same thing with different entry points. Each old
+    /// conversation becomes one `.assistant` thread whose turns unfold into
+    /// user/assistant message pairs — which is what they always were.
+    ///
+    /// The old file is renamed rather than deleted. It is the only copy of
+    /// these conversations, the conversion is lossless but not obviously so,
+    /// and a rename costs nothing next to being wrong about that.
+    private func migrateLegacyConversations() {
+        let source = Self.legacyConversationsURL
+        guard FileManager.default.fileExists(atPath: source.path),
+              let data = try? Data(contentsOf: source)
+        else { return }
+
+        // Ids carry over, so re-running this can't duplicate anything even if
+        // the rename below failed last time.
+        guard let migrated = LegacyConversationStore.threads(
+            fromConversationsJSON: data, skipping: Set(threads.map(\.id)))
+        else {
+            NSLog("[Dictator] conversations.json wouldn't decode; left it in place unmigrated")
+            return
+        }
+
+        if !migrated.isEmpty {
+            threads.append(contentsOf: migrated)
+            threads.sort { $0.updatedAt > $1.updatedAt }
+            scheduleSave()
+        }
+
+        let archived = source.deletingLastPathComponent()
+            .appendingPathComponent("conversations.migrated.json")
+        try? FileManager.default.removeItem(at: archived)
+        try? FileManager.default.moveItem(at: source, to: archived)
+        NSLog("[Dictator] Merged \(migrated.count) assistant conversation(s) into chats.json")
     }
 
     // MARK: - Persistence

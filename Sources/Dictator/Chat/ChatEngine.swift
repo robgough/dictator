@@ -106,6 +106,11 @@ final class ChatEngine {
 
         var thread = store.thread(id: threadID) ?? ChatThread(id: threadID)
         thread.modelID = settings().llmModelID
+        // Typing into a thread that arrived from the Assistant hotkey is the
+        // user saying it's worth keeping, so it stops being swept at 14 days.
+        // "Continue in Chat" says the same thing more explicitly; this covers
+        // picking it out of the sidebar and carrying on.
+        if thread.origin == .assistant { thread.promoted = true }
         thread.append(ChatMessage(kind: .user, text: trimmed))
         store.upsert(thread)
 
@@ -553,6 +558,12 @@ final class ChatEngine {
     /// that can itself be preempted, and getting it wrong silently rewrites
     /// what the user said. The window keeps the system prompt and as much
     /// recent history as fits, and the UI says when something was dropped.
+    ///
+    /// A thread that Assistant Mode already compacted renders in full here and
+    /// is trimmed to this budget instead — deliberately. The summary exists
+    /// because the hotkey path had to fit a reply into an 8K reservation; the
+    /// chat window has the whole window to play with, so it would be a poor
+    /// trade to feed the model someone's paraphrase when the real turns fit.
     static func renderForModel(
         thread: ChatThread,
         systemPrompt: String,
@@ -576,11 +587,26 @@ final class ChatEngine {
                 //    prefill — the whole point of a prompt cache — needs that
                 //    head to be byte-stable. A ticking clock at the front
                 //    invalidates the prefix on literally every round.
-                if message.id == lastUserMessageID {
-                    wire.append(.user("[Right now it is \(Self.clock.string(from: message.timestamp)).]\n\n\(message.text)"))
-                } else {
-                    wire.append(.user(message.text))
+                var content = message.text
+
+                // A turn that came in through the Assistant hotkey was asked
+                // *about* something — the text selected in another app at the
+                // time. Without it the instruction is a dangling pronoun
+                // ("tighten this"), and a thread continued in the chat window
+                // would ask the model to work on something it can't see.
+                if let selection = message.selection, !selection.isEmpty {
+                    content = """
+                        \(content)
+
+                        [The text this was about:]
+                        \(selection)
+                        """
                 }
+
+                if message.id == lastUserMessageID {
+                    content = "[Right now it is \(Self.clock.string(from: message.timestamp)).]\n\n\(content)"
+                }
+                wire.append(.user(content))
 
             case .assistant:
                 guard !message.text.isEmpty else { continue }

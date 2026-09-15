@@ -84,12 +84,21 @@ final class AppState {
         // Move dictation history and conversations from their legacy App
         // Support location into the user's synced folder if they haven't
         // already migrated. Idempotent: subsequent launches no-op once the
-        // synced copy exists. Runs before the singletons are first
-        // referenced (DictationHistory.shared / ConversationHistory.shared)
-        // so they pick up the synced location on initial load.
+        // synced copy exists. Runs before the singletons are first referenced
+        // (DictationHistory.shared / ChatStore.shared) so they pick up the
+        // synced location on initial load.
+        //
+        // `conversations.json` still moves even though Assistant Mode no
+        // longer reads it: it has to reach the synced folder before
+        // `ChatStore` looks for it there to fold into `chats.json`.
         SyncedStorage.migrateFromAppSupport(filename: "history.json")
         SyncedStorage.migrateFromAppSupport(filename: "conversations.json")
         SyncedStorage.cleanupLegacyBackups()
+
+        // Starts the workspace observer that remembers which app a chat reply
+        // should be inserted into. From launch, so it has seen the user move
+        // around before they ever open the chat window.
+        _ = ChatInsertion.shared
 
         // VocabularyStore must boot before anything reads vocab. On a
         // pre-VocabularyStore install we hand it the legacy
@@ -118,24 +127,22 @@ final class AppState {
         // no point doing it when cues are switched off.
         SoundEffects.shared.setTheme(settings.soundTheme)
         if settings.playSounds { SoundEffects.shared.prewarm() }
-        pipeline.onAssistantTurnCompleted = { [weak self] conversation, surface in
-            self?.assistantResultWindow.showConversation(id: conversation.id, surface: surface)
+        pipeline.onAssistantTurnCompleted = { [weak self] thread, surface in
+            self?.assistantResultWindow.showThread(id: thread.id, surface: surface)
         }
         pipeline.resultWindowIsVisible = { [weak self] in
             self?.assistantResultWindow.isWindowVisible ?? false
         }
-        pipeline.resultWindowConversationID = { [weak self] in
-            self?.assistantResultWindow.currentConversationID
+        pipeline.resultWindowThreadID = { [weak self] in
+            self?.assistantResultWindow.currentThreadID
         }
         assistantResultWindow.onWindowClosed = { [weak self] in
             self?.pipeline.endActiveConversation()
         }
-        assistantResultWindow.onConversationDisplayed = { [weak self] id in
-            // When the user reopens a past conversation from the menu bar,
-            // make it the active one so the next assistant call continues it.
-            if let convo = ConversationHistory.shared.conversation(id: id) {
-                self?.pipeline.setActiveConversation(convo)
-            }
+        assistantResultWindow.onThreadDisplayed = { [weak self] id in
+            // Reopening a past thread makes it the active one, so the next
+            // assistant call continues it.
+            self?.pipeline.setActiveThread(id: id)
         }
         dictationHotkey.bind(
             mode: settings.triggerMode,
@@ -198,10 +205,9 @@ final class AppState {
         onboardingController?.show()
     }
 
-    /// Opens a past conversation in the result window. Called from the menu
-    /// bar's recent-conversations list.
-    func openConversation(id: UUID) {
-        assistantResultWindow.showConversation(id: id, surface: true)
+    /// Opens a past assistant thread in the result window.
+    func openAssistantThread(id: UUID) {
+        assistantResultWindow.showThread(id: id, surface: true)
     }
 
     /// Warm the active transcription engine + the LLM in the background so the

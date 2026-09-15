@@ -39,6 +39,27 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// user can read and act on rather than a path in a sentence.
     var producedFile: ProducedFile?
 
+    // MARK: Assistant-mode entries
+    //
+    // Set on messages that came in through the Assistant hotkey rather than the
+    // chat window. All optional, all defaulted: a chat message simply leaves
+    // them nil, and the synthesised `Codable` reads threads written before
+    // Assistant Mode moved into this store.
+
+    /// The text that was selected in the other app when the user spoke. On the
+    /// *user* message, because it's part of what was asked, not of the answer.
+    var selection: String?
+    /// What the assistant read to answer — the text around the cursor, and what
+    /// the vision pass saw. On the user message for the same reason.
+    var context: CapturedContextInfo?
+    /// How the model classified its own reply (REPLACE / DRAFT). On the
+    /// assistant message.
+    var deliveryMode: AssistantMode?
+    /// What actually happened to the reply — "Replaced selection", "Copied to
+    /// clipboard". The model's classification is an intent; this is the
+    /// outcome, and they differ whenever the paste couldn't land.
+    var delivery: String?
+
     init(
         id: UUID = UUID(),
         kind: Kind,
@@ -49,7 +70,11 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         toolFailed: Bool = false,
         toolDenied: Bool = false,
         serverName: String? = nil,
-        producedFile: ProducedFile? = nil
+        producedFile: ProducedFile? = nil,
+        selection: String? = nil,
+        context: CapturedContextInfo? = nil,
+        deliveryMode: AssistantMode? = nil,
+        delivery: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -61,6 +86,10 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         self.toolDenied = toolDenied
         self.serverName = serverName
         self.producedFile = producedFile
+        self.selection = selection
+        self.context = context
+        self.deliveryMode = deliveryMode
+        self.delivery = delivery
     }
 }
 
@@ -85,14 +114,26 @@ struct ProducedFile: Codable, Hashable, Sendable {
     }
 }
 
-/// A saved conversation with the local model.
+/// A saved conversation with the local model, from either way in.
+///
+/// Assistant Mode and the chat window are the same thing with different entry
+/// points: a multi-turn conversation with whichever model is loaded. They used
+/// to be two stores, two models and two windows, which meant an assistant reply
+/// that *almost* worked was a dead end — the only way to pick it up with tools
+/// was to retype it into the chat window. One thread type makes that a button.
+///
+/// What stays separate is the *call path*, deliberately. Assistant Mode is one
+/// shot at `LLMScheduler.interactive` with a person holding a hotkey waiting for
+/// text to land at their cursor; chat is up to eight rounds of tool dispatch at
+/// `.background`. Those cannot be the same code, and trying would make the
+/// assistant slow to save a file that isn't very large.
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
-    /// Where the thread came from.
+    /// Which way in this thread started. Shown in the sidebar, because "the one
+    /// I dictated at in Mail" is how people find a thread again.
     ///
-    /// Only `.chat` is written today. The case exists from the first version
-    /// because Assistant Mode's conversations are heading into this store —
-    /// they're the same idea with a different entry point — and adding the
-    /// discriminator later would mean migrating every persisted thread.
+    /// It records the *origin*, not the current mode: continuing an assistant
+    /// thread in the chat window leaves it `.assistant` forever. Changing it
+    /// would lose the only fact the icon is there to tell you.
     enum Origin: String, Codable, Sendable {
         case chat
         case assistant
@@ -121,22 +162,37 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// delete it, which is the one place the two cases must not be treated
     /// alike.
     var workingDirectoryPath: String?
+    /// Set once the oldest turns have been summarised to fit the context
+    /// window. The turns themselves stay in `messages` — the transcript keeps
+    /// showing the whole conversation, and only the model's payload is
+    /// shortened. Assistant Mode has always done this; chat threads inherit it.
+    var compaction: ConversationCompaction?
+    /// Set when an assistant thread is opened in the chat window, which exempts
+    /// it from the 14-day sweep that assistant threads otherwise get.
+    ///
+    /// The sweep exists because a dictated one-liner that pasted into Mail is
+    /// not a document. But the moment someone opens one in the chat window they
+    /// have said otherwise, and deleting it a fortnight later would be a bug.
+    var promoted: Bool = false
 
     init(
         id: UUID = UUID(),
         createdAt: Date = Date(),
         origin: Origin = .chat,
         messages: [ChatMessage] = [],
+        updatedAt: Date? = nil,
         modelID: String? = nil,
-        customTitle: String? = nil
+        customTitle: String? = nil,
+        promoted: Bool = false
     ) {
         self.id = id
         self.createdAt = createdAt
-        self.updatedAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
         self.origin = origin
         self.messages = messages
         self.modelID = modelID
         self.customTitle = customTitle
+        self.promoted = promoted
     }
 
     var title: String {
@@ -166,5 +222,118 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
         messages[index] = message
         updatedAt = Date()
+    }
+}
+
+// MARK: - Feeding the assistant call
+
+extension ChatThread {
+    /// The thread as the turn pairs `LLMEngine.assist` wants.
+    ///
+    /// `ConversationTurn` stays as the shape the *prompt* is built from, while
+    /// `ChatMessage` is the shape the transcript is stored in — the same split
+    /// as `ChatWireMessage` on the chat side. Keeping them apart is what let
+    /// Assistant Mode move into this store without touching either engine's
+    /// `assist` implementation.
+    ///
+    /// Tool messages are skipped. A thread that has been continued in the chat
+    /// window can contain them, and there is no way to express a tool round in
+    /// this shape — but the assistant reply that *followed* the tool is in the
+    /// list, so what the model said survives even though how it got there
+    /// doesn't. The alternative, refusing to continue such a thread through the
+    /// hotkey, would be worse.
+    var assistantTurns: [ConversationTurn] {
+        var turns: [ConversationTurn] = []
+        var pendingUser: ChatMessage?
+
+        for message in messages {
+            switch message.kind {
+            case .user:
+                pendingUser = message
+            case .assistant:
+                guard let user = pendingUser else { continue }
+                pendingUser = nil
+                turns.append(ConversationTurn(
+                    id: message.id,
+                    timestamp: message.timestamp,
+                    instruction: user.text,
+                    selection: user.selection,
+                    mode: message.deliveryMode ?? .draft,
+                    reply: message.text,
+                    context: user.context
+                ))
+            case .tool, .failure:
+                continue
+            }
+        }
+        return turns
+    }
+
+    /// The turns the next assistant call will actually send, and the summary
+    /// standing in for everything before them.
+    ///
+    /// Splitting on the compaction index here rather than at the call site is
+    /// what stops the two entry points drifting: the chat window and the
+    /// hotkey now ask the same question and get the same answer.
+    var activeAssistantContext: (turns: [ConversationTurn], summary: String?) {
+        let all = assistantTurns
+        guard let compaction else { return (all, nil) }
+        let dropped = min(compaction.upThroughTurnIndex + 1, all.count)
+        return (Array(all.dropFirst(dropped)), compaction.summary)
+    }
+
+    /// What the next assistant call would cost, ignoring the instruction that
+    /// hasn't been spoken yet. Drives the "approaching context limit" chip.
+    var estimatedInputTokensForNextTurn: Int {
+        let active = activeAssistantContext
+        return ConversationContextBudget.estimateInputTokens(
+            priorTurns: active.turns,
+            summary: active.summary,
+            selection: nil,
+            instruction: ""
+        )
+    }
+
+    @MainActor
+    func isApproachingContextLimit(engine: any LLMEngine) -> Bool {
+        estimatedInputTokensForNextTurn >= engine.assistantInputTokenBudget * 4 / 5
+    }
+}
+
+extension ChatThread {
+    /// Builds an `.assistant` thread from turn pairs.
+    ///
+    /// Shared by the `conversations.json` migration and the demo fixtures, so
+    /// there is one definition of how a turn unfolds into messages rather than
+    /// two that can drift. Timestamps come from the turns, so a thread built
+    /// this way keeps its real chronology instead of collapsing to now.
+    static func assistant(
+        id: UUID = UUID(),
+        turns: [ConversationTurn],
+        compaction: ConversationCompaction? = nil
+    ) -> ChatThread {
+        var messages: [ChatMessage] = []
+        for turn in turns {
+            messages.append(ChatMessage(
+                kind: .user,
+                text: turn.instruction,
+                timestamp: turn.timestamp,
+                selection: turn.selection,
+                context: turn.context))
+            messages.append(ChatMessage(
+                id: turn.id,
+                kind: .assistant,
+                text: turn.reply,
+                timestamp: turn.timestamp,
+                deliveryMode: turn.mode))
+        }
+        var thread = ChatThread(
+            id: id,
+            createdAt: turns.first?.timestamp ?? Date(),
+            origin: .assistant,
+            messages: messages,
+            updatedAt: turns.last?.timestamp ?? Date())
+        thread.compaction = compaction
+        return thread
     }
 }

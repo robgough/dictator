@@ -210,13 +210,14 @@ enum DemoFixtures {
     // MARK: - Assistant conversations
 
     /// Three threads, newest first: a drafted reply, an in-place tighten, and
-    /// a summary. One DRAFT, one REPLACE, one DRAFT — so the result window and
-    /// the menu-bar list both show the shapes a user actually accumulates.
-    static func conversations(now: Date = Date()) -> [Conversation] {
+    /// a summary. One DRAFT, one REPLACE, one DRAFT — the shapes a user
+    /// actually accumulates, shown in the result window and in the chat
+    /// sidebar alongside typed chats.
+    static func assistantThreads(now: Date = Date()) -> [ChatThread] {
         [
-            Conversation.new(firstTurn: draftReplyTurn(now: now)),
-            Conversation.new(
-                firstTurn: ConversationTurn(
+            ChatThread.assistant(turns: [draftReplyTurn(now: now)]),
+            ChatThread.assistant(
+                turns: [ConversationTurn(
                     id: UUID(),
                     timestamp: now.addingTimeInterval(-95 * 60),
                     instruction: "Tighten this paragraph — it's twice as long as it needs to be.",
@@ -231,10 +232,10 @@ enum DemoFixtures {
                     We propose two phases: migrate the data first, then move reporting across \
                     once that's signed off.
                     """
-                )
+                )]
             ),
-            Conversation.new(
-                firstTurn: ConversationTurn(
+            ChatThread.assistant(
+                turns: [ConversationTurn(
                     id: UUID(),
                     timestamp: now.addingTimeInterval(-27 * 60 * 60),
                     instruction: "Summarise these notes into three bullets I can send to Tom.",
@@ -251,14 +252,14 @@ enum DemoFixtures {
                     - The new dashboard demo went well.
                     - Two open items: an SSO date, and renewal paperwork sitting with their legal team.
                     """
-                )
+                )]
             ),
         ]
     }
 
     /// The one-turn drafted-email thread the marketing screenshot is built
     /// around. Kept separate so `ScreenshotRunner` can seed exactly this
-    /// conversation without the other two.
+    /// thread without the other two.
     static func draftReplyTurn(now: Date = Date()) -> ConversationTurn {
         ConversationTurn(
             id: UUID(),

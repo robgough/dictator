@@ -6,7 +6,6 @@ import KeyboardShortcuts
 struct MenuBarContent: View {
     @Environment(AppState.self) private var state
     @State private var history = DictationHistory.shared
-    @State private var conversations = ConversationHistory.shared
     @State private var modelManager = ModelManager.shared
     @State private var justCopied: UUID?
     private let demo = DemoMode.shared
@@ -27,11 +26,6 @@ struct MenuBarContent: View {
                 modePicker(bindable: $s)
             }
 
-            if !demo.conversations(real: conversations.conversations).isEmpty {
-                Divider()
-                conversationsList
-            }
-
             if !demo.historyIsEmpty(real: history.records) {
                 Divider()
                 recentList
@@ -40,6 +34,12 @@ struct MenuBarContent: View {
             // Chat gets its own full-width row above the Meetings one. It's a
             // destination, not a setting, and it's the only entry here that
             // opens a window you sit in front of.
+            //
+            // It replaced a list of recent assistant conversations that used to
+            // sit above the dictation history. Once Assistant Mode and chat
+            // became one store, that list was a second, worse thread browser
+            // shown in a popover you have to hold open — the sidebar in the
+            // chat window is the one place threads live now.
             Divider()
             Button {
                 ChatWindowController.shared.show()
@@ -350,93 +350,6 @@ struct MenuBarContent: View {
         }
     }
 
-    @ViewBuilder
-    private var conversationsList: some View {
-        HStack {
-            Text("Conversations")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            Spacer()
-            if demo.conversations(real: conversations.conversations).count > 1 {
-                Button("Clear all") {
-                    demo.clearConversations { conversations.clear() }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-            }
-        }
-
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(demo.conversations(real: conversations.conversations).prefix(5)) { convo in
-                ConversationRow(
-                    conversation: convo,
-                    onOpen: { state.openConversation(id: convo.id) },
-                    onDelete: { demo.removeConversation(id: convo.id) { conversations.remove(id: convo.id) } }
-                )
-            }
-        }
-    }
-}
-
-private struct ConversationRow: View {
-    let conversation: Conversation
-    let onOpen: () -> Void
-    let onDelete: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .foregroundStyle(.indigo)
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 14)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(conversation.title)
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    HStack(spacing: 4) {
-                        Text("\(conversation.turns.count) turn\(conversation.turns.count == 1 ? "" : "s")")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Text("·")
-                            .foregroundStyle(.tertiary)
-                        Text(Self.relative(conversation.updatedAt))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                }
-                Spacer(minLength: 0)
-                if hovering {
-                    Button(action: onDelete) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-
-    private static func relative(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
-    }
 }
 
 private struct RecentRow: View {

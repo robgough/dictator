@@ -129,6 +129,29 @@ so does the menu bar's Chat item and `dictator://chat`.
   written line by line became one line. `CodeHighlighter` is a deliberately
   shallow tokeniser (comments, strings, numbers, per-language keywords) that
   returns ranges, so it stays testable without SwiftUI.
+- **One store, two ways in.** Assistant Mode and the chat window are the same
+  conversation reached by different doors, and both persist as `ChatThread` in
+  `ChatStore` (`origin` says which, and the sidebar shows it). What stays
+  separate is the *call path*: `assist()` is one shot at
+  `LLMScheduler.interactive` with a person holding a hotkey waiting for text to
+  land at their cursor, while `ChatEngine` is up to eight rounds of tool
+  dispatch at `.background`. Merging those would put a tool loop in front of a
+  paste, which is the one thing Assistant Mode must never do.
+  `ChatThread.assistantTurns` derives the `[ConversationTurn]` that `assist()`
+  takes — the same storage-vs-payload split `ChatWireMessage` makes, and what
+  let this land without touching either engine. Tool messages are skipped in
+  that derivation (they can't be expressed as a turn), so a promoted thread
+  keeps working through the hotkey. `scratch/chat-merge-check` round-trips the
+  real archive field by field.
+- **Replies can be inserted back where you were** (`ChatInsertion`). The hotkey
+  can paste at your cursor because the target app is still in front; the chat
+  window can't, so the target is *remembered* from
+  `didActivateApplicationNotification` (plus a `rememberFrontmost()` just before
+  the window takes focus, for the app that was there at launch), then activated
+  and polled until it's genuinely frontmost before ⌘V — `activate()` is a
+  request, not a fact, and pasting too early lands the text back in the chat
+  window. Text goes on the clipboard *first*, so every failure path still leaves
+  the user one ⌘V from what they asked for.
 - **Each chat owns a folder** — `<synced>/Chat Files/<slug>-<id6>/` (`ChatFiles`).
   The name is fixed on first use and stored on the thread, never derived live:
   titles change, and a renamed folder would invalidate every path already
@@ -309,10 +332,9 @@ Several files moved from Application Support to the synced folder and are migrat
 
 - Settings: synced user preferences in `<synced>/settings.json`; per-Mac bits in `~/Library/Application Support/Dictator/local-settings.json`. `UserDefaults` key `DictatorSettings.v2` is a *legacy migration source only* (`legacyUserDefaultsKey`), not where settings live. The decoder is field-level backwards-compatible — every property has a default, missing keys fall through. Adding a top-level field needs it listed in `syncedKeys`/`localKeys` in `persist()` or it silently won't survive a relaunch.
 - Dictation history: `<synced>/history.json`. Capped at 500 records / 7 days.
-- Conversation history (Assistant Mode multi-turn): `<synced>/conversations.json`.
 - Vocabulary: `<synced>/vocabulary.json`. Assistant memory: `<synced>/assistant-memory.md`. Correction suggestions: `<synced>/correction-suggestions.json`.
 - Usage stats: `<synced>/stats.json`, keyed per device so two Macs on iCloud Drive can't clobber each other's counters. `UsageStats` has a hand-written `Codable` plus a memberwise `+` and a `max()`-per-field merge — a new counter needs all of them or it won't persist or sum.
-- Chat threads: `<synced>/chats.json`. Capped at 200 threads, no age cap — a chat is a document people come back to, unlike an Assistant Mode conversation.
+- Conversations: `<synced>/chats.json` — **both** the chat window's threads and Assistant Mode's, since they merged into one store. Retention is per-origin: chat threads are capped at 200 with no age cap (a chat is a document people come back to), assistant threads are swept after 14 days unless `promoted`. The old `conversations.json` is folded in on first launch and renamed `conversations.migrated.json`; `SyncedStorage.migrateFromAppSupport` still moves it into the synced folder first, so don't delete that line.
 - MCP servers: `~/Library/Application Support/Dictator/mcp-servers.json` (**per-Mac** — it holds absolute binary paths). Their environment *values* are keychain-only, under service `net.robgough.Dictator`, account `mcp.<serverID>.env.<KEY>`.
 - Audio device priority: `UserDefaults`, key `AudioDeviceManager.knownDevices.v1` — **not** a JSON file.
 - Dictator Meetings settings: same synced/local split as Dictator's own settings — synced envelope in `SyncedStorage.directory/meetings-settings.json`, per-Mac bits (retention days, model picks, onboarding state, the local-provider model ID) in `~/Library/Application Support/Dictator/meetings-local-settings.json`. On first launch (neither file exists) it one-time-imports the matching keys out of Dictator's own settings files. Meeting recordings/notes/transcripts and people data keep their existing paths (`<synced>/Meetings/`, `~/Library/Application Support/Dictator/Meetings/`) unchanged by the app split.
@@ -325,6 +347,11 @@ Several files moved from Application Support to the synced folder and are migrat
 - `vlm-vision-check/` — loads a downloaded checkpoint through `VLMModelFactory` from the app's real on-disk layout, feeds it a screenshot, prints `phys_footprint`. **Run this before setting `visionCapable` on a catalog entry, and read the output** — a model that loads is not a model that answers usefully.
 - `gemma4-upstream-check/` — takes HF repo ids, downloads via the same Hub bridge the app uses, loads and generates. The fastest way to prove a new catalog model works end to end without launching Dictator.
 - `tool-call-check/` — per model: is the tool-call format inferred, does it emit a parseable call with the right arguments, and does it *stop* calling once fed a result. **Run this before setting `chatCapable`.** Takes a list of repo ids and downloads anything missing. Also runs the tool-list conditions (2 / 60 / find_tools / index + find_tools) that set `ChatToolset.deferAboveToolCount` — re-run it before changing that threshold.
+- `chat-merge-check/` — round-trips the real `conversations.json` through the
+  shipping migration (`ChatThreadMigration.swift`, symlinked) and compares every
+  turn field by field, plus the compaction split and the tool-messages-skipped
+  case. Run it before touching how a turn unfolds into messages: the failure
+  mode there is silent data loss, not a crash.
 - `mcp-client-check/` — symlinks the app's real MCP sources and runs them against a deliberately awkward Python server (non-JSON banner, pagination, a server→client request, an `isError` tool, a tool that never replies). Run it a few times: the two transport bugs it caught were both intermittent.
 - `gemma4-qat-spike/` — the historical 3.31.3 + vendored-architecture reproduction, kept for context only; the vendored `Gemma4/` sources it mirrors were deleted when 3.31.4 landed native support.
 

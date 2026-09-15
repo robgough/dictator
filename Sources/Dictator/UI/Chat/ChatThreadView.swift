@@ -219,15 +219,40 @@ private struct ChatMessageRow: View {
         case .user:
             HStack {
                 Spacer(minLength: 60)
-                Text(text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.tint.opacity(0.15), in: .rect(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(text)
+                        .textSelection(.enabled)
+                    // What the assistant hotkey was pointed at when this was
+                    // spoken. Without it a migrated turn reads as "tighten
+                    // this" with no sign of what "this" was — the instruction
+                    // is half the message and the selection is the other half.
+                    if let selection = message.selection, !selection.isEmpty {
+                        ChatSelectionQuote(text: selection)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.tint.opacity(0.15), in: .rect(cornerRadius: 12))
             }
         case .assistant:
-            ChatMarkdownView(text: text, isStreaming: liveText != nil)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                ChatMarkdownView(text: text, isStreaming: liveText != nil)
+                // Where this reply went the first time round, for turns that
+                // came in through the hotkey and were pasted somewhere before
+                // the thread was ever opened here.
+                if let delivery = message.delivery, !delivery.isEmpty {
+                    Label(delivery, systemImage: "arrow.turn.down.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                // Only once the reply has finished arriving: acting on half a
+                // sentence isn't useful, and a row of buttons flickering under
+                // a streaming reply is a distraction while reading it.
+                if liveText == nil, !text.isEmpty {
+                    ChatReplyActions(text: text)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
             ChatToolRow(message: message)
         case .failure:
@@ -367,5 +392,119 @@ private struct ChatTrustWarning: View {
     private var modelName: String {
         let id = state.settings.llmModelID
         return ModelCatalog.llm(id: id)?.displayName ?? id
+    }
+}
+
+/// What you can do with a finished reply: copy it, or put it back where you
+/// were working.
+///
+/// Insertion is the point. Assistant Mode can already type at your cursor
+/// because the hotkey fires while the target app is still in front; a chat
+/// window that has just spent four tool calls writing something has no such
+/// luck, and the reply's usual fate is a manual copy, a ⌘-Tab, and a paste.
+/// `ChatInsertion` remembers which app that was, so the button can say so.
+private struct ChatReplyActions: View {
+    let text: String
+
+    @State private var insertion = ChatInsertion.shared
+    @State private var copied = false
+    @State private var inserting = false
+    /// Which message the banner belongs to. `ChatInsertion` is a singleton, so
+    /// without this every reply in the transcript shows the same outcome.
+    @State private var owned = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            action(copied ? "checkmark" : "doc.on.doc",
+                   label: copied ? "Copied" : "Copy",
+                   tint: copied ? .green : .secondary) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = true
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    copied = false
+                }
+            }
+
+            if let target = insertion.targetName {
+                action("text.insert", label: "Insert into \(target)", tint: .secondary) {
+                    owned = true
+                    inserting = true
+                    Task {
+                        await insertion.insert(text)
+                        inserting = false
+                    }
+                }
+                .disabled(inserting)
+            }
+
+            if owned, let outcome = insertion.lastOutcome {
+                Label(outcome.message,
+                      systemImage: outcome.isFailure
+                        ? "exclamationmark.triangle" : "checkmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(outcome.isFailure ? .orange : .green)
+                    .transition(.opacity)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .animation(.easeOut(duration: 0.2), value: insertion.lastOutcome)
+        .onChange(of: insertion.lastOutcome) { _, new in
+            // Someone else's outcome cleared — stop claiming the banner.
+            if new == nil { owned = false }
+        }
+    }
+
+    private func action(
+        _ symbol: String, label: String, tint: Color, run: @escaping () -> Void
+    ) -> some View {
+        Button(action: run) {
+            Label(label, systemImage: symbol)
+                .font(.caption2)
+                .foregroundStyle(tint)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The text an Assistant Mode turn was about, quoted under the instruction.
+///
+/// Collapsed by default: a selection can be several paragraphs, and the
+/// instruction is the part you scan for when reading back a conversation.
+private struct ChatSelectionQuote: View {
+    let text: String
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "text.quote")
+                    Text(expanded ? "Hide the text this was about"
+                                  : "About \(text.count) characters of selected text")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(.quaternary).frame(width: 2)
+                    }
+            }
+        }
     }
 }

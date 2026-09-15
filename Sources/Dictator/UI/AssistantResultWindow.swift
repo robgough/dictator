@@ -2,26 +2,32 @@ import AppKit
 import SwiftUI
 
 /// Multi-turn result window for Assistant Mode. Reads its content from
-/// `ConversationHistory.shared` by id, so updates from Pipeline propagate
-/// automatically via @Observable. While the window is open, the next
-/// assistant hotkey continues the displayed conversation; closing the
-/// window (X, Done button, or programmatic close) ends the conversation —
-/// the next call starts fresh. After a REPLACE turn the window never
-/// opens; in that case, continuation falls back to selection-overlap with
-/// the previous reply (Pipeline.shouldContinueConversation).
+/// `ChatStore.shared` by id, so updates from Pipeline propagate automatically
+/// via @Observable. While the window is open, the next assistant hotkey
+/// continues the displayed thread; closing the window (X, Done button, or
+/// programmatic close) ends it — the next call starts fresh. After a REPLACE
+/// turn the window never opens; in that case, continuation falls back to
+/// selection-overlap with the previous reply
+/// (Pipeline.shouldContinueConversation).
+///
+/// Deliberately *not* the chat window, even though they now show the same
+/// threads out of the same store. This one is summoned by a hotkey over
+/// whatever app the user is writing in, so it stays a floating panel you read
+/// and dismiss. "Continue in chat" is the door to the other one, for when the
+/// answer needs tools rather than another sentence.
 @MainActor
 final class AssistantResultController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
-    private var displayedConversationID: UUID?
+    private var displayedThreadID: UUID?
 
     /// Called when the user closes the window (X or Done). AppState wires
     /// this to `pipeline.endActiveConversation()` so the next assistant
     /// call starts fresh.
     var onWindowClosed: (() -> Void)?
 
-    /// Called when the user reopens a conversation from the menu bar so the
-    /// pipeline can switch its active conversation to match what's on screen.
-    var onConversationDisplayed: ((UUID) -> Void)?
+    /// Called when a thread is displayed so the pipeline can switch its active
+    /// thread to match what's on screen.
+    var onThreadDisplayed: ((UUID) -> Void)?
 
     /// True while the window is on-screen. Pipeline asks this when deciding
     /// whether the next assistant call is a continuation.
@@ -29,27 +35,28 @@ final class AssistantResultController: NSObject, NSWindowDelegate {
         window?.isVisible ?? false
     }
 
-    /// Conversation id currently displayed *and* visible. Used by Pipeline's
+    /// Thread id currently displayed *and* visible. Used by Pipeline's
     /// continuation check. Returns nil when the window is hidden so a closed
-    /// window doesn't lock the next call into the wrong conversation.
-    var currentConversationID: UUID? {
+    /// window doesn't lock the next call into the wrong thread.
+    var currentThreadID: UUID? {
         guard isWindowVisible else { return nil }
-        return displayedConversationID
+        return displayedThreadID
     }
 
-    /// Update the window to show a given conversation. `surface` true brings
-    /// it to the front (DRAFT mode, paste-fallback, or menu-bar reopen).
-    /// `surface` false only re-renders if the window is already visible —
-    /// used for REPLACE turns that happen while the user is following along.
-    func showConversation(id: UUID, surface: Bool) {
-        displayedConversationID = id
+    /// Update the window to show a given thread. `surface` true brings it to
+    /// the front (DRAFT mode, paste-fallback, or a reopen). `surface` false
+    /// only re-renders if the window is already visible — used for REPLACE
+    /// turns that happen while the user is following along.
+    func showThread(id: UUID, surface: Bool) {
+        displayedThreadID = id
         let alreadyVisible = window?.isVisible ?? false
         guard surface || alreadyVisible else { return }
 
         let window = ensureWindow()
         let root = AssistantResultView(
-            conversationID: id,
+            threadID: id,
             onCopy: { [weak self] text in self?.copyToClipboard(text) },
+            onContinueInChat: { [weak self] in self?.continueInChat(id) },
             onClose: { [weak self] in self?.requestClose() }
         )
         window.contentViewController = NSHostingController(rootView: root)
@@ -59,7 +66,19 @@ final class AssistantResultController: NSObject, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        onConversationDisplayed?(id)
+        onThreadDisplayed?(id)
+    }
+
+    /// Hands the thread to the chat window, where it can use tools and files.
+    ///
+    /// Closes this window on the way: the same thread open in two places, both
+    /// able to append to it, is a race nobody asked for — and the user has just
+    /// said which of the two they want.
+    private func continueInChat(_ id: UUID) {
+        ChatStore.shared.promote(id: id)
+        requestClose()
+        ChatWindowController.shared.show()
+        ChatWindowController.shared.select(threadID: id)
     }
 
     /// Programmatic close, used by the Done button. Routes through the
@@ -99,37 +118,43 @@ final class AssistantResultController: NSObject, NSWindowDelegate {
     /// specifically the user-initiated close path.
     nonisolated func windowWillClose(_ notification: Notification) {
         MainActor.assumeIsolated {
-            displayedConversationID = nil
+            displayedThreadID = nil
             onWindowClosed?()
         }
     }
 }
 
 private struct AssistantResultView: View {
-    let conversationID: UUID
+    let threadID: UUID
     let onCopy: (String) -> Void
+    let onContinueInChat: () -> Void
     let onClose: () -> Void
 
-    @State private var history = ConversationHistory.shared
+    @State private var store = ChatStore.shared
     @State private var copyFeedback = false
 
     /// Demo mode resolves fixture threads by id first, so the window opens on
     /// fictional content while a recording is running.
-    private var conversation: Conversation? {
-        DemoMode.shared.conversation(id: conversationID, real: history.conversation(id: conversationID))
+    private var thread: ChatThread? {
+        DemoMode.shared.thread(id: threadID, real: store.thread(id: threadID))
     }
+
+    /// The transcript as turn pairs. The window has always shown a turn — the
+    /// instruction and its reply together — rather than a run of messages, and
+    /// that reads better for a hotkey flow than a chat log would.
+    private var turns: [ConversationTurn] { thread?.assistantTurns ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if let conversation {
+            if let thread {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
-                            if let comp = conversation.compaction {
+                            if let comp = thread.compaction {
                                 CompactionNote(summary: comp.summary)
                             }
-                            ForEach(Array(visibleTurns(in: conversation).enumerated()), id: \.element.id) { _, turn in
+                            ForEach(turns) { turn in
                                 TurnRow(turn: turn)
                                     .id(turn.id)
                             }
@@ -144,7 +169,7 @@ private struct AssistantResultView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
                     )
-                    .onChange(of: conversation.turns.last?.id) { _, newID in
+                    .onChange(of: turns.last?.id) { _, newID in
                         if let newID {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo(newID, anchor: .bottom)
@@ -152,16 +177,16 @@ private struct AssistantResultView: View {
                         }
                     }
                     .onAppear {
-                        if let lastID = conversation.turns.last?.id {
+                        if let lastID = turns.last?.id {
                             proxy.scrollTo(lastID, anchor: .bottom)
                         }
                     }
                 }
                 if let engine = AppState.shared.settings.activeLLMEngine(),
-                   conversation.isApproachingContextLimit(engine: engine) {
+                   thread.isApproachingContextLimit(engine: engine) {
                     ApproachingLimitChip()
                 }
-                footer(conversation: conversation)
+                footer
             } else {
                 Text("Conversation no longer available.")
                     .foregroundStyle(.secondary)
@@ -174,12 +199,12 @@ private struct AssistantResultView: View {
 
     @ViewBuilder
     private var header: some View {
-        if let conversation {
+        if thread != nil {
             HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
+                Image(systemName: "wand.and.stars")
                     .foregroundStyle(.indigo)
                     .font(.system(size: 13, weight: .semibold))
-                Text(turnCountLabel(conversation))
+                Text(turns.count == 1 ? "1 turn" : "\(turns.count) turns")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                 Text("·")
@@ -192,12 +217,8 @@ private struct AssistantResultView: View {
         }
     }
 
-    private func turnCountLabel(_ c: Conversation) -> String {
-        c.turns.count == 1 ? "1 turn" : "\(c.turns.count) turns"
-    }
-
     @ViewBuilder
-    private func footer(conversation: Conversation) -> some View {
+    private var footer: some View {
         HStack(spacing: 8) {
             // A clear, persistent "it's on your clipboard" marker — the HUD's
             // version fades after a few seconds, so the only lasting copy
@@ -217,7 +238,13 @@ private struct AssistantResultView: View {
             .background(Capsule().fill(Color.green.opacity(0.12)))
             .help("Stays on your clipboard until you copy something else. Closing this window ends the conversation.")
             Spacer()
-            if let last = conversation.turns.last {
+            // The door to the other half of the app: same thread, same store,
+            // but tools, files and a keyboard. This is the whole reason the two
+            // conversation types were merged — an assistant reply that nearly
+            // worked used to be a dead end.
+            Button("Continue in Chat…", action: onContinueInChat)
+                .help("Open this conversation in the chat window, where the assistant can use tools and write files.")
+            if let last = turns.last {
                 Button(copyFeedback ? "Copied" : "Copy latest") {
                     onCopy(last.reply)
                     copyFeedback = true
@@ -239,14 +266,11 @@ private struct AssistantResultView: View {
         }
     }
 
-    /// The window shows every turn — including ones that have been compacted
-    /// away from the LLM payload. The user told us to keep what's on screen
-    /// honest: "we want it to be clear what has gone on throughout the
-    /// conversation". The CompactionNote at the top signals that older turns
-    /// no longer count toward the model's context.
-    private func visibleTurns(in c: Conversation) -> [ConversationTurn] {
-        c.turns
-    }
+    // The window shows every turn — including ones compacted away from the LLM
+    // payload. The user asked for what's on screen to stay honest: "we want it
+    // to be clear what has gone on throughout the conversation". The
+    // CompactionNote at the top is what signals that the older ones no longer
+    // count toward the model's context.
 }
 
 private struct TurnRow: View {

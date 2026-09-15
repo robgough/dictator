@@ -13,6 +13,11 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Assistant Mode and chat are now one thing. Conversations you start with the assistant hotkey appear in the chat window's list alongside the ones you type, marked with a wand so you can tell where each came from. Your existing assistant conversations move across on first launch; nothing is lost.
+- An assistant reply that almost worked is no longer a dead end. "Continue in Chat" opens that conversation in the chat window, where the assistant can use tools, read your journal, fetch a page and write files — carrying on from what it already said rather than starting over.
+- Chat replies can be inserted back where you were working. Under every reply there's a button naming the app you came from; press it and the text is pasted at your cursor there, the same way Assistant Mode does it. If anything stops the paste landing — no text field focused, the app not coming forward — the text is on your clipboard and it tells you why.
+- The menu bar no longer keeps its own short list of recent conversations. Everything lives in the chat window now, which has the full list, search and a sidebar, rather than five rows in a popover.
+
 - The assistant can delete a file it made. It goes to the Trash, so a wrong one can be put straight back, and it asks first.
 - Under the message box you can now always see which model is answering, with a link to open that chat's files in Finder.
 - Dictating in chat no longer takes over the whole message bar: the recorder grows out of the microphone button at a sensible size and the typing field fades out behind it.

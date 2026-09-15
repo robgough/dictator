@@ -12,10 +12,10 @@ import Observation
 /// - **Session-only.** `isOn` is in-memory and never persisted (deliberately
 ///   *not* a `DictatorSettings` field). Quitting Dictator turns it off.
 /// - **Read-side only.** Nothing here writes to `history.json`,
-///   `conversations.json`, `assistant-memory.md`, `vocabulary.json` or
+///   `chats.json`, `assistant-memory.md`, `vocabulary.json` or
 ///   `scratchpad.md`. Turning it on and off again leaves every store byte for
 ///   byte as it was. Views call an accessor (`history(real:)`,
-///   `conversations(real:)`, …) that hands back the real value when it's off.
+///   `thread(id:real:)`, …) that hands back the real value when it's off.
 /// - **Live work still shows.** A dictation or assistant turn made *during* a
 ///   demo goes to the real stores as normal, and the accessors merge anything
 ///   created since `switchedOnAt` in on top of the fixtures — so "look, it's in
@@ -38,7 +38,7 @@ final class DemoMode {
     // Overlays. Rebuilt on every switch-on so relative timestamps stay fresh,
     // and cleared on switch-off so a second demo starts from a clean set.
     private var historyOverlay: [DictationRecord] = []
-    private var conversationOverlay: [Conversation] = []
+    private var assistantThreadOverlay: [ChatThread] = []
     private var memoryOverlay: [String] = []
     private var vocabularyOverlay: [VocabularyEntry] = []
 
@@ -60,14 +60,14 @@ final class DemoMode {
             let now = Date()
             switchedOnAt = now
             historyOverlay = DemoFixtures.historyRecords(now: now)
-            conversationOverlay = DemoFixtures.conversations(now: now)
+            assistantThreadOverlay = DemoFixtures.assistantThreads(now: now)
             memoryOverlay = DemoFixtures.memoryLines
             vocabularyOverlay = DemoFixtures.vocabulary()
             knownMemoryLines = Set(AssistantMemory.shared.entries)
         } else {
             switchedOnAt = nil
             historyOverlay = []
-            conversationOverlay = []
+            assistantThreadOverlay = []
             memoryOverlay = []
             vocabularyOverlay = []
             knownMemoryLines = []
@@ -116,35 +116,20 @@ final class DemoMode {
         real()
     }
 
-    // MARK: - Assistant conversations
+    // MARK: - Assistant threads
 
-    func conversations(real: [Conversation]) -> [Conversation] {
-        guard isOn, let since = switchedOnAt else { return real }
-        return real.filter { $0.updatedAt >= since } + conversationOverlay
-    }
-
-    /// Resolve by id for the result window, which is handed an id rather than
-    /// a list. Falls back to the real conversation so a turn taken during the
-    /// demo still opens.
-    func conversation(id: UUID, real: Conversation?) -> Conversation? {
-        if isOn, let fixture = conversationOverlay.first(where: { $0.id == id }) { return fixture }
+    /// Resolve by id for the assistant result window, which is handed an id
+    /// rather than a list. Falls back to the real thread so a turn taken
+    /// during the demo still opens.
+    ///
+    /// There's no list-level overlay any more: the recent-conversations list
+    /// was removed from the menu bar when Assistant Mode and chat merged into
+    /// one store, and the chat sidebar shows the real threads. A demo that
+    /// needs fictional threads in the sidebar would have to seed the store,
+    /// the way `ScreenshotRunner` does.
+    func thread(id: UUID, real: ChatThread?) -> ChatThread? {
+        if isOn, let fixture = assistantThreadOverlay.first(where: { $0.id == id }) { return fixture }
         return real
-    }
-
-    func removeConversation(id: UUID, real: () -> Void) {
-        if isOn, conversationOverlay.contains(where: { $0.id == id }) {
-            conversationOverlay.removeAll { $0.id == id }
-            return
-        }
-        real()
-    }
-
-    func clearConversations(real: () -> Void) {
-        if isOn {
-            conversationOverlay = []
-            return
-        }
-        real()
     }
 
     // MARK: - Assistant memory

@@ -35,7 +35,7 @@ struct ChatSidebar: View {
                 ContentUnavailableView(
                     "No chats yet",
                     systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Start one with the button in the toolbar.")
+                    description: Text("Start one with the button in the toolbar. Conversations from the Assistant hotkey show up here too.")
                 )
                 .allowsHitTesting(false)
             }
@@ -45,7 +45,7 @@ struct ChatSidebar: View {
                 Button(role: .destructive) {
                     confirmClearAll = true
                 } label: {
-                    Label("Clear all chats", systemImage: "trash")
+                    Label("Clear all conversations", systemImage: "trash")
                         .font(.caption)
                         .frame(maxWidth: .infinity)
                 }
@@ -76,19 +76,19 @@ struct ChatSidebar: View {
             }
         }
         .confirmationDialog(
-            "Delete every chat?",
+            "Delete every conversation?",
             isPresented: $confirmClearAll,
             titleVisibility: .visible
         ) {
             Button("Delete All", role: .destructive) {
-                // Chats go; files stay. Deleting every conversation is a
-                // tidy-up gesture, and silently taking a folder of documents
+                // Conversations go; files stay. Deleting every conversation is
+                // a tidy-up gesture, and silently taking a folder of documents
                 // with it is not what anybody means by it.
                 store.removeAll()
                 ChatWindowController.shared.newThread()
             }
         } message: {
-            Text("The chats go. Any files they made stay in your Chat Files folder.")
+            Text("Every conversation goes, including ones from the Assistant hotkey. Any files they made stay in your Chat Files folder.")
         }
     }
 
@@ -168,17 +168,46 @@ private struct ChatSidebarRow: View {
     let thread: ChatThread
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(thread.title)
-                .lineLimit(1)
-                .font(.system(size: 13))
-            if let reply = thread.lastAssistantReply, !reply.isEmpty {
-                Text(reply)
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 13, height: 15)
+                .help(originHelp)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(thread.title)
                     .lineLimit(1)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                if let reply = thread.lastAssistantReply, !reply.isEmpty {
+                    Text(reply)
+                        .lineLimit(1)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Which way in this thread started.
+    ///
+    /// Both origins get a glyph rather than marking only the unusual one: with
+    /// a badge on some rows and nothing on others, a plain row reads as "not
+    /// loaded yet" rather than "typed". The wand and the indigo are the
+    /// assistant's everywhere else in the app — the HUD, the island, the
+    /// Settings sidebar — so this needs no legend.
+    private var icon: String {
+        thread.origin == .assistant ? "wand.and.stars" : "bubble.left.and.bubble.right"
+    }
+
+    private var tint: Color {
+        thread.origin == .assistant ? CaptureKind.assistant.tint : .secondary
+    }
+
+    private var originHelp: String {
+        thread.origin == .assistant
+            ? "Started with the Assistant hotkey"
+            : "Started in this window"
     }
 }

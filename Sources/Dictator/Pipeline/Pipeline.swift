@@ -129,20 +129,29 @@ final class Pipeline {
     /// the output. When false, the host should only refresh the window if
     /// it's already visible (e.g. user is following along a REPLACE thread
     /// they've kept open).
-    var onAssistantTurnCompleted: ((_ conversation: Conversation, _ surfaceWindow: Bool) -> Void)?
+    var onAssistantTurnCompleted: ((_ thread: ChatThread, _ surfaceWindow: Bool) -> Void)?
 
     /// Set by AppState — asks the host whether the result window is currently
-    /// on-screen, and what conversation id it's displaying. Pipeline uses
-    /// these to decide whether a new assistant invocation is a continuation
-    /// of the active conversation. Kept as closures so Pipeline doesn't
-    /// import UI types.
+    /// on-screen, and what thread it's displaying. Pipeline uses these to
+    /// decide whether a new assistant invocation is a continuation of the
+    /// active thread. Kept as closures so Pipeline doesn't import UI types.
     var resultWindowIsVisible: (() -> Bool)?
-    var resultWindowConversationID: (() -> UUID?)?
+    var resultWindowThreadID: (() -> UUID?)?
 
-    /// The conversation that will be continued on the next assistant call,
-    /// if continuation triggers fire. Set after every successful turn and
-    /// cleared by the result window's "New conversation" button.
-    private(set) var activeConversation: Conversation?
+    /// The thread that will be continued on the next assistant call, if
+    /// continuation triggers fire. Set after every successful turn and cleared
+    /// by the result window closing.
+    ///
+    /// Held by id, not by value: the same thread can be open in the chat window
+    /// at the same time, and two copies of it would race. `ChatStore` is the
+    /// single owner; this is a pointer into it.
+    private(set) var activeThreadID: UUID?
+
+    /// The active thread as it stands right now, or nil if it's gone.
+    var activeThread: ChatThread? {
+        guard let activeThreadID else { return nil }
+        return ChatStore.shared.thread(id: activeThreadID)
+    }
 
     /// Whether the *currently in-flight* assistant invocation is a follow-up
     /// to the active conversation. Set when recording starts so the HUD can
@@ -1959,22 +1968,22 @@ final class Pipeline {
     }
 
     /// Decides whether the next assistant invocation should be a follow-up
-    /// against `activeConversation`. Two paths in:
+    /// against `activeThread`. Two paths in:
     ///
     /// 1. The result window is currently visible AND is displaying the active
-    ///    conversation. The user is clearly continuing the on-screen thread.
-    /// 2. The user has a selection that overlaps the active conversation's
-    ///    last reply (i.e. they've kept the previous output selected in their
+    ///    thread. The user is clearly continuing the on-screen conversation.
+    /// 2. The user has a selection that overlaps the active thread's last
+    ///    reply (i.e. they've kept the previous output selected in their
     ///    editor and triggered Assistant again). Forgiving substring match —
     ///    accommodates light editing on either side.
     ///
-    /// Anything else → fresh conversation.
+    /// Anything else → fresh thread.
     private func shouldContinueConversation(selection: String?) -> Bool {
-        guard let active = activeConversation else { return false }
-        if resultWindowIsVisible?() == true, resultWindowConversationID?() == active.id {
+        guard let active = activeThread else { return false }
+        if resultWindowIsVisible?() == true, resultWindowThreadID?() == active.id {
             return true
         }
-        guard let selection, let lastReply = active.lastReply else { return false }
+        guard let selection, let lastReply = active.lastAssistantReply else { return false }
         return Self.selectionMatchesReply(selection: selection, reply: lastReply)
     }
 
@@ -1989,18 +1998,18 @@ final class Pipeline {
         return trimRep.contains(trimSel) || trimSel.contains(trimRep)
     }
 
-    /// Called by the result window's "New conversation" button. Clears the
-    /// follow-up state so the next assistant call starts fresh.
+    /// Called when the result window closes. Clears the follow-up state so the
+    /// next assistant call starts fresh.
     func endActiveConversation() {
-        activeConversation = nil
+        activeThreadID = nil
         nextAssistantIsContinuation = false
     }
 
-    /// Called when the user reopens a past conversation from the menu bar.
-    /// The next assistant call will continue it (subject to the usual
-    /// window-visible / selection-match triggers).
-    func setActiveConversation(_ conversation: Conversation) {
-        activeConversation = conversation
+    /// Called when the user reopens a past thread. The next assistant call will
+    /// continue it (subject to the usual window-visible / selection-match
+    /// triggers).
+    func setActiveThread(id: UUID) {
+        activeThreadID = id
     }
 
     /// User-initiated abort, triggered from the HUD's hover cancel button.
@@ -2140,17 +2149,15 @@ final class Pipeline {
 
         // Resolve prior context for this turn. If continuing, take the verbatim
         // tail (turns after the compaction cutoff) plus the existing summary.
-        // Otherwise we send nothing — a fresh conversation.
+        // Otherwise we send nothing — a fresh thread.
+        //
+        // The split lives on `ChatThread` so the chat window asks the same
+        // question and gets the same answer — the two entry points share a
+        // store now, and they must not disagree about what the model has seen.
         var priorTurns: [ConversationTurn] = []
         var summary: String? = nil
-        if continues, let active = activeConversation {
-            if let comp = active.compaction {
-                priorTurns = Array(active.turns.dropFirst(comp.upThroughTurnIndex + 1))
-                summary = comp.summary
-            } else {
-                priorTurns = active.turns
-                summary = nil
-            }
+        if continues, let active = activeThread {
+            (priorTurns, summary) = active.activeAssistantContext
         }
 
         // The Assistant Mode entry-point already guarded against .none, so
@@ -2201,7 +2208,7 @@ final class Pipeline {
             context: assistantContext
         )
         if estimate > llm.assistantInputTokenBudget {
-            guard priorTurns.count > 2, let active = activeConversation else {
+            guard priorTurns.count > 2, let active = activeThread else {
                 inFlightAssistant = nil
                 nextAssistantIsContinuation = false
                 fail("This conversation is too long. Start a new one.")
@@ -2222,8 +2229,8 @@ final class Pipeline {
                 summary = newSummary
                 priorTurns = keep
                 // Index of the last summarised turn within the *full* turn list.
-                // active.turns.count - keep.count - 1 = the last index now compacted.
-                pendingCompactionIndex = active.turns.count - keep.count - 1
+                // count - keep.count - 1 = the last index now compacted.
+                pendingCompactionIndex = active.assistantTurns.count - keep.count - 1
             } catch {
                 if Task.isCancelled { return }
                 inFlightAssistant = nil
@@ -2296,31 +2303,37 @@ final class Pipeline {
             )
         }()
 
-        // Build the new turn and fold it into the conversation. New
-        // conversations are appended to history; follow-ups update in place.
-        let newTurn = ConversationTurn(
-            id: UUID(),
-            timestamp: Date(),
-            instruction: instruction,
+        // Fold the turn into the thread — two messages, which is what a turn
+        // has always been. A follow-up appends to the active thread; anything
+        // else starts a new `.assistant` one.
+        //
+        // The reply's `delivery` is still unknown here: whether it pasted or
+        // fell back to the clipboard is decided in `deliverAssistant`, below,
+        // which fills it in by id.
+        let userMessage = ChatMessage(
+            kind: .user,
+            text: instruction,
             selection: selection,
-            mode: result.mode,
-            reply: text,
-            context: contextInfo
-        )
-        let updatedConversation: Conversation
-        if continues, var active = activeConversation {
+            context: contextInfo)
+        let replyMessage = ChatMessage(
+            kind: .assistant,
+            text: text,
+            deliveryMode: result.mode)
+
+        var thread: ChatThread
+        if continues, let active = activeThread {
+            thread = active
             if let idx = pendingCompactionIndex {
-                active.compaction = ConversationCompaction(summary: summary ?? "", upThroughTurnIndex: idx)
+                thread.compaction = ConversationCompaction(
+                    summary: summary ?? "", upThroughTurnIndex: idx)
             }
-            active.append(newTurn)
-            updatedConversation = active
-            ConversationHistory.shared.update(active)
         } else {
-            let fresh = Conversation.new(firstTurn: newTurn)
-            updatedConversation = fresh
-            ConversationHistory.shared.append(fresh)
+            thread = ChatThread(origin: .assistant, modelID: settings.llmModelID)
         }
-        activeConversation = updatedConversation
+        thread.append(userMessage)
+        thread.append(replyMessage)
+        ChatStore.shared.upsert(thread)
+        activeThreadID = thread.id
 
         UsageStatsStore.shared.record(
             mode: .assistant,
@@ -2339,14 +2352,18 @@ final class Pipeline {
             text: text,
             mode: result.mode,
             hadSelection: selection != nil,
-            conversation: updatedConversation,
+            threadID: thread.id,
+            replyID: replyMessage.id,
             remembered: rememberedNote
         )
         inFlightAssistant = nil
         nextAssistantIsContinuation = false
     }
 
-    private func deliverAssistant(text: String, mode: AssistantMode, hadSelection: Bool, conversation: Conversation, remembered: String? = nil) async {
+    private func deliverAssistant(
+        text: String, mode: AssistantMode, hadSelection: Bool,
+        threadID: UUID, replyID: UUID, remembered: String? = nil
+    ) async {
         // Trailing space so the next keystroke doesn't glue itself to this chunk —
         // same reasoning as `finish()`. Assistant Mode is mode-less, so the
         // emoji-tidy pass always runs — matches the always-on substitution on
@@ -2362,8 +2379,8 @@ final class Pipeline {
         // conversing with the assistant rather than editing in another app.
         // Never paste in this state, regardless of the model's REPLACE/DRAFT
         // classification — the reply just appends to the conversation, which
-        // the window picks up automatically via ConversationHistory. Closing
-        // the window ends conversation mode (and clears activeConversation).
+        // the window picks up automatically from ChatStore. Closing
+        // the window ends conversation mode (and clears the active thread).
         let inConversationMode = resultWindowIsVisible?() == true
         if inConversationMode {
             NSPasteboard.general.clearContents()
@@ -2408,11 +2425,21 @@ final class Pipeline {
             }
         }
 
+        // Record what actually happened to the reply, now that it has. The
+        // model's REPLACE/DRAFT classification is an intent; this is the
+        // outcome, and the two differ whenever the paste had nowhere to land.
+        var delivered = ChatStore.shared.thread(id: threadID)
+        if var message = delivered?.messages.first(where: { $0.id == replyID }) {
+            message.delivery = note
+            delivered?.update(message)
+            if let delivered { ChatStore.shared.upsert(delivered) }
+        }
+
         // Always notify the host that a turn finished. When the result is on
         // the clipboard rather than pasted, the host surfaces the window so
         // the user can read it; otherwise it only refreshes the window if
         // it's already open (e.g. a multi-turn REPLACE thread).
-        onAssistantTurnCompleted?(conversation, !pasted)
+        if let delivered { onAssistantTurnCompleted?(delivered, !pasted) }
 
         // Surface anything we just learned. Memory that writes itself silently
         // is memory the user can't correct.

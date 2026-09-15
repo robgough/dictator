@@ -55,6 +55,9 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
         if model.selectedThreadID == nil {
             selectMostRecentOrNew()
         }
+        // Before we take focus, not after: "insert into…" means the app the
+        // user was in when they came here, and one line below that is us.
+        ChatInsertion.shared.rememberFrontmost()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

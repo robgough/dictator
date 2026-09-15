@@ -66,11 +66,11 @@ enum ScreenshotRunner {
         AppState.shared.pipeline.settingsChanged(AppState.shared.settings)
     }
 
-    /// A one-turn assistant conversation whose reply is a short drafted email.
+    /// A one-turn assistant thread whose reply is a short drafted email.
     private static func seedConversation() -> UUID {
-        let conversation = Conversation.new(firstTurn: DemoFixtures.draftReplyTurn())
-        ConversationHistory.shared.append(conversation)
-        return conversation.id
+        let thread = ChatThread.assistant(turns: [DemoFixtures.draftReplyTurn()])
+        ChatStore.shared.upsert(thread)
+        return thread.id
     }
 
     /// The dictation-history fixtures, written into this capture process's
@@ -122,7 +122,7 @@ enum ScreenshotRunner {
     private static func captureAssistantDraft() {
         let id = seedConversation()
         let controller = AssistantResultController()
-        controller.showConversation(id: id, surface: true)
+        controller.showThread(id: id, surface: true)
         ScreenshotWindowCapture.settle(seconds: 1.0)
         guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Assistant" }) else {
             fail("no assistant window")
