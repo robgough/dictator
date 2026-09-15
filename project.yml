@@ -72,17 +72,26 @@ packages:
   # 0.18 — both constraints are gone now). 3.x decoupled from swift-transformers;
   # we bridge our own Downloader/TokenizerLoader in LLM/HubBridge.swift so model
   # weights keep living in the same on-disk layout under ModelStorage.llmRoot().
+  #
+  # 3.31.4 is what let us delete the vendored Gemma 4 architecture: it registers
+  # gemma4 / gemma4_text / gemma4_unified natively, and carries upstream versions
+  # of both fixes we'd hand-written (KV-shared layers carrying no k_proj/v_proj/
+  # k_norm on QAT checkpoints, and a quantizable per_layer_model_projection). It
+  # also adds qwen3_5 and the Gemma 4 12B "unified" architecture.
+  #
+  # It pulls in swift-syntax (602..<604) as a new transitive dependency, and
+  # requires mlx-swift >= 0.31.4 (upToNextMinor), which our exact pin satisfies.
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
-    exactVersion: 3.31.3
-  # Direct dependency for the vendored Gemma 4 architecture (LLM/Gemma4/),
-  # which imports MLX / MLXNN / MLXFast straight from mlx-swift rather than
-  # through mlx-swift-lm's products. Local implicit-module builds resolve
-  # those transitively, but CI's Xcode builds with explicit modules and
-  # refuses imports the target doesn't declare ("unable to resolve module
-  # dependency: 'MLXFast'", first hit on the v2026.6.0 release run). The
-  # `from:` matches what mlx-swift-lm 3.x already resolves, so this adds no
-  # new constraint pressure.
+    exactVersion: 3.31.4
+  # Direct dependency because four files `import MLX` straight from mlx-swift
+  # rather than through mlx-swift-lm's products (memory reporting, cache
+  # clearing). Local implicit-module builds resolve that transitively, but CI's
+  # Xcode builds with explicit modules and refuses imports the target doesn't
+  # declare ("unable to resolve module dependency: 'MLXFast'", first hit on the
+  # v2026.6.0 release run). MLXNN / MLXFast were only ever needed by the
+  # vendored Gemma 4 sources and went away with them. The version matches what
+  # mlx-swift-lm 3.x already resolves, so this adds no constraint pressure.
   MLXSwift:
     url: https://github.com/ml-explore/mlx-swift
     exactVersion: 0.31.4
@@ -305,12 +314,12 @@ targets:
         product: MLXLLM
       - package: MLXSwiftLM
         product: MLXLMCommon
+      # Vision-capable models load through VLMModelFactory so one resident
+      # container serves both the text passes and window-vision reads.
+      - package: MLXSwiftLM
+        product: MLXVLM
       - package: MLXSwift
         product: MLX
-      - package: MLXSwift
-        product: MLXNN
-      - package: MLXSwift
-        product: MLXFast
       - package: SwiftTransformers
         product: Hub
       - package: SwiftTransformers
@@ -482,12 +491,12 @@ targets:
         product: MLXLLM
       - package: MLXSwiftLM
         product: MLXLMCommon
+      # Vision-capable models load through VLMModelFactory so one resident
+      # container serves both the text passes and window-vision reads.
+      - package: MLXSwiftLM
+        product: MLXVLM
       - package: MLXSwift
         product: MLX
-      - package: MLXSwift
-        product: MLXNN
-      - package: MLXSwift
-        product: MLXFast
       - package: SwiftTransformers
         product: Hub
       - package: SwiftTransformers

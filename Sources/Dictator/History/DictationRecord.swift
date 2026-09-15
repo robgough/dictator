@@ -56,4 +56,33 @@ struct DictationRecord: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// in?" answerable after the fact. nil on records written before it
     /// existed, and whenever the frontmost app couldn't be identified.
     let appBundleID: String?
+
+    /// How many spelling terms a window-vision read contributed to this
+    /// dictation.
+    ///
+    /// True when this was actually written to the user's journal file.
+    ///
+    /// Not simply "came from the journal hotkey": a journal write that fails
+    /// falls back to the clipboard, and that run should read as the clipboard
+    /// fallback it is rather than as a filed entry. So this mirrors
+    /// `Pipeline.lastDeliveryWasJournal`, which the failure path clears.
+    ///
+    /// Needed because `pasted` can't carry it. Journal entries deliberately
+    /// never touch the app or the clipboard, so `pasted` is false for them —
+    /// the same false a genuine clipboard fallback produces. The menu bar was
+    /// reading that as "only reached the clipboard" and tinting successful
+    /// journal entries with the warning colour. nil on older records.
+    let deliveredToJournal: Bool?
+
+    /// Three states, deliberately: **nil** means no read was attempted (vision
+    /// is off for this mode, unsupported, or Screen Recording isn't granted) —
+    /// which is also what old records decode to. **0** means a read ran and
+    /// came back with nothing usable. **Positive** is the happy path.
+    ///
+    /// Recorded because window vision is otherwise invisible: it feeds a
+    /// spelling reference into the prompt and then disappears, so there was no
+    /// way to tell a run that used it from one that didn't — which made it
+    /// impossible to judge whether the feature was working at all.
+    let visionTermCount: Int?
+
 }

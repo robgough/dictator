@@ -162,7 +162,10 @@ enum DemoFixtures {
                 ],
                 final: "Can you check whether the Northwind contract renews in March or April? I keep seeing both dates. ",
                 pasted: false,
-                note: "Accessibility not granted — copied to the clipboard instead"
+                note: "Accessibility not granted — copied to the clipboard instead",
+                // One fixture carries a window-vision read so the History pane's
+                // "from screen" badge appears in screenshots and demos.
+                visionTermCount: 3
             ),
         ]
     }
@@ -179,7 +182,8 @@ enum DemoFixtures {
         final: String,
         pasted: Bool,
         note: String? = nil,
-        inputDevice: String = "MacBook Pro Microphone"
+        inputDevice: String = "MacBook Pro Microphone",
+        visionTermCount: Int? = nil
     ) -> DictationRecord {
         DictationRecord(
             id: UUID(),
@@ -197,7 +201,9 @@ enum DemoFixtures {
             pasted: pasted,
             inputDevice: inputDevice,
             note: note,
-            appBundleID: nil
+            appBundleID: nil,
+            deliveredToJournal: false,
+            visionTermCount: visionTermCount
         )
     }
 

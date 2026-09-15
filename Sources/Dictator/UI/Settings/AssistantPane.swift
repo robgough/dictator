@@ -96,20 +96,6 @@ struct AssistantPane: View {
                 SectionFootnote("Kept in your synced folder as assistant-memory.md, one line each.")
             }
 
-            if WindowVisionContext.isSupported {
-                Section {
-                    Toggle("Read the focused window with vision",
-                           isOn: $s.settings.assistantWindowVisionContextEnabled)
-                        .onChange(of: s.settings.assistantWindowVisionContextEnabled) { _, enabled in
-                            if enabled { ScreenRecordingPermission.request() }
-                            state.save()
-                        }
-                } header: {
-                    Text("Context")
-                } footer: {
-                    SectionFootnote("Reads on-screen names, on-device, so replies use them.")
-                }
-            }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)

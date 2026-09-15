@@ -187,13 +187,25 @@ FluidAudio (`from: 0.14.5`) shares no transitive deps with the MLX/WhisperKit si
 
 ## Persistence
 
-- Settings: `UserDefaults` key `DictatorSettings.v2`. The decoder is field-level backwards-compatible — every property has a default, missing keys fall through.
-- Dictation history: JSON file at `~/Library/Application Support/Dictator/history.json`. Capped at 500 records / 7 days.
-- Conversation history (Assistant Mode multi-turn): JSON at `~/Library/Application Support/Dictator/conversations.json`.
-- Audio device priority: JSON at `~/Library/Application Support/Dictator/input-devices.json`.
+**Two locations, and it matters which.** The *synced* folder is `SyncedStorage.directory` — `~/Documents/Dictator/` by default, or whatever the user picked in Settings → General → Synced folder. Per-Mac state stays in `~/Library/Application Support/Dictator/`.
+
+Several files moved from Application Support to the synced folder and are migrated on launch by `SyncedStorage.migrateFromAppSupport`. **The Application Support copies are left behind and go stale** — reading one while debugging will show you months-old data and send you off after a bug that isn't there. Always confirm which path a store actually resolves before trusting its contents.
+
+- Settings: synced user preferences in `<synced>/settings.json`; per-Mac bits in `~/Library/Application Support/Dictator/local-settings.json`. `UserDefaults` key `DictatorSettings.v2` is a *legacy migration source only* (`legacyUserDefaultsKey`), not where settings live. The decoder is field-level backwards-compatible — every property has a default, missing keys fall through. Adding a top-level field needs it listed in `syncedKeys`/`localKeys` in `persist()` or it silently won't survive a relaunch.
+- Dictation history: `<synced>/history.json`. Capped at 500 records / 7 days.
+- Conversation history (Assistant Mode multi-turn): `<synced>/conversations.json`.
+- Vocabulary: `<synced>/vocabulary.json`. Assistant memory: `<synced>/assistant-memory.md`. Correction suggestions: `<synced>/correction-suggestions.json`.
+- Usage stats: `<synced>/stats.json`, keyed per device so two Macs on iCloud Drive can't clobber each other's counters. `UsageStats` has a hand-written `Codable` plus a memberwise `+` and a `max()`-per-field merge — a new counter needs all of them or it won't persist or sum.
+- Audio device priority: `UserDefaults`, key `AudioDeviceManager.knownDevices.v1` — **not** a JSON file.
 - Dictator Meetings settings: same synced/local split as Dictator's own settings — synced envelope in `SyncedStorage.directory/meetings-settings.json`, per-Mac bits (retention days, model picks, onboarding state, the local-provider model ID) in `~/Library/Application Support/Dictator/meetings-local-settings.json`. On first launch (neither file exists) it one-time-imports the matching keys out of Dictator's own settings files. Meeting recordings/notes/transcripts and people data keep their existing paths (`<synced>/Meetings/`, `~/Library/Application Support/Dictator/Meetings/`) unchanged by the app split.
 - Dictator Meetings provider API keys: macOS Keychain only (see "Provider abstraction" above) — never in the settings JSON files above, synced or local.
 
 ## What's in scratch/
 
-`scratch/` is gitignored. Currently holds `parakeet-v3-spike/` — a self-contained SwiftPM project used to validate FluidAudio's API before integrating. Keep new spikes here; they don't ship.
+`scratch/` is gitignored and holds ~18 self-contained SwiftPM spikes used to validate something headlessly before it touches the app. Keep new ones here; they don't ship. The ones worth knowing about:
+
+- `vlm-vision-check/` — loads a downloaded checkpoint through `VLMModelFactory` from the app's real on-disk layout, feeds it a screenshot, prints `phys_footprint`. **Run this before setting `visionCapable` on a catalog entry, and read the output** — a model that loads is not a model that answers usefully.
+- `gemma4-upstream-check/` — takes HF repo ids, downloads via the same Hub bridge the app uses, loads and generates. The fastest way to prove a new catalog model works end to end without launching Dictator.
+- `gemma4-qat-spike/` — the historical 3.31.3 + vendored-architecture reproduction, kept for context only; the vendored `Gemma4/` sources it mirrors were deleted when 3.31.4 landed native support.
+
+A spike that pins dependency versions must match `project.yml` exactly, or you're testing a different app than the one you ship.

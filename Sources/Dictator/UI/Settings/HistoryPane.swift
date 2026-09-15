@@ -93,6 +93,22 @@ private struct HistoryRow: View {
                                 Text("·")
                                 Text(style)
                             }
+                            // Three-way, because "vision is off for this mode"
+                            // and "vision ran and found nothing" are different
+                            // answers and a bare count renders both as silence.
+                            if let visionCount = record.visionTermCount {
+                                Text("·")
+                                if visionCount > 0 {
+                                    Label("\(visionCount) from screen", systemImage: "eye")
+                                        .labelStyle(.titleAndIcon)
+                                        .help("Dictator read the window you were dictating into and picked up \(visionCount) name(s) or term(s) from it to get the spelling right.")
+                                } else {
+                                    Label("screen read, nothing found", systemImage: "eye.slash")
+                                        .labelStyle(.titleAndIcon)
+                                        .foregroundStyle(.secondary)
+                                        .help("Dictator looked at the window you were dictating into but found no names worth passing on — or the read was interrupted.")
+                                }
+                            }
                             if let note = record.note {
                                 Text("·")
                                 Text(note)

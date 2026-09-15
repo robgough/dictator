@@ -1517,15 +1517,15 @@
         <div class="ram-tiers">
             <div class="ram-tier lean">
                 <h4>16 GB <span class="tag">Minimum</span></h4>
-                <p>Default is <strong>Llama 3.2 1B</strong>. The 3B works too if Dictator is the only memory-hungry thing open.</p>
+                <p>Default is <strong>Qwen 3.5 2B</strong>. The 4B works too if Dictator is the only memory-hungry thing open.</p>
             </div>
             <div class="ram-tier balanced">
                 <h4>24 GB <span class="tag">Recommended</span></h4>
-                <p>Default is <strong>Llama 3.2 3B</strong>, with room left for everything else you'd have open. <strong>Gemma 4 E2B</strong> also fits.</p>
+                <p>Default is <strong>Qwen 3.5 4B</strong>, with room left for everything else you'd have open. <strong>Gemma 4 E2B</strong> also fits.</p>
             </div>
             <div class="ram-tier generous">
                 <h4>32 GB+ <span class="tag">Generous</span></h4>
-                <p><strong>Gemma 4 E4B</strong> — the best Dictator offers — or <strong>Qwen 2.5 7B</strong>, with no swap pressure.</p>
+                <p>Default is <strong>Qwen 3.5 9B</strong> — best formatting, and the cheapest model that can read your screen. <strong>Gemma 4 E4B</strong> also fits, and <strong>Gemma 4 12B</strong> wants this much RAM to itself.</p>
             </div>
         </div>
 
@@ -1535,12 +1535,12 @@
                     <tr><th>Model</th><th>Disk</th><th>RAM</th><th>Min Mac RAM</th><th>Notes</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td class="model-name">Llama 3.2 1B (4-bit)</td>  <td class="size">760 MB</td> <td class="size">~1.5 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting, weaker on assistant work.</td></tr>
-                    <tr><td class="model-name">Llama 3.2 3B (4-bit)</td>  <td class="size">1.9 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Good balance of quality and speed.</td></tr>
-                    <tr><td class="model-name">Qwen 2.5 3B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~2.5 GB</td>   <td class="size">24 GB</td> <td class="note">Alternative 3B with a different prose style.</td></tr>
-                    <tr><td class="model-name">Qwen 2.5 7B (4-bit)</td>   <td class="size">4.4 GB</td> <td class="size">~5–6 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality, noticeably slower.</td></tr>
+                    <tr><td class="model-name">Qwen 3.5 2B (4-bit)</td>   <td class="size">1.8 GB</td> <td class="size">~1.6 GB</td>   <td class="size">16 GB</td> <td class="note">Snappy. Decent formatting, weaker on assistant work.</td></tr>
+                    <tr><td class="model-name">Qwen 3.5 4B (4-bit)</td>   <td class="size">3.1 GB</td> <td class="size">~2.7 GB</td>   <td class="size">24 GB</td> <td class="note">Good balance of quality and speed. The default.</td></tr>
+                    <tr><td class="model-name">Qwen 3.5 9B (4-bit)</td>   <td class="size">6.0 GB</td> <td class="size">~5.9 GB</td>   <td class="size">32 GB</td> <td class="note">Higher quality. Can read your screen. Holds long conversations cheaply.</td></tr>
                     <tr><td class="model-name">Gemma 4 E2B (QAT 4-bit)</td><td class="size">4.4 GB</td> <td class="size">~4 GB</td>    <td class="size">24 GB</td> <td class="note">Gemini 3 lineage. Runs lighter than the download size suggests.</td></tr>
-                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">Best quality on offer. Also what Dictator Meetings recommends.</td></tr>
+                    <tr><td class="model-name">Gemma 4 E4B (QAT MXFP4)</td><td class="size">6.7 GB</td> <td class="size">~6 GB</td>    <td class="size">32 GB</td> <td class="note">What Dictator Meetings recommends.</td></tr>
+                    <tr><td class="model-name">Gemma 4 12B (QAT 4-bit)</td><td class="size">11 GB</td>  <td class="size">~11 GB</td>   <td class="size">32 GB</td> <td class="note">Best quality on offer. Can read your screen. Wants a 32 GB Mac to itself.</td></tr>
                     <tr><td class="model-name">None</td>                  <td class="size">—</td>      <td class="size">—</td>          <td class="size">—</td>     <td class="note">No LLM passes at all. Cues and your dictionary still apply.</td></tr>
                 </tbody>
             </table>

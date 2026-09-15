@@ -477,7 +477,10 @@ private struct ProviderEditor: View {
                 if config.kind == .localMLX {
                     Section {
                         Picker("Model", selection: $modelID) {
-                            ForEach(ModelCatalog.llmModels) { model in
+                            ForEach(ModelCatalog.selectableLLMModels(
+                                selectedID: modelID,
+                                isDownloaded: { ModelManager.shared.llmStates[$0] == .ready }
+                            )) { model in
                                 Text(model.displayName).tag(model.id)
                             }
                         }
@@ -646,7 +649,10 @@ private struct ModelsTab: View {
             }
 
             Section {
-                ForEach(ModelCatalog.llmModels) { model in
+                ForEach(ModelCatalog.selectableLLMModels(
+                    selectedID: s.settings.localLLMModelID,
+                    isDownloaded: { manager.llmStates[$0] == .ready }
+                )) { model in
                     ModelRow(
                         name: model.displayName,
                         note: model.note + (model.meetingsCapable ? "" : " · too small for meeting notes"),

@@ -354,16 +354,18 @@ private struct MachineRAMNote: View {
         case .lean:
             return "Detected \(total) of RAM — we'll keep things lean and skip the LLM by default. Dictator still works great; you'll get raw transcripts that just paste through."
         case .balanced:
-            return "Detected \(total) of RAM — we'll default to a small LLM (Llama 3.2 1B) that fits comfortably alongside the transcription model."
+            return "Detected \(total) of RAM — we'll default to a small LLM (Qwen 3.5 2B) that fits comfortably alongside the transcription model."
         case .generous:
-            return "Detected \(total) of RAM — comfortable for the full setup, including the recommended Llama 3.2 3B for formatting."
+            return "Detected \(total) of RAM — comfortable for the full setup, including the recommended Qwen 3.5 4B for formatting."
+        case .ample:
+            return "Detected \(total) of RAM — enough for Qwen 3.5 9B, which formats best and can also read your screen to get names right."
         }
     }
 
     private var tint: Color {
         switch SystemMemory.tier {
         case .lean: .orange
-        case .balanced, .generous: .accentColor
+        case .balanced, .generous, .ample: .accentColor
         }
     }
 }
@@ -530,6 +532,39 @@ private struct AccessibilityPermissionCard: View {
             }
         }
         .onReceive(pollTimer) { _ in granted = TextInjector.hasAccessibilityPermission() }
+    }
+}
+
+/// Offered at the end of onboarding, and only to people who can actually use
+/// it — the model they just chose has to be one that reads images. Someone on a
+/// 2B model gets no card, because there is nothing to explain to them yet.
+///
+/// The underlying setting is already on by default; this card exists purely for
+/// the Screen Recording grant, which is deliberately never requested without a
+/// deliberate gesture. Skipping it costs nothing: the feature stays switched on
+/// and starts working the day the permission appears.
+private struct ScreenVisionCard: View {
+    @State private var granted: Bool = ScreenRecordingPermission.hasAccess()
+    private let pollTimer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        PermissionCard(
+            icon: "eye",
+            title: "Screen Recording",
+            badge: "Optional",
+            badgeTint: .secondary,
+            description: granted
+                ? "Granted — screenshots are read on your Mac and never stored."
+                : "Passes a screenshot through to improve word recognition and give the assistant context about what you're looking at.",
+            state: granted ? .granted : .pending
+        ) {
+            if !granted {
+                Button("Allow") { _ = ScreenRecordingPermission.request() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandBlue)
+            }
+        }
+        .onReceive(pollTimer) { _ in granted = ScreenRecordingPermission.hasAccess() }
     }
 }
 
@@ -740,7 +775,10 @@ private struct LLMSection: View {
                         state.save()
                     }
                 )) {
-                    ForEach(ModelCatalog.llmModels, id: \.id) { m in
+                    ForEach(ModelCatalog.selectableLLMModels(
+                        selectedID: s.settings.llmModelID,
+                        isDownloaded: { manager.llmStates[$0] == .ready }
+                    ), id: \.id) { m in
                         let fit = SystemMemory.fit(forModelRAM: m.approxRAMMB)
                         let suffix: String = {
                             switch fit {
@@ -749,7 +787,14 @@ private struct LLMSection: View {
                             case .tooLarge:    return " · Too large"
                             }
                         }()
-                        Text("\(m.displayName)\(suffix)").tag(m.id)
+                        // Marked in the list because it's a real reason to
+                        // pick a bigger model. The eye matches Settings →
+                        // Models, so it reads the same everywhere.
+                        if m.visionCapable {
+                            Label("\(m.displayName)\(suffix)", systemImage: "eye").tag(m.id)
+                        } else {
+                            Text("\(m.displayName)\(suffix)").tag(m.id)
+                        }
                     }
                 }
                 .pickerStyle(.menu)
@@ -1071,6 +1116,15 @@ private struct ReadyStep: View {
                 description: "Select text, hold the key, speak an instruction. The LLM rewrites or drafts a reply.",
                 triggerMode: state.settings.assistantTriggerMode
             )
+
+            // Only for people whose chosen model can do it. Everyone else would
+            // be reading about a feature they can't switch on yet.
+            if WindowVisionContext.isConfigurable(
+                engine: state.settings.llmEngine,
+                mlxModelID: state.settings.llmModelID
+            ) {
+                ScreenVisionCard()
+            }
 
             Spacer(minLength: 0)
 

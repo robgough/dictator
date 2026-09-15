@@ -37,6 +37,20 @@ public struct UsageStats: Equatable, Sendable {
     /// nothing else on disk knows how long a recording was — and without it
     /// there is no honest words-per-minute figure, only a guess.
     public var dictationSeconds: Double = 0
+    /// Delivered words from *only* those dictations that also contributed to
+    /// `dictationSeconds`.
+    ///
+    /// Exists because the two are not the same population. Recording duration
+    /// was added long after the word counts, so on any install that predates it
+    /// `dictationWordsOut` covers thousands of dictations while
+    /// `dictationSeconds` covers only the recent ones — dividing one by the
+    /// other produced a real-world reading of 33,116 words a minute. The same
+    /// skew appears whenever a second Mac is running an older build, or when a
+    /// recording's duration is rejected by the sanity clamp below.
+    ///
+    /// Defaults to 0, so existing installs start this metric fresh rather than
+    /// inheriting a ratio that was never true.
+    public var dictationWordsOutTimed: Int = 0
     public var assistantWordsIn: Int = 0
     public var assistantWordsOut: Int = 0
 
@@ -72,8 +86,8 @@ public struct UsageStats: Equatable, Sendable {
     /// nil until there's enough audio to be meaningful. A handful of seconds
     /// divides into a wild figure and reads as a bug.
     public var wordsPerMinute: Int? {
-        guard dictationSeconds >= 30, dictationWordsOut > 0 else { return nil }
-        return Int((Double(dictationWordsOut) / (dictationSeconds / 60)).rounded())
+        guard dictationSeconds >= 30, dictationWordsOutTimed > 0 else { return nil }
+        return Int((Double(dictationWordsOutTimed) / (dictationSeconds / 60)).rounded())
     }
 
     /// Average length of the user's spoken assistant instructions —
@@ -92,6 +106,7 @@ public struct UsageStats: Equatable, Sendable {
             dictationWordsIn: lhs.dictationWordsIn + rhs.dictationWordsIn,
             dictationWordsOut: lhs.dictationWordsOut + rhs.dictationWordsOut,
             dictationSeconds: lhs.dictationSeconds + rhs.dictationSeconds,
+            dictationWordsOutTimed: lhs.dictationWordsOutTimed + rhs.dictationWordsOutTimed,
             assistantWordsIn: lhs.assistantWordsIn + rhs.assistantWordsIn,
             assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut,
             llmTokensIn: lhs.llmTokensIn + rhs.llmTokensIn,
@@ -104,7 +119,7 @@ extension UsageStats: Codable {
     private enum CodingKeys: String, CodingKey {
         case dictationCount, assistantCount
         case dictationWordsIn, dictationWordsOut
-        case dictationSeconds
+        case dictationSeconds, dictationWordsOutTimed
         case assistantWordsIn, assistantWordsOut
         case llmTokensIn, llmTokensOut
         // Legacy flat fields from the v1 schema (one combined wordsIn /
@@ -136,7 +151,19 @@ extension UsageStats: Codable {
             assistantWordsIn = 0
             assistantWordsOut = 0
         }
-        dictationSeconds = try c.decodeIfPresent(Double.self, forKey: .dictationSeconds) ?? 0
+        if let timed = try c.decodeIfPresent(Int.self, forKey: .dictationWordsOutTimed) {
+            dictationWordsOutTimed = timed
+            dictationSeconds = try c.decodeIfPresent(Double.self, forKey: .dictationSeconds) ?? 0
+        } else {
+            // A file written before the paired counter existed. Any seconds on
+            // disk have no matching word count, so keeping them would under-
+            // state the rate for as long as they sat in the denominator —
+            // the mirror image of the bug this pairing fixes. Both sides start
+            // at zero together; a few minutes of orphaned audio is a cheap
+            // price for a figure that's honest from the first reading.
+            dictationWordsOutTimed = 0
+            dictationSeconds = 0
+        }
         llmTokensIn = try c.decodeIfPresent(Int.self, forKey: .llmTokensIn) ?? 0
         llmTokensOut = try c.decodeIfPresent(Int.self, forKey: .llmTokensOut) ?? 0
     }
@@ -148,6 +175,7 @@ extension UsageStats: Codable {
         try c.encode(dictationWordsIn, forKey: .dictationWordsIn)
         try c.encode(dictationWordsOut, forKey: .dictationWordsOut)
         try c.encode(dictationSeconds, forKey: .dictationSeconds)
+        try c.encode(dictationWordsOutTimed, forKey: .dictationWordsOutTimed)
         try c.encode(assistantWordsIn, forKey: .assistantWordsIn)
         try c.encode(assistantWordsOut, forKey: .assistantWordsOut)
         try c.encode(llmTokensIn, forKey: .llmTokensIn)
@@ -324,6 +352,9 @@ public final class UsageStatsStore {
             // drive the words-per-minute denominator to nonsense.
             if spokenSeconds > 0, spokenSeconds < 3600 {
                 record.stats.dictationSeconds += spokenSeconds
+                // Always in the same breath as the seconds — that pairing is
+                // the entire point of this field.
+                record.stats.dictationWordsOutTimed += safeOut
             }
         case .assistant:
             record.stats.assistantCount += 1
@@ -531,6 +562,7 @@ public final class UsageStatsStore {
             dictationWordsIn: max(existing.stats.dictationWordsIn, incoming.stats.dictationWordsIn),
             dictationWordsOut: max(existing.stats.dictationWordsOut, incoming.stats.dictationWordsOut),
             dictationSeconds: max(existing.stats.dictationSeconds, incoming.stats.dictationSeconds),
+            dictationWordsOutTimed: max(existing.stats.dictationWordsOutTimed, incoming.stats.dictationWordsOutTimed),
             assistantWordsIn: max(existing.stats.assistantWordsIn, incoming.stats.assistantWordsIn),
             assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut),
             llmTokensIn: max(existing.stats.llmTokensIn, incoming.stats.llmTokensIn),

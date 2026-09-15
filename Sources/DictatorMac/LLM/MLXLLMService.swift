@@ -1,7 +1,10 @@
+import CoreGraphics
+import CoreImage
 import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 
 /// MLX-Swift backed LLM engine. Downloads a HuggingFace checkpoint via Hub, loads
 /// it into a MainActor-isolated `ModelContainer`, and runs the dictation /
@@ -12,6 +15,21 @@ import MLXLMCommon
 /// per-call API. `ensureLoaded`/`download`/`unload(modelID:)` are *additional*
 /// public methods used by ModelManager's per-model download/verify/unload UI;
 /// they're not part of the `LLMEngine` protocol.
+/// Chat-template variables passed on every generation.
+///
+/// Qwen 3.5 is a hybrid reasoning model: its chat template opens a `<think>`
+/// block unless `enable_thinking` is explicitly false, and the model then emits
+/// its reasoning ahead of the answer. That wrecks every pass we run — the
+/// formatting passes would ship "Thinking Process: 1. Analyze the request…"
+/// straight into the user's document, and the pass validators would (correctly)
+/// reject it and fall back to the raw transcript every single time.
+///
+/// Setting it false makes the template prefill an empty think block, so the
+/// model starts on the answer. Templates that never mention `enable_thinking`
+/// — Gemma 4's, Llama's — ignore the key, so this is safe to send to every
+/// model rather than special-casing by id. Verified against both families.
+private let chatTemplateContext: [String: any Sendable] = ["enable_thinking": false]
+
 @MainActor
 @Observable
 final class MLXLLMService: LLMEngine, LLMUsageReporting {
@@ -71,13 +89,29 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         isLoading = true
         defer { isLoading = false }
 
-        // Vendored architectures (Gemma 4) must be in the type registry before
-        // the factory reads the checkpoint's model_type. Idempotent.
-        await Gemma4Registration.registerIfNeeded()
+        // Vision-capable models load through the VLM factory instead of the LLM
+        // one, so the single resident container can serve both the text passes
+        // and window-vision reads. Measured on Gemma 4 12B: 41 MB more resident
+        // than the text-only load (its "vision tower" is a thin projection, not
+        // a separate encoder), text-pass output byte-identical, so there's no
+        // reason to hold two containers or to swap models per task.
+        let wantsVision = ModelCatalog.llm(id: modelID)?.visionCapable ?? false
 
         // The Hub-backed path, used only when the weights aren't already here.
         func loadFromHub() async throws -> ModelContainer {
-            try await LLMModelFactory.shared.loadContainer(
+            let progressHandler: @Sendable (Progress) -> Void = { p in
+                let fraction = p.fractionCompleted
+                Task { @MainActor in progress?(fraction) }
+            }
+            if wantsVision {
+                return try await VLMModelFactory.shared.loadContainer(
+                    from: HubDownloader(downloadBase: ModelStorage.llmRoot()),
+                    using: HubTokenizerLoader(),
+                    configuration: ModelConfiguration(id: modelID),
+                    progressHandler: progressHandler
+                )
+            }
+            return try await LLMModelFactory.shared.loadContainer(
                 from: HubDownloader(downloadBase: ModelStorage.llmRoot()),
                 using: HubTokenizerLoader(),
                 configuration: ModelConfiguration(id: modelID)
@@ -110,13 +144,19 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             isReady: { contents in contents.contains { !$0.hasPrefix(".") } }
         )
 
+        func loadFromDisk() async throws -> ModelContainer {
+            if wantsVision {
+                return try await VLMModelFactory.shared.loadContainer(
+                    from: localDirectory, using: HubTokenizerLoader())
+            }
+            return try await LLMModelFactory.shared.loadContainer(
+                from: localDirectory, using: HubTokenizerLoader())
+        }
+
         let loaded: ModelContainer
         if isDownloaded {
             do {
-                loaded = try await LLMModelFactory.shared.loadContainer(
-                    from: localDirectory,
-                    using: HubTokenizerLoader()
-                )
+                loaded = try await loadFromDisk()
             } catch {
                 // The on-disk copy is unusable — truncated, or a layout we
                 // didn't anticipate. Repair it through the Hub rather than
@@ -185,6 +225,76 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         MLX.GPU.clearCache()
     }
 
+    /// True when the *currently resident* model can accept an image. Both
+    /// halves matter: the catalog says the selected model is vision-capable,
+    /// and a container is actually loaded — this never triggers a model load,
+    /// because the caller is on the dictation hot path and a cold load would
+    /// cost far more than the vision context is worth. No model resident yet
+    /// (first dictation after launch, before the bootstrap preload lands) just
+    /// means no vision that run.
+    var canReadImages: Bool {
+        guard let id = modelID ?? currentModelID else { return false }
+        return (ModelCatalog.llm(id: id)?.visionCapable ?? false)
+            && isLoaded(modelID: id)
+    }
+
+    /// Reads an image with the resident model and returns its raw reply.
+    ///
+    /// Runs at `.background` priority deliberately. `ModelContainer.perform`
+    /// serialises, so a vision read still in flight when the user stops talking
+    /// would otherwise *delay* the formatting pass instead of overlapping it.
+    /// At `.background` an arriving dictation pass cancels this at the next
+    /// token and the caller simply gets no terms — the same graceful
+    /// degradation every other failure path here already has.
+    ///
+    /// Callers own the prompts and the parsing; this is just the transport.
+    func readImage(
+        _ image: CGImage,
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int
+    ) async throws -> String {
+        guard let container else {
+            throw NSError(domain: "Dictator", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "No MLX model is loaded, so there's nothing to read the image with."
+            ])
+        }
+        // Re-check the *resident* model here, not the selected one. The caller
+        // decided to attempt vision when the read was kicked off, which for a
+        // dictation is one recording earlier; the user can switch models in
+        // Settings in between, and nothing unloads the old container until the
+        // next pass swaps it. Handing an image to a text-only container does
+        // not fail — `LLMUserInputProcessor` silently drops images and returns
+        // the text — so the model would be asked to read a screenshot that
+        // isn't there and would happily invent one. Fail loudly instead; the
+        // caller turns this into "no terms this run".
+        guard let resident = currentModelID,
+              ModelCatalog.llm(id: resident)?.visionCapable == true else {
+            throw NSError(domain: "Dictator", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "The loaded model can't read images."
+            ])
+        }
+        let ciImage = CIImage(cgImage: image)
+        return try await LLMScheduler.shared.run(.background) {
+            try await container.perform { (ctx: ModelContext) -> String in
+                let userInput = UserInput(
+                    chat: [
+                        .system(systemPrompt),
+                        .user(userPrompt, images: [.ciImage(ciImage)]),
+                    ],
+                    additionalContext: chatTemplateContext
+                )
+                let lmInput = try await ctx.processor.prepare(input: userInput)
+                let params = GenerateParameters(maxTokens: maxTokens, temperature: 0.0, topP: 1.0)
+                let result = try MLXLMCommon.generate(
+                    input: lmInput, parameters: params, context: ctx,
+                    didGenerate: { (_: [Int]) in Task.isCancelled ? .stop : .more }
+                )
+                return LLMTextUtilities.clean(result.output)
+            }
+        }
+    }
+
     func format(text: String, systemPrompt: String) async throws -> String {
         // Tight cap on the formatter — a correctly formatted version is almost
         // always within ~15% of the input length. The real defense against the
@@ -216,7 +326,7 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             let userInput = UserInput(chat: [
                 .system(systemPrompt),
                 .user(userText)
-            ])
+            ], additionalContext: chatTemplateContext)
             let lmInput = try await ctx.processor.prepare(input: userInput)
             let approxInputTokens = max(8, text.count / 4)
             let maxTokens = min(2048,
@@ -267,7 +377,7 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             let userInput = UserInput(chat: [
                 .system(system),
                 .user(user)
-            ])
+            ], additionalContext: chatTemplateContext)
             let lmInput = try await ctx.processor.prepare(input: userInput)
             let params = GenerateParameters(maxTokens: cap, temperature: temp, topP: topP)
             let result = try MLXLMCommon.generate(
@@ -304,6 +414,7 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         priorTurns: [ConversationTurn] = [],
         summary: String? = nil,
         context: InsertionContext?,
+        screenImage: CGImage? = nil,
         cancellation: @Sendable @escaping () -> Bool = { Task.isCancelled }
     ) async throws -> AssistantResult {
         try await ensureReady()
@@ -315,6 +426,26 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         // Build the surrounding-document block (if any) outside the perform
         // closure so only a Sendable String crosses into it.
         let contextBlock: String? = (context?.hasPromptMaterial == true) ? context?.assistantPromptBlock : nil
+
+        // The screenshot, when this model can read one. Attaching it to the
+        // current user message means the model answers from the window itself
+        // rather than from a text briefing someone wrote about the window —
+        // no summarisation loss, and no separate describe-the-screen inference
+        // before the answer can start.
+        //
+        // Same re-check as `readImage`, and for the same reason: `ensureReady()`
+        // above may have just swapped in a different model from the one that
+        // was resident when the capture was kicked off. Attaching to a
+        // text-only container would silently drop the image and leave the
+        // "[SCREEN] a screenshot is attached" line asking the model to describe
+        // something it cannot see — an invitation to invent. Dropping the whole
+        // block degrades to a normal, screenless assistant turn.
+        let residentCanSee = currentModelID
+            .flatMap { ModelCatalog.llm(id: $0)?.visionCapable } ?? false
+        let screenCIImage = residentCanSee ? screenImage.map { CIImage(cgImage: $0) } : nil
+        if screenImage != nil && !residentCanSee {
+            MicLog.log("Assistant: dropped the screenshot — the loaded model can't read images.")
+        }
 
         let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
             var messages: [Chat.Message] = [.system(systemPrompt)]
@@ -342,9 +473,17 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             if let contextBlock {
                 messages.append(.user(contextBlock))
             }
+            if let screenCIImage {
+                messages.append(.user(
+                    """
+                    [SCREEN] A screenshot of the window the user is looking at is attached.                     Use it to answer. Read any text in it exactly as shown.
+                    """,
+                    images: [.ciImage(screenCIImage)]
+                ))
+            }
             messages.append(.user(currentUserText))
 
-            let userInput = UserInput(chat: messages)
+            let userInput = UserInput(chat: messages, additionalContext: chatTemplateContext)
             let lmInput = try await ctx.processor.prepare(input: userInput)
             // Assistant Mode is free-form generation — the user's instruction governs
             // length ("give me 100 emojis", "draft a long email"). The cap here is
@@ -418,7 +557,7 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             let userInput = UserInput(chat: [
                 .system(LLMTextUtilities.summariserSystemPrompt),
                 .user(userText)
-            ])
+            ], additionalContext: chatTemplateContext)
             let lmInput = try await ctx.processor.prepare(input: userInput)
             let params = GenerateParameters(maxTokens: 512, temperature: 0.2, topP: 0.95)
             let result = try MLXLMCommon.generate(

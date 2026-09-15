@@ -15,6 +15,25 @@ import KeyboardShortcuts
 struct GeneralPane: View {
     @Environment(AppState.self) private var state
 
+    /// What's stopping the screen read from working, when the switch is on but
+    /// something else isn't in place. nil when it will actually run.
+    ///
+    /// Shown rather than silently doing nothing: with the switch defaulting to
+    /// on, "enabled but inert" is the common case — most models can't read
+    /// images and most people haven't granted Screen Recording — and a toggle
+    /// that claims to be on while doing nothing is worse than one that's off.
+    @MainActor
+    private var visionRequirement: String? {
+        if let reason = WindowVisionContext.unavailableReason(
+            engine: state.settings.llmEngine,
+            mlxModelID: state.settings.llmModelID
+        ) { return reason }
+        if !ScreenRecordingPermission.hasAccess() {
+            return "Needs Screen Recording permission."
+        }
+        return nil
+    }
+
     var body: some View {
         @Bindable var s = state
         // ScrollViewReader wraps the Form purely so screenshot mode can scroll
@@ -96,6 +115,36 @@ struct GeneralPane: View {
                 Text("Dictionary")
             } footer: {
                 SectionFootnote("Suggestions appear in Dictionary. Nothing is ever added on its own. Needs Accessibility.")
+            }
+
+            Section {
+                Toggle("Let Dictator see your screen",
+                       isOn: $s.settings.visionContextEnabled)
+                    .onChange(of: s.settings.visionContextEnabled) { _, enabled in
+                        // Only ask for the permission when the user turns it ON
+                        // deliberately. The setting defaults to on, and a
+                        // permission dialog nobody asked for on first launch is
+                        // exactly the kind of thing that gets an app distrusted.
+                        if enabled { _ = ScreenRecordingPermission.request() }
+                        state.save()
+                    }
+                if s.settings.visionContextEnabled, let requirement = visionRequirement {
+                    HStack(spacing: 8) {
+                        Text(requirement)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !ScreenRecordingPermission.hasAccess() {
+                            Button("Open Settings") { ScreenRecordingPermission.openSystemSettings() }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                        }
+                    }
+                }
+            } header: {
+                Text("Screen")
+            } footer: {
+                SectionFootnote("Passes a screenshot through to improve word recognition and give the assistant context. Only on models that can read images; it never leaves your Mac.")
             }
 
             Section {

@@ -26,6 +26,13 @@ enum PipelineState: Equatable {
     case warmingUp(kind: CaptureKind)
     case recording(level: Float, kind: CaptureKind, interim: String)
     case transcribing
+    /// Waiting on the window-vision read that was kicked off at trigger time.
+    /// Only entered when there is actually a vision task outstanding — normally
+    /// it finished during the recording and this is skipped entirely. It earns
+    /// its own case because the wait can be many seconds on an MLX vision model,
+    /// and sitting in `.transcribing` for that time told the user something
+    /// plainly untrue: transcription was long since finished.
+    case readingScreen
     case formatting
     case fixingGrammar
     case restructuring
@@ -42,6 +49,7 @@ enum PipelineState: Equatable {
         case .warmingUp: "antenna.radiowaves.left.and.right"
         case .recording: "waveform.badge.mic"
         case .transcribing: "waveform.badge.magnifyingglass"
+        case .readingScreen: "eye"
         case .formatting: "sparkles"
         case .fixingGrammar: "text.badge.checkmark"
         case .restructuring: "list.bullet.indent"
@@ -339,6 +347,12 @@ final class Pipeline {
         /// (`combinedContext`). Empty when the mode opts out, the OS/model can't
         /// do vision, Screen Recording isn't granted, or nothing was read.
         var visionTerms: [String] = []
+        /// Whether a window-vision read was started for this dictation. Kept
+        /// separate from `visionTerms.count` so History can tell "vision is off
+        /// for this mode" from "vision ran and found nothing useful" — they are
+        /// very different answers to "is this working?", and a bare count
+        /// renders both as silence.
+        var visionAttempted = false
         /// Bundle ID of the app that was frontmost when the hotkey fired — the
         /// app the paste will land in. Recorded in history purely as
         /// diagnostics: join/spacing bugs are almost always app-specific, and
@@ -381,7 +395,7 @@ final class Pipeline {
         /// recording. Resolved in `runAssistantPipeline` and merged into the
         /// context the assistant LLM sees. nil when the option is off / vision
         /// isn't supported / Screen Recording isn't granted.
-        var visionTask: Task<WindowVisionContext.VisionReadback, Never>? = nil
+        var visionTask: Task<WindowVisionContext.AssistantVision, Never>? = nil
     }
     private var inFlightAssistant: InFlightAssistant?
 
@@ -621,9 +635,13 @@ final class Pipeline {
         // folded in by `resolveVisionTerms`. Gated on the per-mode opt-in, the
         // OS/model actually supporting vision, and Screen Recording being
         // granted — any of those failing just means no vision terms this run.
-        if currentMode.windowVisionContextEnabled,
+        // One global switch for both dictation and the assistant, on by default.
+        // `isSupported` is what actually decides most of the time: it's false
+        // unless a model that can read images is loaded right now.
+        if settings.visionContextEnabled,
            WindowVisionContext.isSupported,
            ScreenRecordingPermission.hasAccess() {
+            inFlight.visionAttempted = true
             inFlight.visionTask = Task.detached(priority: .userInitiated) {
                 await WindowVisionContext.captureFocusedWindowTerms()
             }
@@ -785,6 +803,8 @@ final class Pipeline {
         // here so every downstream branch — formatter, the question/no-LLM
         // skips, the delivery-time restore — sees the same merged term list.
         // Normally instant: the capture finished while we were transcribing.
+        // When it hasn't, say so rather than leaving "Transcribing…" on screen.
+        if inFlight.visionTask != nil { state = .readingScreen }
         await resolveVisionTerms()
 
         // The mode's LLM pipeline is the ordered pass list its STYLE resolves to
@@ -1750,7 +1770,9 @@ final class Pipeline {
             pasted: pasted,
             inputDevice: AudioDeviceManager.shared.activeInputDeviceName(),
             note: note,
-            appBundleID: inFlight.appBundleID
+            appBundleID: inFlight.appBundleID,
+            deliveredToJournal: lastDeliveryWasJournal,
+            visionTermCount: inFlight.visionAttempted ? inFlight.visionTerms.count : nil
         )
         DictationHistory.shared.append(record)
         UsageStatsStore.shared.record(
@@ -1863,11 +1885,18 @@ final class Pipeline {
                 // in apps Accessibility can't read. Runs concurrently with the
                 // instruction recording; resolved in runAssistantPipeline. Gated
                 // on the opt-in + vision support + Screen Recording.
-                if settings.assistantWindowVisionContextEnabled,
+                if settings.visionContextEnabled,
                    WindowVisionContext.isSupported,
                    ScreenRecordingPermission.hasAccess() {
+                    // When the assistant's own engine is the vision model, skip
+                    // the describe-the-screen pass and let it read the
+                    // screenshot during the answer itself. Only the pipeline
+                    // knows which engine will answer, so the decision is made
+                    // here rather than inside WindowVisionContext.
+                    let assistantCanSee = settings.llmEngine == .mlx
+                        && MLXLLMServiceHolder.shared.canReadImages
                     inFlightAssistant?.visionTask = Task.detached(priority: .userInitiated) {
-                        await WindowVisionContext.captureFocusedWindowReadback()
+                        await WindowVisionContext.captureForAssistant(assistantCanSee: assistantCanSee)
                     }
                 }
                 // Same async-warmup story as `startRecording`: recorder
@@ -2118,9 +2147,21 @@ final class Pipeline {
         let visionAttempted = inFlightAssistant?.visionTask != nil
         let documentReason = inFlightAssistant?.contextReason ?? ""
         var visionReadback = WindowVisionContext.VisionReadback.empty
+        var screenImage: CGImage? = nil
         if let task = inFlightAssistant?.visionTask {
+            // Same reasoning as the dictation path: this await can run to tens
+            // of seconds on an MLX vision model, and the HUD was still claiming
+            // to be transcribing throughout.
+            state = .readingScreen
             inFlightAssistant?.visionTask = nil
-            visionReadback = await task.value
+            switch await task.value {
+            case .briefing(let readback):
+                visionReadback = readback
+            case .image(let image):
+                // Single stage: nothing to merge into the text context — the
+                // screenshot rides along with the assistant call itself.
+                screenImage = image
+            }
         }
         let assistantContext = assistantContextMerging(visionReadback)
         var pendingCompactionIndex: Int? = nil
@@ -2184,6 +2225,7 @@ final class Pipeline {
                     priorTurns: priorTurns,
                     summary: summary,
                     context: assistantContext,
+                    screenImage: screenImage,
                     cancellation: { Task.isCancelled }
                 )
             }
@@ -2218,7 +2260,9 @@ final class Pipeline {
                 termCount: termCount,
                 visionAttempted: visionAttempted,
                 visionDescription: visionReadback.content,
-                visionNote: visionReadback.failureReason ?? ""
+                visionNote: screenImage != nil
+                    ? "read the window directly"
+                    : (visionReadback.failureReason ?? "")
             )
         }()
 

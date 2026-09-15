@@ -246,7 +246,10 @@ private struct FormattingModelsPane: View {
                 }
             case .mlx:
                 Section("MLX models") {
-                    ForEach(ModelCatalog.llmModels) { model in
+                    ForEach(ModelCatalog.selectableLLMModels(
+                        selectedID: s.settings.llmModelID,
+                        isDownloaded: { manager.llmStates[$0] == .ready }
+                    )) { model in
                         ModelRow(
                             name: model.displayName,
                             note: model.note,
@@ -256,6 +259,7 @@ private struct FormattingModelsPane: View {
                             isActive: s.settings.llmModelID == model.id,
                             isLoaded: mlxLLM.currentModelID == model.id,
                             isVerifying: manager.verifyingLLM.contains(model.id),
+                            canSeeScreen: model.visionCapable,
                             select: {
                                 s.settings.llmModelID = model.id
                                 state.save()
@@ -450,6 +454,10 @@ private struct ModelRow: View {
     let isActive: Bool
     let isLoaded: Bool
     let isVerifying: Bool
+    /// Shows the eye badge. Only meaningful for LLM rows — the transcription and
+    /// diarization rows pass false, since "can read a screenshot" says nothing
+    /// about them.
+    var canSeeScreen: Bool = false
     let select: () -> Void
     let download: () -> Void
     let cancel: () -> Void
@@ -493,6 +501,13 @@ private struct ModelRow: View {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 1)
                                     .background(Color.green, in: Capsule())
+                            }
+                            if canSeeScreen {
+                                Image(systemName: "eye")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .help("Vision capable — passes a screenshot through to improve word recognition and give the assistant context.")
+                                    .accessibilityLabel("Vision capable")
                             }
                             FitChip(ramMB: ramMB)
                         }

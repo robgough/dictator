@@ -217,7 +217,20 @@ struct DictatorSettings: Codable, Equatable {
     /// terms for correct spelling. Global (Assistant Mode is one flow, not
     /// per-Mode). Off by default; needs macOS 27 + Screen Recording. The image
     /// never leaves the Mac and is never stored.
-    var assistantWindowVisionContextEnabled: Bool
+    /// Let Dictator look at the window you're working in, for both dictation
+    /// and Assistant Mode.
+    ///
+    /// One switch, on by default, replacing two that were off by default: a
+    /// per-mode dictation toggle and a global assistant one. The per-mode
+    /// version was incoherent as well as undiscoverable — modes can change
+    /// mid-recording via tab-cycle, but the vision read fires once at the
+    /// start, so "this mode uses vision" could never be honoured reliably.
+    ///
+    /// On by default because it costs nothing when it can't apply: it only ever
+    /// runs when the loaded model can actually read an image AND Screen
+    /// Recording is granted, and a failed read just means no extra context that
+    /// run. Left off by default, essentially nobody would have found it.
+    var visionContextEnabled: Bool
     /// Flips to true the first time the user finishes (or explicitly skips)
     /// the first-run wizard. When false on launch, `AppState.bootstrap()`
     /// shows the wizard window before the user sees the menu bar — the
@@ -347,7 +360,7 @@ struct DictatorSettings: Codable, Equatable {
         defaultModeID: DictationMode.standardID,
         assistantPromptAddendum: "",
         assistantPromptOverride: nil,
-        assistantWindowVisionContextEnabled: false,
+        visionContextEnabled: true,
         hasCompletedOnboarding: false
     )
 
@@ -372,7 +385,7 @@ struct DictatorSettings: Codable, Equatable {
         defaultModeID: UUID,
         assistantPromptAddendum: String,
         assistantPromptOverride: String?,
-        assistantWindowVisionContextEnabled: Bool,
+        visionContextEnabled: Bool,
         hasCompletedOnboarding: Bool
     ) {
         self.transcriptionEngine = transcriptionEngine
@@ -395,7 +408,7 @@ struct DictatorSettings: Codable, Equatable {
         self.defaultModeID = defaultModeID
         self.assistantPromptAddendum = assistantPromptAddendum
         self.assistantPromptOverride = assistantPromptOverride
-        self.assistantWindowVisionContextEnabled = assistantWindowVisionContextEnabled
+        self.visionContextEnabled = visionContextEnabled
         self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
@@ -449,7 +462,14 @@ struct DictatorSettings: Codable, Equatable {
         self.userName               = try c.decodeIfPresent(String.self,      forKey: .userName)           ?? d.userName
         self.assistantPromptAddendum  = try c.decodeIfPresent(String.self, forKey: .assistantPromptAddendum)  ?? d.assistantPromptAddendum
         self.assistantPromptOverride  = try c.decodeIfPresent(String.self, forKey: .assistantPromptOverride)  ?? d.assistantPromptOverride
-        self.assistantWindowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantWindowVisionContextEnabled) ?? d.assistantWindowVisionContextEnabled
+        // Migration: this replaced `assistantWindowVisionContextEnabled` (global,
+        // assistant-only) and `DictationMode.windowVisionContextEnabled`
+        // (per-mode). Neither old value is consulted: both defaulted to off, so
+        // an off in an existing file records that nobody ever found the switch,
+        // not a decision to decline. Everyone lands on the new default and can
+        // turn it off if they mean it. Delete this comment (not the key) once
+        // no file in the wild still carries the old ones.
+        self.visionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .visionContextEnabled) ?? d.visionContextEnabled
 
         // Modes migration. Pre-modes installs persisted the pass gates and the
         // three dictation prompt fields at the top level; we now bundle them
@@ -1467,7 +1487,7 @@ struct DictatorSettings: Codable, Equatable {
         case assistantTriggerMode, userName
         case modes, defaultModeID
         case assistantPromptAddendum, assistantPromptOverride
-        case assistantWindowVisionContextEnabled
+        case visionContextEnabled
         case hasCompletedOnboarding
         case hotkeyTapToToggleEnabled
         case globalPromptAddendum
@@ -1540,7 +1560,7 @@ struct DictatorSettings: Codable, Equatable {
         "defaultModeID",
         "assistantPromptAddendum",
         "assistantPromptOverride",
-        "assistantWindowVisionContextEnabled",
+        "visionContextEnabled",
         "hotkeyTapToToggleEnabled",
         "globalPromptAddendum",
         "assistantPersona",

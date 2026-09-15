@@ -43,8 +43,13 @@ enum SystemMemory {
         /// ~12–20 GB — comfortable with the 1B LLM. 3B works if not
         /// running much else, but we don't recommend it as the default.
         case balanced
-        /// ≥ ~20 GB — fine with the 3B LLM; 7B is the user's call.
+        /// ~20–30 GB — fine with the 4B LLM; bigger is the user's call.
         case generous
+        /// ≥ ~30 GB — enough headroom for a 9B alongside the transcription
+        /// model *and* the transient spike an image read adds on top (about
+        /// +2.8 GB while it reads). This is the tier where screen reading
+        /// becomes something we can recommend rather than merely allow.
+        case ample
     }
 
     /// Machine tier. The cutoffs use `< 12` and `< 20` because reported
@@ -55,7 +60,10 @@ enum SystemMemory {
     static var tier: Tier {
         if totalGB < 12 { return .lean }
         if totalGB < 20 { return .balanced }
-        return .generous
+        // 30, not 32: a 32 GB Mac reports ~34.36 GB and a 24 GB one ~25.77 GB,
+        // so the gap is wide and the threshold just has to sit inside it.
+        if totalGB < 30 { return .generous }
+        return .ample
     }
 
     /// How a model of `ramMB` resident size fits on this machine. The

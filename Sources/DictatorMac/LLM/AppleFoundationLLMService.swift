@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import FoundationModels
 
@@ -204,6 +205,13 @@ final class AppleFoundationLLMService: LLMEngine {
         priorTurns: [ConversationTurn],
         summary: String?,
         context: InsertionContext?,
+        // Accepted and ignored. Apple's on-device model advertises `.vision`,
+        // but macOS 27.0 ships no image-attachment initializer to hand it one
+        // (see WindowVisionContext.imageAttachmentAPIAvailable), so the caller
+        // never routes a screenshot here — it sends a text briefing in
+        // `context` instead. The parameter exists to satisfy `LLMEngine`; wire
+        // it up if Apple ever ships the API.
+        screenImage: CGImage?,
         cancellation: @Sendable @escaping () -> Bool
     ) async throws -> AssistantResult {
         try await ensureReady()

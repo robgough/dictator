@@ -12,6 +12,20 @@ enum LLMTextUtilities {
     static func clean(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Strip a reasoning block. Hybrid reasoning models (Qwen 3.5 and
+        // successors) emit `<think>…</think>` ahead of the actual answer. We
+        // already suppress it at the source — `chatTemplateContext` sends
+        // `enable_thinking: false`, which makes the chat template prefill an
+        // empty think block — but that only works for templates that honour the
+        // flag. A future catalog addition whose template ignores it would
+        // otherwise paste the model's private reasoning into the user's
+        // document, so drop anything up to and including the last closing tag.
+        // Matching on the closing tag alone covers both shapes: a complete
+        // block, and a stray `</think>` left over from a prefilled opener.
+        if let thinkEnd = s.range(of: "</think>", options: .backwards) {
+            s = String(s[thinkEnd.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         // Strip a leading echoed block like `<<<\n...\n>>>` (possibly with surrounding lines).
         if s.hasPrefix("<<<"), let endRange = s.range(of: ">>>") {
             s = String(s[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)

@@ -322,6 +322,7 @@ struct MenuBarContent: View {
             case .journal:   "Listening for your journal…"
             }
         case .transcribing: "Transcribing…"
+        case .readingScreen: "Reading screen…"
         case .formatting: "Formatting…"
         case .fixingGrammar: "Polishing…"
         case .restructuring: "Paragraphs…"
@@ -428,10 +429,32 @@ private struct RecentRow: View {
     let record: DictationRecord
     let copied: Bool
 
+    private var isJournal: Bool { record.deliveredToJournal ?? false }
+
+    private var rowIcon: String {
+        if copied { return "checkmark.circle.fill" }
+        return isJournal ? "book.closed.fill" : "mic.fill"
+    }
+
+    private var rowTint: Color {
+        if copied { return .green }
+        if isJournal { return CaptureKind.journal.tint }
+        return record.pasted ? .secondary : .orange
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: copied ? "checkmark.circle.fill" : (record.pasted ? "doc.on.doc" : "doc.on.clipboard"))
-                .foregroundStyle(copied ? .green : (record.pasted ? .secondary : .orange))
+            // The glyph says which flow produced the row — a mic for dictation,
+            // the journal's book for a journal entry — rather than what
+            // happened to the clipboard, which is the less interesting half.
+            // Colour still carries delivery: normal when it went into the app,
+            // orange when it only reached the clipboard. A filed journal entry
+            // takes the journal tint — it was never going to be pasted, so the
+            // warning colour it used to get was misreporting a success. A
+            // journal write that *failed* has `deliveredToJournal` false and so
+            // still shows orange, which is exactly what happened to it.
+            Image(systemName: rowIcon)
+                .foregroundStyle(rowTint)
                 .font(.system(size: 11, weight: .semibold))
                 .frame(width: 14)
 

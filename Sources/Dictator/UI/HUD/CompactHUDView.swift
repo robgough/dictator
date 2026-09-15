@@ -220,6 +220,8 @@ struct CompactHUDContent: View {
             recording(level: level, kind: kind, interim: interim)
         case .transcribing:
             stage(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
+        case .readingScreen:
+            stage(icon: "eye", title: isMini ? "Screen" : "Reading screen", accent: .hudIndigo)
         case .formatting:
             stage(icon: "sparkles", title: "Formatting", accent: .hudPurple)
         case .fixingGrammar:
@@ -416,6 +418,7 @@ struct CompactHUDContent: View {
         case .warmingUp: "warmingUp"
         case .recording: "recording"
         case .transcribing: "transcribing"
+        case .readingScreen: "readingScreen"
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"

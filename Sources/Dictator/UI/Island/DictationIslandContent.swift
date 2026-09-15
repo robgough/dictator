@@ -162,6 +162,8 @@ struct DictationIslandContent: View {
             }
         case .transcribing:
             StatusRow(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
+        case .readingScreen:
+            StatusRow(icon: "eye", title: "Reading screen", accent: .hudIndigo)
         case .formatting:
             StatusRow(icon: "sparkles", title: "Formatting", accent: .hudPurple)
         case .fixingGrammar:
@@ -241,6 +243,7 @@ struct DictationIslandContent: View {
         case .warmingUp: "warmingUp"
         case .recording: "recording"
         case .transcribing: "transcribing"
+        case .readingScreen: "readingScreen"
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"

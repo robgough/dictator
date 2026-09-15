@@ -182,7 +182,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// Off by default; needs macOS 27 + Screen Recording permission. The image
     /// never leaves the Mac and is never stored. Independent of
     /// `contextAwarenessEnabled` — either, both, or neither can be on.
-    var windowVisionContextEnabled: Bool
 
     /// The language the user speaks in this mode, as a hint to the recogniser.
     /// `.auto` (the default) lets the engine detect it, which is what every
@@ -298,7 +297,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         case style, extraInstructions, customPrompt
         case steps
         case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
-        case windowVisionContextEnabled
         case spokenLanguage, outputLanguage
     }
 
@@ -353,7 +351,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.appendTrailingSpace = try c.decodeIfPresent(Bool.self, forKey: .appendTrailingSpace) ?? false
         // Off by default — it's opt-in (needs Screen Recording + macOS 27), so a
         // missing key (every blob predating this feature) stays disabled.
-        self.windowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowVisionContextEnabled) ?? false
         // `.auto` for every blob that predates languages, so no existing mode
         // suddenly starts constraining its recogniser or translating.
         self.spokenLanguage = try c.decodeIfPresent(DictationLanguage.self, forKey: .spokenLanguage) ?? .auto
@@ -429,7 +426,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         try c.encode(pressReturnAfterPaste, forKey: .pressReturnAfterPaste)
         try c.encode(contextAwarenessEnabled, forKey: .contextAwarenessEnabled)
         try c.encode(appendTrailingSpace, forKey: .appendTrailingSpace)
-        try c.encode(windowVisionContextEnabled, forKey: .windowVisionContextEnabled)
         try c.encode(spokenLanguage, forKey: .spokenLanguage)
         try c.encode(outputLanguage, forKey: .outputLanguage)
         // COMPAT SHADOW — remove one release after v2026.9.
@@ -464,7 +460,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         pressReturnAfterPaste: Bool = false,
         contextAwarenessEnabled: Bool = true,
         appendTrailingSpace: Bool = false,
-        windowVisionContextEnabled: Bool = false,
         spokenLanguage: DictationLanguage = .auto,
         outputLanguage: DictationLanguage = .auto
     ) {
@@ -486,7 +481,6 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.pressReturnAfterPaste = pressReturnAfterPaste
         self.contextAwarenessEnabled = contextAwarenessEnabled
         self.appendTrailingSpace = appendTrailingSpace
-        self.windowVisionContextEnabled = windowVisionContextEnabled
         self.spokenLanguage = spokenLanguage
         self.outputLanguage = outputLanguage
     }

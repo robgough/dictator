@@ -267,15 +267,6 @@ struct ModeEditorSheet: View {
                 .onChange(of: mode.contextAwarenessEnabled) { _, _ in onChange() }
                 .help("Reads a little text either side of the cursor so names match the document and the paste joins cleanly. On-device, never stored; password fields are never read.")
 
-            if WindowVisionContext.isSupported {
-                Toggle("Read the focused window with vision", isOn: $mode.windowVisionContextEnabled)
-                    .onChange(of: mode.windowVisionContextEnabled) { _, enabled in
-                        if enabled { ScreenRecordingPermission.request() }
-                        onChange()
-                    }
-                    .help("Snapshots just the focused window and reads on-screen names with Apple's vision model. On-device, never stored. Needs Screen Recording.")
-            }
-
             Toggle("Press Return after pasting", isOn: $mode.pressReturnAfterPaste)
                 .onChange(of: mode.pressReturnAfterPaste) { _, _ in onChange() }
                 .help("Submits in chat and search boxes; inserts a blank line in editors.")

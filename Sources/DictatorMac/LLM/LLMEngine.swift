@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// How the assistant's reply should be delivered. Set by the LLM (REPLACE / DRAFT
@@ -74,6 +75,10 @@ protocol LLMEngine: AnyObject {
     /// available — no permission, or the app doesn't expose ranged text. Used
     /// only by the interactive Assistant Mode path; the Meetings callers go
     /// through the contextless convenience overload below.
+    /// `screenImage` is a screenshot of the window the user is looking at,
+    /// passed only when this engine's model can actually read one (see
+    /// `MLXLLMService.canReadImages`). Engines that can't see ignore it — the
+    /// caller falls back to sending a text briefing in `context` instead.
     func assist(
         selection: String?,
         instruction: String,
@@ -81,6 +86,7 @@ protocol LLMEngine: AnyObject {
         priorTurns: [ConversationTurn],
         summary: String?,
         context: InsertionContext?,
+        screenImage: CGImage?,
         cancellation: @Sendable @escaping () -> Bool
     ) async throws -> AssistantResult
 
@@ -136,6 +142,7 @@ extension LLMEngine {
             priorTurns: priorTurns,
             summary: summary,
             context: nil,
+            screenImage: nil,
             cancellation: cancellation
         )
     }

@@ -11,11 +11,15 @@ import AppKit
 // name and shape.
 
 struct SectionFootnote: View {
-    private let text: LocalizedStringKey
-    init(_ text: LocalizedStringKey) { self.text = text }
+    private let content: Text
+    init(_ text: LocalizedStringKey) { self.content = Text(text) }
+    /// For footnotes assembled at runtime — a requirement that names the
+    /// current model, say. A `LocalizedStringKey` built from a dynamic string
+    /// would be looked up as a localization key and come back wrong.
+    init(verbatim text: String) { self.content = Text(verbatim: text) }
 
     var body: some View {
-        Text(text)
+        content
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

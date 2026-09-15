@@ -49,6 +49,7 @@ struct SettingsDetailRoot: View {
             case .journal:    JournalPane()
             case .scratchpad: ScratchpadPane()
             case .dictionary: DictionaryPane(shell: shell).settingsDetailPadding()
+            case .usage:      UsagePane().settingsDetailPadding()
             case .about:      AboutPane(updater: updater).settingsDetailPadding()
             }
         }
@@ -56,7 +57,7 @@ struct SettingsDetailRoot: View {
     }
 }
 
-/// The six settings sections, in sidebar order. Identity is the case itself so
+/// The settings sections, in sidebar order. Identity is the case itself so
 /// `List`'s data-driven selection binds straight to `SettingsSection?`.
 ///
 /// Dictation folds the old Input / Modes / History sections into one section
@@ -66,7 +67,10 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     // Declaration order is sidebar order (`allCases`). The three capture
     // flows — Dictation, Assistant, Journal — sit together, with Scratchpad
     // after them as the other thing that owns a global hotkey.
-    case general, dictation, models, assistant, journal, scratchpad, dictionary, about
+    // Usage sits next to About because both are things you look at rather than
+    // configure; it was carved out of About once the stats grew to more than
+    // half that page.
+    case general, dictation, models, assistant, journal, scratchpad, dictionary, usage, about
 
     var id: Self { self }
 
@@ -79,6 +83,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .journal:    "Journal"
         case .scratchpad: "Scratchpad"
         case .dictionary: "Dictionary"
+        case .usage:      "Usage"
         case .about:      "About"
         }
     }
@@ -92,6 +97,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .journal:    "book.closed.fill"
         case .scratchpad: "note.text"
         case .dictionary: "character.book.closed.fill"
+        case .usage:      "chart.bar.fill"
         case .about:      "info.circle.fill"
         }
     }
@@ -113,6 +119,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .journal:    .mint
         case .scratchpad: .orange
         case .dictionary: .green
+        case .usage:      .indigo
         case .about:      Color(red: 0.28, green: 0.46, blue: 0.62)   // slate blue — bright .cyan washes out the white glyph
         }
     }
