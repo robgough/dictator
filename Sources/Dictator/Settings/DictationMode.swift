@@ -69,7 +69,7 @@ enum DictationStyle: String, Codable, CaseIterable, Sendable {
 /// global instructions. `DictatorSettings.assemblePrompt` layers those on at
 /// call time.
 struct DictationPass: Equatable, Sendable {
-    enum Kind: String, Sendable { case format, polish, messages, custom }
+    enum Kind: String, Sendable { case format, polish, messages, custom, translate }
     let kind: Kind
     /// HUD + history label.
     let name: String
@@ -109,6 +109,16 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// Empty means "no app binding". First-match wins across modes — drag a
     /// mode higher in the list to give its bindings precedence.
     var appBundleIDs: [String]
+
+    /// Website fragments that should auto-pick this mode when the frontmost
+    /// browser is on a matching page — "gmail.com", "github.com/dictator".
+    /// Matched as a substring of the normalized URL (see `BrowserURLReader`).
+    ///
+    /// A website binding beats an app binding, always: binding a mode to
+    /// Chrome is nearly meaningless (Chrome is a mail client, an issue
+    /// tracker and a video player at once), so the more specific rule has to
+    /// win or the pair is useless together.
+    var urlPatterns: [String]
 
     /// Spoken-cue substitution is split into five independent families so
     /// users can keep punctuation cues on while disabling, say, emoji
@@ -174,6 +184,17 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// `contextAwarenessEnabled` — either, both, or neither can be on.
     var windowVisionContextEnabled: Bool
 
+    /// The language the user speaks in this mode, as a hint to the recogniser.
+    /// `.auto` (the default) lets the engine detect it, which is what every
+    /// existing mode keeps doing.
+    var spokenLanguage: DictationLanguage
+
+    /// The language the dictation should be *delivered* in. `.auto` — the
+    /// default — means "whatever was spoken", i.e. no translation. When it's
+    /// set to something else, and differs from `spokenLanguage`, the mode
+    /// gains a final Translate pass.
+    var outputLanguage: DictationLanguage
+
     // MARK: - Resolved pipeline
 
     /// The ordered LLM passes this mode runs, resolved from `style` against the
@@ -183,6 +204,33 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// `extraInstructions` and the global instructions on with
     /// `DictatorSettings.assemblePrompt`.
     var passes: [DictationPass] {
+        var list = stylePasses
+        if let target = translationTarget {
+            // Always last. The style passes are written for the language the
+            // user actually spoke — running them on a translation would mean
+            // asking a 3 B model to punctuate text in a language it has just
+            // produced, and any spelling context mined from the document is
+            // in the source language too.
+            list.append(DictationPass(
+                kind: .translate,
+                name: "Translate",
+                prompt: DictatorSettings.builtinTranslatePrompt(to: target)
+            ))
+        }
+        return list
+    }
+
+    /// The language this mode should translate *into*, or nil when it
+    /// shouldn't translate at all. Nil whenever the output language is
+    /// `.auto`, or is the same language the user is already speaking.
+    var translationTarget: DictationLanguage? {
+        guard outputLanguage != .auto else { return nil }
+        guard outputLanguage != spokenLanguage else { return nil }
+        return outputLanguage
+    }
+
+    /// The passes the mode's *style* contributes, before translation.
+    private var stylePasses: [DictationPass] {
         switch style {
         case .raw:
             return []
@@ -244,13 +292,14 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
     /// which the outer `try?` swallows, settings fall back to defaults, and
     /// the next save silently overwrites the user's data on disk.
     enum CodingKeys: String, CodingKey {
-        case id, name, isLocked, includeInCycle, appBundleIDs
+        case id, name, isLocked, includeInCycle, appBundleIDs, urlPatterns
         case punctuationCuesEnabled, numberCuesEnabled, timeCuesEnabled
         case currencyCuesEnabled, emojiCuesEnabled, vocabularyEnabled
         case style, extraInstructions, customPrompt
         case steps
         case pressReturnAfterPaste, contextAwarenessEnabled, appendTrailingSpace
         case windowVisionContextEnabled
+        case spokenLanguage, outputLanguage
     }
 
     /// Side container for the legacy single `spokenCuesEnabled` toggle.
@@ -285,6 +334,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         self.includeInCycle = try c.decodeIfPresent(Bool.self, forKey: .includeInCycle) ?? true
         self.appBundleIDs = try c.decodeIfPresent([String].self, forKey: .appBundleIDs) ?? []
+        self.urlPatterns = try c.decodeIfPresent([String].self, forKey: .urlPatterns) ?? []
         // The pre-split `spokenCuesEnabled` flag, if present in this blob,
         // seeds whatever new sub-toggles are absent. A user who'd turned
         // spoken cues off entirely shouldn't have them silently re-enabled
@@ -304,6 +354,10 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         // Off by default — it's opt-in (needs Screen Recording + macOS 27), so a
         // missing key (every blob predating this feature) stays disabled.
         self.windowVisionContextEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowVisionContextEnabled) ?? false
+        // `.auto` for every blob that predates languages, so no existing mode
+        // suddenly starts constraining its recogniser or translating.
+        self.spokenLanguage = try c.decodeIfPresent(DictationLanguage.self, forKey: .spokenLanguage) ?? .auto
+        self.outputLanguage = try c.decodeIfPresent(DictationLanguage.self, forKey: .outputLanguage) ?? .auto
 
         // Style is the source of truth. When it's present we ignore `steps`
         // entirely — a new build's own blob (and the COMPAT SHADOW steps it
@@ -362,6 +416,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         try c.encode(isLocked, forKey: .isLocked)
         try c.encode(includeInCycle, forKey: .includeInCycle)
         try c.encode(appBundleIDs, forKey: .appBundleIDs)
+        try c.encode(urlPatterns, forKey: .urlPatterns)
         try c.encode(punctuationCuesEnabled, forKey: .punctuationCuesEnabled)
         try c.encode(numberCuesEnabled, forKey: .numberCuesEnabled)
         try c.encode(timeCuesEnabled, forKey: .timeCuesEnabled)
@@ -375,6 +430,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         try c.encode(contextAwarenessEnabled, forKey: .contextAwarenessEnabled)
         try c.encode(appendTrailingSpace, forKey: .appendTrailingSpace)
         try c.encode(windowVisionContextEnabled, forKey: .windowVisionContextEnabled)
+        try c.encode(spokenLanguage, forKey: .spokenLanguage)
+        try c.encode(outputLanguage, forKey: .outputLanguage)
         // COMPAT SHADOW — remove one release after v2026.9.
         // Settings sync across the user's Macs through the Documents folder. An
         // older build reading a blob with no `steps` key falls back to the
@@ -394,6 +451,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         isLocked: Bool = false,
         includeInCycle: Bool = true,
         appBundleIDs: [String] = [],
+        urlPatterns: [String] = [],
         punctuationCuesEnabled: Bool = true,
         numberCuesEnabled: Bool = true,
         timeCuesEnabled: Bool = true,
@@ -406,13 +464,16 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         pressReturnAfterPaste: Bool = false,
         contextAwarenessEnabled: Bool = true,
         appendTrailingSpace: Bool = false,
-        windowVisionContextEnabled: Bool = false
+        windowVisionContextEnabled: Bool = false,
+        spokenLanguage: DictationLanguage = .auto,
+        outputLanguage: DictationLanguage = .auto
     ) {
         self.id = id
         self.name = name
         self.isLocked = isLocked
         self.includeInCycle = includeInCycle
         self.appBundleIDs = appBundleIDs
+        self.urlPatterns = urlPatterns
         self.punctuationCuesEnabled = punctuationCuesEnabled
         self.numberCuesEnabled = numberCuesEnabled
         self.timeCuesEnabled = timeCuesEnabled
@@ -426,6 +487,8 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
         self.contextAwarenessEnabled = contextAwarenessEnabled
         self.appendTrailingSpace = appendTrailingSpace
         self.windowVisionContextEnabled = windowVisionContextEnabled
+        self.spokenLanguage = spokenLanguage
+        self.outputLanguage = outputLanguage
     }
 
     // MARK: - Prompt helper

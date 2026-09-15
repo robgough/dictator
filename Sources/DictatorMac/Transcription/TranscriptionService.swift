@@ -102,11 +102,12 @@ final class TranscriptionService: ASREngine {
     /// 3-arg form below stays available on the concrete type if biasing is
     /// ever revived (see `whisper_prompt_biasing.md` memory note for why we
     /// parked it).
-    func transcribe(samples: [Float], modelID: String) async throws -> String {
-        try await transcribe(samples: samples, modelID: modelID, prompt: nil)
+    func transcribe(samples: [Float], modelID: String, language: DictationLanguage = .auto) async throws -> String {
+        try await transcribe(samples: samples, modelID: modelID, prompt: nil, language: language)
     }
 
-    func transcribe(samples: [Float], modelID: String, prompt: String? = nil) async throws -> String {
+    func transcribe(samples: [Float], modelID: String, prompt: String? = nil,
+                    language: DictationLanguage = .auto) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let pipe else {
             throw NSError(domain: "Dictator", code: 1, userInfo: [NSLocalizedDescriptionKey: "Whisper not loaded"])
@@ -118,9 +119,23 @@ final class TranscriptionService: ASREngine {
         // more likely to be emitted with the same spelling. Tokenisation can
         // only happen once the tokenizer's loaded, so we require an
         // already-loaded pipeline at this point (ensureLoaded above).
+        // A language hint saves Whisper its detection pass and pins the
+        // decoder to the right token set — worth real accuracy on a short
+        // clip, where detection has the least evidence to work from. `.auto`
+        // leaves `language` nil, which is Whisper's own detect-then-decode
+        // behaviour and what every mode does by default.
         var decodeOptions: DecodingOptions? = nil
-        if let prompt, !prompt.isEmpty, let tokens = pipe.tokenizer?.encode(text: prompt), !tokens.isEmpty {
-            decodeOptions = DecodingOptions(promptTokens: tokens)
+        let promptTokens: [Int]? = {
+            guard let prompt, !prompt.isEmpty else { return nil }
+            guard let tokens = pipe.tokenizer?.encode(text: prompt), !tokens.isEmpty else { return nil }
+            return tokens
+        }()
+        if language.asrCode != nil || promptTokens != nil {
+            decodeOptions = DecodingOptions(
+                task: .transcribe,
+                language: language.asrCode,
+                promptTokens: promptTokens
+            )
         }
 
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: decodeOptions)

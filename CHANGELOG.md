@@ -13,7 +13,17 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-_No changes yet._
+- Dictionary rules can now match by sound, and every rule does this by default — including the ones you already have. One Gough rule catches Goff, Gough and whatever else the model invents next, instead of needing a rule per misspelling. Sounds-like still matches the exact text too, so an upgraded rule can only ever catch more of what you wrote it for, never less. Rules where you deliberately switched on case-sensitivity, or asked to match inside words, stay exact — sounds-like can't express either of those. Any rule can be set back to Exact on its row.
+- Dictionary rules can also be patterns now: set a rule to "Pattern" and the Heard field becomes a regular expression, with $1 in the replacement for whatever it captured. Handy for turning "ticket 412" into a real issue link.
+- Dictator can learn from your corrections. Turn on "Learn from my corrections" in General and, when you fix one of its words by hand, it offers that fix as a dictionary rule at the top of the Dictionary pane. Nothing is ever added without you clicking add.
+- New journal hotkey (⌥J by default) with its own section in Settings. Dictate a thought and it's appended to a Markdown file instead of being pasted into whatever app you were in — nothing on screen moves. By default it writes a file per day, nested in year and month folders so a few years of notes stay browsable. You choose the file, what each entry looks like and which style cleans it up, all with date placeholders. Journal dictations are green everywhere, so you can tell at a glance which hotkey you pressed, and the HUD stays up afterwards long enough to click through to the file it just wrote.
+- Modes can now be bound to websites, not just apps. A mode set to gmail.com takes over whenever your browser is on Gmail, which finally makes browser modes useful — a site rule wins over a rule for the browser itself.
+- Modes can be told which language you speak, which makes transcription more accurate than leaving it to auto-detect, and which language to write out, which translates the dictation on-device before delivering it.
+- Silence at the start and end of each recording is now trimmed before transcribing. Dictations come back faster, and the model no longer invents a stray "Thank you." over the quiet bit at the end. Pauses in the middle are untouched.
+- The recording HUD is now clickable: click it to stop and transcribe, or the ✕ to cancel.
+- About now shows your dictation streak, how many words a minute you speak, and a chart of the last thirteen weeks.
+- Scratchpad has its own section in Settings now, with a scale drawing of how much of your screen each width actually covers — plus the same drawing for a 14-inch MacBook Pro, a 16-inch MacBook Pro and a Studio Display, so you can see that Small is a quarter of a laptop screen but only a sixth of a big monitor.
+- The Dictionary pane now spells out what the "Learn Word in Dictator" service is and exactly which boxes to tick in System Settings, instead of hiding it all in a tooltip.
 
 ## v2026.9.3 — 2026-09-13
 

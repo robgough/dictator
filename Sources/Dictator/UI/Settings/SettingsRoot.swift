@@ -46,6 +46,8 @@ struct SettingsDetailRoot: View {
             case .dictation:  DictationPane(shell: shell)
             case .models:     ModelsPane(shell: shell)
             case .assistant:  AssistantPane()
+            case .journal:    JournalPane()
+            case .scratchpad: ScratchpadPane()
             case .dictionary: DictionaryPane(shell: shell).settingsDetailPadding()
             case .about:      AboutPane(updater: updater).settingsDetailPadding()
             }
@@ -61,7 +63,10 @@ struct SettingsDetailRoot: View {
 /// with a toolbar segmented control (`SettingsShellModel.dictationTab`), the
 /// same pattern Models already used for its three sub-panes.
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
-    case general, dictation, models, assistant, dictionary, about
+    // Declaration order is sidebar order (`allCases`). The three capture
+    // flows — Dictation, Assistant, Journal — sit together, with Scratchpad
+    // after them as the other thing that owns a global hotkey.
+    case general, dictation, models, assistant, journal, scratchpad, dictionary, about
 
     var id: Self { self }
 
@@ -71,6 +76,8 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .dictation:  "Dictation"
         case .models:     "Models"
         case .assistant:  "Assistant"
+        case .journal:    "Journal"
+        case .scratchpad: "Scratchpad"
         case .dictionary: "Dictionary"
         case .about:      "About"
         }
@@ -82,6 +89,8 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .dictation:  "mic.fill"
         case .models:     "cpu"
         case .assistant:  "wand.and.stars"
+        case .journal:    "book.closed.fill"
+        case .scratchpad: "note.text"
         case .dictionary: "character.book.closed.fill"
         case .about:      "info.circle.fill"
         }
@@ -93,9 +102,16 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     var tint: Color {
         switch self {
         case .general:    .gray
+        // The three capture flows own their identity colours, and the badge
+        // matches what appears on screen when you press that flow's hotkey
+        // (`CaptureKind.tint`). Models and Assistant used to be swapped, which
+        // put purple — the assistant's colour everywhere else — on the Models
+        // row and left the assistant reading as red.
         case .dictation:  .blue
-        case .models:     .purple
-        case .assistant:  .pink
+        case .models:     .pink
+        case .assistant:  .purple
+        case .journal:    .mint
+        case .scratchpad: .orange
         case .dictionary: .green
         case .about:      Color(red: 0.28, green: 0.46, blue: 0.62)   // slate blue — bright .cyan washes out the white glyph
         }

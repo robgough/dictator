@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictionary rules that match by sound, or by pattern, now work here too. Create them on the Mac; they arrive through your synced folder and apply to iPhone dictation like any other rule.
 - Phone codes and negative numbers spoken as "plus 44" or "minus 3" now come out as "+44" and "-3", which they never actually did before.
 - Dictation now writes multiplier notation tightly: say "ten x" or "ten X" and you get "10x", "two point five x" becomes "2.5x", and so on.
 - Everyday phrases like "four times a day" or "three to four times" stay as words instead of turning into "4 times a day".

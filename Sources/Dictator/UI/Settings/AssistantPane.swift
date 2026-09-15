@@ -27,7 +27,9 @@ struct AssistantPane: View {
                     ForEach(TriggerMode.allCases.filter { mode in
                         // Hide whatever the dictation trigger is using so the
                         // two hotkeys can't collide on the same physical key.
-                        mode == .keyboardShortcut || mode != s.settings.triggerMode
+                        mode == .keyboardShortcut
+                            || (mode != s.settings.triggerMode
+                                && mode != s.settings.journalTriggerMode)
                     }) { mode in
                         Text(mode.label).tag(mode)
                     }

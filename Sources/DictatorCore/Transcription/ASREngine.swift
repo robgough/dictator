@@ -26,5 +26,20 @@ protocol ASREngine: AnyObject {
     func unload(modelID: String)
 
     /// Transcribe 16 kHz mono Float32 samples.
-    func transcribe(samples: [Float], modelID: String) async throws -> String
+    ///
+    /// `language` is a *hint*, never a requirement: both engines detect the
+    /// language themselves and both do better when told which one to expect.
+    /// `.auto` keeps the historic behaviour of letting them work it out, and
+    /// an engine is free to ignore a language it doesn't know about.
+    func transcribe(samples: [Float], modelID: String, language: DictationLanguage) async throws -> String
+}
+
+extension ASREngine {
+    /// Convenience for the callers that have no opinion about language — the
+    /// meetings pipeline, the mic test, the dictionary tester. Keeps the
+    /// protocol to one requirement while leaving every existing call site
+    /// untouched.
+    func transcribe(samples: [Float], modelID: String) async throws -> String {
+        try await transcribe(samples: samples, modelID: modelID, language: .auto)
+    }
 }

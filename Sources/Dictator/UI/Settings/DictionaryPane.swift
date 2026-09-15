@@ -57,9 +57,12 @@ struct DictionaryPane: View {
 
     @State private var tester = DictionaryTester.shared
 
+    @State private var suggestions = CorrectionSuggestionStore.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             learnWordRows
+            suggestionStrip
             if let err = tester.lastError {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -75,6 +78,12 @@ struct DictionaryPane: View {
             }
             list(vocabBinding)
         }
+        .onAppear {
+            // A rule the user added by hand retires the matching hint, so the
+            // strip doesn't keep offering something already covered.
+            suggestions.ensureLoaded()
+            suggestions.pruneCovered(by: store.entries)
+        }
         // Focus request from the toolbar's Add button: apply, then
         // consume so the next Add re-fires.
         .onChange(of: shell.dictionaryFocusEntryID) { _, id in
@@ -84,36 +93,100 @@ struct DictionaryPane: View {
         }
     }
 
-    /// The two "Learn Word" affordances, one line each: what the service does
-    /// and how to switch it on. The step-by-step used to be a popover of
-    /// bolded prose; it's a tooltip now.
+    /// The "Learn Word" explainer.
+    ///
+    /// Both lines used to be bare labels with the actual instructions hidden
+    /// in a tooltip — which left "Turn the service on" sitting next to a
+    /// button, naming neither what the service is nor what to do once System
+    /// Settings opened. The steps are on screen now; a tooltip is the wrong
+    /// place for the one thing the user has to follow.
     private var learnWordRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "lightbulb")
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                Text("Add words from any app")
-                    .help("Select text in any app, then right-click \u{2192} Services \u{2192} \u{201C}Learn Word in Dictator\u{2026}\u{201D}.")
-                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add words without coming here")
+                        .font(.callout)
+                    Text("Select a word in any app, then right-click \u{2192} Services \u{2192} \u{201C}Learn Word in Dictator\u{2026}\u{201D}.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
                 Text(countLabel(total: entries.count,
                                 shown: filteredEntries(from: entries).count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "checklist")
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                Text("Turn the service on")
-                    .help("In System Settings, click \u{201C}Keyboard Shortcuts\u{2026}\u{201D}, select Services, expand Text, and tick \u{201C}Learn Word in Dictator\u{2026}\u{201D}.")
-                Spacer()
-                Button("Open System Settings") { openServicesSettings() }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not in your Services menu?")
+                        .font(.callout)
+                    Text("macOS hides new services until you tick them. In Keyboard settings, click \u{201C}Keyboard Shortcuts\u{2026}\u{201D}, pick Services in the sidebar, expand Text, and tick \u{201C}Learn Word in Dictator\u{2026}\u{201D}.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Open Keyboard Settings") { openServicesSettings() }
                     .controlSize(.small)
             }
         }
-        .font(.callout)
+    }
+
+    /// Words the user fixed by hand after a dictation, offered as rules.
+    ///
+    /// Hidden entirely when there's nothing pending — an empty affordance for
+    /// an opt-in feature is pure clutter for everyone who hasn't turned it on.
+    @ViewBuilder
+    private var suggestionStrip: some View {
+        if !demo.isOn, !suggestions.suggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    Text("Corrections you made")
+                        .font(.callout)
+                    Spacer()
+                    Button("Dismiss all") { suggestions.clear() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(suggestions.suggestions) { suggestion in
+                            SuggestionChip(
+                                suggestion: suggestion,
+                                onAccept: { accept(suggestion) },
+                                onDismiss: { suggestions.remove(id: suggestion.id) }
+                            )
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.06))
+            )
+        }
+    }
+
+    /// Promote a suggestion into a real rule. New rows go to the top, the way
+    /// the toolbar's + button adds them, so the result is where the user is
+    /// already looking.
+    private func accept(_ suggestion: CorrectionSuggestion) {
+        store.entries.insert(suggestion.proposedEntry, at: 0)
+        suggestions.remove(id: suggestion.id)
+        suggestions.pruneCovered(by: store.entries)
     }
 
     /// Bridges the store's mutable `entries` property to the toolbar/list
@@ -222,6 +295,60 @@ struct DictionaryPane: View {
     }
 }
 
+/// One pending correction, as a compact "heard \u{2192} corrected" chip with
+/// accept and dismiss.
+///
+/// Accept is the prominent action and dismiss is the quiet one, because the
+/// cost of a wrong accept is a rule the user can delete, while the cost of a
+/// wrong dismiss is silently losing evidence they'd have wanted.
+private struct SuggestionChip: View {
+    let suggestion: CorrectionSuggestion
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(suggestion.heard)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .strikethrough(color: .secondary)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+            Text(suggestion.corrected)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            if suggestion.seenCount > 1 {
+                Text("\u{00D7}\(suggestion.seenCount)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .help("You have made this correction \(suggestion.seenCount) times.")
+            }
+            Button(action: onAccept) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .help("Add this as a dictionary rule")
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Not a mis-hearing \u{2014} forget it")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            Capsule().fill(Color.primary.opacity(0.06))
+        )
+        .overlay(
+            Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
 /// Single-line row optimised for dictionaries with many entries. Toggles
 /// for "case-sensitive" and "whole word" become icon toggle-buttons that
 /// only render the affordance — hover/help reveals the meaning. The
@@ -242,7 +369,7 @@ private struct CompactDictionaryRow: View {
     var body: some View {
         HStack(spacing: 8) {
             micButton
-            TextField("Heard", text: $entry.pattern)
+            TextField(entry.matchMode == .regex ? "Pattern" : "Heard", text: $entry.pattern)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .frame(maxWidth: .infinity)
@@ -271,23 +398,55 @@ private struct CompactDictionaryRow: View {
                 .onSubmit { onChange() }
                 .onChange(of: entry.replacement) { _, _ in onChange() }
 
-            Toggle(isOn: $entry.caseSensitive) {
-                Image(systemName: "textformat")
-                    .font(.system(size: 11, weight: .semibold))
+            Picker("", selection: $entry.matchMode) {
+                ForEach(VocabularyMatchMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
             }
-            .toggleStyle(.button)
+            .labelsHidden()
             .controlSize(.small)
-            .help("Case-sensitive: only match the exact casing typed in Heard.")
-            .onChange(of: entry.caseSensitive) { _, _ in onChange() }
+            .frame(width: 104)
+            .help(entry.matchMode.summary)
+            .onChange(of: entry.matchMode) { _, _ in onChange() }
 
-            Toggle(isOn: $entry.wholeWord) {
-                Image(systemName: "text.word.spacing")
-                    .font(.system(size: 11, weight: .semibold))
+            // Case-sensitivity and word boundaries only mean something for a
+            // literal or a regex. Phonetic matching compares sounds word by
+            // word, so both toggles would be lying about what they do.
+            if entry.matchMode.usesLiteralFlags {
+                Toggle(isOn: $entry.caseSensitive) {
+                    Image(systemName: "textformat")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Case-sensitive: only match the exact casing typed in Heard.")
+                .onChange(of: entry.caseSensitive) { _, _ in onChange() }
             }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .help("Whole word only: don't match inside other words.")
-            .onChange(of: entry.wholeWord) { _, _ in onChange() }
+
+            if entry.matchMode == .literal {
+                Toggle(isOn: $entry.wholeWord) {
+                    Image(systemName: "text.word.spacing")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Whole word only: don't match inside other words.")
+                .onChange(of: entry.wholeWord) { _, _ in onChange() }
+            }
+
+            if let problem = entry.validationProblem {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .help(problem)
+            } else if let note = entry.validationNote {
+                // Not a fault — the rule still works, just not the way the
+                // picker implies. Grey, not orange.
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .help(note)
+            }
 
             Button(role: .destructive, action: onRemove) {
                 Image(systemName: "trash")

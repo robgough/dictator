@@ -34,6 +34,7 @@ final class AppState {
 
     private let dictationHotkey = HotkeyBinder(shortcutName: .toggleDictation)
     private let assistantHotkey = HotkeyBinder(shortcutName: .toggleAssistant)
+    private let journalHotkey = HotkeyBinder(shortcutName: .toggleJournal)
     private let assistantResultWindow = AssistantResultController()
     private var onboardingController: OnboardingController?
 
@@ -139,6 +140,13 @@ final class AppState {
             onCancel: { [weak self] in self?.pipeline.cancelInFlight() },
             tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
         )
+        journalHotkey.bind(
+            mode: settings.journalTriggerMode,
+            onPress: { [weak self] in self?.pipeline.startJournal() },
+            onRelease: { [weak self] in self?.pipeline.finishJournal() },
+            onCancel: { [weak self] in self?.pipeline.cancelInFlight() },
+            tapToToggle: { [weak self] in self?.settings.hotkeyTapToToggleEnabled ?? false }
+        )
         // Scratchpad: a plain tap-to-toggle combo, no push-to-talk semantics, so
         // it binds directly through KeyboardShortcuts rather than a HotkeyBinder.
         // The handler is registered once and checks the enable flag live, so the
@@ -220,6 +228,10 @@ final class AppState {
         LocalLLMServer.shared.applySettings(settings)
         dictationHotkey.setMode(settings.triggerMode)
         assistantHotkey.setMode(settings.assistantTriggerMode)
+        journalHotkey.setMode(settings.journalTriggerMode)
+        // Switching the feature off mid-wait shouldn't leave a watcher armed
+        // against a field the user no longer expects us to re-read.
+        if !settings.learnFromCorrectionsEnabled { CorrectionWatcher.shared.cancel() }
     }
 
     /// Used by the Settings UI's "Reset" button next to the keyboard-shortcut recorder.
@@ -229,5 +241,9 @@ final class AppState {
 
     func resetAssistantKeyboardShortcut() {
         assistantHotkey.resetKeyboardShortcutToDefault()
+    }
+
+    func resetJournalKeyboardShortcut() {
+        journalHotkey.resetKeyboardShortcutToDefault()
     }
 }

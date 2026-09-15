@@ -59,7 +59,9 @@ private struct DictationModesTab: View {
                         // the two hotkeys can't collide on the same physical key.
                         // `.keyboardShortcut` is exempt — different `Name`s can be
                         // bound to different combos independently.
-                        mode == .keyboardShortcut || mode != s.settings.assistantTriggerMode
+                        mode == .keyboardShortcut
+                            || (mode != s.settings.assistantTriggerMode
+                                && mode != s.settings.journalTriggerMode)
                     }) { mode in
                         Text(mode.label).tag(mode)
                     }

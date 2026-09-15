@@ -6,11 +6,12 @@ import KeyboardShortcuts
 
 /// General: the settings that aren't about a single flow — permissions, who
 /// you are, the instruction line that applies everywhere, delivery behaviour,
-/// the HUD style, the sound set, the Scratchpad, where synced data lives, and
-/// the per-Mac performance trade-offs.
+/// the HUD style, the sound set, where synced data lives, and the per-Mac
+/// performance trade-offs.
 ///
-/// The dictation and assistant hotkeys deliberately live with their flows
-/// (Dictation → Modes, Assistant) rather than here.
+/// Anything that belongs to one flow lives with that flow instead: the
+/// dictation hotkey under Dictation, and the Assistant, Journal and
+/// Scratchpad sections each own their own pane.
 struct GeneralPane: View {
     @Environment(AppState.self) private var state
 
@@ -88,33 +89,13 @@ struct GeneralPane: View {
             }
 
             Section {
-                Toggle("Scratchpad", isOn: $s.settings.scratchpadEnabled)
-                    .onChange(of: s.settings.scratchpadEnabled) { _, _ in state.save() }
-                if s.settings.scratchpadEnabled {
-                    HStack {
-                        Text("Shortcut")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .toggleScratchpad)
-                        Button("Reset") {
-                            KeyboardShortcuts.reset(.toggleScratchpad)
-                        }
-                        .controlSize(.small)
-                    }
-                    Picker("Width", selection: $s.settings.scratchpadWidth) {
-                        ForEach(ScratchpadWidth.allCases) { width in
-                            Text(width.label).tag(width)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: s.settings.scratchpadWidth) { _, _ in
-                        state.save()
-                        state.scratchpadController?.relayoutIfVisible()
-                    }
-                }
+                Toggle("Learn from my corrections", isOn: $s.settings.learnFromCorrectionsEnabled)
+                    .onChange(of: s.settings.learnFromCorrectionsEnabled) { _, _ in state.save() }
+                    .help("A few seconds after a dictation lands, Dictator re-reads the field to see which words you changed, and offers them as dictionary rules. Only the two words are kept.")
             } header: {
-                Text("Scratchpad")
+                Text("Dictionary")
             } footer: {
-                SectionFootnote("A floating note on a shortcut, saved to your synced folder.")
+                SectionFootnote("Suggestions appear in Dictionary. Nothing is ever added on its own. Needs Accessibility.")
             }
 
             Section {
@@ -126,6 +107,9 @@ struct GeneralPane: View {
             }
 
             Section {
+                Toggle("Trim silence before transcribing", isOn: $s.settings.trimSilenceEnabled)
+                    .onChange(of: s.settings.trimSilenceEnabled) { _, _ in state.save() }
+                    .help("Cuts the dead air from the start and end of each recording. Faster, and it stops the model inventing words over the silence. Never touches pauses in the middle.")
                 Toggle("Pre-load models at launch", isOn: $s.settings.preloadModelsOnLaunch)
                     .onChange(of: s.settings.preloadModelsOnLaunch) { _, on in
                         state.save()
@@ -149,6 +133,7 @@ struct GeneralPane: View {
     /// Anchor the screenshot runner scrolls to for the HUD-gallery shot.
     static let hudSectionID = "screenshot-hud-section"
 }
+
 
 /// Row that shows where Dictator's synced data lives and lets the user
 /// point it at a different folder. Default is `~/Documents/Dictator/`. The

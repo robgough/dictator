@@ -41,6 +41,33 @@ struct CompactHUDView: View {
         return false
     }
 
+    /// Whether a click on the pill should commit. Only `.recording` — the
+    /// thinking states have nothing to stop.
+    private var isRecording: Bool {
+        if case .recording = state.pipeline.state { return true }
+        return false
+    }
+
+    /// A journal result is on screen and its file can be opened.
+    private var canOpenJournal: Bool {
+        if case .done = state.pipeline.state { return state.pipeline.lastJournalURL != nil }
+        return false
+    }
+
+    private func handleTap() {
+        if isRecording {
+            state.pipeline.commitRecording()
+        } else if canOpenJournal {
+            state.pipeline.openLastJournalFile()
+        }
+    }
+
+    private var tapHint: String {
+        if isRecording { return "Click to stop \u{2014} \u{2715} to cancel" }
+        if canOpenJournal { return "Click to open this journal file" }
+        return ""
+    }
+
     var body: some View {
         let revealed = context.revealed
         ZStack(alignment: .bottom) {
@@ -50,6 +77,13 @@ struct CompactHUDView: View {
                     .padding(.vertical, isMini ? 6 : 9)
                     .background(chrome)
                     .onHover { hovering = $0 }
+                    // Click the pill: stop and transcribe while recording,
+                    // or open the file on a journal result. The leading glyph
+                    // is the cancel target and handles its own clicks, so the
+                    // two don't collide.
+                    .contentShape(Rectangle())
+                    .onTapGesture { handleTap() }
+                    .help(tapHint)
                     .padding(.bottom, Self.shadowBleed)
             }
         }
@@ -154,14 +188,14 @@ struct CompactHUDContent: View {
             EmptyView()
         case .capturingSelection:
             stage(icon: "selection.pin.in.out", title: isMini ? "Selection" : "Reading selection", accent: .hudIndigo)
-        case .warmingUp(let isAssistant):
+        case .warmingUp(let kind):
             // Bluetooth mics need a few seconds of HFP negotiation before
             // buffers flow — say so, as the island does, so the user doesn't
             // think they've been recording already. The badge says it in
             // words too: a bare antenna glyph only told people who already
             // knew what it meant that they should wait before speaking.
             HStack(spacing: gap) {
-                leadingGlyph("antenna.radiowaves.left.and.right", accent: isAssistant ? .hudIndigo : .brandBlue, pulse: true)
+                leadingGlyph("antenna.radiowaves.left.and.right", accent: kind.tint, pulse: true)
                 if isMini {
                     Text("Connecting mic…")
                         .font(bodyFont)
@@ -182,8 +216,8 @@ struct CompactHUDContent: View {
                 ProgressView()
                     .controlSize(.mini)
             }
-        case .recording(let level, let isAssistant, let interim):
-            recording(level: level, isAssistant: isAssistant, interim: interim)
+        case .recording(let level, let kind, let interim):
+            recording(level: level, kind: kind, interim: interim)
         case .transcribing:
             stage(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
         case .formatting:
@@ -192,15 +226,17 @@ struct CompactHUDContent: View {
             stage(icon: "text.badge.checkmark", title: "Polishing", accent: .hudPink)
         case .restructuring:
             stage(icon: "list.bullet.indent", title: "Paragraphs", accent: .hudTeal)
+        case .translating:
+            stage(icon: "globe", title: "Translating", accent: .hudTeal)
         case .assisting:
             stage(icon: "wand.and.stars", title: "Thinking", accent: .hudIndigo)
         case .compacting:
             stage(icon: "archivebox", title: isMini ? "Summarising" : "Summarising earlier turns", accent: .hudIndigo)
         case .done(let text, let pasted, let note):
             HStack(spacing: gap) {
-                Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
+                Image(systemName: doneIcon(pasted: pasted))
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, pasted ? Color.brandBlue : Color.hudOrange)
+                    .foregroundStyle(.white, doneTint(pasted: pasted))
                     .font(.system(size: glyphSize, weight: .semibold))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(text)
@@ -211,7 +247,10 @@ struct CompactHUDContent: View {
                     if let note, !isMini {
                         Text(note)
                             .font(subtitleFont)
-                            .foregroundStyle(Color.hudOrange)
+                            // See the island: orange means "act on this", and
+                            // a journal note isn't that.
+                            .foregroundStyle(state.pipeline.lastDeliveryWasJournal
+                                             ? CaptureKind.journal.tint : Color.hudOrange)
                             .lineLimit(1)
                     }
                 }
@@ -240,15 +279,18 @@ struct CompactHUDContent: View {
     /// the whole time (it's the only mode feedback the badge has, and Tab
     /// cycling re-renders it in place).
     @ViewBuilder
-    private func recording(level: Float, isAssistant: Bool, interim: String) -> some View {
-        let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
-        let tint: Color = isAssistant ? .hudIndigo : .brandBlue
+    private func recording(level: Float, kind: CaptureKind, interim: String) -> some View {
+        let isContinuation = kind == .assistant && state.pipeline.nextAssistantIsContinuation
+        let tint = kind.tint
         let previewOn = !isMini && state.settings.realtimeInterimEnabled
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: gap) {
-                if isAssistant {
-                    leadingGlyph(isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars", accent: .hudIndigo)
-                } else {
+                switch kind {
+                case .assistant:
+                    leadingGlyph(isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars", accent: tint)
+                case .journal:
+                    leadingGlyph("book.closed.fill", accent: tint)
+                case .dictation:
                     cancelSlot { RecordingDot() }
                 }
                 Waveform(
@@ -258,17 +300,24 @@ struct CompactHUDContent: View {
                     height: isMini ? 14 : 20
                 )
                 .frame(width: previewOn ? nil : (isMini ? 46 : 82))
-                if isAssistant {
+                if kind == .assistant {
                     if !isMini {
                         Text(isContinuation ? "Following up" : "Speak your instruction")
                             .font(subtitleFont)
-                            .foregroundStyle(Color.hudIndigo)
+                            .foregroundStyle(tint)
+                            .lineLimit(1)
+                    }
+                } else if kind == .journal {
+                    if !isMini {
+                        Text("Journal")
+                            .font(subtitleFont)
+                            .foregroundStyle(tint)
                             .lineLimit(1)
                     }
                 } else if isMini {
                     Text(state.pipeline.currentMode.name)
                         .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.brandBlue)
+                        .foregroundStyle(tint)
                         .lineLimit(1)
                 } else {
                     // Same Accessibility gate as the island: only promise
@@ -342,6 +391,21 @@ struct CompactHUDContent: View {
     /// Content-swap animation key, derived from what's RENDERED (so the
     /// dismiss doesn't animate a swap to empty when the live state hits
     /// `.idle`). `liveStateKey` tracks the actual pipeline for the cache.
+    /// Icon for the terminal frame. A journal entry went to a file, so it
+    /// gets neither the paste tick nor the clipboard glyph.
+    private func doneIcon(pasted: Bool) -> String {
+        if state.pipeline.lastDeliveryWasJournal { return "book.closed.fill" }
+        return pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill"
+    }
+
+    /// Blue for a delivery that landed where it was meant to (pasted, or
+    /// written to the journal); orange only when the user has to do something
+    /// about it.
+    private func doneTint(pasted: Bool) -> Color {
+        if state.pipeline.lastDeliveryWasJournal { return CaptureKind.journal.tint }
+        return pasted ? .brandBlue : .hudOrange
+    }
+
     private var stateKey: String { Self.key(for: renderState) }
     private var liveStateKey: String { Self.key(for: state.pipeline.state) }
 
@@ -355,6 +419,7 @@ struct CompactHUDContent: View {
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"
+        case .translating: "translating"
         case .assisting: "assisting"
         case .compacting: "compacting"
         case .done: "done"

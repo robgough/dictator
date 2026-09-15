@@ -5,6 +5,9 @@ import KeyboardShortcuts
 extension KeyboardShortcuts.Name {
     static let toggleDictation = Self("toggleDictation", default: .init(.d, modifiers: [.option, .command]))
     static let toggleAssistant = Self("toggleAssistant", default: .init(.a, modifiers: [.option, .command]))
+    /// Journal dictation — records, cleans up and appends to the user's
+    /// journal file instead of pasting into whatever is in front.
+    static let toggleJournal = Self("toggleJournal", default: .init(.j, modifiers: [.option]))
     /// Scratchpad is a plain tap-to-toggle combo (not push-to-talk), so it
     /// skips the `TriggerMode` / `HotkeyBinder` machinery and binds straight
     /// through `KeyboardShortcuts.onKeyDown`. Default ⌥X — a Carbon-registered

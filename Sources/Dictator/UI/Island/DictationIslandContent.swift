@@ -50,7 +50,7 @@ struct DictationIslandContent: View {
             EmptyView()
         case .capturingSelection:
             StatusRow(icon: "selection.pin.in.out", title: "Reading selection", accent: .hudIndigo)
-        case .warmingUp(let isAssistant):
+        case .warmingUp(let kind):
             // Bluetooth mics (AirPods, Beats, …) need 2–5 s for HFP profile
             // negotiation before AVAudioEngine actually starts producing
             // buffers. Surface that explicitly so the user doesn't think
@@ -58,7 +58,7 @@ struct DictationIslandContent: View {
             HStack(spacing: 14) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isAssistant ? Color.hudIndigo : Color.brandBlue)
+                    .foregroundStyle(kind.tint)
                     .font(.system(size: 22, weight: .semibold))
                     // NO `.symbolEffect(.variableColor … .repeating)` here: animated
                     // symbol effects render into an offscreen Metal surface, and
@@ -80,7 +80,7 @@ struct DictationIslandContent: View {
                 ProgressView()
                     .controlSize(.small)
             }
-        case .recording(let level, let isAssistant, let interim):
+        case .recording(let level, let kind, let interim):
             // One row: dot (or assistant glyph), the meter stretching across
             // the middle, and a tight trailing column — the mode chip over
             // the live mic's name for dictation, title over prompt for the
@@ -88,25 +88,39 @@ struct DictationIslandContent: View {
             // it) and no Esc hint here (the ear's ✕ is visible the whole
             // time); the working stages below keep their hint because
             // they're the ones that can run long.
-            let isContinuation = isAssistant && state.pipeline.nextAssistantIsContinuation
+            let isContinuation = kind == .assistant && state.pipeline.nextAssistantIsContinuation
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 16) {
-                    if isAssistant {
+                    switch kind {
+                    case .assistant:
                         Image(systemName: isContinuation ? "bubble.left.and.bubble.right.fill" : "wand.and.stars")
                             .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(Color.hudIndigo)
+                            .foregroundStyle(kind.tint)
                             .font(.system(size: 18, weight: .semibold))
-                    } else {
+                    case .journal:
+                        Image(systemName: "book.closed.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(kind.tint)
+                            .font(.system(size: 18, weight: .semibold))
+                    case .dictation:
                         RecordingDot()
                     }
-                    Waveform(level: level, tint: isAssistant ? .hudIndigo : .brandBlue, height: 44)
+                    Waveform(level: level, tint: kind.tint, height: 44)
                         .frame(maxWidth: .infinity)
                     VStack(alignment: .trailing, spacing: 3) {
-                        if isAssistant {
+                        if kind == .assistant {
                             Text(isContinuation ? "Following up" : "Assistant")
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.hudIndigo)
+                                .foregroundStyle(kind.tint)
                             Text(isContinuation ? "Continuing the conversation" : "Speak your instruction")
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else if kind == .journal {
+                            Text("Journal")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(kind.tint)
+                            Text(state.pipeline.currentMode.name)
                                 .font(.system(size: 10, weight: .medium, design: .rounded))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -154,15 +168,17 @@ struct DictationIslandContent: View {
             StatusRow(icon: "text.badge.checkmark", title: "Polishing", accent: .hudPink)
         case .restructuring:
             StatusRow(icon: "list.bullet.indent", title: "Paragraphs", accent: .hudTeal)
+        case .translating:
+            StatusRow(icon: "globe", title: "Translating", accent: .hudTeal)
         case .assisting:
             StatusRow(icon: "wand.and.stars", title: "Thinking", accent: .hudIndigo)
         case .compacting:
             StatusRow(icon: "archivebox", title: "Summarising earlier turns", accent: .hudIndigo)
         case .done(let text, let pasted, let note):
             HStack(spacing: 14) {
-                Image(systemName: pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
+                Image(systemName: doneIcon(pasted: pasted))
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, pasted ? Color.brandBlue : Color.hudOrange)
+                    .foregroundStyle(.white, doneTint(pasted: pasted))
                     .font(.system(size: 22, weight: .semibold))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(text)
@@ -173,7 +189,11 @@ struct DictationIslandContent: View {
                     if let note {
                         Text(note)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.hudOrange)
+                            // Orange is the "you need to do something" colour.
+                            // A journal entry's note is just telling you where
+                            // it went, so it wears the journal's own green.
+                            .foregroundStyle(state.pipeline.lastDeliveryWasJournal
+                                             ? CaptureKind.journal.tint : Color.hudOrange)
                             .lineLimit(2)
                     }
                 }
@@ -196,6 +216,21 @@ struct DictationIslandContent: View {
     /// Content-swap animation key, derived from what's RENDERED (so the
     /// retract doesn't animate a swap to empty when the live state hits
     /// `.idle`). `liveStateKey` tracks the actual pipeline for the cache.
+    /// Icon for the terminal frame. A journal entry went to a file, so it
+    /// gets neither the paste tick nor the clipboard glyph.
+    private func doneIcon(pasted: Bool) -> String {
+        if state.pipeline.lastDeliveryWasJournal { return "book.closed.fill" }
+        return pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill"
+    }
+
+    /// Blue for a delivery that landed where it was meant to (pasted, or
+    /// written to the journal); orange only when the user has to do something
+    /// about it.
+    private func doneTint(pasted: Bool) -> Color {
+        if state.pipeline.lastDeliveryWasJournal { return CaptureKind.journal.tint }
+        return pasted ? .brandBlue : .hudOrange
+    }
+
     private var stateKey: String { Self.key(for: renderState) }
     private var liveStateKey: String { Self.key(for: state.pipeline.state) }
 
@@ -209,6 +244,7 @@ struct DictationIslandContent: View {
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"
+        case .translating: "translating"
         case .assisting: "assisting"
         case .compacting: "compacting"
         case .done: "done"

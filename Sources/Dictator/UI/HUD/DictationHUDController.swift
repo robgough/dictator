@@ -102,9 +102,16 @@ final class DictationHUDController {
             if panel.isKeyWindow { panel.resignKey() }
         }
 
-        // Mouse policy: transparent unless the pipeline's hover-cancel target
-        // is live.
-        panel.ignoresMouseEvents = !s.canCancel
+        // Mouse policy: transparent unless there's something to click.
+        //
+        // `canCancel` covers the in-flight states (the ✕ ear, and clicking the
+        // body to stop). The second term is the journal's terminal frame,
+        // which is explicitly clickable to open the file just written — and
+        // `.done` reports `canCancel == false`, so without this the panel
+        // would swallow nothing and the click would sail through to whatever
+        // is behind it.
+        let journalResultIsClickable = isTerminal(s) && state.pipeline.lastJournalURL != nil
+        panel.ignoresMouseEvents = !(s.canCancel || journalResultIsClickable)
 
         // Escape monitor: only while the pipeline is cancellable.
         if s.canCancel && !escapeActive {

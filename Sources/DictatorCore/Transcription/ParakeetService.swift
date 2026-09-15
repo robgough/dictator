@@ -136,7 +136,7 @@ final class ParakeetService: ASREngine {
 
     /// Transcribe a 16 kHz mono Float32 sample buffer. The recorder already
     /// produces audio in that shape, so no conversion is needed here.
-    func transcribe(samples: [Float], modelID: String) async throws -> String {
+    func transcribe(samples: [Float], modelID: String, language: DictationLanguage = .auto) async throws -> String {
         try await ensureLoaded(modelID: modelID)
         guard let manager else {
             throw NSError(domain: "Dictator", code: 11,
@@ -146,8 +146,21 @@ final class ParakeetService: ASREngine {
         // when streaming). We're doing one-shot per recording, so a fresh state
         // per call is the right semantics — no leakage between dictations.
         var state = try TdtDecoderState()
-        let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
+        let result = try await manager.transcribe(samples, decoderState: &state,
+                                                  language: Self.fluidLanguage(language))
         return result.text
+    }
+
+    /// Map our language enum onto FluidAudio's.
+    ///
+    /// Theirs is a *script filter* for the v3 decoder, not a model selector —
+    /// it stops the joint network emitting Cyrillic mid-Polish-sentence. It
+    /// covers fewer languages than we offer, and an unknown code simply
+    /// resolves to nil, which is exactly the "no hint" behaviour this call
+    /// used unconditionally before.
+    private static func fluidLanguage(_ language: DictationLanguage) -> Language? {
+        guard let code = language.asrCode else { return nil }
+        return Language(rawValue: code)
     }
 
     /// Word-aligned transcription. Same audio shape as `transcribe(...)` but

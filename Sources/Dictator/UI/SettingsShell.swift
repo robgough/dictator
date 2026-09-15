@@ -247,7 +247,8 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
     /// flipped to "as entered" and search cleared so the row is visible, then
     /// a focus request the pane applies.
     @objc private func addDictionaryEntry() {
-        let new = VocabularyEntry(pattern: "", replacement: "")
+        let new = VocabularyEntry(pattern: "", replacement: "",
+                                  matchMode: .defaultForNewRule)
         // Demo mode keeps new rules in its own overlay — the user's real
         // vocabulary.json is never written while it's on.
         DemoMode.shared.insertVocabularyEntry(new) {

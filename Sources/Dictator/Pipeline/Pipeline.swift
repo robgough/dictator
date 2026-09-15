@@ -3,6 +3,18 @@ import Observation
 import AppKit
 import os
 
+/// Which capture flow is driving the pipeline.
+///
+/// Replaces the `isAssistant` flag the recording states used to carry: with
+/// journal dictation there are three flows, not two, and each gets its own
+/// HUD tint and wording. The tint mapping lives in the UI layer
+/// (`HUDPalette`) — Pipeline has no business importing SwiftUI.
+enum CaptureKind: Equatable, Sendable {
+    case dictation
+    case assistant
+    case journal
+}
+
 enum PipelineState: Equatable {
     case idle
     case capturingSelection
@@ -11,12 +23,13 @@ enum PipelineState: Equatable {
     /// Bluetooth (AirPods etc.) it can last 2–5 s while macOS negotiates
     /// HFP. Surfaced in the HUD so the user understands they're not yet
     /// being recorded.
-    case warmingUp(isAssistant: Bool)
-    case recording(level: Float, isAssistant: Bool, interim: String)
+    case warmingUp(kind: CaptureKind)
+    case recording(level: Float, kind: CaptureKind, interim: String)
     case transcribing
     case formatting
     case fixingGrammar
     case restructuring
+    case translating
     case assisting
     case compacting
     case done(text: String, pasted: Bool, note: String?)
@@ -32,6 +45,7 @@ enum PipelineState: Equatable {
         case .formatting: "sparkles"
         case .fixingGrammar: "text.badge.checkmark"
         case .restructuring: "list.bullet.indent"
+        case .translating: "globe"
         case .assisting: "wand.and.stars"
         case .compacting: "archivebox"
         case .done: "checkmark.circle.fill"
@@ -65,6 +79,24 @@ final class Pipeline {
     private(set) var state: PipelineState = .idle
     private(set) var lastResult: String = ""
 
+    /// Whether the delivery the HUD is currently showing went to the journal
+    /// file rather than into an app.
+    ///
+    /// It lives here rather than as a fourth associated value on
+    /// `PipelineState.done` because every `.done` switch in the UI would have
+    /// to be rewritten for a fact only the terminal frame cares about. The
+    /// views read it in their `.done` branch to pick the right icon and
+    /// wording — otherwise a journal entry reports itself as "Copied to
+    /// clipboard", which is not what happened to it.
+    private(set) var lastDeliveryWasJournal = false
+
+    /// The file the last journal entry was appended to, while the HUD is
+    /// still showing it. Clicking the HUD opens it — the moment you've just
+    /// spoken a thought into a file is exactly when you might want to look at
+    /// it, and hunting for the path afterwards is friction the feature can
+    /// do without.
+    private(set) var lastJournalURL: URL?
+
     /// Mode driving the in-flight dictation. Captured at `startRecording()`
     /// time from `settings.activeMode(forFrontmostBundleID:)`, then frozen
     /// for the rest of the pipeline run so mid-recording cycling (Step 2)
@@ -97,7 +129,7 @@ final class Pipeline {
     /// Whether the *currently in-flight* assistant invocation is a follow-up
     /// to the active conversation. Set when recording starts so the HUD can
     /// show "Following up" instead of "Speak your instruction". Read by the
-    /// HUD view during `.recording(isAssistant: true)`.
+    /// HUD view during `.recording(kind: .assistant, …)`.
     private(set) var nextAssistantIsContinuation: Bool = false
 
     private var settings: DictatorSettings
@@ -312,6 +344,16 @@ final class Pipeline {
         /// diagnostics: join/spacing bugs are almost always app-specific, and
         /// "which app was this?" was previously unanswerable after the fact.
         var appBundleID: String?
+        /// True when this capture came from the journal hotkey. Everything up
+        /// to delivery is identical to a normal dictation — same transcribe,
+        /// same passes, same dictionary — but `finish` appends to a file
+        /// instead of pasting, and skips every insertion-point behaviour
+        /// (context join, trailing space, Return) because there is no
+        /// insertion point.
+        var isJournal: Bool = false
+        /// Seconds of audio actually transcribed, after silence trimming.
+        /// Feeds the words-per-minute figure on About.
+        var spokenSeconds: Double = 0
     }
     private var inFlight = InFlight()
 
@@ -355,8 +397,8 @@ final class Pipeline {
         self.settings = settings
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
-            if case .recording(_, let isAssistant, let interim) = state {
-                state = .recording(level: level, isAssistant: isAssistant, interim: interim)
+            if case .recording(_, let kind, let interim) = state {
+                state = .recording(level: level, kind: kind, interim: interim)
             }
         }
         recorder.onReady = { [weak self] in
@@ -376,13 +418,13 @@ final class Pipeline {
     /// released the hotkey while the mic was negotiating HFP) the recorder
     /// has already been told to stop; nothing to do here.
     private func handleRecorderReady() {
-        guard case .warmingUp(let isAssistant) = state else { return }
+        guard case .warmingUp(let kind) = state else { return }
         // Mark this attempt confirmed so the off-main stall sampler knows the
         // main actor got here (and doesn't fire on a healthy start). Read into
         // a local first — the `withLock` closure is @Sendable.
         let confirmedAttempt = warmupAttempt
         readyConfirmedAttempt.withLock { $0 = max($0, confirmedAttempt) }
-        state = .recording(level: 0, isAssistant: isAssistant, interim: "")
+        state = .recording(level: 0, kind: kind, interim: "")
         if settings.playSounds { SoundEffects.shared.playStart() }
         // Engaged after the start sound so the chime itself isn't dipped
         // by the very ducking it announces. Mode is snapshotted inside
@@ -430,10 +472,10 @@ final class Pipeline {
                             modelID: modelID
                         )
                         guard !Task.isCancelled,
-                              case .recording(let level, let isAssistant, _) = self.state else { return }
+                              case .recording(let level, let kind, _) = self.state else { return }
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            self.state = .recording(level: level, isAssistant: isAssistant, interim: trimmed)
+                            self.state = .recording(level: level, kind: kind, interim: trimmed)
                         }
                     } catch {
                         // Interim is best-effort; a failed snapshot just
@@ -501,7 +543,18 @@ final class Pipeline {
         return cycleable[nextIdx]
     }
 
+    /// Journal dictation. Same capture and same passes as `startRecording`;
+    /// the difference is entirely at delivery, where `finish` appends to the
+    /// user's journal file rather than pasting into the frontmost app.
+    func startJournal() {
+        startRecording(isJournal: true)
+    }
+
     func startRecording() {
+        startRecording(isJournal: false)
+    }
+
+    private func startRecording(isJournal: Bool) {
         // If we're sitting in a terminal state (.done / .failed) when the hotkey
         // fires again, snap back to .idle right now. Previously we cancelled the
         // doneFader and bailed on the guard — which permanently stranded us in
@@ -515,12 +568,33 @@ final class Pipeline {
             break
         }
         guard case .idle = state else { return }
+        // A correction the user made after the *previous* dictation is most
+        // likely to have happened in the seconds just before this one — they
+        // fixed the name and went straight back to dictating. Report it now
+        // rather than letting the watcher's timer run out.
+        if settings.learnFromCorrectionsEnabled { CorrectionWatcher.shared.flush() }
         // Snapshot the mode that will drive this dictation. Resolution order:
-        // (1) any mode bound to the frontmost app's bundle ID, (2) the user's
-        // configured defaultModeID. Frozen here so mid-pipeline settings
-        // churn or app-switching can't change pass behaviour underneath us.
+        // (1) a mode bound to the frontmost browser's URL, (2) a mode bound to
+        // the frontmost app's bundle ID, (3) the user's configured
+        // defaultModeID. Frozen here so mid-pipeline settings churn or
+        // app-switching can't change pass behaviour underneath us.
+        //
+        // A journal dictation ignores all of that: it isn't going into the app
+        // in front, so that app has no business choosing how it's written.
         let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        currentMode = settings.activeMode(forFrontmostBundleID: bundleID)
+        if isJournal {
+            currentMode = settings.journalMode
+        } else {
+            currentMode = settings.activeMode(forFrontmostBundleID: bundleID, url: frontmostBrowserURL(bundleID: bundleID))
+        }
+        // Start from a clean slate rather than clearing field by field. A run
+        // that ended in `fail()` never reset `inFlight`, so its stages used to
+        // leak into the next dictation's history record — and now that the
+        // struct also carries `isJournal`, a stale flag would send a normal
+        // dictation to the journal file instead of the app in front.
+        inFlight.visionTask?.cancel()
+        inFlight = InFlight()
+        inFlight.isJournal = isJournal
         // Snapshot the text around the insertion point while focus is still
         // in the target app (the HUD is non-activating, but press time is the
         // honest reading of "where the user was when they started talking").
@@ -529,10 +603,6 @@ final class Pipeline {
         // (mode opted out, no Accessibility, focused element doesn't expose
         // ranged text) just means no context this run.
         inFlight.appBundleID = bundleID
-        inFlight.context = nil
-        inFlight.visionTerms = []
-        inFlight.visionTask?.cancel()
-        inFlight.visionTask = nil
         if currentMode.contextAwarenessEnabled {
             Task.detached(priority: .userInitiated) { [weak self] in
                 let context = AXContextReader.capture(
@@ -564,10 +634,58 @@ final class Pipeline {
         // `.warmingUp` until the recorder's `onReady` fires (handled in
         // init); the HUD shows "Connecting" with the active device name for
         // the duration.
-        state = .warmingUp(isAssistant: false)
+        state = .warmingUp(kind: isJournal ? .journal : .dictation)
         if settings.playSounds { SoundEffects.shared.playArm() }
         recorder.start()
         armWarmupWatchdog()
+    }
+
+    /// Open the journal file the HUD is currently reporting, if any. Wired to
+    /// a click on the HUD's terminal frame.
+    @discardableResult
+    func openLastJournalFile() -> Bool {
+        guard let url = lastJournalURL else { return false }
+        NSWorkspace.shared.open(url)
+        return true
+    }
+
+    /// Commit whatever recording is in flight, whichever hotkey started it.
+    ///
+    /// This is the HUD's click-to-stop: the panel already accepts clicks while
+    /// the pipeline is cancellable (that's how the ✕ works), so the body of it
+    /// may as well be the stop button — the alternative is a HUD you can see
+    /// and point at but not use. Only meaningful while `.recording`; the later
+    /// stages have nothing to stop, and ✕ still cancels them.
+    func commitRecording() {
+        guard case .recording = state else { return }
+        if inFlightAssistant != nil {
+            finishAssistant()
+        } else {
+            finishRecording()
+        }
+    }
+
+    /// The journal hotkey's release. Guarded on the in-flight capture
+    /// actually being a journal one, so releasing the journal key while an
+    /// ordinary dictation is running doesn't commit somebody else's recording.
+    func finishJournal() {
+        guard inFlight.isJournal else { return }
+        finishRecording()
+    }
+
+    /// URL of the page in the frontmost browser, for website-bound modes.
+    ///
+    /// Returns nil — without touching Accessibility at all — unless a mode
+    /// actually has a website binding and the front app is a browser. This
+    /// runs on the hotkey-press path, which is the one place in this app with
+    /// a documented history of main-thread stalls, so the common case has to
+    /// cost nothing.
+    private func frontmostBrowserURL(bundleID: String?) -> String? {
+        guard settings.anyModeHasURLBinding,
+              BrowserURLReader.isBrowser(bundleID: bundleID),
+              let app = NSWorkspace.shared.frontmostApplication
+        else { return nil }
+        return BrowserURLReader.currentURL(bundleID: bundleID, pid: app.processIdentifier)
     }
 
     func finishRecording() {
@@ -591,8 +709,25 @@ final class Pipeline {
             state = .idle
             return
         }
+        // Cut the dead air off both ends before the engine ever sees it. Two
+        // wins on every push-to-talk clip: less audio to transcribe, and no
+        // near-silent frames for Whisper to hallucinate "Thank you." over.
+        // Conservative by construction — `SilenceTrimmer` hands back the
+        // original whenever trimming would be unsafe.
+        var speech = samples
+        if settings.trimSilenceEnabled {
+            let trimmed = SilenceTrimmer.trim(samples)
+            if trimmed.didTrim {
+                NSLog("[Dictator] Trimmed %.2fs of silence (%.2fs lead, %.2fs tail) from a %.2fs recording.",
+                      trimmed.totalSecondsRemoved, trimmed.leadingSecondsRemoved,
+                      trimmed.trailingSecondsRemoved, Double(samples.count) / 16_000)
+                speech = trimmed.samples
+            }
+        }
+        inFlight.spokenSeconds = Double(speech.count) / 16_000
+        let payload = speech
         inFlightTask = Task { @MainActor [weak self] in
-            await self?.runPostCapture(samples: samples)
+            await self?.runPostCapture(samples: payload)
             self?.inFlightTask = nil
         }
     }
@@ -614,7 +749,8 @@ final class Pipeline {
             )
             defer { watchdog.cancel() }
             let asr = activeASR
-            raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID)
+            raw = try await asr.engine.transcribe(samples: samples, modelID: asr.modelID,
+                                                  language: currentMode.spokenLanguage)
         } catch {
             if Task.isCancelled { return }
             fail("Transcribe: \(error.localizedDescription)")
@@ -687,6 +823,12 @@ final class Pipeline {
         for (index, pass) in passes.enumerated() {
             if Task.isCancelled { return }
             let isFirst = index == 0
+            // The dictionary and the mined document spellings are in the
+            // language the user *spoke*. On a Raw mode that only translates,
+            // the translation is the first pass, and running them after it
+            // would be trying to correct spellings in a language they were
+            // never written for.
+            if pass.kind == .translate { applyDeterministicMidPasses() }
 
             // Skip conditions, preserving the old per-pass guards:
             //  • pure emoji/punctuation (no words) — nothing to transform, and
@@ -694,7 +836,12 @@ final class Pipeline {
             //  • question-shaped input, FIRST pass only — Whisper already
             //    punctuates questions and the formatter is tempted to answer.
             let wordsFree = Self.wordSequence(text).isEmpty
-            let questionSkip = isFirst && Self.looksLikeQuestion(text)
+            // The question skip exists because the *formatter* is tempted to
+            // answer a question instead of punctuating it. A translator has no
+            // such excuse — "what time is the meeting?" is exactly as
+            // translatable as anything else, and skipping it would silently
+            // leave one sentence in the wrong language.
+            let questionSkip = isFirst && pass.kind != .translate && Self.looksLikeQuestion(text)
             if wordsFree || questionSkip {
                 if isFirst { applyDeterministicMidPasses() }
                 continue
@@ -716,8 +863,10 @@ final class Pipeline {
             // the only <<<>>> data block. When that pass is chunked, only chunk
             // 0 gets it — the caret's surroundings describe the start of the
             // dictation, not the middle of it.
+            // Document context is terminology in the language the user spoke;
+            // hanging it off a translate prompt is noise at best.
             var contextBlock: String? = nil
-            if isFirst, let context = combinedContext(), context.hasPromptMaterial {
+            if isFirst, pass.kind != .translate, let context = combinedContext(), context.hasPromptMaterial {
                 contextBlock = context.formatterPromptBlock
                 NSLog("[Dictator] Pass 1 (%@) running with document context (%d/%d chars, %d terms).",
                       pass.name, context.textBefore.count, context.textAfter.count, context.documentTerms.count)
@@ -910,6 +1059,7 @@ final class Pipeline {
         switch pass.kind {
         case .format, .messages, .custom: return .formatting
         case .polish: return .fixingGrammar
+        case .translate: return .translating
         }
     }
 
@@ -950,6 +1100,14 @@ final class Pipeline {
             // the drift ceiling with fillers stripped (catches rewording).
             guard passOnePreservesContent(raw: input, formatted: output) else { return false }
             return wordEditFractionStrippingFillers(from: input, to: output) <= polishMaxDriftFraction
+        case .translate:
+            // Every content-preservation check is meaningless here by
+            // definition — a translation is *supposed* to share no words with
+            // its input. What's left is the length sanity check that catches
+            // the two failure modes a translator actually has: answering the
+            // text instead of translating it (much longer), and summarising
+            // it (much shorter). Numbers still have to survive.
+            return translationLooksSane(input: input, output: output)
         }
     }
 
@@ -960,6 +1118,7 @@ final class Pipeline {
         switch pass.kind {
         case .format, .messages, .custom: return "content preserved"
         case .polish: return "content preserved + max drift"
+        case .translate: return "length + numbers preserved"
         }
     }
 
@@ -1178,6 +1337,28 @@ final class Pipeline {
     /// Called once, after transcription — by which point the capture (started
     /// at hotkey press) has almost always finished, so this returns instantly;
     /// the worst case is bounded by `WindowVisionContext`'s own deadline.
+    /// Post-check for the Translate pass.
+    ///
+    /// Nothing the other gates measure applies: a translation legitimately
+    /// shares no anchor words with its input, so `passOnePreservesContent`
+    /// would reject every correct result. What a translation *can't* do is
+    /// change size dramatically — real language pairs run roughly 0.6× to
+    /// 1.8× the source word count, with the extremes being compact→verbose
+    /// pairs like English→French. Outside that band the model has either
+    /// answered the text or summarised it, which are the two ways this pass
+    /// actually fails. Digits still have to survive.
+    static func translationLooksSane(input: String, output: String) -> Bool {
+        let inputWords = wordSequence(input).count
+        let outputWords = wordSequence(output).count
+        guard inputWords > 0, outputWords > 0 else { return false }
+        let ratio = Double(outputWords) / Double(inputWords)
+        // The +4 floor keeps a five-word dictation from failing on a single
+        // extra article, where the ratio is a very blunt instrument.
+        guard outputWords <= Int(Double(inputWords) * 1.8) + 4 else { return false }
+        guard ratio >= 0.5 || outputWords >= inputWords - 4 else { return false }
+        return numbersPreserved(input, output)
+    }
+
     private func resolveVisionTerms() async {
         guard let task = inFlight.visionTask else { return }
         inFlight.visionTask = nil
@@ -1467,7 +1648,7 @@ final class Pipeline {
         // focused element doesn't expose ranged text).
         var joinContext: InsertionContext?
         var joinPlaceholderChars = 0
-        if currentMode.contextAwarenessEnabled && settings.pasteAutomatically {
+        if currentMode.contextAwarenessEnabled && settings.pasteAutomatically && !inFlight.isJournal {
             let captured = await Task.detached(priority: .userInitiated) {
                 AXContextReader.captureDetailed(
                     maxBefore: AXContextReader.joinBeforeCap,
@@ -1515,8 +1696,34 @@ final class Pipeline {
         lastResult = text
         var pasted = false
         var note: String? = warning
+        lastDeliveryWasJournal = inFlight.isJournal
+        lastJournalURL = nil
 
-        if settings.pasteAutomatically {
+        if inFlight.isJournal {
+            // Journal entries never touch the frontmost app, and never touch
+            // the clipboard either — the whole point is to capture a thought
+            // without disturbing whatever you were doing.
+            do {
+                let written = try JournalWriter.append(
+                    text: text,
+                    pathTemplate: settings.journalPathTemplate,
+                    headerTemplate: settings.journalHeaderTemplate,
+                    entryTemplate: settings.journalEntryTemplate,
+                    appName: NSWorkspace.shared.frontmostApplication?.localizedName
+                )
+                lastJournalURL = written.url
+                note = warning ?? (written.createdFile
+                    ? "Started \(written.url.lastPathComponent) — click to open"
+                    : "Added to \(written.url.lastPathComponent) — click to open")
+            } catch {
+                // Fall back to the clipboard rather than losing the dictation:
+                // a mistyped path template shouldn't cost the user their words.
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                note = "Couldn't write the journal (\(error.localizedDescription)) — copied to the clipboard instead."
+                lastDeliveryWasJournal = false
+            }
+        } else if settings.pasteAutomatically {
             switch injector.deliver(text: text, pressReturnAfter: currentMode.pressReturnAfterPaste) {
             case .pasted:
                 pasted = true
@@ -1549,14 +1756,29 @@ final class Pipeline {
         UsageStatsStore.shared.record(
             mode: .dictation,
             wordsIn: UsageStatsStore.wordCount(inFlight.raw),
-            wordsOut: UsageStatsStore.wordCount(text)
+            wordsOut: UsageStatsStore.wordCount(text),
+            spokenSeconds: inFlight.spokenSeconds
         )
+        // Start watching for hand-corrections to what we just pasted. Only
+        // for text that actually landed in an app — a journal entry or a
+        // clipboard fallback has no field to re-read.
+        if settings.learnFromCorrectionsEnabled, pasted, !inFlight.isJournal {
+            CorrectionWatcher.shared.watch(delivered: text, appBundleID: inFlight.appBundleID)
+        }
         inFlight = InFlight()
 
         state = .done(text: text, pasted: pasted, note: note)
         if settings.playSounds { SoundEffects.shared.playDone() }
-        // Hold the HUD longer when there's something for the user to read.
-        let lingerMs = note == nil ? 1400 : 4000
+        // Hold the HUD longer when there's something for the user to read —
+        // and longer still for a journal entry, which is both the one result
+        // the user can't see land anywhere on screen and the one that offers
+        // a click (opening the file) they need time to take.
+        let lingerMs: Int
+        if lastJournalURL != nil {
+            lingerMs = 7000
+        } else {
+            lingerMs = note == nil ? 1400 : 4000
+        }
         doneFader = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(lingerMs))
             guard !Task.isCancelled else { return }
@@ -1651,8 +1873,8 @@ final class Pipeline {
                 // Same async-warmup story as `startRecording`: recorder
                 // start is non-blocking so BT HFP negotiation doesn't
                 // stall the assistant flow. handleRecorderReady promotes
-                // `.warmingUp(isAssistant: true)` to `.recording(...)`.
-                state = .warmingUp(isAssistant: true)
+                // `.warmingUp(kind: .assistant)` to `.recording(...)`.
+                state = .warmingUp(kind: .assistant)
                 if settings.playSounds { SoundEffects.shared.playArm() }
                 recorder.start()
                 armWarmupWatchdog()

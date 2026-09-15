@@ -173,7 +173,12 @@ private struct VocabularyEntryEditor: View {
                             pattern: trimmedPattern,
                             replacement: replacement,
                             caseSensitive: caseSensitive,
-                            wholeWord: wholeWord
+                            wholeWord: wholeWord,
+                            // iOS has no match-mode picker, so an edit here
+                            // must carry the mode through — otherwise editing
+                            // a sounds-like rule on the phone would quietly
+                            // downgrade it to exact on every Mac too.
+                            matchMode: entry?.matchMode ?? .defaultForNewRule
                         )
                         onSave(saved)
                         dismiss()

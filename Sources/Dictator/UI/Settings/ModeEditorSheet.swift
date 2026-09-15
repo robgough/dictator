@@ -17,6 +17,7 @@ struct ModeEditorSheet: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
     @State private var showCustomPromptSheet = false
+    @State private var newURLPattern = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +28,9 @@ struct ModeEditorSheet: View {
                 if mode.style != .raw { extraInstructionsSection }
                 if !mode.isLocked {
                     appsSection
+                    websitesSection
                 }
+                languageSection
                 optionsSection
             }
             .formStyle(.grouped)
@@ -150,6 +153,89 @@ struct ModeEditorSheet: View {
         } footer: {
             SectionFootnote("Switches to this mode when one of these apps is in front.")
         }
+    }
+
+    /// Site bindings. Separate from the Apps section rather than folded into
+    /// it because they're typed, not picked, and because they win over an app
+    /// binding when both could match — worth showing as its own idea.
+    private var websitesSection: some View {
+        Section {
+            ForEach(mode.urlPatterns, id: \.self) { pattern in
+                URLBindingRow(pattern: pattern) {
+                    mode.urlPatterns.removeAll(where: { $0 == pattern })
+                    onChange()
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("gmail.com", text: $newURLPattern)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addURLPattern)
+                Button("Add", action: addURLPattern)
+                    .disabled(newURLPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("Websites")
+        } footer: {
+            SectionFootnote("Switches to this mode when the browser in front is on a matching page. Beats an app match, so a site rule wins over a rule for the browser itself. Needs Accessibility.")
+        }
+    }
+
+    /// Language. Two separate ideas that look similar and aren't: what the
+    /// recogniser should expect to hear, and what the delivered text should be
+    /// written in.
+    private var languageSection: some View {
+        Section {
+            Picker("I speak", selection: $mode.spokenLanguage) {
+                Text("Detect automatically").tag(DictationLanguage.auto)
+                Divider()
+                ForEach(DictationLanguage.selectable) { language in
+                    Text(language.label).tag(language)
+                }
+            }
+            .onChange(of: mode.spokenLanguage) { _, _ in onChange() }
+            .help("Tells the transcription model which language to expect. It still detects automatically when this is left alone.")
+
+            Picker("Write it in", selection: $mode.outputLanguage) {
+                Text("Same language I spoke").tag(DictationLanguage.auto)
+                Divider()
+                ForEach(DictationLanguage.selectable) { language in
+                    Text(language.label).tag(language)
+                }
+            }
+            .onChange(of: mode.outputLanguage) { _, _ in onChange() }
+            .help("Translates the dictation before it's delivered. Runs on-device as one extra pass, so it needs a language model.")
+        } header: {
+            Text("Language")
+        } footer: {
+            languageFootnote
+        }
+    }
+
+    @ViewBuilder
+    private var languageFootnote: some View {
+        if mode.translationTarget != nil, state.settings.llmEngine == .none {
+            SectionFootnote("Translation needs a language model (see Models). Right now the dictation will be delivered as spoken.")
+        } else if state.settings.transcriptionEngine == .parakeet, !mode.spokenLanguage.isParakeetSupported {
+            SectionFootnote("Parakeet doesn't handle \(mode.spokenLanguage.label). Switch to Whisper in Models, or this mode will transcribe poorly.")
+        } else if mode.translationTarget != nil {
+            SectionFootnote("Dictate in \(mode.spokenLanguage == .auto ? "any language" : mode.spokenLanguage.label), get \(mode.outputLanguage.label).")
+        } else {
+            SectionFootnote("Leave both alone unless you dictate in more than one language.")
+        }
+    }
+
+    private func addURLPattern() {
+        let trimmed = newURLPattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return }
+        // Store the normalized form so "https://www.gmail.com/" and
+        // "gmail.com" don't sit in the list as two different-looking rules
+        // that behave identically.
+        let pattern = BrowserURLReader.normalize(trimmed) ?? trimmed
+        if !mode.urlPatterns.contains(pattern) {
+            mode.urlPatterns.append(pattern)
+            onChange()
+        }
+        newURLPattern = ""
     }
 
     private var optionsSection: some View {
@@ -284,6 +370,35 @@ private struct CustomPromptSheet: View {
                 .padding(12)
         }
         .frame(width: 720, height: 520)
+    }
+}
+
+/// One row in the website-bindings list. Plainer than `AppBindingRow` — there
+/// is no icon to resolve, and the pattern is already the display name.
+private struct URLBindingRow: View {
+    let pattern: String
+    let onRemove: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "globe")
+                .foregroundStyle(.tertiary)
+                .frame(width: 18, height: 18)
+            Text(pattern)
+                .lineLimit(1)
+            Spacer()
+            if hovering {
+                Button(role: .destructive, action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .help("Matches any page whose address contains \(pattern)")
+        .onHover { hovering = $0 }
     }
 }
 

@@ -79,13 +79,21 @@ The two Mac apps are separate processes with separate bundle IDs (`net.robgough.
 
 ```
 .idle → .capturingSelection? → .recording → .transcribing → .formatting →
-.fixingGrammar? → .restructuring? → .assisting? → .compacting? → .done → .idle
-                                                                       ↘ .failed
+.fixingGrammar? → .restructuring? → .translating? → .assisting? → .compacting? → .done → .idle
+                                                                                      ↘ .failed
 ```
 
-`.capturingSelection`, `.assisting`, `.compacting` only fire in Assistant Mode. `.fixingGrammar` and `.restructuring` are optional dictation passes gated by settings + word count.
+`.capturingSelection`, `.assisting`, `.compacting` only fire in Assistant Mode. `.fixingGrammar` and `.restructuring` are optional dictation passes gated by settings + word count. `.translating` fires only when a mode's output language differs from its spoken one.
 
-The two entry points (`startRecording` / `finishRecording` and `startAssistant` / `finishAssistant`) live on the same `Pipeline` instance so the HUD panel and menu bar can render either path off the same observed state.
+**Three** entry points, all on the same `Pipeline` instance so the HUD panel and menu bar render every path off the same observed state:
+
+- `startRecording` / `finishRecording` — dictation, pastes into the focused app.
+- `startAssistant` / `finishAssistant` — Assistant Mode.
+- `startJournal` / `finishJournal` — journal dictation. Identical capture and passes to a normal dictation (it just sets `inFlight.isJournal`); the only difference is at delivery, where `finish` appends to the user's journal file via `JournalWriter` and skips every insertion-point behaviour (context join, trailing space, Return) because there is no insertion point. Mode selection ignores app/website bindings — a journal entry isn't going into the app in front, so that app has no business choosing how it's written.
+
+`commitRecording()` is the HUD's click-to-stop: it routes to whichever `finish…` owns the in-flight capture.
+
+Mode resolution at recording start is most-specific-first: **website** binding (`urlPatterns`, matched against the frontmost browser's URL via `BrowserURLReader`) beats **app** binding (`appBundleIDs`) beats `defaultModeID`. The URL read walks a browser's AX tree, so it's skipped entirely unless `settings.anyModeHasURLBinding` — this is the hotkey-press path, which has a documented history of main-thread stalls.
 
 ### Two transcription engines behind one protocol
 
@@ -100,8 +108,13 @@ Each LLM pass has a deterministic post-check; the pipeline reverts to the previo
 - **Pass 1 (Format)**: question-shaped input (trailing `?` or interrogative first word) skips Pass 1 entirely — Whisper already punctuates correctly and small models are biased toward *answering* questions rather than transcribing them. For everything else, `Pipeline.passOnePreservesContent` validates that ≥60% of input anchor words (≥4 chars, not punctuation triggers) survive in the output AND the word count didn't grow more than 15% + 3. Failure → fall back to raw Whisper transcript with a HUD note.
 - **Pass 2 (Grammar)**: word-level Levenshtein distance. Reverts if drift exceeds `settings.grammarPassMaxEditFraction` (default 0.15).
 - **Pass 3 (Structure)**: strict word-sequence equality after lowercasing/stripping non-alphanumerics. Reverts on any word change — bullets/breaks only.
+- **Translate** (only when `mode.outputLanguage` differs from `mode.spokenLanguage`): runs LAST, after the style passes, so those operate on the language actually spoken. Every content-preservation gate is meaningless for a translation by definition, so it gets its own: `translationLooksSane` bounds the output/input word ratio (catches answering and summarising, the two ways this pass fails) and requires numbers to survive.
 
-The `Vocabulary` substitution pass runs between Pass 1 and Pass 2, deterministic case-insensitive whole-word replace.
+The `Vocabulary` substitution pass runs between Pass 1 and Pass 2. Three match modes per entry (`VocabularyEntry.matchMode`): `.literal` (the original case-insensitive whole-word replace), `.regex`, and `.phonetic` — Metaphone-keyed sound-alike matching via `PhoneticKey`, which is what makes one rule cover every spelling the decoder invents for a name.
+
+`.phonetic` is the default for new rules, and `VocabularyEntry.upgradedMatchMode` migrates pre-match-mode rules to it on decode. That's only safe because **phonetic is a strict superset of literal**: it matches the exact text first, and a pattern too short to key (under `PhoneticKey.minPatternLetters`) falls back to a whole-word literal replace rather than going inert. The migration deliberately skips `caseSensitive` and `wholeWord == false` rules — phonetic can express neither, so upgrading those would silently drop behaviour the user asked for.
+
+Read `PhoneticKey`'s doc comment before touching its gates: the obvious "also require a small edit distance" check was tried and defeats the whole feature, and the common-word stoplist is what's holding the false-positive rate down instead.
 
 ### Prompt customisation model
 
@@ -115,6 +128,8 @@ Two capture stacks coexist in the codebase, chosen per use case (a third, meetin
 
 - **`Sources/DictatorMac/Audio/AudioRecorder.swift` (dictation, shared by both Mac targets) uses `AVCaptureSession`.** Capture-only workloads sit awkwardly inside `AVAudioEngine`'s audio-graph model — every recording paid for the graph machinery (AUHAL device-property overrides, tap format propagation, ConfigurationChange rebuilds) without using it, and that machinery was the source of most flakiness on USB devices that share clock with the output (Yeti, audio interfaces) where engine ConfigurationChange didn't always fire for subtle clock shifts. `AVCaptureSession` is the AVFoundation media-capture stack with explicit beginConfiguration/commitConfiguration hot-swaps, dedicated runtime-error / device-disconnect notifications, and a delegate-queue stream of `CMSampleBuffer`s.
 - **`Sources/DictatorIOS/IOSAudioRecorder.swift` (iOS dictation) uses `AVAudioEngine`.** Same shape as the meeting mic recorder (see below), minus the voice processing.
+
+Captured audio goes through `SilenceTrimmer` (`Sources/DictatorCore/Audio/`) before transcription when `settings.trimSilenceEnabled` — leading/trailing only, never internal (a mid-dictation pause is where the sentence boundaries are). It returns the clip untouched whenever trimming would be unsafe, so it can't eat a quiet speaker.
 
 Preferred input device for both stacks comes from `AudioDeviceManager` (`Sources/DictatorMac/Audio/`), which keeps an ordered list per machine; if the override doesn't take the recorder falls back to the system default. `AudioDeviceEnumerator` extends that with output-side transport-type probes (`kAudioDevicePropertyTransportType`) so Dictator Meetings' AEC `.auto` mode can distinguish headphones (skip AEC) from built-in speakers (enable AEC).
 

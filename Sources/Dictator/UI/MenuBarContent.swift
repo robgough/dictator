@@ -315,14 +315,22 @@ struct MenuBarContent: View {
         case .idle: "Idle"
         case .capturingSelection: "Reading selection…"
         case .warmingUp: "Connecting microphone…"
-        case .recording(_, let isAssistant, _): isAssistant ? "Listening for instruction…" : "Listening…"
+        case .recording(_, let kind, _):
+            switch kind {
+            case .dictation: "Listening…"
+            case .assistant: "Listening for instruction…"
+            case .journal:   "Listening for your journal…"
+            }
         case .transcribing: "Transcribing…"
         case .formatting: "Formatting…"
         case .fixingGrammar: "Polishing…"
         case .restructuring: "Paragraphs…"
+        case .translating: "Translating…"
         case .assisting: "Thinking…"
         case .compacting: "Summarising earlier turns…"
-        case .done(_, let pasted, _): pasted ? "Pasted" : "Copied to clipboard"
+        case .done(_, let pasted, _):
+            if state.pipeline.lastDeliveryWasJournal { "Saved to your journal" }
+            else { pasted ? "Pasted" : "Copied to clipboard" }
         case .failed(let m): m
         }
     }

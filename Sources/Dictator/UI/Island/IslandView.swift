@@ -96,6 +96,14 @@ struct IslandView: View {
                     .fill(.black)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
             )
+            // Click the island itself: while recording it stops and
+            // transcribes, and on a journal result it opens the file that was
+            // just written. The panel already takes clicks whenever the
+            // pipeline is cancellable, so the shape was pointable but inert;
+            // the ✕ ear is an overlay and therefore still wins its own corner.
+            .contentShape(Rectangle())
+            .onTapGesture { handleTap() }
+            .help(tapHint)
             .overlay(alignment: .topTrailing) {
                 // Cancel hotspot in the island's right "ear" — the empty black
                 // strip beside the notch (the island is wider than the notch), at
@@ -141,6 +149,33 @@ struct IslandView: View {
             .frame(height: dictationHeight)
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: dictationHeight)
         }
+    }
+
+    /// Whether a click on the shape should commit. Only `.recording` — the
+    /// thinking states have nothing to stop.
+    private var isRecording: Bool {
+        if case .recording = state.pipeline.state { return true }
+        return false
+    }
+
+    /// A journal result is on screen and its file can be opened.
+    private var canOpenJournal: Bool {
+        if case .done = state.pipeline.state { return state.pipeline.lastJournalURL != nil }
+        return false
+    }
+
+    private func handleTap() {
+        if isRecording {
+            state.pipeline.commitRecording()
+        } else if canOpenJournal {
+            state.pipeline.openLastJournalFile()
+        }
+    }
+
+    private var tapHint: String {
+        if isRecording { return "Click to stop \u{2014} \u{2715} to cancel" }
+        if canOpenJournal { return "Click to open this journal file" }
+        return ""
     }
 
     private var dictationHeight: CGFloat {

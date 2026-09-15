@@ -32,6 +32,11 @@ public struct UsageStats: Equatable, Sendable {
     /// how much the model expanded a short instruction into reply text.
     public var dictationWordsIn: Int = 0
     public var dictationWordsOut: Int = 0
+    /// Seconds of speech actually transcribed across every dictation,
+    /// measured after silence trimming. Stored rather than derived because
+    /// nothing else on disk knows how long a recording was — and without it
+    /// there is no honest words-per-minute figure, only a guess.
+    public var dictationSeconds: Double = 0
     public var assistantWordsIn: Int = 0
     public var assistantWordsOut: Int = 0
 
@@ -60,6 +65,17 @@ public struct UsageStats: Equatable, Sendable {
         return Int((Double(dictationWordsOut) / Double(dictationCount)).rounded())
     }
 
+    /// Speaking rate across every dictation, in words per minute, measured
+    /// on the words actually *delivered* rather than the raw transcript —
+    /// that's the number that describes what the user got out of the app.
+    ///
+    /// nil until there's enough audio to be meaningful. A handful of seconds
+    /// divides into a wild figure and reads as a bug.
+    public var wordsPerMinute: Int? {
+        guard dictationSeconds >= 30, dictationWordsOut > 0 else { return nil }
+        return Int((Double(dictationWordsOut) / (dictationSeconds / 60)).rounded())
+    }
+
     /// Average length of the user's spoken assistant instructions —
     /// "how chatty are my prompts". Output-side average (reply length)
     /// would be more about the model than the user, so we surface the
@@ -75,6 +91,7 @@ public struct UsageStats: Equatable, Sendable {
             assistantCount: lhs.assistantCount + rhs.assistantCount,
             dictationWordsIn: lhs.dictationWordsIn + rhs.dictationWordsIn,
             dictationWordsOut: lhs.dictationWordsOut + rhs.dictationWordsOut,
+            dictationSeconds: lhs.dictationSeconds + rhs.dictationSeconds,
             assistantWordsIn: lhs.assistantWordsIn + rhs.assistantWordsIn,
             assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut,
             llmTokensIn: lhs.llmTokensIn + rhs.llmTokensIn,
@@ -87,6 +104,7 @@ extension UsageStats: Codable {
     private enum CodingKeys: String, CodingKey {
         case dictationCount, assistantCount
         case dictationWordsIn, dictationWordsOut
+        case dictationSeconds
         case assistantWordsIn, assistantWordsOut
         case llmTokensIn, llmTokensOut
         // Legacy flat fields from the v1 schema (one combined wordsIn /
@@ -118,6 +136,7 @@ extension UsageStats: Codable {
             assistantWordsIn = 0
             assistantWordsOut = 0
         }
+        dictationSeconds = try c.decodeIfPresent(Double.self, forKey: .dictationSeconds) ?? 0
         llmTokensIn = try c.decodeIfPresent(Int.self, forKey: .llmTokensIn) ?? 0
         llmTokensOut = try c.decodeIfPresent(Int.self, forKey: .llmTokensOut) ?? 0
     }
@@ -128,6 +147,7 @@ extension UsageStats: Codable {
         try c.encode(assistantCount, forKey: .assistantCount)
         try c.encode(dictationWordsIn, forKey: .dictationWordsIn)
         try c.encode(dictationWordsOut, forKey: .dictationWordsOut)
+        try c.encode(dictationSeconds, forKey: .dictationSeconds)
         try c.encode(assistantWordsIn, forKey: .assistantWordsIn)
         try c.encode(assistantWordsOut, forKey: .assistantWordsOut)
         try c.encode(llmTokensIn, forKey: .llmTokensIn)
@@ -153,6 +173,40 @@ struct UsageStatsDeviceRecord: Codable, Equatable, Sendable {
     var stats: UsageStats
     var firstSeen: Date
     var lastUpdated: Date
+    /// Dictations per local calendar day, keyed `yyyy-MM-dd`. Kept per device
+    /// for the same reason every other counter is: two Macs writing the file
+    /// must not be able to lose each other's days.
+    ///
+    /// Local dates, deliberately. A streak is a human fact about the days
+    /// somebody showed up, so it has to agree with the calendar on their wall
+    /// rather than with UTC.
+    var days: [String: Int] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case deviceName, platform, stats, firstSeen, lastUpdated, days
+    }
+
+    init(deviceName: String, platform: String, stats: UsageStats,
+         firstSeen: Date, lastUpdated: Date, days: [String: Int] = [:]) {
+        self.deviceName = deviceName
+        self.platform = platform
+        self.stats = stats
+        self.firstSeen = firstSeen
+        self.lastUpdated = lastUpdated
+        self.days = days
+    }
+
+    /// Tolerant of records written before `days` existed — they simply have
+    /// no history, and the streak starts from the next dictation.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deviceName = try c.decodeIfPresent(String.self, forKey: .deviceName) ?? "Mac"
+        platform = try c.decodeIfPresent(String.self, forKey: .platform) ?? "macOS"
+        stats = try c.decodeIfPresent(UsageStats.self, forKey: .stats) ?? .zero
+        firstSeen = try c.decodeIfPresent(Date.self, forKey: .firstSeen) ?? Date()
+        lastUpdated = try c.decodeIfPresent(Date.self, forKey: .lastUpdated) ?? Date()
+        days = try c.decodeIfPresent([String: Int].self, forKey: .days) ?? [:]
+    }
 }
 
 /// File-backed store for `stats.json`. Lazily loads on first access,
@@ -253,16 +307,24 @@ public final class UsageStatsStore {
     /// Increment this device's counters by the supplied amounts. Loads
     /// on first call. Failure to persist is logged but never thrown —
     /// stats are nice-to-have, not load-bearing for the dictation path.
-    public func record(mode: UsageStatsMode, wordsIn: Int, wordsOut: Int) {
+    public func record(mode: UsageStatsMode, wordsIn: Int, wordsOut: Int, spokenSeconds: Double = 0) {
         ensureLoaded()
         var record = records[deviceID] ?? freshRecord()
         let safeIn = max(0, wordsIn)
         let safeOut = max(0, wordsOut)
+        let key = Self.dayKey(for: Date())
+        record.days[key, default: 0] += 1
+        Self.trimDays(&record.days)
         switch mode {
         case .dictation:
             record.stats.dictationCount += 1
             record.stats.dictationWordsIn += safeIn
             record.stats.dictationWordsOut += safeOut
+            // Clamped: a clock jump or a wedged recorder must not be able to
+            // drive the words-per-minute denominator to nonsense.
+            if spokenSeconds > 0, spokenSeconds < 3600 {
+                record.stats.dictationSeconds += spokenSeconds
+            }
         case .assistant:
             record.stats.assistantCount += 1
             record.stats.assistantWordsIn += safeIn
@@ -325,7 +387,105 @@ public final class UsageStatsStore {
         totals = records.values.reduce(UsageStats.zero) { $0 + $1.stats }
         thisDeviceStats = records[deviceID]?.stats ?? .zero
         deviceCount = records.count
+
+        // Days are summed across devices, not maxed: dictating on the laptop
+        // and the desktop on the same day is two dictations, and for the
+        // streak all that matters is that the day is non-zero either way.
+        var merged: [String: Int] = [:]
+        for record in records.values {
+            for (key, count) in record.days {
+                merged[key, default: 0] += count
+            }
+        }
+        dailyCounts = merged
+        let streaks = Self.streaks(in: Set(merged.keys))
+        currentStreak = streaks.current
+        bestStreak = streaks.best
     }
+
+    // MARK: - Streaks
+
+    /// Dictations per local calendar day, summed across every device.
+    public private(set) var dailyCounts: [String: Int] = [:]
+    /// Consecutive days up to today (or yesterday — a streak isn't broken
+    /// until a day has fully passed without one, otherwise every streak would
+    /// read as zero until the first dictation each morning).
+    public private(set) var currentStreak: Int = 0
+    /// Longest run of consecutive days ever recorded.
+    public private(set) var bestStreak: Int = 0
+
+    /// Counts for the last `count` days ending today, oldest first — the heat
+    /// strip's data. Days with no activity come back as zero rather than being
+    /// absent, so the caller can render a fixed-width row.
+    public func recentDays(_ count: Int) -> [(date: Date, count: Int)] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return (0..<count).reversed().compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            return (date, dailyCounts[Self.dayKey(for: date)] ?? 0)
+        }
+    }
+
+    /// Current and best run lengths over a set of `yyyy-MM-dd` keys.
+    static func streaks(in days: Set<String>) -> (current: Int, best: Int) {
+        guard !days.isEmpty else { return (0, 0) }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        func run(endingAt start: Date) -> Int {
+            var length = 0
+            var cursor = start
+            while days.contains(dayKey(for: cursor)) {
+                length += 1
+                guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+                cursor = previous
+            }
+            return length
+        }
+
+        // Today not yet used doesn't end a streak — the day isn't over.
+        var current = run(endingAt: today)
+        if current == 0, let yesterday = calendar.date(byAdding: .day, value: -1, to: today) {
+            current = run(endingAt: yesterday)
+        }
+
+        // Best: walk every recorded day and measure the run that ends there.
+        // Only days whose successor is absent can end a run, which keeps this
+        // linear in practice rather than quadratic.
+        var best = current
+        for key in days {
+            guard let date = dayFormatter.date(from: key) else { continue }
+            if let next = calendar.date(byAdding: .day, value: 1, to: date),
+               days.contains(dayKey(for: next)) {
+                continue
+            }
+            best = max(best, run(endingAt: date))
+        }
+        return (current, best)
+    }
+
+    /// Keep a rolling window of days. Two years is far more than any UI shows
+    /// and keeps the file from growing without bound on a long-lived install.
+    private static func trimDays(_ days: inout [String: Int]) {
+        let limit = 730
+        guard days.count > limit else { return }
+        for key in days.keys.sorted().prefix(days.count - limit) {
+            days.removeValue(forKey: key)
+        }
+    }
+
+    static func dayKey(for date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+
+    /// Local time zone on purpose — see `UsageStatsDeviceRecord.days`. Fixed
+    /// POSIX locale so the key format can't shift with the user's region.
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     private func freshRecord() -> UsageStatsDeviceRecord {
         let now = Date()
@@ -370,17 +530,24 @@ public final class UsageStatsStore {
             assistantCount: max(existing.stats.assistantCount, incoming.stats.assistantCount),
             dictationWordsIn: max(existing.stats.dictationWordsIn, incoming.stats.dictationWordsIn),
             dictationWordsOut: max(existing.stats.dictationWordsOut, incoming.stats.dictationWordsOut),
+            dictationSeconds: max(existing.stats.dictationSeconds, incoming.stats.dictationSeconds),
             assistantWordsIn: max(existing.stats.assistantWordsIn, incoming.stats.assistantWordsIn),
             assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut),
             llmTokensIn: max(existing.stats.llmTokensIn, incoming.stats.llmTokensIn),
             llmTokensOut: max(existing.stats.llmTokensOut, incoming.stats.llmTokensOut)
         )
+        var days = existing.days
+        for (key, count) in incoming.days {
+            days[key] = max(days[key] ?? 0, count)
+        }
+        Self.trimDays(&days)
         return UsageStatsDeviceRecord(
             deviceName: incoming.deviceName,
             platform: incoming.platform,
             stats: stats,
             firstSeen: min(existing.firstSeen, incoming.firstSeen),
-            lastUpdated: max(existing.lastUpdated, incoming.lastUpdated)
+            lastUpdated: max(existing.lastUpdated, incoming.lastUpdated),
+            days: days
         )
     }
 

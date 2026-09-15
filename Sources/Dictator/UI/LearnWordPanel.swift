@@ -210,7 +210,10 @@ private struct LearnWordPanelView: View {
                     pattern: pattern.trimmingCharacters(in: .whitespacesAndNewlines),
                     replacement: replacement.trimmingCharacters(in: .whitespacesAndNewlines),
                     caseSensitive: caseSensitive,
-                    wholeWord: wholeWord
+                    wholeWord: wholeWord,
+                    // Editing an existing rule keeps whatever match mode it
+                    // already had; only a genuinely new one gets the default.
+                    matchMode: existingMatch?.matchMode ?? .defaultForNewRule
                 )
                 onSave(entry, existingMatch?.id)
             }
