@@ -134,7 +134,7 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
 
     /// Starts a fresh thread and focuses the composer.
     func newThread() {
-        let thread = ChatThread(modelID: AppState.shared.settings.llmModelID)
+        let thread = ChatThread(modelID: ChatEngine.currentModelIdentifier(AppState.shared.settings))
         ChatStore.shared.upsert(thread)
         ChatStore.shared.pruneEmpty(keeping: thread.id)
         select(threadID: thread.id)
@@ -147,7 +147,16 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
         // when they were added. Carrying them to another thread would send
         // that thread a message pointing at another chat's files — and leave
         // the copies orphaned in a folder nothing references.
-        if threadID != model.selectedThreadID { model.discardPendingAttachments() }
+        if threadID != model.selectedThreadID {
+            model.discardPendingAttachments()
+            // Cancel *before* repointing the engine. A turn left running would
+            // go on writing into the thread just left, and — because one engine
+            // serves every thread — would keep `isBusy` true, so the first
+            // message typed in the new chat was silently refused. `cancel()`
+            // commits whatever streamed into the old thread, which is why the
+            // order matters: it reads `engine.threadID` to find it.
+            if model.engine.isBusy { model.engine.cancel() }
+        }
         model.selectedThreadID = threadID
         model.engine.threadID = threadID
         model.modelSwitchNotice = noticeForModelMismatch(threadID: threadID)
@@ -161,11 +170,15 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
               let threadModel = thread.modelID,
               !thread.isEmpty
         else { return nil }
-        let current = AppState.shared.settings.llmModelID
+        let current = ChatEngine.currentModelIdentifier(AppState.shared.settings)
         guard threadModel != current else { return nil }
-        let was = ModelCatalog.llm(id: threadModel)?.displayName ?? threadModel
-        let now = ModelCatalog.llm(id: current)?.displayName ?? current
-        return "This chat was with \(was). New replies will come from \(now)."
+        return "This chat was with \(Self.modelName(threadModel)). "
+            + "New replies will come from \(Self.modelName(current))."
+    }
+
+    private static func modelName(_ id: String) -> String {
+        if id == ChatEngine.appleModelIdentifier { return "Apple's on-device model" }
+        return ModelCatalog.llm(id: id)?.displayName ?? id
     }
 
     private func selectMostRecentOrNew() {

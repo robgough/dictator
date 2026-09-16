@@ -27,7 +27,7 @@ struct ChatDetailRoot: View {
 enum ChatAvailability {
     enum Reason {
         case engineDisabled
-        case appleEngine
+        case appleUnavailable(String)
         case modelNotCapable(String)
         case modelNotDownloaded(String)
     }
@@ -41,7 +41,18 @@ enum ChatAvailability {
         case .none:
             return .unavailable(.engineDisabled)
         case .apple:
-            return .unavailable(.appleEngine)
+            // Apple runs chat without tools — see the `LLMChatStreaming`
+            // extension on `AppleFoundationLLMService`. It used to be refused
+            // outright, which also made every thread in the sidebar
+            // unopenable, including the Assistant Mode ones that predate the
+            // window. Reading your own conversation shouldn't depend on which
+            // engine happens to be selected.
+            guard AppleFoundationAvailability.isUsable else {
+                return .unavailable(.appleUnavailable(
+                    AppleFoundationAvailability.unavailableMessage
+                        ?? "Apple Intelligence isn't available on this Mac."))
+            }
+            return .ready
         case .mlx:
             break
         }
@@ -94,7 +105,7 @@ private struct ChatUnavailableView: View {
     private var title: String {
         switch reason {
         case .engineDisabled: return "Chat needs a language model"
-        case .appleEngine: return "Chat needs an MLX model"
+        case .appleUnavailable: return "Apple Intelligence isn't available"
         case .modelNotCapable: return "This model can't run chat"
         case .modelNotDownloaded: return "The model isn't downloaded yet"
         }
@@ -106,8 +117,8 @@ private struct ChatUnavailableView: View {
         switch reason {
         case .engineDisabled:
             return "Language model passes are switched off. Turn one on in Settings → Models, then pick one of: \(list)."
-        case .appleEngine:
-            return "Apple's on-device model can't hold a tool-calling conversation — its context window is too small and its tool support isn't reachable from here. Switch to MLX in Settings → Models and pick one of: \(list)."
+        case .appleUnavailable(let message):
+            return "\(message) Turn it on in System Settings, or switch to MLX in Settings → Models and pick one of: \(list)."
         case .modelNotCapable(let name):
             return "\(name) runs your dictation just fine, but it hasn't been tested for chat and tool calling. Models that have: \(list)."
         case .modelNotDownloaded(let name):

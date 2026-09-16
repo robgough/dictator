@@ -86,14 +86,11 @@ struct ChatComposer: View {
                 iconButton("xmark", size: 13, help: "Discard", action: dictation.cancel)
                     .keyboardShortcut(.cancelAction)
 
-                Button { dictation.finish(send: true) } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
+                roundButton("arrow.up.circle.fill", help: "Stop and send") {
+                    dictation.finish(send: true)
                 }
-                .buttonStyle(.plain)
                 .keyboardShortcut(.defaultAction)
                 .disabled(dictation.phase == .transcribing)
-                .help("Stop and send")
             } else {
                 iconButton("paperclip", size: 15, help: "Attach files…", action: chooseFiles)
                     .disabled(shell.engine.isBusy)
@@ -110,20 +107,10 @@ struct ChatComposer: View {
                     .transition(.opacity)
 
                 if shell.engine.isBusy {
-                    Button(action: shell.engine.cancel) {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 22))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Stop")
+                    roundButton("stop.circle.fill", help: "Stop", action: shell.engine.cancel)
                 } else {
-                    Button(action: send) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 22))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .help("Send")
+                    roundButton("arrow.up.circle.fill", help: "Send", action: send)
+                        .disabled(!canSend)
                 }
 
                 iconButton("mic.fill", size: 17, help: "Dictate a message",
@@ -131,6 +118,26 @@ struct ChatComposer: View {
                     .disabled(dictation.phase == .transcribing)
             }
         }
+    }
+
+    /// The filled send/stop glyph.
+    ///
+    /// Shares `iconButton`'s 30×30 box on purpose. These were bare images, so
+    /// in a bottom-aligned row their glyph sat flush with the baseline while
+    /// the paperclip and microphone were centred in a taller box — the send
+    /// button ended up a few points below its neighbours. Same box, same
+    /// centre, whatever the glyph's own size.
+    private func roundButton(
+        _ symbol: String, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 22))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func iconButton(
@@ -182,6 +189,10 @@ struct ChatComposer: View {
     }
 
     private var modelName: String {
+        // Not `llmModelID` unconditionally: on the Apple engine that holds
+        // whichever MLX model the user would switch *to*, so the footer named a
+        // model that wasn't going to answer.
+        guard state.settings.llmEngine != .apple else { return "Apple's on-device model" }
         let id = state.settings.llmModelID
         return ModelCatalog.llm(id: id)?.displayName ?? id
     }
