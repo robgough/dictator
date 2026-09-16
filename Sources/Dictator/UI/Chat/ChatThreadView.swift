@@ -182,7 +182,7 @@ private struct ChatEmptyState: View {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Ask anything — it all stays on this Mac.")
+            Text("Ask anything")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
@@ -407,8 +407,6 @@ private struct ChatToolRow: View {
 /// colour left on the icon alone — still the first thing on the page, no longer
 /// competing with the conversation.
 private struct ChatTrustWarning: View {
-    @Environment(AppState.self) private var state
-
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -431,17 +429,19 @@ private struct ChatTrustWarning: View {
 
     /// Four facts, in the order they matter: it's private, it's small, it lies
     /// fluently, check it. Cutting further starts dropping one of them.
-    private var warning: String {
-        "\(modelName) runs entirely on this Mac — nothing you type leaves it. "
-            + "It's also a tiny fraction of the size of ChatGPT or Claude, and it will state "
-            + "untrue things with complete confidence: invented dates, names, numbers and "
-            + "quotes, written as fluently as the parts it gets right. Check anything that matters."
-    }
-
-    private var modelName: String {
-        let id = state.settings.llmModelID
-        return ModelCatalog.llm(id: id)?.displayName ?? id
-    }
+    ///
+    /// The Mac is mentioned once and does double duty — it's both the privacy
+    /// claim and the reason the model is small. It used to be said here, again
+    /// in the empty state and a third time in the footer, which reads as
+    /// protesting too much.
+    ///
+    /// The model isn't named. The footer names it and is on screen the whole
+    /// time, so repeating it here only made this line longer.
+    private let warning =
+        "This is a small model running on your own Mac — nothing you type leaves it, and "
+        + "it's a tiny fraction of the size of ChatGPT or Claude. It will state untrue things "
+        + "with complete confidence: invented dates, names, numbers and quotes, written as "
+        + "fluently as the parts it gets right. Check anything that matters."
 }
 
 /// What you can do with a finished reply: copy it, or put it back where you
