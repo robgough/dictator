@@ -20,8 +20,9 @@ enum ChatScreenReader {
     /// nil when there was nothing to capture or the loaded model can't see —
     /// the caller turns that into a sentence for the model.
     static func read(question: String? = nil) async -> String? {
-        let service = MLXLLMServiceHolder.shared
-        guard service.canReadImages else { return nil }
+        // Whatever this Mac has — Apple's system model on macOS 27, otherwise a
+        // vision-capable MLX model. It used to require the latter specifically.
+        guard WindowVisionContext.canReadImages else { return nil }
         guard let image = await WindowImageCapture.captureFocusedWindow() else { return nil }
 
         let ask = (question?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
@@ -31,7 +32,7 @@ enum ChatScreenReader {
             ?? "Describe this window and transcribe the text in it."
 
         do {
-            let description = try await service.readImage(
+            let description = try await WindowVisionContext.readImage(
                 image,
                 systemPrompt: systemPrompt,
                 userPrompt: userPrompt,

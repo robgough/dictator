@@ -140,7 +140,20 @@ enum WindowVisionContext {
         case .none:
             return "Needs a language model. Choose one in Settings → Models."
         case .apple:
-            return "Apple's model can't take images on this macOS. Switch to \(capable) in Settings → Models."
+            // Three different situations wearing one hat before: too old an
+            // OS, Apple Intelligence switched off, and a build without the
+            // image API compiled in. Only the first two are things the user
+            // can act on, and they need opposite advice.
+            if !appleImageAPICompiledIn {
+                return "This build of Dictator can't hand Apple's model an image. "
+                    + "Switch to \(capable) in Settings → Models."
+            }
+            if !osSupportsAppleVision {
+                return "Apple's model can read your screen on macOS 27 and later. "
+                    + "Update macOS, or switch to \(capable) in Settings → Models."
+            }
+            return "Apple Intelligence isn't available right now. Turn it on in "
+                + "System Settings, or switch to \(capable) in Settings → Models."
         case .mlx:
             let name = ModelCatalog.llm(id: mlxModelID)?.displayName ?? "The selected model"
             return "\(name) can't read images. Switch to \(capable) in Settings → Models."
@@ -158,6 +171,26 @@ enum WindowVisionContext {
         case 1: return names[0]
         default: return names.dropLast().joined(separator: ", ") + " or " + names[names.count - 1]
         }
+    }
+
+    /// Whether the image API is in this binary at all — false on a build made
+    /// against an SDK older than macOS 27, which is what CI still uses. Split
+    /// out from the OS check because they fail for unrelated reasons and a user
+    /// can only do something about one of them.
+    static var appleImageAPICompiledIn: Bool {
+        #if FOUNDATION_MODELS_VISION
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// Whether the running OS is new enough for Apple's model to take an image,
+    /// and actually exports the initializer.
+    @MainActor
+    static var osSupportsAppleVision: Bool {
+        guard #available(macOS 27.0, *) else { return false }
+        return appleImageAPICompiledIn && imageAttachmentAPIAvailable
     }
 
     @MainActor
@@ -207,9 +240,18 @@ enum WindowVisionContext {
     /// know resolves whenever the technique works, so a missing sentinel means
     /// "this probe is broken", not "the API is absent" — and we fail closed and
     /// say so, rather than quietly disabling vision for the rest of time.
+    ///
+    /// **Regenerate `target` by reading it off a binary, never by hand.** The
+    /// first version of this string was hand-mangled and carried one extra
+    /// character (`Rszrl` where the real symbol has `Rszl`), so it never
+    /// resolved and the feature stayed off on an OS that could do it all along
+    /// — a false negative that read exactly like Apple not having shipped the
+    /// API. To regenerate: build a throwaway executable that calls
+    /// `Attachment(someCGImage)`, then
+    /// `nm -u <binary> | grep Attachment`, and drop dyld's leading `_`.
     private static let imageAttachmentAPIAvailable: Bool = {
         // _$s… with the leading underscore is dyld's C prefix; dlsym wants it dropped.
-        let target = "$s16FoundationModels10AttachmentVA2A05ImageC7ContentVRszrlE_11orientationACyAEGSo10CGImageRefa_So0G19PropertyOrientationVSgtcfC"
+        let target = "$s16FoundationModels10AttachmentVA2A05ImageC7ContentVRszlE_11orientationACyAEGSo10CGImageRefa_So0G19PropertyOrientationVSgtcfC"
         let sentinel = "$s16FoundationModels19SystemLanguageModelC7defaultACvgZ"
         let path = "/System/Library/Frameworks/FoundationModels.framework/FoundationModels"
         guard let handle = dlopen(path, RTLD_LAZY) else { return false }
@@ -221,20 +263,117 @@ enum WindowVisionContext {
         return dlsym(handle, target) != nil
     }()
 
+    // MARK: - Reading an arbitrary image
+
+    /// Whether anything on this Mac can read an image right now.
+    ///
+    /// The single answer to that question. Callers used to ask
+    /// `MLXLLMServiceHolder.shared.canReadImages`, which meant "is a
+    /// vision-capable MLX model resident" — true only for the two largest
+    /// models in the catalogue, and false on Apple's engine even though the
+    /// system model reads images perfectly well on macOS 27.
+    @MainActor
+    static var canReadImages: Bool { backend != nil }
+
+    /// Whether Apple's system model can be handed an image on this Mac.
+    ///
+    /// Exposed for the one caller that needs to know *which* engine will see —
+    /// Assistant Mode, which skips the describe-the-screen pass only when the
+    /// engine answering the question is the one that can look at it.
+    @MainActor
+    static var appleCanSee: Bool { appleVisionAvailable }
+
+    /// Read an image with whichever backend this Mac has, Apple first.
+    ///
+    /// Apple is preferred for the same reasons `backend` prefers it: measured
+    /// at ~0.7s warm against an MLX VLM's several seconds, no extra resident
+    /// memory (the system model is shared between apps), and no requirement
+    /// that any particular model be loaded. MLX is the fallback, and on macOS
+    /// 26 it is the only option.
+    ///
+    /// Throws when nothing here can see, so callers can tell "couldn't read it"
+    /// from "read it and found nothing" — the two need different words in front
+    /// of a user.
+    @MainActor
+    static func readImage(
+        _ image: CGImage, systemPrompt: String, userPrompt: String, maxTokens: Int
+    ) async throws -> String {
+        switch backend {
+        case .apple:
+            return try await appleRead(image, systemPrompt: systemPrompt,
+                                       userPrompt: userPrompt, maxTokens: maxTokens)
+        case .mlx:
+            return try await MLXLLMServiceHolder.shared.readImage(
+                image, systemPrompt: systemPrompt, userPrompt: userPrompt, maxTokens: maxTokens)
+        case nil:
+            throw NSError(domain: "Dictator", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "Nothing on this Mac can read an image right now."
+            ])
+        }
+    }
+
+    private static func appleRead(
+        _ image: CGImage, systemPrompt: String, userPrompt: String, maxTokens: Int
+    ) async throws -> String {
+        #if !FOUNDATION_MODELS_VISION
+        throw NSError(domain: "Dictator", code: 6, userInfo: [
+            NSLocalizedDescriptionKey: "This build has no Apple image support."
+        ])
+        #else
+        guard #available(macOS 27.0, *) else {
+            throw NSError(domain: "Dictator", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "Apple's model can only read images on macOS 27 or later."
+            ])
+        }
+        let session = LanguageModelSession(instructions: Instructions(systemPrompt))
+        let options = GenerationOptions(
+            samplingMode: .greedy, temperature: 0.0, maximumResponseTokens: maxTokens)
+        let response = try await session.respond(options: options) {
+            userPrompt
+            Attachment(image)
+        }
+        return response.content
+        #endif
+    }
+
     /// Capture the focused window and return the distinctive terms read from it,
     /// or an empty list on any failure (unsupported, no permission, no window,
     /// model refusal, timeout). Nonisolated — the heavy work is async capture +
     /// model inference; callers run it off the main actor (a detached task), so
     /// neither the screenshot nor the inference touches the dictation hot path.
     static func captureFocusedWindowTerms() async -> [String] {
-        guard let backend = await MainActor.run(body: { self.backend }) else { return [] }
+        // Timed in four parts because they fail for completely different
+        // reasons. The main-actor hop for `backend` is first on purpose: this
+        // runs off a detached task during recording, when the main thread is
+        // driving a 60fps level meter, and a slow hop here would mean the read
+        // hadn't even started yet — a different bug from a slow model.
+        let t0 = CFAbsoluteTimeGetCurrent()
+        guard let backend = await MainActor.run(body: { self.backend }) else {
+            VisionLog.log(String(format: "no backend after %.2fs — nothing loaded here can read an image",
+                                 CFAbsoluteTimeGetCurrent() - t0))
+            return []
+        }
+        let tBackend = CFAbsoluteTimeGetCurrent()
         let deadline = backend == .apple ? appleTimeoutSeconds : mlxTimeoutSeconds
         return await withDeadline(seconds: deadline, fallback: [String]()) {
-            guard let image = await WindowImageCapture.captureFocusedWindow() else { return [] }
-            switch backend {
-            case .apple: return await appleExtractTerms(from: image)
-            case .mlx:   return await mlxExtractTerms(from: image)
+            guard let image = await WindowImageCapture.captureFocusedWindow() else {
+                VisionLog.log(String(format: "no window captured (backend hop %.2fs, capture %.2fs)",
+                                     tBackend - t0, CFAbsoluteTimeGetCurrent() - tBackend))
+                return []
             }
+            let tCapture = CFAbsoluteTimeGetCurrent()
+            let terms: [String]
+            switch backend {
+            case .apple: terms = await appleExtractTerms(from: image)
+            case .mlx:   terms = await mlxExtractTerms(from: image)
+            }
+            let tEnd = CFAbsoluteTimeGetCurrent()
+            VisionLog.log(String(format: "terms pass: backend=%@ hop=%.2fs screenshot=%.2fs (%dx%d) read=%.2fs total=%.2fs",
+                                 backend == .apple ? "apple" : "mlx",
+                                 tBackend - t0, tCapture - tBackend,
+                                 image.width, image.height,
+                                 tEnd - tCapture, tEnd - t0))
+            return terms
         }
     }
 

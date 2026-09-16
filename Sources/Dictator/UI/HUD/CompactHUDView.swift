@@ -220,7 +220,10 @@ struct CompactHUDContent: View {
             recording(level: level, kind: kind, interim: interim)
         case .transcribing:
             stage(icon: "waveform.badge.magnifyingglass", title: "Transcribing", accent: .brandBlue)
-        case .readingScreen:
+        case .readingScreen(.spellings):
+            stage(icon: "textformat.abc.dottedunderline",
+                  title: isMini ? "Spellings" : "Checking spellings", accent: .hudIndigo)
+        case .readingScreen(.content):
             stage(icon: "eye", title: isMini ? "Screen" : "Reading screen", accent: .hudIndigo)
         case .formatting:
             stage(icon: "sparkles", title: "Formatting", accent: .hudPurple)
@@ -418,7 +421,7 @@ struct CompactHUDContent: View {
         case .warmingUp: "warmingUp"
         case .recording: "recording"
         case .transcribing: "transcribing"
-        case .readingScreen: "readingScreen"
+        case .readingScreen: "readingScreen"  // one identity: the two purposes never follow each other
         case .formatting: "formatting"
         case .fixingGrammar: "fixingGrammar"
         case .restructuring: "restructuring"

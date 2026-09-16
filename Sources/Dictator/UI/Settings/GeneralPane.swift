@@ -144,7 +144,7 @@ struct GeneralPane: View {
             } header: {
                 Text("Screen")
             } footer: {
-                SectionFootnote("Passes a screenshot through to improve word recognition and give the assistant context. Only on models that can read images; it never leaves your Mac.")
+                SectionFootnote("Passes a screenshot through to improve word recognition and give the assistant context. Needs a model that can see — Apple's own, on macOS 27, or one of the larger MLX models. It never leaves your Mac.")
             }
 
             Section {

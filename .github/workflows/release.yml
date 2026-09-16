@@ -30,11 +30,30 @@ jobs:
     if: |
       (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/meetings-v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.app == 'dictator')
-    # macos-26 is required so the runner has Xcode 17 + the macOS 26 SDK —
-    # FoundationModels (used by AppleFoundationLLMService) only ships with the
-    # 26 SDK, and the project's MACOSX_DEPLOYMENT_TARGET is 26.0. Older runner
-    # labels (macos-15 etc.) ship an Xcode whose SDK caps at macOS 15.5 and
-    # the build fails with "no such module 'FoundationModels'".
+    # macos-26 gives Xcode 26.x + the macOS 26 SDK. FoundationModels (used by
+    # AppleFoundationLLMService) needs at least that, and MACOSX_DEPLOYMENT_TARGET
+    # is 26.0. Older labels (macos-15 etc.) cap at the macOS 15.5 SDK and fail
+    # with "no such module 'FoundationModels'".
+    #
+    # ─── Why not the macOS 27 SDK yet ────────────────────────────────────────
+    # Apple's on-device model CAN read images on macOS 27 — verified on 27.0 GA
+    # (26A428): ~0.7s warm, correct transcription. The code is already here,
+    # behind `FOUNDATION_MODELS_VISION`, which project.yml switches on for
+    # `[sdk=macosx27*]` only. So releases built here have it compiled out and
+    # local builds on Xcode 27 have it on.
+    #
+    # The only runner image carrying the macOS 27 SDK is `xcode-27`, and it
+    # ships **Xcode 27 beta 6 (27A5252f)**, not GA. That is not a pedantic
+    # objection: the beta SDK mangles `Attachment(_ cgImage:orientation:)`
+    # differently from GA (`…Rszrl…` vs `…Rszl…`), so a binary built there asks
+    # the user's GA machine for a symbol it does not export. Either the app
+    # crashes uncatchably, or — once WindowVisionContext's gate is synced to
+    # match — vision is simply off for every GA user. Neither ships the feature.
+    #
+    # Switch to `runs-on: xcode-27` when that image carries a GA Xcode 27. The
+    # "Check the vision symbol gate" step below is what makes that safe: it
+    # fails the build when gate and binary disagree, instead of letting either
+    # failure mode ship quietly.
     runs-on: macos-26
     env:
       # ─── Required at build/sign time ──────────────────────────────────
@@ -177,6 +196,16 @@ jobs:
               exit 1
           fi
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Check the vision symbol gate
+        # Cheap, and it guards a failure invisible from the outside:
+        # WindowVisionContext decides whether to hand Apple's model a screenshot
+        # by dlsym-probing for a hardcoded mangled symbol, and a hardcoded
+        # symbol can disagree with the binary in either direction — a silently
+        # dead feature, or an uncatchable crash. On a macOS 26 SDK build the
+        # call site is compiled out and this passes trivially; it earns its keep
+        # the day this job moves to the macOS 27 SDK.
+        run: ./scripts/check-vision-symbol.sh "$APP_PATH"
 
       - name: Re-sign Sparkle helpers and the app for notarization
         # Sparkle ships as a versioned framework with nested executables —

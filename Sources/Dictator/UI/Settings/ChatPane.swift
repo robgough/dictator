@@ -85,7 +85,7 @@ struct ChatPane: View {
 
             let tools = BuiltInChatTools.all(
                 settings: state.settings,
-                canReadScreen: MLXLLMServiceHolder.shared.canReadImages
+                canReadScreen: WindowVisionContext.canReadImages
             )
             ForEach(tools, id: \.name) { tool in
                 HStack(alignment: .top, spacing: 8) {
@@ -113,8 +113,10 @@ struct ChatPane: View {
                     .padding(.top, 2)
             }
 
-            if !MLXLLMServiceHolder.shared.canReadImages {
-                Text("Reading the screen needs a model that can see images — \(ModelCatalog.llmModels.filter(\.visionCapable).map(\.displayName).joined(separator: " or ")).")
+            if !WindowVisionContext.canReadImages {
+                Text(WindowVisionContext.osSupportsAppleVision
+                     ? "Reading the screen needs a model that can see images — Apple's on-device model, or \(ModelCatalog.llmModels.filter(\.visionCapable).map(\.displayName).joined(separator: " or ")). Chat tools only run on MLX, so pick one of the latter here."
+                     : "Reading the screen needs a model that can see images — \(ModelCatalog.llmModels.filter(\.visionCapable).map(\.displayName).joined(separator: " or ")).")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

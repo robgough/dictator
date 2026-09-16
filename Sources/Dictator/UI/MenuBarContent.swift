@@ -336,7 +336,8 @@ struct MenuBarContent: View {
             case .journal:   "Listening for your journal…"
             }
         case .transcribing: "Transcribing…"
-        case .readingScreen: "Reading screen…"
+        case .readingScreen(.spellings): "Checking spellings…"
+        case .readingScreen(.content): "Reading screen…"
         case .formatting: "Formatting…"
         case .fixingGrammar: "Polishing…"
         case .restructuring: "Paragraphs…"

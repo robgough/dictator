@@ -15,6 +15,17 @@ enum CaptureKind: Equatable, Sendable {
     case journal
 }
 
+/// What a window-vision read is being done *for* — the only thing the HUD needs
+/// to know about it.
+enum ScreenReadPurpose: Equatable, Sendable {
+    /// Dictation: mining proper-noun spellings out of the focused window so the
+    /// formatter writes names the way the user's own screen writes them.
+    case spellings
+    /// Assistant Mode: reading what the window actually says, because the
+    /// spoken instruction is about it.
+    case content
+}
+
 enum PipelineState: Equatable {
     case idle
     case capturingSelection
@@ -32,7 +43,17 @@ enum PipelineState: Equatable {
     /// its own case because the wait can be many seconds on an MLX vision model,
     /// and sitting in `.transcribing` for that time told the user something
     /// plainly untrue: transcription was long since finished.
-    case readingScreen
+    ///
+    /// Carries what the read is *for* because the two flows using it mean very
+    /// different things by it, and one label can't serve both honestly. On a
+    /// dictation the user asked for text, not for the screen to be looked at —
+    /// "Reading screen", several seconds at a time on every polished run, reads
+    /// as the app watching them rather than working on their sentence. Naming
+    /// the product (the spellings) matches every other stage here — Formatting,
+    /// Polishing, Translating all say what comes out, not what gets touched.
+    /// In Assistant Mode the instruction is *about* the window, so there the
+    /// literal label is the reassuring one and it stays.
+    case readingScreen(purpose: ScreenReadPurpose)
     case formatting
     case fixingGrammar
     case restructuring
@@ -49,7 +70,11 @@ enum PipelineState: Equatable {
         case .warmingUp: "antenna.radiowaves.left.and.right"
         case .recording: "waveform.badge.mic"
         case .transcribing: "waveform.badge.magnifyingglass"
-        case .readingScreen: "eye"
+        case .readingScreen(let purpose):
+            switch purpose {
+            case .spellings: "textformat.abc.dottedunderline"
+            case .content: "eye"
+            }
         case .formatting: "sparkles"
         case .fixingGrammar: "text.badge.checkmark"
         case .restructuring: "list.bullet.indent"
@@ -361,6 +386,10 @@ final class Pipeline {
         /// into `visionTerms` once transcription completes — by which point it's
         /// almost always already done, so it adds no latency to delivery.
         var visionTask: Task<[String], Never>?
+        /// When the vision read was kicked off, so `resolveVisionTerms` can say
+        /// how much of it the recording actually managed to hide. Diagnostics
+        /// only — see the `[Vision]` NSLog lines.
+        var visionStartedAt: CFAbsoluteTime = 0
         /// Distinctive terms read off the focused window by the vision model.
         /// Merged with `context.documentTerms` at the consumption sites
         /// (`combinedContext`). Empty when the mode opts out, the OS/model can't
@@ -672,8 +701,14 @@ final class Pipeline {
            WindowVisionContext.isSupported,
            ScreenRecordingPermission.hasAccess() {
             inFlight.visionAttempted = true
+            let visionStart = CFAbsoluteTimeGetCurrent()
+            inFlight.visionStartedAt = visionStart
+            VisionLog.log("kick-off (mode '\(currentMode.name)')")
             inFlight.visionTask = Task.detached(priority: .userInitiated) {
-                await WindowVisionContext.captureFocusedWindowTerms()
+                let terms = await WindowVisionContext.captureFocusedWindowTerms()
+                VisionLog.log(String(format: "read DONE %.2fs after kick-off — %d term(s)",
+                                     CFAbsoluteTimeGetCurrent() - visionStart, terms.count))
+                return terms
             }
         }
         // Recorder start is non-blocking and asynchronous — the actual
@@ -834,7 +869,7 @@ final class Pipeline {
         // skips, the delivery-time restore — sees the same merged term list.
         // Normally instant: the capture finished while we were transcribing.
         // When it hasn't, say so rather than leaving "Transcribing…" on screen.
-        if inFlight.visionTask != nil, !currentMode.passes.isEmpty { state = .readingScreen }
+        if inFlight.visionTask != nil, !currentMode.passes.isEmpty { state = .readingScreen(purpose: .spellings) }
         await resolveVisionTerms()
 
         // The mode's LLM pipeline is the ordered pass list its STYLE resolves to
@@ -1421,7 +1456,16 @@ final class Pipeline {
             inFlight.visionAttempted = false
             return
         }
+        // The number that decides whether the overlap is working. Near zero
+        // means the read finished while the user was still speaking and the
+        // HUD stage was a flicker; seconds means the pipeline genuinely stood
+        // still, and the `[Vision]` lines above say which part was slow.
+        let waitStart = CFAbsoluteTimeGetCurrent()
         inFlight.visionTerms = await task.value
+        let now = CFAbsoluteTimeGetCurrent()
+        VisionLog.log(String(format: "pipeline WAITED %.2fs (read began %.2fs before this point, %d term(s))",
+                             now - waitStart, waitStart - inFlight.visionStartedAt,
+                             inFlight.visionTerms.count))
     }
 
     /// The Accessibility context merged with any window-vision terms. Vision is
@@ -1932,8 +1976,15 @@ final class Pipeline {
                     // screenshot during the answer itself. Only the pipeline
                     // knows which engine will answer, so the decision is made
                     // here rather than inside WindowVisionContext.
-                    let assistantCanSee = settings.llmEngine == .mlx
-                        && MLXLLMServiceHolder.shared.canReadImages
+                    // Either engine can now take the screenshot directly:
+                    // a vision-capable MLX model, or Apple's system model on
+                    // macOS 27. Both skip the describe-it-to-ourselves pass.
+                    let assistantCanSee: Bool
+                    switch settings.llmEngine {
+                    case .mlx:   assistantCanSee = MLXLLMServiceHolder.shared.canReadImages
+                    case .apple: assistantCanSee = WindowVisionContext.appleCanSee
+                    case .none:  assistantCanSee = false
+                    }
                     inFlightAssistant?.visionTask = Task.detached(priority: .userInitiated) {
                         await WindowVisionContext.captureForAssistant(assistantCanSee: assistantCanSee)
                     }
@@ -2189,7 +2240,7 @@ final class Pipeline {
             // Same reasoning as the dictation path: this await can run to tens
             // of seconds on an MLX vision model, and the HUD was still claiming
             // to be transcribing throughout.
-            state = .readingScreen
+            state = .readingScreen(purpose: .content)
             inFlightAssistant?.visionTask = nil
             switch await task.value {
             case .briefing(let readback):
