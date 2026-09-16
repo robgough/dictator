@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- A new chat no longer opens with its warning hanging in mid-air. Short content was being pinned to the bottom of the pane, so the warning sat just above the message box under a field of empty space, and moved again whenever anything re-drew.
+- A chat that doesn't fill the window no longer opens with a great slab of empty space above it. Short conversations were being pinned to the bottom of the pane, leaving what looked like an enormous blank header between the title bar and the first message.
 - The warning at the top of a chat is smaller and much quieter — one muted line instead of a bright yellow card. It says the same four things.
 
 - You can attach files to a chat. Use the paperclip next to the message box, or drag files anywhere onto the conversation. They're copied into that chat's folder, so the assistant can go back and read or change them later rather than only seeing them once.

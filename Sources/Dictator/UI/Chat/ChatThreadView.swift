@@ -62,63 +62,73 @@ struct ChatThreadView: View {
     @ViewBuilder
     private var transcript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ChatTrustWarning()
-                    if let notice = shell.modelSwitchNotice {
-                        ChatNoticeRow(text: notice, icon: "arrow.triangle.2.circlepath")
+            GeometryReader { geometry in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ChatTrustWarning()
+                        if let notice = shell.modelSwitchNotice {
+                            ChatNoticeRow(text: notice, icon: "arrow.triangle.2.circlepath")
+                        }
+                        // In the stack rather than centred over it. As an overlay
+                        // it floated independently of the warning, so the gap
+                        // between the two changed with the window height and the
+                        // pair drifted apart as you resized.
+                        if isEmpty {
+                            ChatEmptyState()
+                                .padding(.top, 56)
+                                .frame(maxWidth: .infinity)
+                        }
+                        ForEach(thread?.messages ?? []) { message in
+                            // The reply currently streaming lives on the engine,
+                            // not the store — writing it per token would reorder
+                            // and re-render the whole thread list on every chunk.
+                            ChatMessageRow(
+                                message: message,
+                                liveText: message.id == shell.engine.streamingMessageID
+                                    ? shell.engine.visibleStreamingText : nil
+                            )
+                            .id(message.id)
+                        }
+                        if shell.engine.activity != .idle {
+                            ChatActivityRow(activity: shell.engine.activity)
+                        }
+                        // A zero-height target to scroll to. Scrolling to the last
+                        // *message* was the bug: with a LazyVStack the row is sized
+                        // as it appears, so `scrollTo` aimed at a height that was
+                        // still changing and landed part-way up a long reply. An
+                        // empty anchor below everything has nothing to mis-measure.
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomAnchor)
                     }
-                    // In the stack rather than centred over it. As an overlay
-                    // it floated independently of the warning, so the gap
-                    // between the two changed with the window height and the
-                    // pair drifted apart as you resized.
-                    if isEmpty {
-                        ChatEmptyState()
-                            .padding(.top, 56)
-                            .frame(maxWidth: .infinity)
-                    }
-                    ForEach(thread?.messages ?? []) { message in
-                        // The reply currently streaming lives on the engine,
-                        // not the store — writing it per token would reorder
-                        // and re-render the whole thread list on every chunk.
-                        ChatMessageRow(
-                            message: message,
-                            liveText: message.id == shell.engine.streamingMessageID
-                                ? shell.engine.visibleStreamingText : nil
-                        )
-                        .id(message.id)
-                    }
-                    if shell.engine.activity != .idle {
-                        ChatActivityRow(activity: shell.engine.activity)
-                    }
-                    // A zero-height target to scroll to. Scrolling to the last
-                    // *message* was the bug: with a LazyVStack the row is sized
-                    // as it appears, so `scrollTo` aimed at a height that was
-                    // still changing and landed part-way up a long reply. An
-                    // empty anchor below everything has nothing to mis-measure.
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.bottomAnchor)
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // At least as tall as the pane, content pinned to its top.
+                    //
+                    // This is what makes the bottom anchor below behave. A scroll
+                    // view told to anchor at the bottom hoists content *shorter
+                    // than the viewport* down to the bottom of it — so a couple of
+                    // messages sat just above the composer under a great slab of
+                    // empty space that read as a giant blank header. Giving the
+                    // stack a floor of one viewport means there is never anything
+                    // to hoist: short threads start at the top, long ones still
+                    // stick to the end.
+                    .frame(minHeight: geometry.size.height, alignment: .top)
                 }
-                .padding(18)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // Pins to the newest content as the thread grows, including on
-            // first open — without it a reopened chat starts at the top and you
-            // scroll down through your own history to find the end.
-            //
-            // Top when there's nothing to pin to, though. Bottom anchoring puts
-            // content *shorter than the pane* at the bottom of it, so a new
-            // chat hung its warning just above the composer under a field of
-            // empty space, and shifted it again on every re-layout.
-            .defaultScrollAnchor(isEmpty ? .top : .bottom)
-            .onChange(of: thread?.messages.count) { scrollToEnd(proxy) }
-            .onChange(of: shell.engine.streamingText) { throttledScrollToEnd(proxy) }
-            .onChange(of: shell.engine.activity) { scrollToEnd(proxy) }
-            .onChange(of: shell.selectedThreadID) {
-                // No animation when switching threads: animating a jump
-                // through someone else's conversation is just a smear.
-                scrollToEnd(proxy, animated: false)
+                // Pins to the newest content as the thread grows, including on
+                // first open — without it a reopened chat starts at the top and you
+                // scroll down through your own history to find the end. Safe to
+                // apply unconditionally now that the stack above has a one-viewport
+                // floor; on its own it mis-places every thread short enough to fit.
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: thread?.messages.count) { scrollToEnd(proxy) }
+                .onChange(of: shell.engine.streamingText) { throttledScrollToEnd(proxy) }
+                .onChange(of: shell.engine.activity) { scrollToEnd(proxy) }
+                .onChange(of: shell.selectedThreadID) {
+                    // No animation when switching threads: animating a jump
+                    // through someone else's conversation is just a smear.
+                    scrollToEnd(proxy, animated: false)
+                }
             }
         }
     }
