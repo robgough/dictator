@@ -40,6 +40,10 @@ enum SpokenCues {
     static func apply(to text: String, options: Options = .all) -> String {
         guard !text.isEmpty else { return text }
         var s = text
+        // Named cue phrases ("a question mark") come out before anything runs
+        // and go back in at the end — see "Named cues" below.
+        var liftedCues: [String] = []
+        if options.punctuation { s = protectNamedCues(in: s, into: &liftedCues) }
         if options.punctuation { s = applyMultiWordPunctuation(to: s) }
         if options.times       { s = applyTimes(to: s) }
         if options.numbers     { s = applyArithmetic(to: s) }
@@ -47,6 +51,8 @@ enum SpokenCues {
         if options.currency    { s = applyCurrency(to: s) }
         if options.punctuation { s = applySingleWordPunctuation(to: s) }
         if options.emojis      { s = applyEmojis(to: s) }
+        // Before cleanup, so it sees real words rather than placeholders.
+        s = restoreNamedCues(in: s, from: liftedCues)
         s = cleanup(s)
         return s
     }
@@ -57,6 +63,102 @@ enum SpokenCues {
     // consumed before "mark" could be picked up by anything else, and so
     // "new paragraph" is consumed before "paragraph" might be (it isn't
     // today, but the ordering is the right defensive default).
+
+    // MARK: - Named cues
+    //
+    // A cue phrase is sometimes the *subject* of the sentence rather than a
+    // request. From a real dictation: "…if there's a question mark? Is that
+    // just on the assistant?" came out as "…if there's a?? Is that just on the
+    // assistant?" — the substitution ate the user's words, and the transcript's
+    // own "?" ended up beside the one it produced.
+    //
+    // The tell is a determiner. Nobody says "a" immediately before a mark they
+    // want typed: "put a question mark there" is about the mark, "are you sure
+    // question mark" is the cue. That asymmetry is the whole rule, and it makes
+    // the guard one-directional — it can only ever keep what was said.
+    //
+    // Deterministic rather than left to the LLM, even though judgement about
+    // meaning usually belongs in a prompt. Cues run before any pass precisely
+    // so they work on every engine including None, and in the dictation above
+    // no pass ran at all (question-shaped input skips the formatter), so a
+    // prompt-side fix would not have fixed it. A determiner isn't really a
+    // semantic judgement anyway — it's a syntactic fact sitting next to the cue.
+    //
+    // Done by lifting the phrase out of the text entirely rather than by
+    // declining each substitution in place. Declining in place was tried first
+    // and was wrong: "the em dash" survived the multi-word pass only for the
+    // single-word `dash` rule to eat "dash" a few stages later, leaving
+    // "the em —". Anything left in the text is reachable by a later pass, so
+    // the protected phrase has to be somewhere no pattern can see it.
+    //
+    // Plurals need no handling: "question marks" already fails the trailing
+    // `\b` in every pattern below. Line and paragraph breaks are deliberately
+    // NOT protected — "start a new paragraph" is as likely to be the request as
+    // the mention, and losing the cue there is worse than the occasional
+    // literal. Covered by `scratch/cue-mention-check`.
+
+    private static let cueDeterminers =
+        "a|an|the|another|any|each|every|no|some|this|that|these|those"
+        + "|its|his|her|their|our|my|your"
+
+    /// Every multi-word cue phrase, as one alternation. Kept in step with
+    /// `applyMultiWordPunctuation` by hand — a phrase missing here is only ever
+    /// a missed protection, never a wrong substitution.
+    private static let cuePhrases = [
+        "question[ \\t]+mark",
+        "exclamation[ \\t]+(?:mark|point)",
+        "open[ \\t]+paren(?:thesis)?",
+        "close[ \\t]+paren(?:thesis)?",
+        "open[ \\t]+quote",
+        "close[ \\t]+quote",
+        "full[ \\t]+stop",
+        "(?:em|m)[ \\t-]+dash",
+        "(?:en|n)[ \\t-]+dash",
+        "open[ \\t]+(?:square[ \\t]+)?bracket",
+        "close[ \\t]+(?:square[ \\t]+)?bracket",
+        "open[ \\t]+(?:curly[ \\t]+)?brace",
+        "close[ \\t]+(?:curly[ \\t]+)?brace",
+        "at[ \\t]+(?:sign|symbol)",
+        "(?:hash|pound|number)[ \\t]+sign",
+        "dollar[ \\t]+sign",
+        "forward[ \\t]+slash",
+    ].joined(separator: "|")
+
+    nonisolated(unsafe) private static let namedCueRegex: Regex<AnyRegexOutput>? = {
+        try? Regex("\\b(?:\(cueDeterminers))[ \\t]+(?:\(cuePhrases))\\b").ignoresCase()
+    }()
+
+    /// Placeholder for one lifted phrase: two private-use scalars around a
+    /// unary count. Private-use scalars carry no Unicode word property, so a
+    /// placeholder can't satisfy `\b`, `\w` or a digit class in any later
+    /// pattern — which a decimal index would have done, putting a bare "0" in
+    /// front of the arithmetic pass.
+    private static let cueMark = "\u{E000}"
+    private static let cueMarkEnd = "\u{E001}"
+    private static let cueMarkUnit = "\u{E002}"
+
+    private static func placeholder(_ index: Int) -> String {
+        cueMark + String(repeating: cueMarkUnit, count: index + 1) + cueMarkEnd
+    }
+
+    /// Lift every named cue phrase out, recording what was there.
+    private static func protectNamedCues(in text: String, into lifted: inout [String]) -> String {
+        guard let regex = namedCueRegex else { return text }
+        return text.replacing(regex) { match in
+            lifted.append(String(match.output[0].substring ?? ""))
+            return placeholder(lifted.count - 1)
+        }
+    }
+
+    /// Put the lifted phrases back, exactly as spoken.
+    private static func restoreNamedCues(in text: String, from lifted: [String]) -> String {
+        guard !lifted.isEmpty else { return text }
+        var s = text
+        for (index, original) in lifted.enumerated() {
+            s = s.replacingOccurrences(of: placeholder(index), with: original)
+        }
+        return s
+    }
 
     private static func applyMultiWordPunctuation(to text: String) -> String {
         var s = text
