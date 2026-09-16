@@ -187,10 +187,16 @@ private struct ChatEmptyState: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(
+                    // One each for the three things that aren't guessable
+                    // from a text box: it can see the screen, it knows what
+                    // you've dictated, and you can put a file into it. The
+                    // dropped-PDF line replaced "draft a reply to the email
+                    // behind this window", which was a second way of saying
+                    // the first one.
                     [
                         "What's on my screen right now?",
                         "Summarise what I dictated this week.",
-                        "Draft a reply to the email behind this window.",
+                        "Summarise the PDF I've dropped in.",
                     ], id: \.self
                 ) { example in
                     Text("“\(example)”")
