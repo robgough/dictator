@@ -72,6 +72,10 @@ private struct AboutStats: View {
                         allTokensOut: stats.llmTokensOut,
                         thisTokensIn: thisDeviceStats.llmTokensIn,
                         thisTokensOut: thisDeviceStats.llmTokensOut,
+                        // This Mac's, never the pooled figure: generation speed
+                        // describes the machine and the model, so averaging it
+                        // with another Mac's would describe neither.
+                        tokensPerSecond: thisDeviceStats.llmTokensPerSecond,
                         showsPerDevice: deviceCount > 1
                     )
                 }
@@ -321,6 +325,7 @@ private struct LLMTokenCard: View {
     let allTokensOut: Int
     let thisTokensIn: Int
     let thisTokensOut: Int
+    let tokensPerSecond: Int?
     let showsPerDevice: Bool
 
     var body: some View {
@@ -358,6 +363,14 @@ private struct LLMTokenCard: View {
                     tokensIn: allTokensIn,
                     tokensOut: allTokensOut
                 )
+            }
+
+            if let tokensPerSecond {
+                Text(showsPerDevice
+                     ? "About \(tokensPerSecond.formatted()) tokens a second on this Mac."
+                     : "About \(tokensPerSecond.formatted()) tokens a second.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

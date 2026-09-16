@@ -58,11 +58,27 @@ final class ChatPromptCache: @unchecked Sendable {
         ownerKey = nil
     }
 
-    /// Prepares a cache for a round.
+    /// What a round starts from: the cache to generate into, and what it cost
+    /// to get there.
     ///
-    /// Returns the cache to generate into and how many tokens had to be
-    /// prefilled. The returned cache is a throwaway: the caller generates into
-    /// it and discards it.
+    /// The cache is a throwaway — the caller generates into it and discards it.
+    struct Prepared {
+        let cache: [KVCache]
+        /// Tokens actually prefilled this round. The rest of the prompt came
+        /// out of the baseline, which is the entire point of this type.
+        let prefilled: Int
+        /// Wall-clock seconds those tokens took.
+        ///
+        /// Honest to within one token: `LLMModel.prepare` prefills in chunks
+        /// and ends with a synchronous `eval(cache)`, so the bulk of the work
+        /// has genuinely landed before this returns. What is still in flight is
+        /// the single `asyncEval`d step `TokenIterator.prepare` does at the
+        /// end, and that lands in the generation timing instead. MLX's own
+        /// `promptPrefillTime` draws the line in exactly the same place.
+        let seconds: TimeInterval
+    }
+
+    /// Prepares a cache for a round.
     ///
     /// - Parameters:
     ///   - promptTokens: the full prompt for this round.
@@ -74,7 +90,7 @@ final class ChatPromptCache: @unchecked Sendable {
         owner: String,
         model: any LanguageModel,
         parameters: GenerateParameters
-    ) throws -> (cache: [KVCache], prefilled: Int) {
+    ) throws -> Prepared {
         // `head` is the prompt minus the seed token — see the type's comment.
         let head = Array(promptTokens.dropLast())
 
@@ -98,10 +114,13 @@ final class ChatPromptCache: @unchecked Sendable {
         // Constructing a TokenIterator IS the prefill, so this extends the
         // baseline to hold exactly `head`. Its sampled token is discarded — one
         // wasted step against thousands of skipped ones.
+        var seconds: TimeInterval = 0
         if !delta.isEmpty {
+            let start = Date.timeIntervalSinceReferenceDate
             _ = try TokenIterator(
                 input: LMInput(tokens: MLXArray(delta)),
                 model: model, cache: base, parameters: parameters)
+            seconds = Date.timeIntervalSinceReferenceDate - start
         }
 
         if head.count <= Self.maxCachedTokens {
@@ -114,6 +133,7 @@ final class ChatPromptCache: @unchecked Sendable {
             tokens = []
         }
 
-        return (base.map { $0.copy() }, delta.count)
+        return Prepared(
+            cache: base.map { $0.copy() }, prefilled: delta.count, seconds: seconds)
     }
 }

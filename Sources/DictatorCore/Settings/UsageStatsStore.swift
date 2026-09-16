@@ -63,6 +63,18 @@ public struct UsageStats: Equatable, Sendable {
     public var llmTokensIn: Int = 0
     public var llmTokensOut: Int = 0
 
+    /// Generated tokens from *only* those calls whose generation was also
+    /// timed, paired with the seconds they took.
+    ///
+    /// A second pair rather than a denominator under `llmTokensOut`, for the
+    /// same reason `dictationWordsOutTimed` exists: only the MLX engine reports
+    /// generation time, so dividing every recorded token by the seconds a
+    /// subset of them took would overstate the rate by however much of the
+    /// user's work ran on Apple Foundation Models or arrived over the socket.
+    /// Both are written in one breath at each call site, or neither is.
+    public var llmTokensOutTimed: Int = 0
+    public var llmGenerateSeconds: Double = 0
+
     public static let zero = UsageStats()
 
     /// Total words across both flows. Kept as a derived value rather
@@ -90,6 +102,21 @@ public struct UsageStats: Equatable, Sendable {
         return Int((Double(dictationWordsOutTimed) / (dictationSeconds / 60)).rounded())
     }
 
+    /// How fast the local model generates, in tokens per second, across every
+    /// timed call on this device — the cleanup passes, assistant turns and chat
+    /// rounds alike.
+    ///
+    /// A property of the Mac and the model rather than of the user, which is
+    /// why the pane shows this device's figure and not the pooled one.
+    ///
+    /// nil until there's enough generation to mean anything: a couple of
+    /// seconds of decoding divides into a number that swings by a third
+    /// between readings.
+    public var llmTokensPerSecond: Int? {
+        guard llmGenerateSeconds >= 5, llmTokensOutTimed > 0 else { return nil }
+        return Int((Double(llmTokensOutTimed) / llmGenerateSeconds).rounded())
+    }
+
     /// Average length of the user's spoken assistant instructions —
     /// "how chatty are my prompts". Output-side average (reply length)
     /// would be more about the model than the user, so we surface the
@@ -110,7 +137,9 @@ public struct UsageStats: Equatable, Sendable {
             assistantWordsIn: lhs.assistantWordsIn + rhs.assistantWordsIn,
             assistantWordsOut: lhs.assistantWordsOut + rhs.assistantWordsOut,
             llmTokensIn: lhs.llmTokensIn + rhs.llmTokensIn,
-            llmTokensOut: lhs.llmTokensOut + rhs.llmTokensOut
+            llmTokensOut: lhs.llmTokensOut + rhs.llmTokensOut,
+            llmTokensOutTimed: lhs.llmTokensOutTimed + rhs.llmTokensOutTimed,
+            llmGenerateSeconds: lhs.llmGenerateSeconds + rhs.llmGenerateSeconds
         )
     }
 }
@@ -122,6 +151,7 @@ extension UsageStats: Codable {
         case dictationSeconds, dictationWordsOutTimed
         case assistantWordsIn, assistantWordsOut
         case llmTokensIn, llmTokensOut
+        case llmTokensOutTimed, llmGenerateSeconds
         // Legacy flat fields from the v1 schema (one combined wordsIn /
         // wordsOut per device). When present on decode we fold them
         // into the dictation buckets — dictation is the dominant flow,
@@ -166,6 +196,16 @@ extension UsageStats: Codable {
         }
         llmTokensIn = try c.decodeIfPresent(Int.self, forKey: .llmTokensIn) ?? 0
         llmTokensOut = try c.decodeIfPresent(Int.self, forKey: .llmTokensOut) ?? 0
+        // Both sides of the pair or neither, so a file written by a build that
+        // only knew one of them can't seed a lopsided ratio.
+        if let timed = try c.decodeIfPresent(Int.self, forKey: .llmTokensOutTimed),
+           let seconds = try c.decodeIfPresent(Double.self, forKey: .llmGenerateSeconds) {
+            llmTokensOutTimed = timed
+            llmGenerateSeconds = seconds
+        } else {
+            llmTokensOutTimed = 0
+            llmGenerateSeconds = 0
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -180,6 +220,8 @@ extension UsageStats: Codable {
         try c.encode(assistantWordsOut, forKey: .assistantWordsOut)
         try c.encode(llmTokensIn, forKey: .llmTokensIn)
         try c.encode(llmTokensOut, forKey: .llmTokensOut)
+        try c.encode(llmTokensOutTimed, forKey: .llmTokensOutTimed)
+        try c.encode(llmGenerateSeconds, forKey: .llmGenerateSeconds)
     }
 }
 
@@ -320,12 +362,24 @@ public final class UsageStatsStore {
     /// "tokens generated locally", not per-pass accounting. Zero or
     /// negative inputs are coerced to zero; we don't want a failed
     /// detached-task accounting hop to drive the total backwards.
-    public func recordLLMTokens(in tokensIn: Int, out tokensOut: Int) {
+    ///
+    /// `generatedIn` is the seconds the output tokens took, where the engine
+    /// knows — only MLX does. Decode time, not wall clock: MLX stops counting
+    /// prompt time once the first token is out, so this is the rate the model
+    /// produces text at rather than how long the user waited. Supplying it
+    /// moves the same `tokensOut` into the timed pair as well, in one call, so
+    /// the two halves of the rate can't drift apart.
+    public func recordLLMTokens(in tokensIn: Int, out tokensOut: Int,
+                                generatedIn seconds: Double? = nil) {
         ensureLoaded()
         guard tokensIn > 0 || tokensOut > 0 else { return }
         var record = records[deviceID] ?? freshRecord()
         record.stats.llmTokensIn += max(0, tokensIn)
         record.stats.llmTokensOut += max(0, tokensOut)
+        if let seconds, seconds > 0, seconds.isFinite, tokensOut > 0 {
+            record.stats.llmTokensOutTimed += tokensOut
+            record.stats.llmGenerateSeconds += seconds
+        }
         record.lastUpdated = Date()
         records[deviceID] = record
         recomputeTotals()
@@ -566,7 +620,11 @@ public final class UsageStatsStore {
             assistantWordsIn: max(existing.stats.assistantWordsIn, incoming.stats.assistantWordsIn),
             assistantWordsOut: max(existing.stats.assistantWordsOut, incoming.stats.assistantWordsOut),
             llmTokensIn: max(existing.stats.llmTokensIn, incoming.stats.llmTokensIn),
-            llmTokensOut: max(existing.stats.llmTokensOut, incoming.stats.llmTokensOut)
+            llmTokensOut: max(existing.stats.llmTokensOut, incoming.stats.llmTokensOut),
+            llmTokensOutTimed: max(
+                existing.stats.llmTokensOutTimed, incoming.stats.llmTokensOutTimed),
+            llmGenerateSeconds: max(
+                existing.stats.llmGenerateSeconds, incoming.stats.llmGenerateSeconds)
         )
         var days = existing.days
         for (key, count) in incoming.days {
