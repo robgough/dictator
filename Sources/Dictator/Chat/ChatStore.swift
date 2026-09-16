@@ -174,9 +174,24 @@ final class ChatStore {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: Self.storeURL) else { return }
+        guard let data = try? Data(contentsOf: Self.storeURL) else {
+            // No store yet — but there may still be a quarantined one to fold
+            // back in, which is exactly the state a failed decode leaves behind.
+            recoverQuarantinedThreads()
+            return
+        }
         do {
-            threads = try JSONDecoder.chatISO8601.decode([ChatThread].self, from: data)
+            // Element-wise, so one unreadable thread costs one thread. Decoding
+            // `[ChatThread]` straight is all-or-nothing: the array decoder
+            // rethrows, and the `catch` below then sets the *whole file* aside.
+            // That is precisely how 38 conversations were stranded twice.
+            let salvaged = try JSONDecoder.chatISO8601.decode([Lossy<ChatThread>].self, from: data)
+            threads = salvaged.compactMap(\.value)
+            let lost = salvaged.count - threads.count
+            if lost > 0 {
+                NSLog("[Dictator] %d chat(s) in chats.json wouldn't decode and were skipped; %d loaded.",
+                      lost, threads.count)
+            }
         } catch {
             // Keep the unreadable file rather than overwriting it on the next
             // save — same posture as DictatorSettings' corruption path. Losing
@@ -186,11 +201,97 @@ final class ChatStore {
             try? data.write(to: backup)
             NSLog("[Dictator] chats.json wouldn't decode (\(error)); kept a copy at \(backup.lastPathComponent)")
         }
+        recoverQuarantinedThreads()
     }
 
-    private func persist() {
-        guard let data = try? JSONEncoder.chatISO8601.encode(threads) else { return }
-        try? data.write(to: Self.storeURL, options: .atomic)
+    /// Fold back any threads stranded in a `chats.unreadable-*.json`.
+    ///
+    /// Those files are written by the `catch` above when the whole store fails
+    /// to decode. Until the hand-written decoders on `ChatThread`,
+    /// `ChatMessage` and `ChatAttachment` landed, one missing key was enough to
+    /// do that: Swift's *synthesised* `init(from:)` ignores property defaults,
+    /// so adding a non-optional defaulted field — `promoted` for the
+    /// assistant/chat merge, `attachments` before it — made every previously
+    /// written thread undecodable. It happened twice on 2026-09-15 and stranded
+    /// 38 conversations.
+    ///
+    /// Those files decode now, so this reads them back. Strictly additive: a
+    /// thread whose id is already present is skipped, so nothing live is ever
+    /// overwritten by an older copy of itself. A file that still won't decode is
+    /// left exactly where it is — recovery must never be the thing that loses
+    /// the data. Handled files are renamed `chats.recovered-*.json` so this runs
+    /// once per file and the originals remain on disk.
+    private func recoverQuarantinedThreads() {
+        let directory = Self.storeURL.deletingLastPathComponent()
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)
+        else { return }
+
+        var known = Set(threads.map(\.id))
+        var recovered: [ChatThread] = []
+        var handled: [URL] = []
+        for url in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        where url.lastPathComponent.hasPrefix("chats.unreadable-")
+            && url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let salvaged = (try? JSONDecoder.chatISO8601.decode([Lossy<ChatThread>].self, from: data))?
+                .compactMap(\.value)
+            else {
+                NSLog("[Dictator] %@ still won't decode — leaving it alone.",
+                      url.lastPathComponent)
+                continue
+            }
+            for thread in salvaged where !known.contains(thread.id) && !thread.isEmpty {
+                known.insert(thread.id)
+                var restored = thread
+                // Exempt from the 14-day assistant sweep, which `prune()` runs
+                // moments after this. 24 of the 38 stranded threads are
+                // assistant-origin and only 3 were promoted, so without this a
+                // launch after they age out would restore them and delete them
+                // in the same breath — with the quarantine file already renamed.
+                // The sweep is there to clear one-off dictations nobody returned
+                // to; a conversation being handed back after being lost is not
+                // that, and `promoted` already means "worth keeping".
+                restored.promoted = true
+                recovered.append(restored)
+            }
+            handled.append(url)
+        }
+
+        guard !recovered.isEmpty else { return }
+        threads.append(contentsOf: recovered)
+        threads.sort { $0.updatedAt > $1.updatedAt }
+
+        // Written synchronously, and the quarantine files are renamed only once
+        // that write has landed. `scheduleSave` debounces by 600ms, and this
+        // runs from `init` — the window in which a crash, a kill, or the
+        // second-instance guard can take the process out. Renaming first and
+        // saving later would leave the threads in a file nothing reads again:
+        // recovery itself becomes the thing that hides the data.
+        guard persist() else {
+            NSLog("[Dictator] Recovered %d chat(s) but couldn't save — leaving the quarantined files where they are, to try again next launch.",
+                  recovered.count)
+            return
+        }
+        for url in handled {
+            let renamed = directory.appendingPathComponent(
+                url.lastPathComponent.replacingOccurrences(
+                    of: "chats.unreadable-", with: "chats.recovered-"))
+            try? FileManager.default.moveItem(at: url, to: renamed)
+        }
+        NSLog("[Dictator] Recovered %d chat(s) from quarantined stores.", recovered.count)
+    }
+
+    @discardableResult
+    private func persist() -> Bool {
+        guard let data = try? JSONEncoder.chatISO8601.encode(threads) else { return false }
+        do {
+            try data.write(to: Self.storeURL, options: .atomic)
+            return true
+        } catch {
+            NSLog("[Dictator] Couldn't write chats.json: %@", error.localizedDescription)
+            return false
+        }
     }
 }
 
@@ -209,4 +310,18 @@ private extension JSONEncoder {
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
+}
+
+/// Decodes what it can and swallows what it can't.
+///
+/// Wrapping each element means a decode failure is scoped to that element
+/// instead of the array. For a store of conversations that is the difference
+/// between losing one and losing all of them — the failure mode that has
+/// already cost 38, twice, when a newly added field made every older record
+/// unreadable at once.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: any Decoder) throws {
+        value = try? T(from: decoder)
+    }
 }

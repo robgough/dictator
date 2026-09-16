@@ -63,6 +63,41 @@ struct ConversationTurn: Codable, Identifiable, Equatable, Hashable, Sendable {
 struct ConversationCompaction: Codable, Equatable, Hashable, Sendable {
     let summary: String
     let upThroughTurnIndex: Int
+    /// Chat threads cut at a *message*, not a turn pair.
+    ///
+    /// Assistant Mode compacts a list of `ConversationTurn`s, where an index is
+    /// a perfectly good cut. The chat window's unit is `ChatMessage`, and its
+    /// messages interleave tool calls and results that do not pair up into
+    /// turns at all — so it stores the id of the last message the summary
+    /// covers. An id rather than an index because a thread can gain messages at
+    /// any time and an index would quietly come to mean something else.
+    ///
+    /// Optional, so it decodes from anything written before it existed. Exactly
+    /// one of the two is meaningful per thread, decided by which entry point
+    /// compacted it.
+    var upThroughMessageID: UUID?
+
+    init(summary: String, upThroughTurnIndex: Int, upThroughMessageID: UUID? = nil) {
+        self.summary = summary
+        self.upThroughTurnIndex = upThroughTurnIndex
+        self.upThroughMessageID = upThroughMessageID
+    }
+
+    /// Hand-written for the same reason as `ChatMessage.init(from:)`: this type
+    /// is nested inside `ChatThread`, so a decode failure here doesn't lose one
+    /// field — `ChatStore.load` discards the whole file and quarantines it.
+    /// That has already happened twice and stranded 38 conversations.
+    ///
+    /// `upThroughTurnIndex` is still *written* on every path, including the chat
+    /// one, so a build that predates `upThroughMessageID` can decode anything
+    /// this build writes. Two Macs sharing a synced folder can be on different
+    /// versions, and the older one must not choke on the newer one's file.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        upThroughTurnIndex = try c.decodeIfPresent(Int.self, forKey: .upThroughTurnIndex) ?? -1
+        upThroughMessageID = try c.decodeIfPresent(UUID.self, forKey: .upThroughMessageID)
+    }
 }
 
 /// Token-budget heuristics used in two places: Pipeline decides when to

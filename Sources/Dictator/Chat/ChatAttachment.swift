@@ -43,6 +43,8 @@ struct ChatAttachment: Codable, Hashable, Sendable, Identifiable {
     var truncated: Bool = false
 
     var url: URL { URL(fileURLWithPath: path) }
+
+
     var stillExists: Bool { FileManager.default.fileExists(atPath: path) }
     var fileExtension: String { url.pathExtension.lowercased() }
 
@@ -233,9 +235,8 @@ enum ChatAttachments {
         // The same vision-to-prose path `read_screen` uses. Chat models here
         // are handed text, not images, so an image becomes a description of
         // itself — written once and stored, never on re-render.
-        let service = MLXLLMServiceHolder.shared
-        guard service.canReadImages else {
-            attachment.note = "the model in use can't read images"
+        guard WindowVisionContext.canReadImages else {
+            attachment.note = "nothing on this Mac can read images right now"
             return
         }
         guard let image = loadImage(attachment.url) else {
@@ -243,7 +244,7 @@ enum ChatAttachments {
             return
         }
         do {
-            let description = try await service.readImage(
+            let description = try await WindowVisionContext.readImage(
                 image,
                 systemPrompt: """
                     You are looking at an image the user has attached to a conversation. \
@@ -267,5 +268,24 @@ enum ChatAttachments {
     private static func loadImage(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+}
+
+// Decoding lives in an extension on purpose: an `init` declared in the type
+// body suppresses the memberwise initialiser, and `ChatAttachment` is
+// constructed memberwise in `ChatAttachments.attach`.
+extension ChatAttachment {
+    /// Hand-written for the reason on `ChatMessage.init(from:)`: a synthesised
+    /// decoder treats `truncated` as required because it carries a default, and
+    /// one missing key throws away every thread in the file.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "attachment"
+        path = try c.decode(String.self, forKey: .path)
+        byteCount = try c.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .other
+        text = try c.decodeIfPresent(String.self, forKey: .text)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
     }
 }

@@ -60,6 +60,11 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// outcome, and they differ whenever the paste couldn't land.
     var delivery: String?
 
+    /// How fast this reply was generated. On assistant messages from the chat
+    /// window; nil on everything else, including replies from engines that
+    /// don't report it and threads written before it was measured.
+    var speed: ChatRoundSpeed?
+
     // MARK: Attachments
 
     /// Files the user brought in with this message. On the user message,
@@ -69,6 +74,46 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// read or change it later with the ordinary file tools rather than only
     /// seeing whatever was inlined into the prompt at the time.
     var attachments: [ChatAttachment] = []
+
+
+    // MARK: Decoding
+    //
+    // Hand-written, and it must stay that way. Swift's *synthesised*
+    // `init(from:)` ignores property defaults: a non-optional stored property
+    // with `= false` is still a required key, and a thread written before that
+    // property existed fails to decode. `ChatStore.load` then throws away the
+    // whole file — every thread, not just the old one — and quarantines it as
+    // `chats.unreadable-<epoch>.json`.
+    //
+    // That is not hypothetical. It happened twice on 2026-09-15, when
+    // `promoted` was added for the assistant/chat merge, and it stranded 38
+    // conversations. Optionals were always safe; the defaulted `Bool`s and
+    // arrays were not, despite a comment above claiming the synthesised
+    // Codable read older threads.
+    //
+    // So: every field except identity is read with `decodeIfPresent` and falls
+    // back to what a fresh value would have. Adding a field here costs one line
+    // and breaks nothing. `encode(to:)` stays synthesised — writing is never the
+    // problem.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .user
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        timestamp = try c.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        toolCall = try? c.decodeIfPresent(ChatWireToolCall.self, forKey: .toolCall)
+        toolResult = try c.decodeIfPresent(String.self, forKey: .toolResult)
+        toolFailed = try c.decodeIfPresent(Bool.self, forKey: .toolFailed) ?? false
+        toolDenied = try c.decodeIfPresent(Bool.self, forKey: .toolDenied) ?? false
+        serverName = try c.decodeIfPresent(String.self, forKey: .serverName)
+        producedFile = try? c.decodeIfPresent(ProducedFile.self, forKey: .producedFile)
+        selection = try c.decodeIfPresent(String.self, forKey: .selection)
+        context = try? c.decodeIfPresent(CapturedContextInfo.self, forKey: .context)
+        deliveryMode = try? c.decodeIfPresent(AssistantMode.self, forKey: .deliveryMode)
+        delivery = try c.decodeIfPresent(String.self, forKey: .delivery)
+        speed = try? c.decodeIfPresent(ChatRoundSpeed.self, forKey: .speed)
+        attachments = (try? c.decodeIfPresent([ChatAttachment].self, forKey: .attachments)) as? [ChatAttachment] ?? []
+    }
 
     init(
         id: UUID = UUID(),
@@ -85,6 +130,7 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         context: CapturedContextInfo? = nil,
         deliveryMode: AssistantMode? = nil,
         delivery: String? = nil,
+        speed: ChatRoundSpeed? = nil,
         attachments: [ChatAttachment] = []
     ) {
         self.id = id
@@ -101,6 +147,7 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         self.context = context
         self.deliveryMode = deliveryMode
         self.delivery = delivery
+        self.speed = speed
         self.attachments = attachments
     }
 }
@@ -186,6 +233,25 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// not a document. But the moment someone opens one in the chat window they
     /// have said otherwise, and deleting it a fortnight later would be a bug.
     var promoted: Bool = false
+
+
+    /// Hand-written for the reason spelled out on `ChatMessage.init(from:)`:
+    /// a synthesised decoder makes every defaulted non-optional a required key,
+    /// and one missing key discards the entire store.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        origin = (try? c.decode(Origin.self, forKey: .origin)) ?? .chat
+        messages = try c.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        modelID = try c.decodeIfPresent(String.self, forKey: .modelID)
+        customTitle = try c.decodeIfPresent(String.self, forKey: .customTitle)
+        filesFolderName = try c.decodeIfPresent(String.self, forKey: .filesFolderName)
+        workingDirectoryPath = try c.decodeIfPresent(String.self, forKey: .workingDirectoryPath)
+        compaction = (try? c.decodeIfPresent(ConversationCompaction.self, forKey: .compaction))?.flatMap { $0.summary.isEmpty ? nil : $0 }
+        promoted = try c.decodeIfPresent(Bool.self, forKey: .promoted) ?? false
+    }
 
     init(
         id: UUID = UUID(),
@@ -290,7 +356,23 @@ extension ChatThread {
     var activeAssistantContext: (turns: [ConversationTurn], summary: String?) {
         let all = assistantTurns
         guard let compaction else { return (all, nil) }
-        let dropped = min(compaction.upThroughTurnIndex + 1, all.count)
+
+        // Two cursors, because two entry points compact. Assistant Mode cuts at
+        // a turn index; the chat window cuts at a message id, since its messages
+        // interleave tool calls that don't pair into turns. Prefer the message
+        // id when it's there: a chat-compacted thread continued by the hotkey
+        // would otherwise read `upThroughTurnIndex` (which that path never set)
+        // and send the summary *plus* every turn it already covers.
+        let dropped: Int
+        if let cutID = compaction.upThroughMessageID,
+           let cutIndex = messages.firstIndex(where: { $0.id == cutID }) {
+            // A derived turn is identified by its reply message, so a turn is
+            // covered exactly when its reply sits at or before the cut.
+            let covered = Set(messages.prefix(cutIndex + 1).map(\.id))
+            dropped = all.prefix(while: { covered.contains($0.id) }).count
+        } else {
+            dropped = min(compaction.upThroughTurnIndex + 1, all.count)
+        }
         return (Array(all.dropFirst(dropped)), compaction.summary)
     }
 
