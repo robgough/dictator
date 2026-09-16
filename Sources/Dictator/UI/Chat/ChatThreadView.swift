@@ -39,16 +39,43 @@ struct ChatThreadView: View {
         } isTargeted: { dropTargeted = $0 }
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
-                    .padding(6)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                        .padding(6)
+                    if let hint = imageDropHint { DropHint(text: hint) }
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.12), value: dropTargeted)
     }
 
+
+    /// Said while the file is still over the window, because afterwards is too
+    /// late to choose a different one.
+    ///
+    /// Only about images. Text files and PDFs are read by Dictator itself —
+    /// UTF-8 sniffing and PDFKit, no model involved — so they work on every
+    /// engine including Apple's, and warning about "documents" would be telling
+    /// the user something untrue. An image is the one attachment that needs the
+    /// model to *see*, and nothing here can do that unless a vision-capable MLX
+    /// model is loaded.
+    ///
+    /// The drop is still accepted. Refusing it would also refuse the text file
+    /// dragged alongside, and an image that can't be read still gets a chip
+    /// saying so rather than being silently ignored.
+    private var imageDropHint: String? {
+        guard !WindowVisionContext.canReadImages else { return nil }
+        let capable = ModelCatalog.llmModels
+            .filter { $0.visionCapable && !$0.isLegacy }
+            .map(\.displayName)
+            .joined(separator: " or ")
+        return WindowVisionContext.osSupportsAppleVision
+            ? "Text files and PDFs are fine. Images need a model that can see — Apple's on-device model, or \(capable)."
+            : "Text files and PDFs are fine. Images need a model that can see — \(capable)."
+    }
 
     private var approvalBinding: Binding<ChatEngine.PendingApproval?> {
         Binding(
@@ -66,6 +93,17 @@ struct ChatThreadView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ChatTrustWarning()
+                        // Said once, at the top, rather than left for the user
+                        // to discover by asking for something and getting a
+                        // description of what the model would have done.
+                        if state.settings.llmEngine == .apple {
+                            ChatNoticeRow(
+                                text: "Apple's on-device model can chat, but can't use tools: "
+                                    + "it can't write or edit files, read your screen, fetch a "
+                                    + "web page, or reach an MCP server. Files you attach still "
+                                    + "work. Switch to an MLX model in Settings → Models for the rest.",
+                                icon: "wrench.and.screwdriver")
+                        }
                         if let notice = shell.modelSwitchNotice {
                             ChatNoticeRow(text: notice, icon: "arrow.triangle.2.circlepath")
                         }
@@ -164,12 +202,13 @@ struct ChatThreadView: View {
     }
 
     private func send() {
-        let text = shell.draft
-        let attachments = shell.pendingAttachments
+        // Clear only once the engine has taken it. Clearing first meant a
+        // refused message vanished without trace — no draft, no bubble, no
+        // error — which reads as the app simply not working.
+        guard shell.engine.send(shell.draft, attachments: shell.pendingAttachments) else { return }
         shell.draft = ""
         shell.pendingAttachments = []
         shell.attachmentError = nil
-        shell.engine.send(text, attachments: attachments)
     }
 }
 
@@ -246,6 +285,9 @@ private struct ChatActivityRow: View {
         // Worth saying plainly rather than showing a generic spinner: the
         // reply genuinely has stopped, and it's because dictation won.
         case .pausedForDictation: return "Paused — dictation is using the model"
+        // Named rather than left as a spinner: it can take several seconds, and
+        // a silent pause before an answer reads as a hang.
+        case .compacting: return "Summarising the earlier part of this chat…"
         }
     }
 }
@@ -303,7 +345,7 @@ private struct ChatMessageRow: View {
                 // sentence isn't useful, and a row of buttons flickering under
                 // a streaming reply is a distraction while reading it.
                 if liveText == nil, !text.isEmpty {
-                    ChatReplyActions(text: text)
+                    ChatReplyActions(text: text, speed: message.speed)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -450,6 +492,24 @@ private struct ChatTrustWarning: View {
         + "fluently as the parts it gets right. Check anything that matters."
 }
 
+/// The one line shown inside the drop outline. Deliberately a statement of what
+/// works, not a warning: the drop is going to succeed, and most of what people
+/// drag here is readable.
+private struct DropHint: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxWidth: 360)
+            .background(.regularMaterial, in: .rect(cornerRadius: 10))
+    }
+}
+
 /// What you can do with a finished reply: copy it, or put it back where you
 /// were working.
 ///
@@ -460,6 +520,10 @@ private struct ChatTrustWarning: View {
 /// `ChatInsertion` remembers which app that was, so the button can say so.
 private struct ChatReplyActions: View {
     let text: String
+    /// How fast this reply arrived, when the engine could say. Sits at the far
+    /// end of the row rather than under the text: it's worth knowing and worth
+    /// comparing between models, but it isn't part of the answer.
+    var speed: ChatRoundSpeed?
 
     @State private var insertion = ChatInsertion.shared
     @State private var copied = false
@@ -504,12 +568,40 @@ private struct ChatReplyActions: View {
             }
 
             Spacer(minLength: 0)
+
+            if let speed, let rate = speed.tokensPerSecond {
+                Text("\(Int(rate.rounded())) tok/s")
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .help(Self.speedDetail(speed))
+            }
         }
         .animation(.easeOut(duration: 0.2), value: insertion.lastOutcome)
         .onChange(of: insertion.lastOutcome) { _, new in
             // Someone else's outcome cleared — stop claiming the banner.
             if new == nil { owned = false }
         }
+    }
+
+    /// The whole measurement, on hover. The row shows the generation rate
+    /// because that's the one people compare models on; prefill belongs here
+    /// because it explains the wait *before* the first word, which is the other
+    /// half of how fast a reply felt.
+    private static func speedDetail(_ speed: ChatRoundSpeed) -> String {
+        var parts = ["Generated \(speed.generatedTokens.formatted()) tokens"]
+        if speed.prefilledTokens == 0 {
+            // A round reusing the turn's cache, which is the common case after
+            // the first one and the reason a follow-up starts answering fast.
+            parts.append("prompt already cached")
+        } else if let prefill = speed.prefillTokensPerSecond {
+            parts.append(
+                "prefilled \(speed.prefilledTokens.formatted()) tokens "
+                + "at \(Int(prefill.rounded()).formatted()) tok/s")
+        } else {
+            parts.append("prefilled \(speed.prefilledTokens.formatted()) tokens")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func action(

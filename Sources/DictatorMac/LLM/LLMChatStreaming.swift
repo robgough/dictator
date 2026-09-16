@@ -34,6 +34,18 @@ struct ChatWireMessage: Sendable {
     /// Set on a tool message, matching the call it answers.
     var toolCallID: String?
     var toolName: String?
+    /// Images this message carries, as file paths.
+    ///
+    /// Paths rather than `CGImage` because `ChatWireMessage` is `Sendable` and
+    /// crosses `ModelContainer.perform`, which `CGImage` and `CIImage` cannot.
+    /// Each engine loads them at its own boundary; decoding a PNG is
+    /// milliseconds against an encode measured in seconds.
+    ///
+    /// Empty for every message whose images have been demoted to their stored
+    /// description — see `ChatEngine.renderForModel`. A message never carries
+    /// both: paying to encode the pixels and then also telling the model what
+    /// they say is the worst of both.
+    var imagePaths: [String] = []
 
     static func system(_ content: String) -> Self { .init(role: .system, content: content) }
     static func user(_ content: String) -> Self { .init(role: .user, content: content) }
@@ -41,6 +53,24 @@ struct ChatWireMessage: Sendable {
     /// The dictionary the Jinja template sees.
     var templateMessage: [String: any Sendable] {
         var message: [String: any Sendable] = ["role": role.rawValue, "content": content]
+        // A message carrying images needs the *structured* content list the VLM
+        // message generators emit — images first, then the text — not a plain
+        // string. `UserInput(messages:)` hands these dicts to the template
+        // untouched (only the typed `chat:` path rewrites them), so with a plain
+        // string the template emits no image placeholder and `prepare` throws
+        // "Number of placeholder tokens does not match number of frames".
+        //
+        // Measured in `scratch/mlx-image-dicts-check` on Qwen 3.5 9B: plain
+        // string throws, this shape reads the image correctly and produces the
+        // same 431-token prompt as the typed API — with a tool advertised, and
+        // with a later text-only turn after it.
+        //
+        // Only the image-bearing message is converted. Gemma 4's generator keeps
+        // `system` as a plain string, so converting everything would break it.
+        if !imagePaths.isEmpty {
+            message["content"] = imagePaths.map { _ in ["type": "image"] }
+                + [["type": "text", "text": content]]
+        }
         if !toolCalls.isEmpty {
             message["tool_calls"] = toolCalls.map { call -> [String: any Sendable] in
                 [
@@ -84,6 +114,48 @@ struct ChatWireToolCall: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// How fast a round ran.
+///
+/// Stored as counts and seconds rather than as rates, so the two halves of
+/// each rate are written down together and can only ever be divided by the
+/// thing that was actually measured. (A rate whose numerator and denominator
+/// came from different populations is how the usage pane once reported
+/// 33,116 words per minute.)
+struct ChatRoundSpeed: Codable, Hashable, Sendable {
+    var generatedTokens: Int
+    /// Time spent generating those tokens, with the first one excluded — the
+    /// token loop restarts its clock once the first token is out, so this is a
+    /// decode rate and doesn't include waiting for prefill.
+    var generationSeconds: Double
+    /// Tokens prefilled this round. Usually far short of the whole prompt:
+    /// `ChatPromptCache` keeps the rest between the rounds of a turn.
+    var prefilledTokens: Int
+    var prefillSeconds: Double
+
+    /// Tokens per second while generating, or nil when there wasn't enough of
+    /// a reply to say.
+    ///
+    /// Short replies are excluded rather than reported: with the first token
+    /// outside the measured window, a four-token answer divides four tokens by
+    /// the time three of them took, and the shorter the reply the more that
+    /// flatters it.
+    var tokensPerSecond: Double? {
+        rate(Double(generatedTokens), over: generationSeconds, floor: 8)
+    }
+
+    /// Tokens per second while prefilling. Nil on a round that was fully
+    /// cached, which is a real and common outcome — not a measurement failure.
+    var prefillTokensPerSecond: Double? {
+        rate(Double(prefilledTokens), over: prefillSeconds, floor: 8)
+    }
+
+    private func rate(_ tokens: Double, over seconds: Double, floor: Double) -> Double? {
+        guard tokens >= floor, seconds > 0 else { return nil }
+        let value = tokens / seconds
+        return value.isFinite ? value : nil
+    }
+}
+
 /// What one round of generation produced.
 struct ChatRoundResult: Sendable {
     /// Prose the model emitted, already cleaned. Empty when it went straight
@@ -98,6 +170,9 @@ struct ChatRoundResult: Sendable {
     /// finishing. The UI says so instead of presenting a truncated answer as
     /// complete.
     let hitTokenLimit: Bool
+    /// How fast it ran. Nil when the round produced no `.info` to measure —
+    /// a round cancelled before its first token, in practice.
+    let speed: ChatRoundSpeed?
 }
 
 /// Streaming deltas, in order.
@@ -109,11 +184,17 @@ enum ChatStreamDelta: Sendable {
 /// Opt-in refinement for engines that can run a streaming, tool-calling chat
 /// turn.
 ///
-/// Separate from `LLMEngine` for the same reason `LLMUsageReporting` is:
-/// `AppleFoundationLLMService` can't do this (its framework has its own tool
-/// protocol and a context window well below the bar), and widening `LLMEngine`
-/// would force it to carry a method it can only throw from. `MLXLLMService`
-/// conforms; the chat UI refuses to open on an engine that doesn't.
+/// Separate from `LLMEngine` for the same reason `LLMUsageReporting` is: not
+/// every engine can run a chat turn, and widening `LLMEngine` would force the
+/// ones that can't to carry a method they could only throw from. The chat UI
+/// refuses to open on an engine that doesn't conform.
+///
+/// Both engines conform, but they mean different things by it.
+/// `MLXLLMService` does the whole job — streaming prose *and* tool calls, which
+/// is what makes `ChatEngine`'s loop a loop. `AppleFoundationLLMService` never
+/// emits a tool call, so its turns are always a single round; see the
+/// extension on it for why its framework's tool protocol isn't reachable from
+/// a runtime JSON schema.
 @MainActor
 protocol LLMChatStreaming: AnyObject {
     /// Runs one generation round: prompt → prose and/or tool calls.

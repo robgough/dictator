@@ -306,8 +306,15 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             ])
         }
         let ciImage = CIImage(cgImage: image)
+        // Split three ways: time spent queued behind other work, time the
+        // processor spends turning the image into tokens, and the generate
+        // call itself (which is where image *prefill* lands). Which of the
+        // three dominates decides whether there's anything to fix here at all.
+        let tQueued = CFAbsoluteTimeGetCurrent()
         return try await LLMScheduler.shared.run(.background) {
-            try await container.perform { (ctx: ModelContext) -> String in
+            let tRunning = CFAbsoluteTimeGetCurrent()
+            return try await container.perform { (ctx: ModelContext) -> String in
+                let tContainer = CFAbsoluteTimeGetCurrent()
                 let userInput = UserInput(
                     chat: [
                         .system(systemPrompt),
@@ -316,11 +323,19 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
                     additionalContext: chatTemplateContext
                 )
                 let lmInput = try await ctx.processor.prepare(input: userInput)
+                let tPrepared = CFAbsoluteTimeGetCurrent()
                 let params = GenerateParameters(maxTokens: maxTokens, temperature: 0.0, topP: 1.0)
                 let result = try MLXLMCommon.generate(
                     input: lmInput, parameters: params, context: ctx,
                     didGenerate: { (_: [Int]) in Task.isCancelled ? .stop : .more }
                 )
+                let tGenerated = CFAbsoluteTimeGetCurrent()
+                VisionLog.log(String(format: "readImage: scheduler=%.2fs container=%.2fs prepare=%.2fs generate=%.2fs total=%.2fs — prompt %d tok (the image), generated %d tok in %.2fs",
+                                     tRunning - tQueued, tContainer - tRunning,
+                                     tPrepared - tContainer, tGenerated - tPrepared,
+                                     tGenerated - tQueued,
+                                     result.promptTokenCount, result.generationTokenCount,
+                                     result.generateTime))
                 return LLMTextUtilities.clean(result.output)
             }
         }
@@ -353,7 +368,9 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         // defensively.
         let userText = LLMTextUtilities.wrapAsData(text)
 
-        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
+        let generated = try await container.perform {
+            (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int,
+                                    generateSeconds: Double) in
             let userInput = UserInput(chat: [
                 .system(systemPrompt),
                 .user(userText)
@@ -370,10 +387,13 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return (result.output, result.promptTokenCount, result.generationTokenCount)
+            return (result.output, result.promptTokenCount, result.generationTokenCount,
+                    result.generateTime)
         }
 
-        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        UsageStatsStore.shared.recordLLMTokens(
+            in: generated.inTokens, out: generated.outTokens,
+            generatedIn: generated.generateSeconds)
         return LLMTextUtilities.clean(generated.output)
     }
 
@@ -404,7 +424,9 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         // combination MLX's own examples pair.
         let temp = Float(max(0, temperature))
         let topP: Float = temp > 0 ? 0.95 : 1.0
-        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
+        let generated = try await container.perform {
+            (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int,
+                                    generateSeconds: Double) in
             let userInput = UserInput(chat: [
                 .system(system),
                 .user(user)
@@ -417,9 +439,12 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
                 context: ctx,
                 didGenerate: { (_: [Int]) in Task.isCancelled ? .stop : .more }
             )
-            return (result.output, result.promptTokenCount, result.generationTokenCount)
+            return (result.output, result.promptTokenCount, result.generationTokenCount,
+                    result.generateTime)
         }
-        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        UsageStatsStore.shared.recordLLMTokens(
+            in: generated.inTokens, out: generated.outTokens,
+            generatedIn: generated.generateSeconds)
         return LLMCompletionResult(
             text: LLMTextUtilities.clean(generated.output),
             promptTokens: generated.inTokens,
@@ -478,7 +503,9 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
             MicLog.log("Assistant: dropped the screenshot — the loaded model can't read images.")
         }
 
-        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
+        let generated = try await container.perform {
+            (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int,
+                                    generateSeconds: Double) in
             var messages: [Chat.Message] = [.system(systemPrompt)]
 
             if let summary, !summary.isEmpty {
@@ -530,10 +557,13 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return (result.output, result.promptTokenCount, result.generationTokenCount)
+            return (result.output, result.promptTokenCount, result.generationTokenCount,
+                    result.generateTime)
         }
 
-        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        UsageStatsStore.shared.recordLLMTokens(
+            in: generated.inTokens, out: generated.outTokens,
+            generatedIn: generated.generateSeconds)
         return LLMTextUtilities.parseAssistant(generated.output)
     }
 
@@ -584,7 +614,9 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         >>>
         """
 
-        let generated = try await container.perform { (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int) in
+        let generated = try await container.perform {
+            (ctx: ModelContext) -> (output: String, inTokens: Int, outTokens: Int,
+                                    generateSeconds: Double) in
             let userInput = UserInput(chat: [
                 .system(LLMTextUtilities.summariserSystemPrompt),
                 .user(userText)
@@ -597,10 +629,13 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
                 context: ctx,
                 didGenerate: { (_: [Int]) in cancellation() ? .stop : .more }
             )
-            return (result.output, result.promptTokenCount, result.generationTokenCount)
+            return (result.output, result.promptTokenCount, result.generationTokenCount,
+                    result.generateTime)
         }
 
-        UsageStatsStore.shared.recordLLMTokens(in: generated.inTokens, out: generated.outTokens)
+        UsageStatsStore.shared.recordLLMTokens(
+            in: generated.inTokens, out: generated.outTokens,
+            generatedIn: generated.generateSeconds)
         let cleaned = LLMTextUtilities.clean(generated.output)
         guard !cleaned.isEmpty else {
             throw NSError(domain: "Dictator", code: 3, userInfo: [NSLocalizedDescriptionKey: "Summariser returned no text"])
@@ -643,7 +678,27 @@ extension MLXLLMService: LLMChatStreaming {
 
         // Rendered outside `perform`: `[String: any Sendable]` crosses the
         // @Sendable boundary, and building it here keeps the closure small.
-        let wire = messages.map(\.templateMessage)
+        // Images only when the *resident* model can actually see. The caller
+        // gates on this too, but `LLMUserInputProcessor` silently drops images
+        // on a text-only model — and the prompt has already told the model the
+        // picture is there, so a silent drop produces a confident answer about
+        // something nobody sent. Re-checked here for the same reason
+        // `readImage` re-checks: the user can switch model mid-thread.
+        let canSee = currentModelID.flatMap { ModelCatalog.llm(id: $0)?.visionCapable } ?? false
+        let wire = messages.map { message -> ChatWireMessage in
+            guard !canSee else { return message }
+            var stripped = message
+            stripped.imagePaths = []
+            return stripped
+        }.map(\.templateMessage)
+        // URLs, not `UserInput.Image`: this crosses into a `@Sendable` closure
+        // and `UserInput.Image` is not `Sendable`. Built into images inside.
+        let imageURLs = canSee
+            ? messages.flatMap(\.imagePaths).map { URL(fileURLWithPath: $0) }
+            : []
+        if !canSee, messages.contains(where: { !$0.imagePaths.isEmpty }) {
+            NSLog("[Dictator] Chat round dropped image(s): the resident model can't see them.")
+        }
         let toolSpecs: [ToolSpec]? = tools.isEmpty ? nil : tools
 
         let cache = chatPromptCache
@@ -666,6 +721,7 @@ extension MLXLLMService: LLMChatStreaming {
                 try await Self.generateRound(
                     container: container,
                     messages: wire,
+                    images: imageURLs,
                     tools: toolSpecs,
                     maxTokens: maxTokens,
                     cache: cache,
@@ -691,7 +747,8 @@ extension MLXLLMService: LLMChatStreaming {
             work.cancel()
         }
         UsageStatsStore.shared.recordLLMTokens(
-            in: result.promptTokens, out: result.completionTokens)
+            in: result.promptTokens, out: result.completionTokens,
+            generatedIn: result.speed?.generationSeconds)
         return result
     }
 
@@ -711,6 +768,7 @@ extension MLXLLMService: LLMChatStreaming {
     private nonisolated static func generateRound(
         container: ModelContainer,
         messages: [[String: any Sendable]],
+        images: [URL],
         tools: [ToolSpec]?,
         maxTokens: Int,
         cache: ChatPromptCache,
@@ -718,11 +776,19 @@ extension MLXLLMService: LLMChatStreaming {
         continuation: AsyncStream<ChatStreamDelta>.Continuation
     ) async throws -> ChatRoundResult {
         try await container.perform { (ctx: ModelContext) -> ChatRoundResult in
-            let input = UserInput(
+            var input = UserInput(
                 messages: messages,
+                images: images.map { UserInput.Image.url($0) },
                 tools: tools,
                 additionalContext: chatTemplateContext
             )
+            // Bound what one screenshot can cost. Qwen sizes image tokens from
+            // the pixel count, so an unresized Retina grab runs to thousands of
+            // tokens and a 5K display shot can take a third of a 12B's window on
+            // its own. The cap is generous next to the ~350 tokens a small image
+            // costs, and it only ever shrinks the input.
+            input.processing.resize = nil
+            input.processing.maxPixels = 1_280 * 1_280
             let lmInput = try await ctx.processor.prepare(input: input)
             let params = GenerateParameters(
                 maxTokens: maxTokens, temperature: 0.4, topP: 0.95)
@@ -731,14 +797,39 @@ extension MLXLLMService: LLMChatStreaming {
             // back from at any point: a miss just prefills the lot, which is
             // what every round did before this existed.
             let promptTokens = lmInput.text.tokens.asArray(Int.self)
-            let prepared = try cache.prepare(
-                promptTokens: promptTokens, owner: cacheOwner,
-                model: ctx.model, parameters: params)
-            let seed = LMInput(tokens: MLXArray([promptTokens[promptTokens.count - 1]]))
-            let iterator = try TokenIterator(
-                input: seed, model: ctx.model, cache: prepared.cache, parameters: params)
+            // A round carrying an image cannot use `ChatPromptCache`. The cache
+            // works on `lmInput.text.tokens` alone and drops `lmInput.image`, so
+            // going through it would hand the model image *placeholder* tokens
+            // with no pixels behind them — embedded as ordinary text. Instead,
+            // build the iterator from the whole `LMInput`, which is the path
+            // `readImage` already proves works.
+            //
+            // The baseline is deliberately left alone rather than reset: it
+            // still describes a valid prefix of the pre-image conversation, and
+            // `cache.prepare`'s prefix match will reject it the moment it stops
+            // being one. Nothing here writes a baseline, so a prompt containing
+            // placeholders can never *become* one.
+            let iterator: TokenIterator
+            let prefilled: Int
+            let prefillSeconds: Double
+            if lmInput.image != nil || lmInput.video != nil {
+                let started = Date.timeIntervalSinceReferenceDate
+                iterator = try TokenIterator(
+                    input: lmInput, model: ctx.model, parameters: params)
+                prefillSeconds = Date.timeIntervalSinceReferenceDate - started
+                prefilled = promptTokens.count
+            } else {
+                let prepared = try cache.prepare(
+                    promptTokens: promptTokens, owner: cacheOwner,
+                    model: ctx.model, parameters: params)
+                let seed = LMInput(tokens: MLXArray([promptTokens[promptTokens.count - 1]]))
+                iterator = try TokenIterator(
+                    input: seed, model: ctx.model, cache: prepared.cache, parameters: params)
+                prefilled = prepared.prefilled
+                prefillSeconds = prepared.seconds
+            }
             let (stream, _) = MLXLMCommon.generateTask(
-                promptTokenCount: prepared.prefilled + 1,
+                promptTokenCount: prefilled + 1,
                 modelConfiguration: ctx.configuration,
                 tokenizer: ctx.tokenizer,
                 iterator: iterator,
@@ -748,6 +839,7 @@ extension MLXLLMService: LLMChatStreaming {
             var calls: [ChatWireToolCall] = []
             var completionTokens = 0
             var hitLimit = false
+            var speed: ChatRoundSpeed?
             for await item in stream {
                 if Task.isCancelled { break }
                 switch item {
@@ -765,6 +857,18 @@ extension MLXLLMService: LLMChatStreaming {
                 case .info(let info):
                     completionTokens = info.generationTokenCount
                     hitLimit = info.stopReason == .length
+                    // `info.promptTime` is deliberately not used for the
+                    // prefill figure: the real prefill happened above, in
+                    // `cache.prepare`, in an iterator this stream never saw.
+                    // All this one was handed is the seed token, so its own
+                    // prompt timing describes a single forward pass while
+                    // `promptTokenCount` counts the whole delta.
+                    speed = ChatRoundSpeed(
+                        generatedTokens: info.generationTokenCount,
+                        generationSeconds: info.generateTime,
+                        prefilledTokens: prefilled,
+                        prefillSeconds: prefillSeconds
+                    )
                 }
             }
             return ChatRoundResult(
@@ -772,7 +876,8 @@ extension MLXLLMService: LLMChatStreaming {
                 toolCalls: calls,
                 promptTokens: promptTokens.count,
                 completionTokens: completionTokens,
-                hitTokenLimit: hitLimit
+                hitTokenLimit: hitLimit,
+                speed: speed
             )
         }
     }
