@@ -323,7 +323,12 @@ final class ChatEngine {
                 ) { [weak self] delta in
                     guard let self else { return }
                     if case .chunk(let piece) = delta {
-                        self.streamingText += piece
+                        // Filtered here as well as in `cleanChatReply`, or a
+                        // stray vision token flashes on screen for the rest of
+                        // the reply before the commit tidies it away. A marker
+                        // is a single token, so it arrives in one piece and
+                        // can't be split across two chunks.
+                        self.streamingText += LLMTextUtilities.stripModelMarkers(piece)
                         if self.activity != .streaming { self.activity = .streaming }
                     }
                 }

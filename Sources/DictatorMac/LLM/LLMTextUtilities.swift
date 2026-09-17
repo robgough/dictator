@@ -64,11 +64,46 @@ enum LLMTextUtilities {
         return clean(s)
     }
 
+    /// Vision control tokens a multimodal model can sample in the middle of
+    /// ordinary text.
+    ///
+    /// These are real entries in the vocabulary, not text the model invented, so
+    /// nothing stops it reaching for one and nothing downstream recognises it.
+    /// Seen in the wild: Gemma 4 12B dropped its *end-of-image* token into the
+    /// middle of a French sentence — `"Bonjour, je vous<image|>contacte…"` — in a
+    /// conversation with no image in it at all.
+    ///
+    /// Taken from the tokenizer configs of the models in the catalogue:
+    ///
+    ///     Gemma 4   boi `<|image>`  eoi `<image|>`  image `<|image|>`
+    ///     Qwen 3.5  `<|image_pad|>` `<|vision_start|>` `<|vision_end|>`
+    ///
+    /// Listed rather than read from the tokenizer because this has to work on
+    /// the text *after* decoding, where the token is just a string, and because
+    /// a model whose markers we don't know about should still lose the ones we
+    /// do. Harmless on text that never contained them.
+    static let modelMarkers = [
+        "<|image|>", "<|image>", "<image|>",
+        "<start_of_image>", "<end_of_image>",
+        "<|image_pad|>", "<|vision_start|>", "<|vision_end|>",
+    ]
+
+    /// Removes those markers. Applied to model output only — never to what the
+    /// user typed, which is theirs to write however they like.
+    static func stripModelMarkers(_ raw: String) -> String {
+        guard raw.contains("<") else { return raw }
+        var s = raw
+        for marker in modelMarkers where s.contains(marker) {
+            s = s.replacingOccurrences(of: marker, with: "")
+        }
+        return s
+    }
+
     /// Strips wrapping artifacts the model occasionally emits — echoed
     /// `<<<...>>>` blocks, `Output:` labels, markdown code fences, surrounding
     /// quotes. Idempotent and safe to call on already-clean text.
     static func clean(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var s = stripModelMarkers(raw).trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Strip a reasoning block. Hybrid reasoning models (Qwen 3.5 and
         // successors) emit `<think>…</think>` ahead of the actual answer. We
