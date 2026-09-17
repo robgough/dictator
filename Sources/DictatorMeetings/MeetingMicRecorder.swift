@@ -65,7 +65,28 @@ final class MeetingMicRecorder {
     /// adopted after the fact.
     private var startGeneration = 0
 
-    private var file: AVAudioFile?
+    /// The open recording. **Only ever touched on `outputQueue`**, which is
+    /// serial, so that queue is the mutual exclusion — `AVAudioFile` is not
+    /// thread-safe and must not be written from two places at once.
+    ///
+    /// It used to live on the main actor, written from a `Task { @MainActor }`
+    /// per sample buffer. That put every write to disk behind the interface,
+    /// and `stop()` set `running = false` before releasing the file precisely so
+    /// pending hops would bail — so the end of a meeting was dropped by design,
+    /// and however far behind the main actor was decided how much. A meeting's
+    /// last minute is usually the part with the actions in it.
+    nonisolated(unsafe) private var file: AVAudioFile?
+
+    /// What the capture queue needs to know, and what it reports back.
+    private struct WriteGate: Sendable {
+        var accepting = false
+        var generation = 0
+        var url: URL?
+        var didCapture = false
+        var wroteFrames = 0
+    }
+    private let writeGate = OSAllocatedUnfairLock(initialState: WriteGate())
+
     private(set) var fileURL: URL?
     /// True once at least one buffer made it to disk.
     private(set) var didCapture = false
@@ -109,10 +130,16 @@ final class MeetingMicRecorder {
         fileURL = url
         try? FileManager.default.removeItem(at: url)
         didCapture = false
-        file = nil
         firstBufferFlag.withLock { $0 = false }
         startGeneration &+= 1
         let generation = startGeneration
+        // Reset the previous recording's file on the queue that owns it, then
+        // open the gate for this one.
+        outputQueue.async { [weak self] in self?.file = nil }
+        writeGate.withLock {
+            $0 = WriteGate(accepting: true, generation: generation, url: url,
+                           didCapture: false, wroteFrames: 0)
+        }
 
         let label = preferredDevice.map { $0.isSystemDefault ? "<system default>" : $0.uid } ?? "<nil / system default>"
         NSLog("[Dictator] MeetingMic: starting (AVCaptureSession) — preferredDevice=\(label)")
@@ -134,10 +161,25 @@ final class MeetingMicRecorder {
         silentCaptureTask?.cancel()
         silentCaptureTask = nil
         teardownSession()
-        // Drop the file last so any in-flight `write` hop finds running ==
-        // false and bails before touching it. Releasing the AVAudioFile
-        // flushes it to disk.
-        file = nil
+
+        // Close the gate, then close the file *on the queue that owns it*, so
+        // every buffer already delivered is written first. The old version set
+        // `running = false` and released the file immediately, which made
+        // in-flight writes bail on purpose — the end of the meeting, discarded
+        // by design. Releasing the AVAudioFile flushes it to disk.
+        writeGate.withLock { $0.accepting = false }
+        await withCheckedContinuation { continuation in
+            outputQueue.async { [weak self] in
+                self?.file = nil
+                continuation.resume()
+            }
+        }
+
+        let gate = writeGate.withLock { $0 }
+        didCapture = gate.didCapture
+        if gate.wroteFrames > 0 {
+            NSLog("[Dictator] MeetingMic: stopped after writing %d frames.", gate.wroteFrames)
+        }
     }
 
     // MARK: - Session setup
@@ -168,8 +210,14 @@ final class MeetingMicRecorder {
                 NSLog("[Dictator] MeetingMic: first buffer — rate=\(processed.sampleRate), frames=\(processed.mono.count)")
             }
             bufferSink?(processed.mono, processed.sampleRate)
+            // Straight to disk, here, on the serial capture queue. Not behind a
+            // main-actor hop — see `file`.
+            self?.writeOnCaptureQueue(
+                samples: processed.mono,
+                sampleRate: processed.sampleRate,
+                generation: generation)
             Task { @MainActor [weak self, processed] in
-                self?.write(samples: processed.mono, sampleRate: processed.sampleRate, level: processed.level)
+                self?.onLevel?(processed.level)
             }
         }
         let queue = outputQueue
@@ -339,9 +387,19 @@ final class MeetingMicRecorder {
 
     // MARK: - File writing
 
-    @MainActor
-    private func write(samples: [Float], sampleRate: Double, level: Float) {
-        guard running, let url = fileURL else { return }
+    /// Writes one buffer straight to disk. **Runs on `outputQueue` only.**
+    ///
+    /// `nonisolated` and queue-confined on purpose: the previous version was
+    /// `@MainActor` and reached from a per-buffer hop, which put the recording
+    /// of a meeting behind the drawing of a window.
+    private nonisolated func writeOnCaptureQueue(
+        samples: [Float], sampleRate: Double, generation: Int
+    ) {
+        let url: URL? = writeGate.withLock { gate in
+            guard gate.accepting, gate.generation == generation else { return nil }
+            return gate.url
+        }
+        guard let url else { return }
         do {
             if file == nil {
                 file = try Self.openFile(at: url, sampleRate: sampleRate)
@@ -351,10 +409,7 @@ final class MeetingMicRecorder {
             // rate. AVAudioFile won't accept a buffer whose rate disagrees
             // with how it was opened; rather than corrupt the CAF, drop the
             // buffer and keep the existing recording.
-            guard abs(file.fileFormat.sampleRate - sampleRate) < 1 else {
-                onLevel?(level)
-                return
-            }
+            guard abs(file.fileFormat.sampleRate - sampleRate) < 1 else { return }
             guard let sourceFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: sampleRate,
@@ -369,18 +424,20 @@ final class MeetingMicRecorder {
                 }
             }
             try file.write(from: buffer)
-            didCapture = true
+            writeGate.withLock {
+                $0.didCapture = true
+                $0.wroteFrames += samples.count
+            }
         } catch {
             NSLog("[Dictator] MeetingMicRecorder write failed: \(error)")
         }
-        onLevel?(level)
     }
 
     /// Int16 PCM on disk (buffers stay Float32 in memory; AVAudioFile
     /// converts on write). 16-bit is already beyond what a meeting mic
     /// resolves and halves the bytes vs Float32; `MeetingAudioCompactor`
     /// re-encodes the track to AAC once the post-pass is done with it.
-    private static func openFile(at url: URL, sampleRate: Double) throws -> AVAudioFile {
+    private nonisolated static func openFile(at url: URL, sampleRate: Double) throws -> AVAudioFile {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: sampleRate,

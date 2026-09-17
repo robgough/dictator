@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Meeting recordings no longer lose their last moments. Audio was written to disk through the same queue that draws the window, and stopping a meeting deliberately discarded whatever was still waiting there — usually the end, which is where the decisions tend to be. Audio is now written the moment it arrives, and stopping waits for the last of it to land before closing the file.
 - Two more models can write meeting notes: Qwen 3.5 9B and Gemma 4 12B. Gemma 4 E4B is still the recommended one — it remains the model the notes are tuned against.
 - New language models to choose from for the on-device provider: Qwen 3.5 in 2B, 4B and 9B sizes, and Gemma 4 12B. Older models (Llama 3.2 and Qwen 2.5) are no longer offered, but one you're already using stays selected and stays listed.
 - New Demo mode in Settings swaps your meetings, notes, transcripts and people for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator Meetings quits.
