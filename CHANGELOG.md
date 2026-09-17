@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The "Clear all conversations" button at the bottom of the chat list no longer has conversations scrolling through it. It now sits on its own strip with a line above it, and the whole strip is clickable rather than just the words.
 - Dictation no longer loses the last words of a sentence. Captured audio was being handed to the app through the same queue that draws the window, so whatever was still waiting there when you released the hotkey was thrown away — which is why it came and went, and why longer or busier moments were worse. Audio is now kept the moment it arrives, independently of the interface.
 - Replies no longer show stray tags like "<image|>" in the middle of a sentence. Models that can also read pictures keep a few internal markers in their vocabulary, and Gemma 4 was occasionally reaching for one mid-reply even in a conversation with no picture in it. Those markers are now stripped from anything a model writes.
 - Chats you thought you'd lost are back. Adding a field to a chat could make every previously saved conversation unreadable, and when that happened Dictator set the whole file aside and started fresh — it had happened twice, stranding 38 conversations. Saved chats now tolerate missing fields, and anything set aside that way is folded back in on the next launch.

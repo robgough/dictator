@@ -40,17 +40,33 @@ struct ChatSidebar: View {
                 .allowsHitTesting(false)
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        // A footer needs a surface of its own. `safeAreaInset` reserves the
+        // space so the last row can still be scrolled clear of it, but rows
+        // travelling past on their way up are drawn *behind* it — and with a
+        // transparent button that reads as the label sitting on top of a
+        // conversation title, which is what it looked like.
+        //
+        // The divider and the bar material are what a sidebar footer is
+        // supposed to be on macOS; they also mark where the list stops, which
+        // this was missing even when nothing was scrolling through it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if !store.threads.filter({ !$0.isEmpty }).isEmpty {
-                Button(role: .destructive) {
-                    confirmClearAll = true
-                } label: {
-                    Label("Clear all conversations", systemImage: "trash")
-                        .font(.caption)
-                        .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    Divider()
+                    Button(role: .destructive) {
+                        confirmClearAll = true
+                    } label: {
+                        Label("Clear all conversations", systemImage: "trash")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            // The whole strip, not just the words — a footer
+                            // button people have to aim at is a worse footer.
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .padding(.vertical, 8)
+                .background(.bar)
             }
         }
         .confirmationDialog(
