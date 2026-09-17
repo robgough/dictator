@@ -13,7 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- Saying two numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Runs of digits read out one at a time — phone numbers, card numbers — still join up, but it now takes three or more, because two in a row is almost always just speech.
+- Saying a couple of numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Digits read out one at a time still join up, but it now takes four or more — the length of a real phone number, card number or PIN — because a short run is almost always just speech.
+- Numbers read out the British way now work: "oh seven nine one two" becomes 07912. "Oh" only counts as a zero inside a run that already looks like a number, so "oh dear" and "Oh, four five seconds" are left alone.
 - The "Clear all conversations" button at the bottom of the chat list no longer has conversations scrolling through it. It now sits on its own strip with a line above it, and the whole strip is clickable rather than just the words.
 - Dictation no longer loses the last words of a sentence. Captured audio was being handed to the app through the same queue that draws the window, so whatever was still waiting there when you released the hotkey was thrown away — which is why it came and went, and why longer or busier moments were worse. Audio is now kept the moment it arrives, independently of the interface.
 - Replies no longer show stray tags like "<image|>" in the middle of a sentence. Models that can also read pictures keep a few internal markers in their vocabulary, and Gemma 4 was occasionally reaching for one mid-reply even in a conversation with no picture in it. Those markers are now stripped from anything a model writes.

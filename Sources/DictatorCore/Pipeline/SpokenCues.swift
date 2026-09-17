@@ -329,14 +329,24 @@ enum SpokenCues {
     /// people read out digit-by-digit. Single isolated words ("I have
     /// five apples") aren't touched.
     ///
-    /// **Three, not two.** A pair of digit words is far more often ordinary
+    /// **Four, not two.** A short run of digit words is far more often ordinary
     /// speech than a number being read out: "four five seconds" became
-    /// "45 seconds", and "two three days" would go the same way. Nobody reads a
-    /// phone number, a card number or a postcode two digits at a time, so the
-    /// real cases are untouched — and the one thing a pair bought, someone
-    /// spelling out a two-digit number, is already served by
-    /// `digitiseCompositeWordNumbers`, which turns the way people actually say
-    /// it ("forty five") into 45.
+    /// "45 seconds", and "two three days" would go the same way. The things this
+    /// rule exists for are long — a phone number is ten or eleven digits, a card
+    /// number sixteen, a PIN four to six — so requiring four costs almost
+    /// nothing real and removes the whole class of false positive. The one thing
+    /// a pair bought, someone spelling out a two-digit number, is already served
+    /// by `digitiseCompositeWordNumbers`, which handles the way people actually
+    /// say it: "forty five" → 45.
+    ///
+    /// **"oh" counts as zero, but only inside a qualifying run.** It is how
+    /// British numbers are actually read — "oh seven nine one two" — but it is
+    /// also far too common in prose to admit to `onesMap`, where it would turn
+    /// "oh dear" into digits. So it is allowed as a *member* of a run that has
+    /// already earned its place: at least four words, of which at least two are
+    /// unambiguous digit words. "Oh, four five seconds" is safe on two counts —
+    /// the comma ends the run before "oh" can join it, and two words is short of
+    /// the bar anyway.
     private static func unifyAdjacentDigitWords(_ text: String) -> String {
         guard let regex = digitWordRunRegex else { return text }
         return text.replacing(regex) { match in
@@ -345,20 +355,44 @@ enum SpokenCues {
             }
             let words = phrase.lowercased()
                 .split(whereSeparator: { $0.isWhitespace })
-            let digits = words
-                .compactMap { onesMap[String($0)] }
+                .map(String.init)
+            guard Self.qualifiesAsDigitRun(words) else {
+                return String(match.output[0].substring ?? "")
+            }
+            return words.compactMap { Self.digitValue(inRun: $0) }
                 .map(String.init)
                 .joined()
-            return digits
         }
     }
 
+    /// Whether a matched run is really someone reading out a number.
+    ///
+    /// The regex can say "these words are all digit-ish and adjacent"; it can't
+    /// say "and there are enough of them, and enough of them are unambiguous".
+    /// Doing that here keeps the pattern readable and the judgement testable.
+    private static func qualifiesAsDigitRun(_ words: [String]) -> Bool {
+        guard words.count >= 4 else { return false }
+        // "oh" alone proves nothing — "oh oh oh oh" is not a phone number. Two
+        // real digit words are what make the run a number rather than a noise.
+        return words.count(where: { onesMap[$0] != nil }) >= 2
+    }
+
+    /// A word's digit value *within an already-qualifying run*, where "oh" is
+    /// the spoken zero. Deliberately not part of `onesMap`, which is consulted
+    /// in places where "oh" is just a word.
+    private static func digitValue(inRun word: String) -> Int? {
+        if word == "oh" { return 0 }
+        return onesMap[word]
+    }
+
     nonisolated(unsafe) private static let digitWordRunRegex: Regex<AnyRegexOutput>? = {
-        let ones = "(?:zero|naught|nought|one|two|three|four|five|six|seven|eight|nine)"
-        // {2,} = two or more *additional* ones words after the first, so we
-        // need 3+ total. A bare "five" doesn't match, and neither does
-        // "four five" — see the doc comment for why a pair is not enough.
-        let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){2,})\\b"
+        // "oh" is in the *pattern* but not in `onesMap`: the run it forms still
+        // has to pass `qualifiesAsDigitRun` before anything is substituted.
+        let ones = "(?:zero|naught|nought|oh|one|two|three|four|five|six|seven|eight|nine)"
+        // {3,} = three or more *additional* words after the first, so we need
+        // 4+ total. A bare "five" doesn't match, and neither does "four five" —
+        // see the doc comment for why a short run is not enough.
+        let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){3,})\\b"
         return try? Regex(pattern).ignoresCase()
     }()
 
