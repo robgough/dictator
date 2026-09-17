@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictation no longer loses the last words of a sentence. Captured audio was being handed to the app through the same queue that draws the window, so whatever was still waiting there when you released the hotkey was thrown away — which is why it came and went, and why longer or busier moments were worse. Audio is now kept the moment it arrives, independently of the interface.
 - Replies no longer show stray tags like "<image|>" in the middle of a sentence. Models that can also read pictures keep a few internal markers in their vocabulary, and Gemma 4 was occasionally reaching for one mid-reply even in a conversation with no picture in it. Those markers are now stripped from anything a model writes.
 - Chats you thought you'd lost are back. Adding a field to a chat could make every previously saved conversation unreadable, and when that happened Dictator set the whole file aside and started fresh — it had happened twice, stranding 38 conversations. Saved chats now tolerate missing fields, and anything set aside that way is folded back in on the next launch.
 - Images you attach to a chat are now shown to the model itself, not just a description of them written when you dropped the file in. You can ask follow-up questions about an image and it will look again, so "what's the code in the third panel?" works. Needs a model that can see: Apple's on-device model on macOS 27, or Qwen 3.5 9B or Gemma 4 12B.

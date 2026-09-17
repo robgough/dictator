@@ -45,8 +45,32 @@ private final class SampleBufferForwarder: NSObject, AVCaptureAudioDataOutputSam
 @MainActor
 final class AudioRecorder {
     private let targetSampleRate: Double = 16_000
-    private var rawBuffer: [Float] = []         // mono, at native sample rate
-    private var nativeSampleRate: Double = 0    // populated from the first CMSampleBuffer
+
+    /// Captured audio, and the rate it was captured at.
+    ///
+    /// Behind a lock, and written on the capture queue rather than the main
+    /// actor. It used to be main-actor state appended from a
+    /// `Task { @MainActor }` per buffer, which loses the end of the recording:
+    /// `stop()` runs on the main actor, bumps `startGeneration` and reads the
+    /// buffer immediately, so every hop still queued behind it then failed its
+    /// generation check and was **discarded**. However far behind the main actor
+    /// happened to be — driving the HUD, the level meter and SwiftUI, on a main
+    /// thread this app has a documented history of starving — is exactly how
+    /// much of the tail went missing, which is why it came and went.
+    ///
+    /// The per-buffer hop was also unordered: `Task { @MainActor }` carries no
+    /// FIFO guarantee, so buffers could be appended out of sequence and quietly
+    /// scramble the audio.
+    ///
+    /// The main actor now only gets the level meter, which is allowed to drop
+    /// frames. Audio never is.
+    private struct Captured {
+        var samples: [Float] = []   // mono, at native rate
+        var sampleRate: Double = 0  // from the first CMSampleBuffer
+        var generation: Int = 0
+        var accepting = false
+    }
+    private let captured = OSAllocatedUnfairLock(initialState: Captured())
     private var running = false
     private var startInFlight = false
 
@@ -179,14 +203,15 @@ final class AudioRecorder {
             MicLog.log("Mic start: recorder still running from a previous session (gen=\(startGeneration)) — stopping zombie and starting fresh")
             _ = stop()
         }
-        rawBuffer.removeAll(keepingCapacity: true)
-        nativeSampleRate = 0
         lastBufferTime = nil
         sessionPhysicallyLive.withLock { $0 = false }
 
         startInFlight = true
         startGeneration &+= 1
         let generation = startGeneration
+        captured.withLock {
+            $0 = Captured(samples: [], sampleRate: 0, generation: generation, accepting: true)
+        }
 
         startBegan = Date()
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
@@ -351,8 +376,7 @@ final class AudioRecorder {
     /// growing buffer every ~second so the user sees a running draft.
     /// The internal buffer isn't drained; this is purely a read.
     func snapshotResampled16k() -> [Float] {
-        let snap = rawBuffer
-        let rate = nativeSampleRate
+        let (snap, rate) = captured.withLock { ($0.samples, $0.sampleRate) }
         guard rate > 0, !snap.isEmpty else { return [] }
         if abs(rate - targetSampleRate) < 1 { return snap }
         return AudioResampler.mono(samples: snap, from: rate, to: targetSampleRate) ?? []
@@ -374,9 +398,35 @@ final class AudioRecorder {
         silentCaptureTask?.cancel()
         silentCaptureTask = nil
 
-        let nativeSamples = rawBuffer
-        let rate = nativeSampleRate
-        rawBuffer.removeAll(keepingCapacity: false)
+        // Close the door first, then wait for the capture queue to go idle, so
+        // a delegate callback already in flight finishes appending before the
+        // buffer is read. `outputQueue` is serial, so this returns as soon as
+        // any in-progress buffer is done — microseconds, not a delay the user
+        // can feel, and it is the difference between keeping the last words and
+        // dropping them.
+        captured.withLock { $0.accepting = false }
+        outputQueue.sync {}
+
+        let (nativeSamples, rate) = captured.withLock { state -> ([Float], Double) in
+            let result = (state.samples, state.sampleRate)
+            state.samples = []
+            return result
+        }
+
+        // How much audio we kept against how long the mic was open. These should
+        // agree to within a buffer; a gap means samples were lost on the way in,
+        // which is exactly the failure that made dictations lose their last
+        // words and left no trace anywhere. Cheap, and it turns a silent class
+        // of bug into a line in the log.
+        if rate > 0, startBegan.timeIntervalSince1970 > 0 {
+            let captured = Double(nativeSamples.count) / rate
+            let elapsed = Date().timeIntervalSince(startBegan)
+            if elapsed > 0.5, captured < elapsed - 0.35 {
+                MicLog.log(String(format:
+                    "Mic stop: kept %.2fs of audio but the mic was open %.2fs — %.2fs missing.",
+                    captured, elapsed, elapsed - captured))
+            }
+        }
 
         guard rate > 0 else { return nativeSamples }
         return AudioResampler.mono(samples: nativeSamples, from: rate, to: targetSampleRate)
@@ -407,16 +457,24 @@ final class AudioRecorder {
         // are tagged with the start they came from. If the user cancels or
         // we retry, samples from the stale generation get dropped on main.
         let capturedGeneration = generation
+        let store = captured
         let forwarder = SampleBufferForwarder { [weak self] sampleBuffer in
             guard let processed = Self.processSampleBuffer(sampleBuffer) else { return }
+            // Append here, on the serial capture queue, so the audio lands in
+            // order and without waiting on the main actor. This is the whole
+            // fix for the dropped tail — see `Captured`.
+            let accepted = store.withLock { state -> Bool in
+                guard state.accepting, state.generation == capturedGeneration else { return false }
+                state.samples.append(contentsOf: processed.mono)
+                state.sampleRate = processed.sampleRate
+                return true
+            }
+            guard accepted else { return }
+            // The meter and the diagnostics can hop, and can be dropped: they
+            // are how the recording *looks*, not what it is.
             Task { @MainActor [weak self, processed, capturedGeneration] in
-                guard let self else { return }
-                guard self.startGeneration == capturedGeneration else { return }
-                self.appendSamples(
-                    mono: processed.mono,
-                    level: processed.level,
-                    sampleRate: processed.sampleRate
-                )
+                guard let self, self.startGeneration == capturedGeneration else { return }
+                self.noteBufferArrived(level: processed.level, sampleRate: processed.sampleRate)
             }
         }
         let queue = outputQueue
@@ -691,6 +749,10 @@ final class AudioRecorder {
         // The session is gone — keep the diagnostic flag honest (covers
         // stop() and the unexpected-stop / device-loss path).
         sessionPhysicallyLive.withLock { $0 = false }
+        // And stop accepting audio into the buffer. `stop()` does this before
+        // draining the queue; this covers the paths that don't go through it,
+        // like a device disappearing mid-recording.
+        captured.withLock { $0.accepting = false }
     }
 
     /// `stopRunning()` can block briefly when tearing down a Bluetooth
@@ -736,15 +798,16 @@ final class AudioRecorder {
 
     // MARK: - Sample buffer ingest
 
-    private func appendSamples(mono: [Float], level: Float, sampleRate: Double) {
-        // Drop samples that arrive after teardown — outputQueue callbacks
-        // can race with stopRunning by a few milliseconds.
+    /// Main-actor bookkeeping for a buffer that has *already* been stored.
+    ///
+    /// Deliberately carries no audio. The samples are appended on the capture
+    /// queue before this is scheduled, so a slow or starved main actor can delay
+    /// the meter and the watchdog's clock without costing a single sample.
+    private func noteBufferArrived(level: Float, sampleRate: Double) {
         guard running || startInFlight else { return }
         if lastBufferTime == nil {
             MicLog.log("Mic start: first buffer \(Int(Date().timeIntervalSince(startBegan) * 1000))ms after start (rate=\(Int(sampleRate)))")
         }
-        rawBuffer.append(contentsOf: mono)
-        nativeSampleRate = sampleRate
         lastBufferTime = Date()
         onLevel?(level)
     }
