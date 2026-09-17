@@ -356,25 +356,54 @@ enum SpokenCues {
             let words = phrase.lowercased()
                 .split(whereSeparator: { $0.isWhitespace })
                 .map(String.init)
-            guard Self.qualifiesAsDigitRun(words) else {
+            guard let digits = Self.digitsIfRunQualifies(words) else {
                 return String(match.output[0].substring ?? "")
             }
-            return words.compactMap { Self.digitValue(inRun: $0) }
-                .map(String.init)
-                .joined()
+            return digits
         }
     }
 
-    /// Whether a matched run is really someone reading out a number.
+    /// The digits a matched run stands for, or nil when it isn't really someone
+    /// reading out a number.
     ///
     /// The regex can say "these words are all digit-ish and adjacent"; it can't
-    /// say "and there are enough of them, and enough of them are unambiguous".
-    /// Doing that here keeps the pattern readable and the judgement testable.
-    private static func qualifiesAsDigitRun(_ words: [String]) -> Bool {
-        guard words.count >= 4 else { return false }
+    /// say "and there are enough of them, and enough are unambiguous, and the
+    /// 'double' has something to double". Doing that here keeps the pattern
+    /// readable and the judgement testable.
+    ///
+    /// **"double"/"triple" expand only if the run survives this.** Expanding
+    /// them earlier, as a pre-pass, would turn a bare "double seven" into
+    /// "seven seven" — two words short of qualifying, so nothing would then
+    /// join them and the speaker would be left with a mangled phrase instead of
+    /// what they said. The count that matters is the count *after* expansion:
+    /// "double seven three four" is four digits and joins, "double seven" is
+    /// two and does not.
+    private static func digitsIfRunQualifies(_ words: [String]) -> String? {
+        var digits: [Int] = []
+        var unambiguous = 0
+        var index = 0
+        while index < words.count {
+            let word = words[index]
+            if word == "double" || word == "triple" {
+                // A multiplier with nothing to multiply is just a word.
+                guard index + 1 < words.count,
+                      let next = digitValue(inRun: words[index + 1])
+                else { return nil }
+                digits.append(contentsOf: Array(repeating: next, count: word == "double" ? 2 : 3))
+                if onesMap[words[index + 1]] != nil { unambiguous += 1 }
+                index += 2
+                continue
+            }
+            guard let value = digitValue(inRun: word) else { return nil }
+            digits.append(value)
+            if onesMap[word] != nil { unambiguous += 1 }
+            index += 1
+        }
+        guard digits.count >= 4 else { return nil }
         // "oh" alone proves nothing — "oh oh oh oh" is not a phone number. Two
-        // real digit words are what make the run a number rather than a noise.
-        return words.count(where: { onesMap[$0] != nil }) >= 2
+        // real digit words are what make the run a number rather than noise.
+        guard unambiguous >= 2 else { return nil }
+        return digits.map(String.init).joined()
     }
 
     /// A word's digit value *within an already-qualifying run*, where "oh" is
@@ -387,8 +416,10 @@ enum SpokenCues {
 
     nonisolated(unsafe) private static let digitWordRunRegex: Regex<AnyRegexOutput>? = {
         // "oh" is in the *pattern* but not in `onesMap`: the run it forms still
-        // has to pass `qualifiesAsDigitRun` before anything is substituted.
-        let ones = "(?:zero|naught|nought|oh|one|two|three|four|five|six|seven|eight|nine)"
+        // has to pass `qualifiesAsDigitRun` before anything is substituted. So
+        // are "double" and "triple", which are how British speakers say a
+        // repeated digit — "double seven" for 77, "double oh seven" for 007.
+        let ones = "(?:zero|naught|nought|oh|double|triple|one|two|three|four|five|six|seven|eight|nine)"
         // {3,} = three or more *additional* words after the first, so we need
         // 4+ total. A bare "five" doesn't match, and neither does "four five" —
         // see the doc comment for why a short run is not enough.
@@ -434,9 +465,17 @@ enum SpokenCues {
     private static func digitiseCompositeWordNumbers(_ text: String) -> String {
         guard let regex = compositeStandaloneRegex else { return text }
         return text.replacing(regex) { match in
-            guard let wn = match.output[1].substring,
+            let whole = String(match.output[0].substring ?? "")
+            // A bare digit word in front means the speaker is using the short
+            // form for a hundred-something — "three sixty one" for 361, "nine
+            // ninety nine" for 999. Converting only the tail produced
+            // "three 61", which is wrong under every reading of the sentence.
+            // Leave the whole phrase to the formatting pass, which can see
+            // whether it is a quantity, a price or a time.
+            guard match.output[1].substring == nil else { return whole }
+            guard let wn = match.output[2].substring,
                   let n = parseWordNumber(String(wn))
-            else { return String(match.output[0].substring ?? "") }
+            else { return whole }
             return String(n)
         }
     }
@@ -457,7 +496,10 @@ enum SpokenCues {
         // ones suffix (so "twenty" alone doesn't match, but "twenty-five"
         // does). hundreds and thousands always contain a scale word.
         let tensOnes = "(?:\(tens)[ \\t-]+\(one))"
-        let pattern = "\\b((?:\(thousands)|\(hundreds)|\(tensOnes)))\\b"
+        // The optional leading group is matched only so it can be *detected* —
+        // see the closure. Capturing it is how the hundred-shorthand case is
+        // recognised without a lookbehind.
+        let pattern = "\\b(?:(\(one))[ \\t]+)?((?:\(thousands)|\(hundreds)|\(tensOnes)))\\b"
         return try? Regex(pattern).ignoresCase()
     }()
 

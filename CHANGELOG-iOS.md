@@ -17,6 +17,8 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- "Double" and "triple" now work in a number read out loud: "my number is double seven three four" becomes 7734. On its own, "press double seven" is left exactly as said — it only expands inside something long enough to be a number.
+- Numbers said the short way are no longer half-converted. "Three sixty one" was coming out as "three 61", which is wrong however you read it. The whole phrase is now left for the language model, which can tell a price from a quantity from a time.
 - Numbers read out digit by digit are now judged from the sentence rather than by counting words. "The code is six nine six zero" becomes 6960 and "call me on oh seven nine one two" becomes 07912, while "four five seconds" and "two three days" stay as you said them. In Quick mode, which runs no language model, only unmistakable runs of four or more are joined.
 - Saying a couple of numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Digits read out one at a time still join up, but it now takes four or more — the length of a real phone number, card number or PIN — because a short run is almost always just speech.
 - Numbers read out the British way now work: "oh seven nine one two" becomes 07912. "Oh" only counts as a zero inside a run that already looks like a number, so "oh dear" and "Oh, four five seconds" are left alone.
