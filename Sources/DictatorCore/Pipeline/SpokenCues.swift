@@ -323,11 +323,20 @@ enum SpokenCues {
         }
     }
 
-    /// Concatenate runs of 2+ adjacent single-digit number words into a
+    /// Concatenate runs of 3+ adjacent single-digit number words into a
     /// digit string: "four four seven seven seven" → "44777". Phone
     /// numbers, credit-card numbers, postcodes, area codes — anything
     /// people read out digit-by-digit. Single isolated words ("I have
     /// five apples") aren't touched.
+    ///
+    /// **Three, not two.** A pair of digit words is far more often ordinary
+    /// speech than a number being read out: "four five seconds" became
+    /// "45 seconds", and "two three days" would go the same way. Nobody reads a
+    /// phone number, a card number or a postcode two digits at a time, so the
+    /// real cases are untouched — and the one thing a pair bought, someone
+    /// spelling out a two-digit number, is already served by
+    /// `digitiseCompositeWordNumbers`, which turns the way people actually say
+    /// it ("forty five") into 45.
     private static func unifyAdjacentDigitWords(_ text: String) -> String {
         guard let regex = digitWordRunRegex else { return text }
         return text.replacing(regex) { match in
@@ -346,9 +355,10 @@ enum SpokenCues {
 
     nonisolated(unsafe) private static let digitWordRunRegex: Regex<AnyRegexOutput>? = {
         let ones = "(?:zero|naught|nought|one|two|three|four|five|six|seven|eight|nine)"
-        // {1,} = one or more *additional* ones words after the first, so
-        // we need 2+ total. Single bare "five" doesn't match.
-        let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){1,})\\b"
+        // {2,} = two or more *additional* ones words after the first, so we
+        // need 3+ total. A bare "five" doesn't match, and neither does
+        // "four five" — see the doc comment for why a pair is not enough.
+        let pattern = "\\b(\(ones)(?:[ \\t]+\(ones)){2,})\\b"
         return try? Regex(pattern).ignoresCase()
     }()
 

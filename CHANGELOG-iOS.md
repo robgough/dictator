@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Saying two numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Runs of digits read out one at a time — phone numbers, card numbers — still join up, but it now takes three or more, because two in a row is almost always just speech.
 - Saying the name of a punctuation mark no longer types the mark. "If there's a question mark" stayed as those words instead of turning into "if there's a?", and the same goes for an em dash, an at sign, a full stop and the rest — an "a", "an" or "the" in front of the phrase now means you're talking about the mark, not asking for one.
 - Dictionary rules that match by sound, or by pattern, now work here too. Create them on the Mac; they arrive through your synced folder and apply to iPhone dictation like any other rule.
 - Phone codes and negative numbers spoken as "plus 44" or "minus 3" now come out as "+44" and "-3", which they never actually did before.
