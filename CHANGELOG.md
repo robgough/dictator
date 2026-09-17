@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- The same number rule now applies whichever mode you dictate in. The instructions given to the language model said to join runs of spoken digits without saying how long a run had to be, so a polished dictation could still turn "four five seconds" into "45 seconds" even after the deterministic pass stopped doing it.
+- Numbers read out digit by digit are now judged from the sentence rather than by counting words. "The code is six nine six zero" becomes 6960 and "call me on oh seven nine one two" becomes 07912, while "four five seconds" and "two three days" stay as you said them. In Quick mode, which runs no language model, only unmistakable runs of four or more are joined.
 - Saying a couple of numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Digits read out one at a time still join up, but it now takes four or more — the length of a real phone number, card number or PIN — because a short run is almost always just speech.
 - Numbers read out the British way now work: "oh seven nine one two" becomes 07912. "Oh" only counts as a zero inside a run that already looks like a number, so "oh dear" and "Oh, four five seconds" are left alone.
 - The "Clear all conversations" button at the bottom of the chat list no longer has conversations scrolling through it. It now sits on its own strip with a line above it, and the whole strip is clickable rather than just the words.
