@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The same number rule now applies whichever mode you dictate in. The instructions given to the language model said to join runs of spoken digits without saying how long a run had to be, so a polished dictation could still turn "four five seconds" into "45 seconds" even after the deterministic pass stopped doing it.
 - Saying a couple of numbers in a row no longer glues them together. "Four five seconds" was becoming "45 seconds". Digits read out one at a time still join up, but it now takes four or more — the length of a real phone number, card number or PIN — because a short run is almost always just speech.
 - Numbers read out the British way now work: "oh seven nine one two" becomes 07912. "Oh" only counts as a zero inside a run that already looks like a number, so "oh dear" and "Oh, four five seconds" are left alone.
 - Saying the name of a punctuation mark no longer types the mark. "If there's a question mark" stayed as those words instead of turning into "if there's a?", and the same goes for an em dash, an at sign, a full stop and the rest — an "a", "an" or "the" in front of the phrase now means you're talking about the mark, not asking for one.
