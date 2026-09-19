@@ -8,9 +8,18 @@ import Foundation
 /// lands in one directory inside the user's synced Dictator folder, where it is
 /// visible, backed up with their other Dictator data, and trivially deleted.
 ///
-/// It also never overwrites. An assistant that silently replaces a file the
-/// user edited is a data-loss bug, and "write it again" is a thing people ask
-/// for constantly — so a clashing name gets a numbered sibling instead.
+/// It also never overwrites on the create path — but it no longer *renames*
+/// there either. A numbered sibling was the original answer to "write it
+/// again", from before `update` existed, and it was measured going wrong in
+/// the worst available way: asked to change a file it had just made, a 12B
+/// model called `create` again, got back `presentation 2.html`, and told the
+/// user the file was called `presentation.html`. The user's next message was
+/// "you've told me the wrong file name."
+///
+/// So a clash is now a **refusal that names the alternative**. The wrong call
+/// fails instead of quietly doing something else, which is the only version a
+/// small model reliably notices. `availableURL` stays for attachments, where
+/// a dropped file genuinely must not clobber an earlier one.
 @MainActor
 enum ChatFileWriter {
     // Files go in the *chat's* folder — see `ChatFiles` — so a conversation
@@ -38,18 +47,26 @@ enum ChatFileWriter {
     /// send it — and a success string would have to be parsed back apart to
     /// do that.
     enum Outcome {
-        case written(url: URL, byteCount: Int, renamedFrom: String?)
+        case written(url: URL, byteCount: Int)
         case failed(String)
 
-        /// What the model is told. It only needs to know it worked and what
-        /// the file ended up called.
+        /// What the model is told.
+        ///
+        /// Two deliberate choices, both from watching this go wrong. The
+        /// filename is stated twice, once as a fact and once as an
+        /// instruction, because the model's own belief about what it called
+        /// the file is what it otherwise reports. And there is no longer a
+        /// "don't tell them the path" clause: it was read as "don't dwell on
+        /// the name", and the name is the one thing the user needs.
         var modelDescription: String {
             switch self {
-            case .written(let url, _, let renamedFrom):
-                let note = renamedFrom.map { " (\($0) already existed, so it was saved under a new name)" } ?? ""
-                return "Saved \(url.lastPathComponent)\(note). It's shown to the user in the "
-                    + "conversation, with buttons to open it or save it elsewhere — so don't "
-                    + "repeat the contents back to them or tell them the full path."
+            case .written(let url, let byteCount):
+                return """
+                    OK: wrote \(url.lastPathComponent) (\(byteCount) bytes) in this chat's folder.
+                    The file is called exactly “\(url.lastPathComponent)” — use that name when \
+                    you tell the user about it. It's already shown to them in the conversation \
+                    with buttons to open or save it, so don't repeat its contents back.
+                    """
             case .failed(let message):
                 return "ERROR: \(message)"
             }
@@ -67,16 +84,22 @@ enum ChatFileWriter {
             return .failed(unusableMessage(for: trimmed))
         }
 
+        // A clash means the model meant `update` — say so, rather than
+        // inventing a name it will then misreport.
+        guard !FileManager.default.fileExists(atPath: target.path) else {
+            let existing = target.lastPathComponent
+            return .failed(
+                "“\(existing)” already exists in this chat's folder, so nothing was written. "
+                    + "To change it: call read_file on “\(existing)”, then update_file with the "
+                    + "complete new contents. To keep both: call create_file again with a "
+                    + "different name.")
+        }
+
         do {
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let url = availableURL(for: target)
-            try contents.write(to: url, atomically: true, encoding: .utf8)
-            return .written(
-                url: url,
-                byteCount: contents.utf8.count,
-                renamedFrom: url.lastPathComponent == target.lastPathComponent
-                    ? nil : target.lastPathComponent)
+            try contents.write(to: target, atomically: true, encoding: .utf8)
+            return .written(url: target, byteCount: contents.utf8.count)
         } catch {
             return .failed("couldn't write the file: \(error.localizedDescription)")
         }
@@ -247,7 +270,7 @@ enum ChatFileWriter {
         }
         do {
             try contents.write(to: url, atomically: true, encoding: .utf8)
-            return .written(url: url, byteCount: contents.utf8.count, renamedFrom: nil)
+            return .written(url: url, byteCount: contents.utf8.count)
         } catch {
             return .failed("couldn't update the file: \(error.localizedDescription)")
         }

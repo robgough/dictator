@@ -118,6 +118,20 @@ enum ConversationContextBudget {
     /// - 1K margin for chat-template role markers and tokenizer slop
     static let nonInputReservationTokens = 11_000
 
+    /// The same reservation, for the chat window.
+    ///
+    /// Smaller, because the two callers cap their replies differently:
+    /// Assistant Mode generates up to 8,192 tokens, the chat window up to
+    /// 4,096 (`ChatEngine.replyTokenCap`). Chat was paying Assistant Mode's
+    /// worst case, which cost it 4K tokens of history it could have used — on
+    /// a 32K model that is a fifth of the usable window, held back for a reply
+    /// that cannot happen. The system-prompt share is smaller too: chat
+    /// subtracts its own tool schemas separately, via
+    /// `ChatToolset.estimatedPromptTokens`.
+    ///
+    /// Sum: 4K worst-case reply + 2K system prompt + 1K template/tokenizer slop.
+    static let chatNonInputReservationTokens = 7_000
+
     /// Rough 4-chars-per-token approximation plus a small per-message overhead
     /// for chat-template tokens (role markers etc.). Not exact — exactness
     /// isn't required for a "approaching limit" warning.

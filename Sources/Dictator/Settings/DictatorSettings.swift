@@ -279,6 +279,31 @@ struct DictatorSettings: Codable, Equatable {
     /// sized Macs.
     var scratchpadWidth: ScratchpadWidth = .small
 
+    /// Whether the chat assistant keeps a short checklist for multi-step jobs
+    /// (see `ChatThread.plan`).
+    ///
+    /// On by default, and the reasoning is the opposite of the industry's.
+    /// Structured planning is being removed from harnesses aimed at frontier
+    /// models — measured, it costs them accuracy — but the same measurement
+    /// gave the *weakest* model tested +11.6 points, and every model Dictator
+    /// runs is weaker still. Synced: it's a preference about how the assistant
+    /// works, not a property of this Mac.
+    var chatPlanningEnabled: Bool = true
+
+    /// Which search service the chat assistant's `web_search` tool asks, if
+    /// any (see `SearchBackend`).
+    ///
+    /// Defaults to DuckDuckGo: an assistant that can't look anything up is
+    /// wrong about the present in a way users read as broken, and this backend
+    /// needs no key and no account — the query reaches the engine exactly as a
+    /// browser tab's would. It is still a network request from an app that
+    /// otherwise makes none, so the Settings picker carries the disclosure and
+    /// `.off` is one click away.
+    ///
+    /// Per-Mac. `.exa` depends on a key in *this* Mac's keychain, so syncing
+    /// the choice would land the other Mac on a backend it has no key for.
+    var webSearchBackend: SearchBackend = .duckDuckGo
+
     /// Which HUD shows while a dictation or assistant request is in flight.
     /// Per-Mac: the reason to switch is the display attached to this machine
     /// (a notch island reads right on a MacBook, a bottom pill on a 32"
@@ -513,6 +538,8 @@ struct DictatorSettings: Codable, Equatable {
         self.scratchpadEnabled = try c.decodeIfPresent(Bool.self, forKey: .scratchpadEnabled) ?? d.scratchpadEnabled
         self.scratchpadWidth = try c.decodeIfPresent(ScratchpadWidth.self, forKey: .scratchpadWidth) ?? d.scratchpadWidth
         self.hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? d.hudStyle
+        self.webSearchBackend = try c.decodeIfPresent(SearchBackend.self, forKey: .webSearchBackend) ?? d.webSearchBackend
+        self.chatPlanningEnabled = try c.decodeIfPresent(Bool.self, forKey: .chatPlanningEnabled) ?? d.chatPlanningEnabled
         self.soundTheme = try c.decodeIfPresent(SoundTheme.self, forKey: .soundTheme) ?? d.soundTheme
         self.trimSilenceEnabled = try c.decodeIfPresent(Bool.self, forKey: .trimSilenceEnabled) ?? d.trimSilenceEnabled
         self.learnFromCorrectionsEnabled = try c.decodeIfPresent(Bool.self, forKey: .learnFromCorrectionsEnabled) ?? d.learnFromCorrectionsEnabled
@@ -1495,6 +1522,8 @@ struct DictatorSettings: Codable, Equatable {
         case scratchpadEnabled
         case scratchpadWidth
         case hudStyle
+        case webSearchBackend
+        case chatPlanningEnabled
         case soundTheme
         case trimSilenceEnabled
         case learnFromCorrectionsEnabled
@@ -1574,6 +1603,7 @@ struct DictatorSettings: Codable, Equatable {
         "journalHeaderTemplate",
         "journalEntryTemplate",
         "journalModeID",
+        "chatPlanningEnabled",
     ]
 
     /// Keys that belong in the per-Mac file
@@ -1597,6 +1627,7 @@ struct DictatorSettings: Codable, Equatable {
         "syncedDirectoryPath",
         "hasCompletedOnboarding",
         "hudStyle",
+        "webSearchBackend",
         "trimSilenceEnabled",
     ]
 

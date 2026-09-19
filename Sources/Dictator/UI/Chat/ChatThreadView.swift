@@ -355,6 +355,14 @@ private struct ChatMessageRow: View {
             Label(message.text, systemImage: "exclamationmark.triangle")
                 .font(.callout)
                 .foregroundStyle(.orange)
+        case .notice:
+            // Quiet and clearly not the user's words — it's Dictator correcting
+            // the assistant mid-turn, and the user should be able to see why
+            // the reply changed course without it looking like they asked.
+            Label(message.text, systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

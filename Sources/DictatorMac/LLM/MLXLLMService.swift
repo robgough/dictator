@@ -65,11 +65,17 @@ final class MLXLLMService: LLMEngine, LLMUsageReporting {
         container != nil && currentModelID == modelID
     }
 
-    var assistantInputTokenBudget: Int {
-        let id = modelID ?? ""
-        let context = ModelCatalog.llm(id: id)?.contextWindowTokens
+    /// The window Dictator is willing to use for the loaded model, from the
+    /// catalog. Deliberately at or below the model's native window — see
+    /// `LLMModel.contextWindowTokens`, which explains why that is a RAM and
+    /// prefill-time commitment rather than a capability claim.
+    var contextWindowTokens: Int {
+        ModelCatalog.llm(id: modelID ?? "")?.contextWindowTokens
             ?? ModelCatalog.fallbackContextWindowTokens
-        return max(2_000, context - ConversationContextBudget.nonInputReservationTokens)
+    }
+
+    var assistantInputTokenBudget: Int {
+        max(2_000, contextWindowTokens - ConversationContextBudget.nonInputReservationTokens)
     }
 
     /// Downloads the model files (no compile, no load) and reports fractional

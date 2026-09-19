@@ -7,12 +7,18 @@ struct ChatPane: View {
     @State private var registry = MCPRegistry.shared
     @State private var editing: MCPServerConfig?
     @State private var testing: Set<UUID> = []
+    @State private var exaKey = ""
+    @State private var exaKeyIsStored = SearchSecrets.has(.exa)
+    @State private var searchTest: String?
+    @State private var isTestingSearch = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 availability
                 builtInTools
+                planning
+                webSearch
                 mcpServers
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,7 +84,7 @@ struct ChatPane: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("What the assistant can do")
                 .font(.headline)
-            Text("The chat assistant can use these without you setting anything up. They run on this Mac, on your own data, and never leave it.")
+            Text("The chat assistant can use these without you setting anything up. They run on this Mac, on your own data — apart from searching and opening web pages, which is covered below.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -119,6 +125,125 @@ struct ChatPane: View {
                      : "Reading the screen needs a model that can see images — \(ModelCatalog.llmModels.filter(\.visionCapable).map(\.displayName).joined(separator: " or ")).")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - Planning
+
+    @ViewBuilder
+    private var planning: some View {
+        @Bindable var bindable = state
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Working through several steps")
+                .font(.headline)
+            Toggle("Let the assistant keep a checklist", isOn: $bindable.settings.chatPlanningEnabled)
+                .onChange(of: bindable.settings.chatPlanningEnabled) { _, _ in state.save() }
+            Text("When you ask for something with several parts, the assistant writes down the steps and ticks them off as it goes. The list is shown back to it with every message, so it doesn't lose track halfway through — and unlike notes in the conversation, it survives the summarising that happens in a long chat.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Web search
+
+    @ViewBuilder
+    private var webSearch: some View {
+        @Bindable var bindable = state
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Searching the web")
+                .font(.headline)
+
+            Picker("Search with", selection: $bindable.settings.webSearchBackend) {
+                ForEach(SearchBackend.allCases) { backend in
+                    Text(backend.label).tag(backend)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .onChange(of: bindable.settings.webSearchBackend) { _, backend in
+                state.save()
+                searchTest = nil
+                // Don't leave a browser engine resident for a backend that is
+                // no longer selected.
+                if backend != .duckDuckGo { DuckDuckGoLiteSearch.shared.shutDown() }
+            }
+
+            Text(state.settings.webSearchBackend.disclosure)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if state.settings.webSearchBackend == .exa {
+                HStack {
+                    SecureField(
+                        exaKeyIsStored ? "Saved — type to replace" : "Exa API key",
+                        text: $exaKey)
+                        .frame(maxWidth: 320)
+                    Button("Save") {
+                        SearchSecrets.setValue(exaKey, for: .exa)
+                        exaKey = ""
+                        exaKeyIsStored = SearchSecrets.has(.exa)
+                        searchTest = nil
+                    }
+                    .disabled(exaKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if exaKeyIsStored {
+                        Button("Remove") {
+                            SearchSecrets.remove(.exa)
+                            exaKeyIsStored = false
+                            searchTest = nil
+                        }
+                    }
+                }
+                Text("Stored in your Mac's keychain, never in Dictator's settings files — so the folder sync can't carry it into iCloud Drive or Dropbox. Get a key from exa.ai.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if state.settings.webSearchBackend != .off {
+                HStack(spacing: 8) {
+                    Button("Test search…") { runSearchTest() }
+                        .controlSize(.small)
+                        .disabled(isTestingSearch)
+                    if isTestingSearch { ProgressView().controlSize(.small) }
+                    if let searchTest {
+                        Text(searchTest)
+                            .font(.caption)
+                            .foregroundStyle(searchTest.hasPrefix("ERROR") ? .orange : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// Runs one real search, because the failures worth catching here — a
+    /// rejected key, a challenge page, no network — only show up against the
+    /// live service.
+    private func runSearchTest() {
+        isTestingSearch = true
+        searchTest = nil
+        Task {
+            let output = await WebSearcher.search(
+                "what day is it today", backend: state.settings.webSearchBackend)
+            isTestingSearch = false
+            if output.hasPrefix("ERROR") {
+                searchTest = output
+            } else {
+                let hosts = output
+                    .split(separator: "\n")
+                    .compactMap { line -> String? in
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        guard trimmed.hasPrefix("http"),
+                              let host = URL(string: trimmed)?.host
+                        else { return nil }
+                        return host
+                    }
+                searchTest = hosts.isEmpty
+                    ? "Search worked."
+                    : "Search worked — \(hosts.count) results, including \(hosts.prefix(2).joined(separator: ", "))."
             }
         }
     }

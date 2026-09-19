@@ -20,9 +20,13 @@ import Foundation
 enum SystemMemory {
     /// Total physical RAM in bytes, as macOS reports it. Cached so callers
     /// don't pay the `ProcessInfo` round-trip on every model row render.
-    static let totalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ///
+    /// `nonisolated`: an immutable read of a value the OS fixes at boot, so it
+    /// is safe from any thread — and `ChatPromptCache` sizes itself from
+    /// `tier` while running inside `ModelContainer.perform`, off the main actor.
+    nonisolated static let totalBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
 
-    static var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
+    nonisolated static var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
 
     /// Human-readable total ("8 GB", "16 GB", "32 GB"). Rounded to the
     /// nearest whole GB because macOS reports values like 8.59 GB on some
@@ -57,7 +61,7 @@ enum SystemMemory {
     /// number (8 GB MacBooks report ~8.59 GB; 16 GB report ~17.18 GB), and
     /// we don't want a 16 GB machine landing in `.lean` on the wrong side
     /// of an `<= 12` test.
-    static var tier: Tier {
+    nonisolated static var tier: Tier {
         if totalGB < 12 { return .lean }
         if totalGB < 20 { return .balanced }
         // 30, not 32: a 32 GB Mac reports ~34.36 GB and a 24 GB one ~25.77 GB,

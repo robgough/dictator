@@ -17,6 +17,15 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         /// than shown as a transient banner, so a thread reopened tomorrow
         /// still explains its own gap.
         case failure
+        /// Dictator telling the model something mid-turn — currently only that
+        /// a file it said it was writing does not exist.
+        ///
+        /// Sent to the model as a user-role message (there is no system turn
+        /// available mid-conversation) but shown to the user as a quiet note,
+        /// because they didn't say it. An older build decodes an unknown kind
+        /// as `.user`, so the worst case for a downgrade is that the note looks
+        /// like something the user typed — visible, not lost.
+        case notice
     }
 
     let id: UUID
@@ -234,6 +243,63 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// have said otherwise, and deleting it a fortnight later would be a bug.
     var promoted: Bool = false
 
+    /// The steps the assistant is working through, if it has set any.
+    ///
+    /// Deliberately **not** a message and **not** a file. Two things follow
+    /// from that, and both are the point:
+    ///
+    /// - It survives compaction. A plan written as prose gets summarised
+    ///   away — measured on a real thread, where a three-phase research plan
+    ///   came back as a 382-character summary containing none of it.
+    /// - It costs no round to consult. A plan kept in a file would need a
+    ///   `read_file` call, one of eight, every turn — and the same thread
+    ///   shows the model never re-reading a file it wrote unless told to.
+    ///
+    /// Instead it is re-rendered onto the newest user message every turn, the
+    /// same trick the clock uses, which also keeps the head of the prompt
+    /// byte-stable for `ChatPromptCache`.
+    var plan: [PlanStep] = []
+
+    /// One step, and whether it's done.
+    ///
+    /// A flat list: no nesting, no priorities, no owners. This is read and
+    /// rewritten by a 4-12B model every turn, and every extra field is one
+    /// more thing for it to get wrong and to spend tokens restating.
+    struct PlanStep: Codable, Hashable, Sendable, Identifiable {
+        var id: UUID = UUID()
+        var text: String
+        var done: Bool = false
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+            done = try c.decodeIfPresent(Bool.self, forKey: .done) ?? false
+        }
+
+        init(text: String, done: Bool = false) {
+            self.text = text
+            self.done = done
+        }
+    }
+
+    /// The plan as the model sees it, or nil when there isn't one.
+    ///
+    /// Rendered fresh each turn rather than stored as text, so a step ticked
+    /// off shows up immediately and there is only ever one copy of the truth.
+    var planBlock: String? {
+        guard !plan.isEmpty else { return nil }
+        let lines = plan.map { "\($0.done ? "[x]" : "[ ]") \($0.text)" }
+            .joined(separator: "\n")
+        return """
+            [Your plan for this conversation, not part of the question above. \
+            Work through it in order, and call update_plan when you finish a \
+            step or the plan needs to change.]
+            \(lines)
+            """
+    }
+
+
 
     /// Hand-written for the reason spelled out on `ChatMessage.init(from:)`:
     /// a synthesised decoder makes every defaulted non-optional a required key,
@@ -251,6 +317,7 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
         workingDirectoryPath = try c.decodeIfPresent(String.self, forKey: .workingDirectoryPath)
         compaction = (try? c.decodeIfPresent(ConversationCompaction.self, forKey: .compaction))?.flatMap { $0.summary.isEmpty ? nil : $0 }
         promoted = try c.decodeIfPresent(Bool.self, forKey: .promoted) ?? false
+        plan = (try? c.decode([PlanStep].self, forKey: .plan)) ?? []
     }
 
     init(
@@ -340,7 +407,10 @@ extension ChatThread {
                     reply: message.text,
                     context: user.context
                 ))
-            case .tool, .failure:
+            case .tool, .failure, .notice:
+                // A notice is Dictator talking to the model mid-turn; it is
+                // not a turn, and replaying it through the hotkey would read
+                // as the user having said it.
                 continue
             }
         }

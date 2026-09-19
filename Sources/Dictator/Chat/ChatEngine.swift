@@ -208,6 +208,8 @@ final class ChatEngine {
         // it before the model starts thinking rather than between rounds.
         activity = .loadingModel
         var toolset = await availableTools()
+        // One correction per turn, not per round.
+        var nudgedAboutMissingFile = false
         var preemptions = 0
 
         // Once per turn, before any round. Compacting mid-turn would rewrite the
@@ -274,14 +276,28 @@ final class ChatEngine {
             }
             store.upsert(updated)
 
-            guard !result.toolCalls.isEmpty else { return }
+            guard !result.toolCalls.isEmpty else {
+                // The reply may have *said* it wrote a file without calling
+                // anything. One correction, then the loop carries on.
+                if !nudgedAboutMissingFile,
+                   let missing = missingClaimedFile(in: reply.text, threadID: threadID) {
+                    nudgedAboutMissingFile = true
+                    recordMissingFileNotice(missing, threadID: threadID)
+                    continue
+                }
+                return
+            }
 
             // Run every call this round asked for. Both Qwen models routinely
             // emit two in one round when a question needs two tools, so this
             // is the normal path, not an edge case.
-            for call in result.toolCalls {
+            for (call, superseded) in Self.resolvingDuplicateWrites(result.toolCalls) {
                 if Task.isCancelled { return }
-                await runToolCall(call, toolset: &toolset, threadID: threadID)
+                if superseded {
+                    recordSupersededCall(call, threadID: threadID)
+                } else {
+                    await runToolCall(call, toolset: &toolset, threadID: threadID)
+                }
             }
         }
 
@@ -375,6 +391,95 @@ final class ChatEngine {
         store.upsert(thread)
     }
 
+    /// Catches the model saying it wrote a file when it didn't.
+    ///
+    /// Reported from real use, and the most common way a turn ends badly: the
+    /// reply says "I'm creating research_roadmap_simple.html now." and then
+    /// stops. A round that ends in prose ends the turn, so nothing is written,
+    /// nothing failed, and the user is left looking for a file that was never
+    /// there. It is made *more* likely by the prompt telling the model to say
+    /// what it's about to do before doing it — that instruction is worth
+    /// keeping, so the loop has to close the gap instead.
+    ///
+    /// Deliberately a fact-check, not a phrasing rule. It only fires when a
+    /// filename the model named, with an extension it is allowed to write,
+    /// genuinely is not on disk — so "you could call it notes.md" and a file
+    /// that really was written both pass silently. At most one nudge per turn:
+    /// a model that ignores the correction is not going to be talked round by
+    /// a second one, and the round cap is the backstop.
+    private func missingClaimedFile(in text: String, threadID: UUID) -> String? {
+        guard let thread = store.thread(id: threadID),
+              let folder = try? ChatFiles.workingDirectory(for: thread)
+        else { return nil }
+        let claimed = FileClaimDetector.claimedFilenames(
+            in: text, allowedExtensions: ChatFileWriter.allowedExtensions)
+        for name in claimed {
+            guard let url = ChatFileWriter.resolve(name: name, in: folder.url) else { continue }
+            if FileManager.default.fileExists(atPath: url.path) { continue }
+            return name
+        }
+        return nil
+    }
+
+    /// Tells the model, in the transcript, that the file isn't there.
+    private func recordMissingFileNotice(_ name: String, threadID: UUID) {
+        guard var thread = store.thread(id: threadID) else { return }
+        thread.append(ChatMessage(
+            kind: .notice,
+            text: "Dictator: there is no file called “\(name)” in this conversation's folder. "
+                + "You described writing it but never called the tool. Call create_file now "
+                + "with the full contents, or tell the user it wasn't written."))
+        store.upsert(thread)
+    }
+
+    /// Marks all but the last write to any one filename within a single round.
+    ///
+    /// A model that changes its mind mid-generation emits two `create_file`
+    /// calls for the same name in one reply — measured: 6,350 bytes then
+    /// 6,451 bytes of the same presentation. Both used to run, so the second
+    /// hit the clash path and the user got a stray sibling file. Now the
+    /// earlier ones are recorded as superseded and never touch the disk,
+    /// which is also what the model meant.
+    ///
+    /// Order is preserved so the transcript still reads in the order the model
+    /// wrote it. Pure function of the round's calls, so a preempted round that
+    /// re-runs reaches the same answer.
+    private static func resolvingDuplicateWrites(
+        _ calls: [ChatWireToolCall]
+    ) -> [(call: ChatWireToolCall, superseded: Bool)] {
+        var lastIndexForTarget: [String: Int] = [:]
+        for (index, call) in calls.enumerated() {
+            guard let key = writeTarget(of: call) else { continue }
+            lastIndexForTarget[key] = index
+        }
+        return calls.enumerated().map { index, call in
+            guard let key = writeTarget(of: call) else { return (call, false) }
+            return (call, lastIndexForTarget[key] != index)
+        }
+    }
+
+    /// The filename a write-style call targets, or nil if it isn't one.
+    private static func writeTarget(of call: ChatWireToolCall) -> String? {
+        guard call.name == "create_file" || call.name == "update_file",
+              let name = call.arguments["name"]?.stringValue,
+              !name.isEmpty
+        else { return nil }
+        // create_file and update_file share a namespace deliberately: a round
+        // that creates then updates the same name meant the update.
+        return name.lowercased()
+    }
+
+    private func recordSupersededCall(_ call: ChatWireToolCall, threadID: UUID) {
+        guard var thread = store.thread(id: threadID) else { return }
+        let label = call.name == "update_file" ? "Update a file" : "Save a file"
+        var entry = ChatMessage(kind: .tool, text: label, toolCall: call)
+        entry.toolResult = "Nothing was written: a later call in the same reply wrote this "
+            + "file instead. Only the last version was saved."
+        entry.toolFailed = true
+        thread.append(entry)
+        store.upsert(thread)
+    }
+
     // MARK: - Tool dispatch
 
     private func runToolCall(
@@ -412,7 +517,16 @@ final class ChatEngine {
         activity = .runningTool(tool.displayName)
         let output: String
         var failed = false
-        if ["create_file", "update_file", "read_file", "list_files", "delete_file"]
+        if call.name == "update_plan" {
+            output = runPlanUpdate(call: call, threadID: threadID)
+            failed = output.hasPrefix("ERROR:")
+        } else if call.name == "check_html" {
+            // Its own branch rather than runFileTool's: loading a page is
+            // asynchronous, and that function is deliberately synchronous so
+            // the transcript entry can be filled in before it returns.
+            output = await runHTMLCheck(call: call, threadID: threadID)
+            failed = output.hasPrefix("ERROR:")
+        } else if ["create_file", "update_file", "read_file", "list_files", "delete_file"]
             .contains(call.name) {
             // Dispatched here rather than in BuiltInChatTools because the
             // transcript entry carries the resulting file, and only the loop
@@ -452,6 +566,65 @@ final class ChatEngine {
         entry.toolResult = Self.truncateToolOutput(output)
         entry.toolFailed = failed
         updateEntry(entry, threadID: threadID)
+    }
+
+    /// Replaces the thread's plan with what the model sent.
+    ///
+    /// Whole-list replacement rather than per-step edits: a 4-12B model that
+    /// has to address an existing step by index or id gets it wrong, and a
+    /// wrong tick is worse than a rewritten list. Sending the list back costs
+    /// a few dozen tokens and is the thing these models do reliably.
+    private func runPlanUpdate(call: ChatWireToolCall, threadID: UUID) -> String {
+        guard var thread = store.thread(id: threadID) else {
+            return "ERROR: this conversation no longer exists."
+        }
+        // Not `case .array` — measured across all five catalogue models, not
+        // one of them sends the array the schema asks for. See
+        // `PlanStepParsing`, which normalises what they actually send.
+        let steps = PlanStepParsing.steps(
+            from: call.arguments["steps"]?.jsonObject,
+            fallbackText: call.arguments["text"]?.stringValue
+        ).map { ChatThread.PlanStep(text: $0.text, done: $0.done) }
+        guard !steps.isEmpty else {
+            thread.plan = []
+            store.upsert(thread)
+            return "Plan cleared."
+        }
+        thread.plan = steps
+        store.upsert(thread)
+        let remaining = thread.plan.filter { !$0.done }.count
+        return "Plan saved (\(thread.plan.count) steps, \(remaining) still to do). "
+            + "It's shown to you on every message from now on, so don't repeat it back to the user."
+    }
+
+    /// Loads an HTML file this chat produced and reports what's wrong with it.
+    ///
+    /// Scoped the same way the file tools are: the name is resolved inside the
+    /// chat's own folder, and the page is given read access to that folder and
+    /// nothing else, so it can pull in the stylesheet and script the model
+    /// wrote beside it.
+    private func runHTMLCheck(call: ChatWireToolCall, threadID: UUID) async -> String {
+        guard let thread = store.thread(id: threadID) else {
+            return "ERROR: this conversation no longer exists."
+        }
+        let folder: (url: URL, folderName: String?)
+        do {
+            folder = try ChatFiles.workingDirectory(for: thread)
+        } catch {
+            return "ERROR: \(error.localizedDescription)"
+        }
+        let name = call.arguments["name"]?.stringValue ?? ""
+        guard let fileURL = ChatFileWriter.resolve(name: name, in: folder.url) else {
+            return "ERROR: “\(name)” isn't a file in this chat's folder."
+        }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return "ERROR: there's no file called “\(name)” in this chat's folder. "
+                + "Call list_files to see what's there."
+        }
+        guard fileURL.pathExtension.lowercased() == "html" else {
+            return "ERROR: check_html only works on .html files."
+        }
+        return await HTMLChecker.check(fileURL: fileURL, readAccessTo: folder.url)
     }
 
     /// The file tools, all scoped to this chat's own folder.
@@ -494,7 +667,7 @@ final class ChatEngine {
             let outcome = call.name == "create_file"
                 ? ChatFileWriter.write(name: name, contents: contents, in: folder.url)
                 : ChatFileWriter.update(name: name, contents: contents, in: folder.url)
-            if case .written(let url, let bytes, _) = outcome {
+            if case .written(let url, let bytes) = outcome {
                 // An updated file gets a card too — the user should see the
                 // version that now exists, not the one from three messages ago.
                 entry.producedFile = ProducedFile(
@@ -657,9 +830,17 @@ final class ChatEngine {
         // there throws mid-answer rather than degrading, so it gets its own,
         // much smaller budget — `renderForModel` then drops older turns sooner
         // instead of the round failing.
-        let total = settings().llmEngine == .apple
-            ? AppleFoundationLLMService.chatInputTokenBudget
-            : MLXLLMServiceHolder.shared.assistantInputTokenBudget
+        let total: Int
+        if settings().llmEngine == .apple {
+            total = AppleFoundationLLMService.chatInputTokenBudget
+        } else {
+            // Not `assistantInputTokenBudget`: that reserves for Assistant
+            // Mode's 8K reply cap, and this window's is 4K. Deriving it here
+            // from the model's window gives the conversation back the
+            // difference — a fifth of the usable history on a 32K model.
+            let window = MLXLLMServiceHolder.shared.contextWindowTokens
+            total = max(2_000, window - ConversationContextBudget.chatNonInputReservationTokens)
+        }
         return max(1_500, total - toolset.estimatedPromptTokens)
     }
 
@@ -794,6 +975,28 @@ final class ChatEngine {
     static func estimatedTokens(for message: ChatMessage) -> Int {
         var chars = message.text.count + (message.selection?.count ?? 0)
         chars += message.toolResult?.count ?? 0
+        // Tool-call arguments are rendered into the prompt too, and were being
+        // counted as nothing — so a thread carrying six written-out HTML files
+        // estimated far smaller than it really was, and compaction fired late
+        // while the real prompt had already overrun the cache.
+        //
+        // The `contents` of a write is the exception, and is counted at its
+        // elided size: `renderForModel` replaces it with a pointer for
+        // everything before the last two exchanges, so on exactly the long
+        // threads where this matters it is not in the prompt. Counting it in
+        // full would swing the error the other way and compact a thread that
+        // is comfortably inside the window.
+        if case .object(let fields)? = message.toolCall?.arguments {
+            let isWrite = message.toolCall?.name == "create_file"
+                || message.toolCall?.name == "update_file"
+            for (key, value) in fields {
+                if isWrite && key == "contents" {
+                    chars += 120
+                } else {
+                    chars += value.compactString.count + key.count + 4
+                }
+            }
+        }
         for attachment in message.attachments {
             chars += attachment.text?.count ?? 0
         }
@@ -841,7 +1044,9 @@ final class ChatEngine {
                 pendingUser = message
             case .assistant:
                 if !message.text.isEmpty { lastReply = message }
-            case .tool, .failure:
+            case .tool, .failure, .notice:
+                // Not summarisable: a correction Dictator issued mid-turn is
+                // about how the turn went, not about what was said.
                 continue
             }
         }
@@ -983,11 +1188,25 @@ final class ChatEngine {
         """
     }
 
-    /// Flattens the stored transcript back into the message shape the chat
-    /// template expects — which means folding each tool entry back into the
-    /// assistant message that asked for it (see `ChatWireMessage` for why that
-    /// matters).
+    /// Replaces the `contents` of a stale `create_file` / `update_file` call
+    /// with a pointer to the file.
     ///
+    /// The call itself is kept — Gemma 4 renders a tool result only by scanning
+    /// forward from the call that produced it, so dropping it would break every
+    /// result after it. Only the payload goes.
+    static func elidingWrittenContents(of call: ChatWireToolCall) -> ChatWireToolCall {
+        guard call.name == "create_file" || call.name == "update_file",
+              case .object(var fields) = call.arguments,
+              case .string(let contents)? = fields["contents"],
+              contents.count > 200
+        else { return call }
+        let name = fields["name"]?.stringValue ?? "the file"
+        fields["contents"] = .string(
+            "[\(contents.count) characters, elided to save room — “\(name)” is on disk; "
+                + "call read_file to see it]")
+        return ChatWireToolCall(id: call.id, name: call.name, arguments: .object(fields))
+    }
+
     /// Trims from the front when the thread outgrows `budgetTokens`. Dropping
     /// oldest-first (rather than summarising, as Assistant Mode does) is the
     /// simple thing that can't fail: a summariser pass is another generation
@@ -1000,6 +1219,11 @@ final class ChatEngine {
     /// because the hotkey path had to fit a reply into an 8K reservation; the
     /// chat window has the whole window to play with, so it would be a poor
     /// trade to feed the model someone's paraphrase when the real turns fit.
+    ///
+    /// Flattens the stored transcript back into the message shape the chat
+    /// template expects — which means folding each tool entry back into the
+    /// assistant message that asked for it (see `ChatWireMessage` for why that
+    /// matters).
     static func renderForModel(
         thread: ChatThread,
         systemPrompt: String,
@@ -1069,6 +1293,15 @@ final class ChatEngine {
 
                 if message.id == lastUserMessageID {
                     content = Self.withClock(content, at: message.timestamp)
+                    // After the clock, for the same reason the clock sits after
+                    // the question: whatever is nearest the end is what a small
+                    // model treats as the subject, and the plan is the thing it
+                    // should act on next. Re-rendered every turn from the
+                    // thread rather than stored in the transcript, so it
+                    // survives compaction and costs no round to consult.
+                    if let plan = thread.planBlock {
+                        content += "\n\n" + plan
+                    }
                 }
                 var userMessage = ChatWireMessage(role: .user, content: content)
                 userMessage.imagePaths = message.attachments
@@ -1086,12 +1319,24 @@ final class ChatEngine {
                 // result. Gemma 4 renders the result *only* by scanning forward
                 // from one; without it the model never sees what came back and
                 // calls the same tool forever.
+                //
+                // The *arguments* are elided on the same schedule as the
+                // result, because for a write the argument IS the file. A
+                // thread that produced six HTML files was measured carrying
+                // 33,000 characters of stale markup in every prompt, on every
+                // round, for the rest of the conversation — which is what
+                // pushed it past the prompt cache and turned each round into a
+                // 22-second re-prefill. The file is on disk; read_file gets it
+                // back when it's actually wanted.
+                let renderedCall = index < elideToolResultsBefore
+                    ? Self.elidingWrittenContents(of: call)
+                    : call
                 if var last = wire.last, last.role == .assistant {
-                    last.toolCalls.append(call)
+                    last.toolCalls.append(renderedCall)
                     wire[wire.count - 1] = last
                 } else {
                     wire.append(
-                        ChatWireMessage(role: .assistant, content: "", toolCalls: [call]))
+                        ChatWireMessage(role: .assistant, content: "", toolCalls: [renderedCall]))
                 }
                 let result: String
                 if index < elideToolResultsBefore {
@@ -1106,6 +1351,13 @@ final class ChatEngine {
                         toolCallID: call.id,
                         toolName: call.name
                     ))
+
+            case .notice:
+                // Goes to the model as a user turn: there is no system role
+                // available mid-conversation, and every chat template renders
+                // a user message. Bracketed and self-identifying so it doesn't
+                // read as something the person said.
+                wire.append(ChatWireMessage(role: .user, content: "[\(message.text)]"))
 
             case .failure:
                 // Not sent to the model: it's a note to the user about a turn
@@ -1208,8 +1460,70 @@ final class ChatEngine {
             You have tools. Call one only when it is the only way to get what you need, \
             and never to answer something you already know. \
             After a tool returns, answer the question in prose — do not call the same tool again.
+
+            Do things in this order: say in one short line what you are about to do, \
+            call the tool, then report what the tool result actually said. \
+            Never say you have created, saved, updated or checked something \
+            unless a tool result in this reply says so — if you only described \
+            doing it, it did not happen. \
+            Never end a reply having only said you are about to do something: \
+            saying "I'm creating the file now" and then stopping means the user \
+            gets nothing. Either call the tool in the same reply, or don't \
+            mention it.
             """
         }
+
+        // Worked examples rather than rules: at 4B-12B a model copies the
+        // shape of an exchange far more reliably than it obeys an abstract
+        // instruction, and the two failures these prevent — recreating a file
+        // instead of updating it, and reporting a filename the tool didn't
+        // return — were both measured against a description that already
+        // said, in words, not to do them.
+        if toolset.advertised.contains(where: { $0.name == "update_file" }) {
+            prompt += """
+
+
+            To change a file that already exists, read it and then update it. \
+            create_file is only for a name that does not exist yet, and it will \
+            refuse one that does. Always use the filename the tool result gives back.
+
+            User: can you fix the heading in notes.md
+            You: Reading notes.md first.
+            → read_file(name: "notes.md")
+            → update_file(name: "notes.md", contents: "<the whole file, with the heading fixed>")
+            You: Updated notes.md — the heading is now "Q3 planning".
+            """
+        }
+
+        if toolset.advertised.contains(where: { $0.name == "update_plan" }) {
+            prompt += """
+
+
+            When the user asks for something with several parts, call update_plan first \
+            with the steps, then do the first one. Tick steps off as you finish them. \
+            The plan comes back to you on every message, so it is how you remember what \
+            you were doing — trust it over your own memory of earlier in the conversation.
+            """
+        }
+
+        if toolset.advertised.contains(where: { $0.name == "check_html" }) {
+            prompt += """
+
+
+            After writing or changing an .html file, call check_html on it and fix what \
+            it reports before you say it works. A page whose scripts throw nothing can \
+            still be completely broken, so read what it says about CSS rules that match \
+            nothing and about which elements are visible.
+            """
+        }
+
+        prompt += """
+
+
+        If they mention a company, product or person you do not recognise, it may well \
+        be their own: check what you remember and search their journal before saying \
+        you have not heard of it.
+        """
         if toolset.isDeferred {
             prompt += "\n\n" + toolset.indexBlock
         }

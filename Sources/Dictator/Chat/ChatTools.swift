@@ -84,7 +84,7 @@ enum BuiltInChatTools {
                 name: "create_file",
                 displayName: "Save a file",
                 detail: "Writes a file into the “Chat Files” folder in your Dictator folder.",
-                description: "Save text to a file — notes, Markdown, JSON, CSV, a script. It always goes in the user's “Chat Files” folder; you cannot choose a location, and you cannot overwrite an existing file (a clashing name gets a number added). Give the filename with its extension.",
+                description: "Save text to a NEW file — notes, Markdown, JSON, CSV, a script. It always goes in the user's “Chat Files” folder; you cannot choose a location. This fails if a file of that name already exists: to change one you have already made, use update_file instead. Give the filename with its extension.",
                 parameters: [
                     "name": [
                         "type": "string",
@@ -131,7 +131,7 @@ enum BuiltInChatTools {
                 name: "update_file",
                 displayName: "Update a file",
                 detail: "Replaces the contents of a file in this conversation.",
-                description: "Replace the entire contents of a file this conversation already made. Read it first. Use this — not create_file — when the user asks to change, add to, or fix an existing file, otherwise they end up with two versions.",
+                description: "Change a file this conversation already made. Use this whenever the user asks to change, fix, add to or improve an existing file — read_file first, then send the complete new contents, which replace the file. create_file will refuse a name that already exists, so this is the only way to alter one.",
                 parameters: [
                     "name": [
                         "type": "string",
@@ -143,6 +143,85 @@ enum BuiltInChatTools {
                     ] as [String: any Sendable],
                 ],
                 required: ["name", "contents"],
+                safe: true
+            ))
+
+        // Offered only where it can pay for itself: a conversation already
+        // long enough to have lost its thread. The measured case for planning
+        // is that it helps *weak* models keep a multi-step job on track — and
+        // these are the weakest models anyone runs an agent on — but an empty
+        // plan on a one-line question is 150 tokens a round buying nothing.
+        //
+        // Measured in `scratch/plan-follow-check`, 3 adherence scenarios and 10
+        // judgement cases across all five catalogue models.
+        //
+        // **It works where it matters.** Following the right next step, with the
+        // conversation's opening request summarised away by compaction:
+        // 2/15 without the plan, 11/15 with it injected at the tail. With the
+        // history still intact it barely registers (12/15 → 14/15), because the
+        // model can just read the original request. Gemma 4 12B gains most —
+        // 1/3 without, 3/3 with.
+        //
+        // **Don't try to stop it over-planning by adding non-examples to this
+        // description.** That was measured head to head: adding "no plan for
+        // 'what's 17 times 23?'…" scored 39/50 against the current wording's
+        // 39/50 — it helped two models by one case and hurt two by one — while
+        // costing ~120 prompt tokens every round.
+        //
+        // It is also the wrong target. Of 22 judgement failures, 17 were the
+        // model *not* planning when it should (42% of multi-part jobs) and only
+        // 5 were planning when it shouldn't (8% of one-off questions, four of
+        // those five on Qwen 3.5 4B). Under-planning costs nothing — you get
+        // the behaviour you had before the tool existed — so a conservative
+        // tool is the right failure to have, and a description that discourages
+        // planning pushes the wrong way.
+        if settings.chatPlanningEnabled {
+            tools.append(
+                tool(
+                    name: "update_plan",
+                    displayName: "Update the plan",
+                    detail: "Keeps a short checklist of what it's working through.",
+                    description: "Write or revise the short list of steps you are working through for this conversation. Use it when the user asks for something with several parts, and call it again to tick steps off or change the plan as you learn more. The list is shown back to you on every message, so it is how you remember what you were doing — you do not need to repeat it in your reply. Send the whole list every time: what you send replaces what was there.",
+                    parameters: [
+                        "steps": [
+                            "type": "array",
+                            "description": "The full list of steps, in order, replacing any previous list. Keep each one short.",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "text": [
+                                        "type": "string",
+                                        "description": "What the step is, in a few words.",
+                                    ] as [String: any Sendable],
+                                    "done": [
+                                        "type": "boolean",
+                                        "description": "True once the step is finished.",
+                                    ] as [String: any Sendable],
+                                ] as [String: any Sendable],
+                                "required": ["text"],
+                            ] as [String: any Sendable],
+                        ] as [String: any Sendable]
+                    ],
+                    required: ["steps"],
+                    safe: true
+                ))
+        }
+
+        tools.append(
+            tool(
+                name: "check_html",
+                displayName: "Check a web page works",
+                detail: "Opens an HTML file this chat made and reports what's broken in it.",
+                description: "Open an .html file you have written and report what is actually wrong with it: CSS rules that match nothing, JavaScript errors, and which elements are visible once it loads. Do this after writing or updating any .html file, and fix what it reports before telling the user it works. You cannot see the page any other way.",
+                parameters: [
+                    "name": [
+                        "type": "string",
+                        "description": "The filename to check, e.g. slides.html.",
+                    ] as [String: any Sendable]
+                ],
+                required: ["name"],
+                // Reads a file this chat already wrote, in a browser engine
+                // that can reach neither the network nor the rest of the disk.
                 safe: true
             ))
 
@@ -165,12 +244,43 @@ enum BuiltInChatTools {
                 safe: false
             ))
 
+        // Search first, so the model meets the tool that finds an address
+        // before the one that opens it.
+        if settings.webSearchBackend != .off {
+            tools.append(
+                tool(
+                    name: "web_search",
+                    displayName: "Search the web",
+                    detail: "Looks up a search query on the web and reads back the results.",
+                    // Says nothing about *which* service answers. The backend is
+                    // a settings choice and the model must not be able to tell,
+                    // or switching it would change how the assistant behaves —
+                    // and would move the head of the prompt, which is what
+                    // ChatPromptCache depends on staying still.
+                    description: "Search the web and get back a list of results — each with a title, an address and a short summary. Use it whenever the answer depends on something current, or on a page whose address you don't know, rather than guessing from memory. The summaries are short and often written to sell something: open the most promising result with fetch_url before relying on the detail.",
+                    parameters: [
+                        "query": [
+                            "type": "string",
+                            "description": "What to search for. Use the words you'd type into a search box, not a whole sentence.",
+                        ] as [String: any Sendable]
+                    ],
+                    required: ["query"],
+                    // Reads a public web page, like fetch_url, and prompting
+                    // before every search would make the assistant tedious in
+                    // exactly the way that trains people to click through.
+                    // Consent lives in Settings, where the disclosure is.
+                    safe: true
+                ))
+        }
+
         tools.append(
             tool(
                 name: "fetch_url",
                 displayName: "Read a web page",
                 detail: "Opens a web address and reads the text on it.",
-                description: "Fetch a public web page and read its text. Use it when the user gives you a link, or refers to something you'd need to look up on a page you know the address of. You cannot search the web — you can only open an address.",
+                description: settings.webSearchBackend == .off
+                    ? "Fetch a public web page and read its text. Use it when the user gives you a link, or refers to something you'd need to look up on a page you know the address of. You cannot search the web — you can only open an address."
+                    : "Fetch a public web page and read its text. Use it when the user gives you a link, and to read a result properly after web_search — the search summaries are too short to answer from.",
                 parameters: [
                     "url": [
                         "type": "string",
@@ -378,6 +488,10 @@ enum BuiltInChatTools {
             // Handled by the engine, which needs the structured outcome to
             // attach the file to the transcript.
             return "ERROR: create_file is dispatched by ChatEngine."
+
+        case "web_search":
+            return await WebSearcher.search(
+                arguments["query"]?.stringValue ?? "", backend: settings.webSearchBackend)
 
         case "fetch_url":
             return await WebFetcher.fetch(arguments["url"]?.stringValue ?? "")

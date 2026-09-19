@@ -48,7 +48,25 @@ final class ChatPromptCache: @unchecked Sendable {
     /// Don't cache a prompt beyond this. A KV cache for a long thread on a 12B
     /// runs to hundreds of megabytes and the working copy doubles it, which is
     /// not a trade worth making on a 16 GB Mac that is also holding the model.
-    private static let maxCachedTokens = 16_384
+    ///
+    /// Scaled by machine, because a flat 16K was measured doing real damage on
+    /// a big Mac: a thread whose prompt reached 19K tokens fell off the cache
+    /// entirely and **re-prefilled 19,000 tokens on every round — 22 seconds
+    /// each on a 12B at 667-845 tok/s** — for want of a few hundred megabytes
+    /// on a machine with 64 GB. Below `.ample` the original reasoning stands.
+    ///
+    /// Measured KV cost of raising it, per model, for the growing part:
+    /// Qwen 3.5 4B/9B ~32 KB per 1K tokens, Gemma 4 12B ~64 KB per 1K (most of
+    /// its layers use a capped sliding window, so it grows far slower than its
+    /// size suggests). Going 16K → 32K therefore costs about 0.5 GB on the
+    /// 12B and 0.25 GB on the 9B, doubled while a round is in flight.
+    private static var maxCachedTokens: Int {
+        switch SystemMemory.tier {
+        case .ample: return 32_768
+        case .generous: return 24_576
+        case .balanced, .lean: return 16_384
+        }
+    }
 
     /// Drop everything. Called when the model changes or is unloaded — the
     /// cached state is meaningless against different weights.
