@@ -68,6 +68,18 @@ struct MenuBarContent: View {
                 .font(.system(size: 13, weight: .medium, design: .rounded))
             }
 
+            // Development builds only (see `BuildStamp`): which build is this,
+            // and is it the one I just made? Nil — and so absent entirely — in
+            // anything shipped.
+            if let build = BuildStamp.label {
+                Divider()
+                Label(build, systemImage: "hammer")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
             Divider()
             HStack(spacing: 8) {
                 Button {
