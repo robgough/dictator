@@ -92,7 +92,7 @@ final class JournalWindowController: NSObject, NSToolbarDelegate, NSWindowDelega
     /// this choice rather than falling back to today — which matters for an
     /// entry written just after midnight, or into a custom template.
     func show(fileURL: URL) {
-        if let key = JournalArchive.dateKey(from: fileURL) {
+        if let key = JournalStore.shared.dayKey(for: fileURL) {
             JournalStore.shared.select(key: key)
         }
         show()

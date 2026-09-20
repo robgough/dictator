@@ -189,6 +189,18 @@ final class JournalStore {
         }
     }
 
+    /// Which day a journal file belongs to, the same way the walk decides it.
+    ///
+    /// Root-aware, because the date may live in the folders rather than the
+    /// filename. Falls back to the filename alone when there's no root yet —
+    /// which is the case on the very first entry, before the folder exists.
+    func dayKey(for url: URL) -> String? {
+        guard let root = JournalWriter.root(pathTemplate: settings.journalPathTemplate) else {
+            return JournalArchive.dateKey(from: url)
+        }
+        return JournalArchive.dateKey(for: url, root: root)
+    }
+
     func beginObserving() { isObserving = true }
 
     func endObserving() {
@@ -226,7 +238,7 @@ final class JournalStore {
     /// what it always did for everyone who never opens it.
     func noteWrite(url: URL) {
         guard isObserving else { return }
-        let key = JournalArchive.dateKey(from: url) ?? todayKey
+        let key = dayKey(for: url) ?? todayKey
         pendingUndo = nil
         if selectedKey != key {
             selectedKey = key

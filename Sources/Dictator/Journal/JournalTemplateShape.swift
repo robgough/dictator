@@ -20,15 +20,42 @@ enum JournalTemplateShape {
 
     /// Can a day be found from a filename?
     ///
-    /// The sidebar's calendar is built entirely from the dates in filenames
-    /// (`JournalArchive.dateKey`), so a template whose filename has no ISO date
-    /// in it — one long `journal.md`, or `{yyyy}/{MMMM}/{d}.md` — has no days
-    /// to show. Everything else still works: entries are appended the same way.
+    /// The calendar is built from the dates in the path below the journal root
+    /// (`JournalArchive.dateKey(forRelativePath:)`), so what matters is whether
+    /// the numbers of a date survive the render *somewhere* in that path —
+    /// filename or folders. `{yyyy}/{MM}/{dd}.md` is fine; so is
+    /// `{yyyy}-{MM}-{dd}.md` and `{yyyy}/{MM}-{MMMM}/{dd}.md`.
+    ///
+    /// What isn't: one long `journal.md`, and `{yyyy}/{MMMM}/{d}.md` — a month
+    /// written only as "December" carries no number to read, and guessing it
+    /// back from a name means picking a locale and being wrong in the others.
+    ///
+    /// A false answer here is cheap either way: entries are appended the same
+    /// way regardless, and the assistant still reads the whole archive.
     static func daysAreFindable(pathTemplate: String) -> Bool {
         let resolved = JournalWriter.resolve(template: pathTemplate, date: referenceDate)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !resolved.isEmpty else { return false }
-        return JournalArchive.dateKey(from: URL(fileURLWithPath: resolved)) != nil
+        return JournalArchive.dateKey(forRelativePath: relativeComponents(of: pathTemplate,
+                                                                          resolved: resolved)) != nil
+    }
+
+    /// The parts of a resolved path that sit below the folder the user chose.
+    ///
+    /// Everything in the template before the first `{` is literal, so it comes
+    /// through the render unchanged and can be sliced straight off the front.
+    /// What's left is exactly what the walk sees below the root — which is what
+    /// the check has to reason about, since a date in the *fixed* part of the
+    /// path (`~/2026-archive/journal.md`) dates nothing.
+    private static func relativeComponents(of template: String, resolved: String) -> [String] {
+        let fixed = template.split(separator: "{", maxSplits: 1,
+                                   omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        let relative = resolved.hasPrefix(fixed) ? String(resolved.dropFirst(fixed.count)) : resolved
+        var components = relative.split(separator: "/").map(String.init)
+        if let last = components.last {
+            components[components.count - 1] = (last as NSString).deletingPathExtension
+        }
+        return components
     }
 
     /// Can one entry be told from the next?

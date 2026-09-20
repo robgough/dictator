@@ -50,7 +50,15 @@ struct JournalArchive {
         var id: String { key }
     }
 
-    /// A `.md` in the archive, with the date in its name and when it last
+    /// Extensions treated as journal notes.
+    ///
+    /// `.md` is the default and the common case; `.markdown` and `.txt` are
+    /// here because a journal that already exists usually predates this app,
+    /// and refusing to see somebody's notes over a three-letter difference is
+    /// not a defensible reason to show them an empty calendar.
+    static let noteExtensions: Set<String> = ["md", "markdown", "txt"]
+
+    /// A note in the archive, with the date it represents and when it last
     /// changed.
     struct File: Sendable {
         let url: URL
@@ -236,20 +244,118 @@ struct JournalArchive {
     /// for most of a 124 ms call, before a single entry was read. Scanning for
     /// the digits by hand costs nothing and needs no formatter at all.
     ///
+    /// The date a file represents, read from its name *and* the folders it sits
+    /// in below the journal root.
+    ///
+    /// The filename alone isn't enough, because a perfectly ordinary layout
+    /// puts the date in the path: `{yyyy}/{MM}/{dd}.md` gives a file called
+    /// `19.md`, which says nothing on its own. Only components *below the root*
+    /// are considered — the root is wherever the user pointed their template,
+    /// and a home directory or a backup folder with a year in its name has no
+    /// business dating their entries.
+    static func dateKey(for url: URL, root: URL) -> String? {
+        dateKey(forRelativePath: relativeComponents(of: url, under: root))
+    }
+
+    /// Path components of `url` below `root`, filename included, extension
+    /// dropped.
+    static func relativeComponents(of url: URL, under root: URL) -> [String] {
+        let filePath = url.standardizedFileURL.deletingPathExtension().path
+        var rootPath = root.standardizedFileURL.path
+        if !rootPath.hasSuffix("/") { rootPath += "/" }
+        let relative = filePath.hasPrefix(rootPath)
+            ? String(filePath.dropFirst(rootPath.count))
+            : url.deletingPathExtension().lastPathComponent
+        return relative.split(separator: "/").map(String.init)
+    }
+
+    /// Work out a date from path components, cheapest test first.
+    ///
+    /// 1. A full `yyyy-MM-dd` anywhere in the filename — the common case, and
+    ///    the only one the original version handled.
+    /// 2. Eight digits together, `yyyyMMdd`.
+    /// 3. Otherwise, the runs of digits across the components in order: the
+    ///    first four-digit run is the year, and the next two 1-or-2-digit runs
+    ///    are the month and the day. That covers `{yyyy}/{MM}/{dd}`,
+    ///    `{yyyy}/{MM}-{MMMM}/{dd}`, `{yyyy}-{MM}/{dd}` and — for free, since
+    ///    only digits are looked at — `yyyy_MM_dd`.
+    ///
+    /// Day-first (`19-09-2026`) is deliberately *not* recognised: it can't be
+    /// told from month-first, and guessing wrong files an entry under a day it
+    /// didn't happen on. Nothing here parses a `Date`; see `dateKey(from:)` for
+    /// why that matters.
+    static func dateKey(forRelativePath components: [String]) -> String? {
+        guard let name = components.last else { return nil }
+        if let iso = dateKey(inName: name) { return iso }
+
+        var runs: [(value: Int, digits: Int)] = []
+        for component in components {
+            var digits = 0
+            var value = 0
+            func flush() {
+                if digits > 0 { runs.append((value, digits)) }
+                digits = 0
+                value = 0
+            }
+            for byte in component.utf8 {
+                if byte >= 48, byte <= 57 {
+                    digits += 1
+                    value = value * 10 + Int(byte - 48)
+                } else {
+                    flush()
+                }
+            }
+            flush()
+        }
+
+        // yyyyMMdd, on its own.
+        for run in runs where run.digits == 8 {
+            return key(year: run.value / 10_000,
+                       month: (run.value / 100) % 100,
+                       day: run.value % 100)
+        }
+
+        guard let yearIndex = runs.firstIndex(where: { $0.digits == 4 }) else { return nil }
+        let rest = runs[runs.index(after: yearIndex)...].filter { $0.digits == 1 || $0.digits == 2 }
+        guard rest.count >= 2 else { return nil }
+        return key(year: runs[yearIndex].value, month: rest[rest.startIndex].value,
+                   day: rest[rest.index(after: rest.startIndex)].value)
+    }
+
+    /// Zero-padded `yyyy-MM-dd`, or nil if the numbers aren't a plausible date.
+    /// Built by hand rather than by a `DateFormatter` — see `dateKey(from:)`.
+    private static func key(year: Int, month: Int, day: Int) -> String? {
+        guard year >= 1000, year <= 9999, month >= 1, month <= 12, day >= 1, day <= 31
+        else { return nil }
+        let monthText = month < 10 ? "0\(month)" : "\(month)"
+        let dayText = day < 10 ? "0\(day)" : "\(day)"
+        return "\(year)-\(monthText)-\(dayText)"
+    }
+
     /// nil for a filename with no date in it — such a file still works, it
     /// just sorts last and can't be day-filtered.
     static func dateKey(from url: URL) -> String? {
-        let name = Array(url.deletingPathExtension().lastPathComponent.utf8)
-        guard name.count >= 10 else { return nil }
-        func isDigit(_ i: Int) -> Bool { name[i] >= 48 && name[i] <= 57 }
-        for start in 0...(name.count - 10) {
+        dateKey(inName: url.deletingPathExtension().lastPathComponent)
+    }
+
+    /// A full `yyyy-MM-dd` anywhere in one piece of text, found by scanning for
+    /// the digits rather than by parsing a date.
+    static func dateKey(inName name: String) -> String? {
+        let bytes = Array(name.utf8)
+        guard bytes.count >= 10 else { return nil }
+        func isDigit(_ i: Int) -> Bool { bytes[i] >= 48 && bytes[i] <= 57 }
+        for start in 0...(bytes.count - 10) {
             guard isDigit(start), isDigit(start + 1), isDigit(start + 2), isDigit(start + 3),
-                  name[start + 4] == 45,  // "-"
+                  bytes[start + 4] == 45,  // "-"
                   isDigit(start + 5), isDigit(start + 6),
-                  name[start + 7] == 45,
+                  bytes[start + 7] == 45,
                   isDigit(start + 8), isDigit(start + 9)
             else { continue }
-            return String(decoding: name[start..<(start + 10)], as: UTF8.self)
+            // A run of digits longer than the date itself isn't a date — it's a
+            // serial number that happens to contain dashes.
+            let key = String(decoding: bytes[start..<(start + 10)], as: UTF8.self)
+            guard start == 0 || !isDigit(start - 1) else { continue }
+            return key
         }
         return nil
     }
@@ -279,10 +385,10 @@ struct JournalArchive {
         else { return [] }
         return walker
             .compactMap { $0 as? URL }
-            .filter { $0.pathExtension.lowercased() == "md" }
+            .filter { Self.noteExtensions.contains($0.pathExtension.lowercased()) }
             .map { url in
                 File(url: url,
-                     key: Self.dateKey(from: url),
+                     key: Self.dateKey(for: url, root: root),
                      modified: (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                         .contentModificationDate ?? .distantPast)
             }
