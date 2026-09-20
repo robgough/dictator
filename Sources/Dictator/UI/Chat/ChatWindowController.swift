@@ -226,7 +226,7 @@ final class ChatWindowController: NSObject, NSToolbarDelegate, NSWindowDelegate 
         // A title is required, not cosmetic: the AppDelegate reverts the
         // activation policy on the close of any *titled* window, which is how
         // the dock icon goes away again.
-        window.title = "Chat"
+        window.title = "Dictator Chat"
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
         window.tabbingMode = .disallowed

@@ -60,7 +60,7 @@ final class AssistantResultController: NSObject, NSWindowDelegate {
             onClose: { [weak self] in self?.requestClose() }
         )
         window.contentViewController = NSHostingController(rootView: root)
-        window.title = "Assistant"
+        window.title = "Dictator Assistant"
         if !window.isVisible {
             window.center()
         }

@@ -34,7 +34,7 @@ final class LearnWordPanelController: NSObject, NSWindowDelegate {
             }
         )
         window.contentViewController = NSHostingController(rootView: root)
-        window.title = "Learn Word"
+        window.title = "Dictator — Learn Word"
         if !window.isVisible {
             window.center()
         }

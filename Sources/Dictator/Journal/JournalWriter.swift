@@ -116,6 +116,33 @@ enum JournalWriter {
         return url
     }
 
+    /// The folder the journal lives in: everything in the path template
+    /// before the first `{`, trimmed back to a directory.
+    ///
+    /// nil when that folder doesn't exist yet — which is the honest answer
+    /// before the first entry is ever written, and what tells the journal
+    /// window to show its "nothing here yet" state rather than an error.
+    @MainActor
+    static func root(pathTemplate: String) -> URL? {
+        let fixed = pathTemplate.split(separator: "{", maxSplits: 1,
+                                       omittingEmptySubsequences: false).first.map(String.init)
+            ?? pathTemplate
+        var path = (fixed as NSString).expandingTildeInPath
+        // Trim back to a directory: the fixed part may end mid-filename.
+        if !path.hasSuffix("/") {
+            path = (path as NSString).deletingLastPathComponent
+        }
+        guard !path.isEmpty else { return nil }
+        let url: URL = path.hasPrefix("/")
+            ? URL(fileURLWithPath: path, isDirectory: true)
+            : SyncedStorage.directory.appendingPathComponent(path, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return nil }
+        return url
+    }
+
     /// Append one dictation. Creates intermediate directories and the file
     /// itself, writing the header template only when the file is new.
     @discardableResult
@@ -126,7 +153,29 @@ enum JournalWriter {
                        entryTemplate: String,
                        appName: String?,
                        date: Date = Date()) throws -> Written {
-        let url = try resolvedURL(pathTemplate: pathTemplate, date: date)
+        try append(text: text,
+                   to: resolvedURL(pathTemplate: pathTemplate, date: date),
+                   headerTemplate: headerTemplate,
+                   entryTemplate: entryTemplate,
+                   appName: appName,
+                   date: date)
+    }
+
+    /// The same write, to a URL already resolved.
+    ///
+    /// `nonisolated` so the journal window can do this off the main actor. The
+    /// file is usually local and the write sub-millisecond, but an
+    /// iCloud-evicted file blocks on a download, and that is not something to
+    /// do on the thread drawing the window. The main-actor version above stays
+    /// as the pipeline's entry point, because resolving the template needs
+    /// `SyncedStorage.directory`, which is main-actor state.
+    @discardableResult
+    nonisolated static func append(text: String,
+                                   to url: URL,
+                                   headerTemplate: String,
+                                   entryTemplate: String,
+                                   appName: String?,
+                                   date: Date = Date()) throws -> Written {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

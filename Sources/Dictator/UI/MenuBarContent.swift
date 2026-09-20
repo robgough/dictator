@@ -51,6 +51,20 @@ struct MenuBarContent: View {
             .buttonStyle(.plain)
             .font(.system(size: 13, weight: .medium, design: .rounded))
 
+            // Journal sits under Chat and above Meetings: all three are
+            // destinations you sit in front of, and this is the only one that
+            // shows you what the journal hotkey has been collecting.
+            Divider()
+            Button {
+                JournalWindowController.shared.show()
+            } label: {
+                Label("Journal…", systemImage: "book.closed")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .medium, design: .rounded))
+
             // Its own full-width row, and only when the app is actually
             // installed: squeezed into the footer next to Settings and Quit
             // the label wrapped, and users without Dictator Meetings have no

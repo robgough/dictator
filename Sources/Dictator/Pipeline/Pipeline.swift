@@ -419,6 +419,16 @@ final class Pipeline {
     }
     private var inFlight = InFlight()
 
+    /// Whether the capture running right now is a journal one.
+    ///
+    /// The journal window shows an entry arriving — the waveform, then
+    /// "Transcribing", then the style pass — in the place it will land, so that
+    /// speaking a thought doesn't feel like watching it disappear. Those middle
+    /// states are shared with ordinary dictation, so the window needs to know
+    /// *whose* they are: an entry being typed into Safari must not draw a ghost
+    /// entry on today's page.
+    var isJournalInFlight: Bool { state.isActive && inFlight.isJournal }
+
     /// Non-nil while an Assistant Mode dictation is in progress. Used to route the
     /// release-of-hotkey event to the assistant path instead of the dictation path,
     /// and to carry the captured selection from press → release → LLM. `selection`
@@ -644,6 +654,15 @@ final class Pipeline {
         // A journal dictation ignores all of that: it isn't going into the app
         // in front, so that app has no business choosing how it's written.
         let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // Reading *ourselves* for context is pure cost. The journal window is
+        // the case that made this obvious — with it in front, the AX read
+        // turns the entries already on the page into "document context" for
+        // the formatter, and window vision runs a whole inference pass over a
+        // screenshot of Dictator. Neither tells us anything about the words
+        // being spoken. Skipped whenever we're the frontmost app, not just for
+        // the journal: nothing dictated while Dictator is in front is going
+        // into Dictator's own text.
+        let frontmostIsSelf = bundleID == Bundle.main.bundleIdentifier
         if isJournal {
             currentMode = settings.journalMode
         } else {
@@ -665,7 +684,7 @@ final class Pipeline {
         // (mode opted out, no Accessibility, focused element doesn't expose
         // ranged text) just means no context this run.
         inFlight.appBundleID = bundleID
-        if currentMode.contextAwarenessEnabled {
+        if currentMode.contextAwarenessEnabled, !frontmostIsSelf {
             Task.detached(priority: .userInitiated) { [weak self] in
                 let context = AXContextReader.capture(
                     maxBefore: AXContextReader.promptBeforeCap,
@@ -698,6 +717,7 @@ final class Pipeline {
         // fast.
         if settings.visionContextEnabled,
            !currentMode.passes.isEmpty,
+           !frontmostIsSelf,
            WindowVisionContext.isSupported,
            ScreenRecordingPermission.hasAccess() {
             inFlight.visionAttempted = true
@@ -721,15 +741,6 @@ final class Pipeline {
         if settings.playSounds { SoundEffects.shared.playArm() }
         recorder.start()
         armWarmupWatchdog()
-    }
-
-    /// Open the journal file the HUD is currently reporting, if any. Wired to
-    /// a click on the HUD's terminal frame.
-    @discardableResult
-    func openLastJournalFile() -> Bool {
-        guard let url = lastJournalURL else { return false }
-        NSWorkspace.shared.open(url)
-        return true
     }
 
     /// Commit whatever recording is in flight, whichever hotkey started it.
@@ -1786,14 +1797,20 @@ final class Pipeline {
             if currentMode.style == .messages {
                 text = Self.relaxShortMessage(text)
             }
-            text = Self.withTrailingSpace(text)
+            // Not for a journal entry: there is no insertion point to flow on
+            // from, and the space survives into the file, where every entry
+            // ends in one. `InFlight.isJournal` has always claimed to skip
+            // this; only the join above was actually guarded.
+            if !inFlight.isJournal {
+                text = Self.withTrailingSpace(text)
+            }
         }
         // Per-mode override: guarantee a trailing space even when the
         // context-aware joiner decided against one (caret at the end of a
         // terminal/chat line, nothing after it). Lets back-to-back dictation
         // flow without manually typing a leading space. Idempotent with the
         // else-branch call above.
-        if currentMode.appendTrailingSpace {
+        if currentMode.appendTrailingSpace, !inFlight.isJournal {
             text = Self.withTrailingSpace(text)
         }
         lastResult = text
@@ -1815,9 +1832,12 @@ final class Pipeline {
                     appName: NSWorkspace.shared.frontmostApplication?.localizedName
                 )
                 lastJournalURL = written.url
+                // If the journal window is open, show the entry arriving.
+                // A no-op — and no directory walk — when it isn't.
+                JournalStore.shared.noteWrite(url: written.url)
                 note = warning ?? (written.createdFile
-                    ? "Started \(written.url.lastPathComponent) — click to open"
-                    : "Added to \(written.url.lastPathComponent) — click to open")
+                    ? "Started \(written.url.lastPathComponent) — click to see it"
+                    : "Added to \(written.url.lastPathComponent) — click to see it")
             } catch {
                 // Fall back to the clipboard rather than losing the dictation:
                 // a mistyped path template shouldn't cost the user their words.

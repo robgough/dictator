@@ -512,26 +512,11 @@ enum BuiltInChatTools {
         }
     }
 
-    /// The fixed directory prefix of the journal path template — everything
-    /// before the first `{date placeholder}`.
+    /// The journal's root folder. Lives on `JournalWriter` — it's derived from
+    /// the path template, which is that type's language — and is reached
+    /// through here so the tool and the journal window can't drift apart on
+    /// what "the journal" means.
     static func journalRoot(settings: DictatorSettings) -> URL? {
-        let template = settings.journalPathTemplate
-        let fixed = template.split(separator: "{", maxSplits: 1,
-                                   omittingEmptySubsequences: false).first.map(String.init)
-            ?? template
-        var path = (fixed as NSString).expandingTildeInPath
-        // Trim back to a directory: the fixed part may end mid-filename.
-        if !path.hasSuffix("/") {
-            path = (path as NSString).deletingLastPathComponent
-        }
-        guard !path.isEmpty else { return nil }
-        let url: URL = path.hasPrefix("/")
-            ? URL(fileURLWithPath: path, isDirectory: true)
-            : SyncedStorage.directory.appendingPathComponent(path, isDirectory: true)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else { return nil }
-        return url
+        JournalWriter.root(pathTemplate: settings.journalPathTemplate)
     }
 }

@@ -48,7 +48,7 @@ struct CompactHUDView: View {
         return false
     }
 
-    /// A journal result is on screen and its file can be opened.
+    /// A journal result is on screen, so clicking can show it.
     private var canOpenJournal: Bool {
         if case .done = state.pipeline.state { return state.pipeline.lastJournalURL != nil }
         return false
@@ -57,14 +57,15 @@ struct CompactHUDView: View {
     private func handleTap() {
         if isRecording {
             state.pipeline.commitRecording()
-        } else if canOpenJournal {
-            state.pipeline.openLastJournalFile()
+        } else if canOpenJournal, let url = state.pipeline.lastJournalURL {
+            // The journal window, on the day it landed — not the raw file.
+            JournalWindowController.shared.show(fileURL: url)
         }
     }
 
     private var tapHint: String {
         if isRecording { return "Click to stop \u{2014} \u{2715} to cancel" }
-        if canOpenJournal { return "Click to open this journal file" }
+        if canOpenJournal { return "Click to open it in your journal" }
         return ""
     }
 

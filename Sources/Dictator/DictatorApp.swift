@@ -91,8 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // services-menu invocation. `NSApp.servicesProvider` is `weak`.
     private let learnWordProvider = LearnWordProvider()
 
-    /// Routes `dictator://…` URLs. Three hosts handled:
-    /// `dictator://settings` opens the Settings window; `dictator://onboarding`
+    /// Routes `dictator://…` URLs. Five hosts handled:
+    /// `dictator://settings` opens the Settings window; `dictator://chat` and
+    /// `dictator://journal` open those windows; `dictator://onboarding`
     /// (or `setup` / `wizard`) re-shows the first-run wizard; and
     /// `dictator://demo?on=1` / `?on=0` switches Demo mode on or off (with no
     /// `on` parameter it toggles). Useful both as a deep-link target for
@@ -116,6 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             case "chat":
                 Task { @MainActor in ChatWindowController.shared.show() }
+            case "journal":
+                Task { @MainActor in JournalWindowController.shared.show() }
             case "demo":
                 DemoMode.handleURL(url)
             case "onboarding", "setup", "wizard":
