@@ -62,10 +62,11 @@ struct JournalPane: View {
                     onChange: { state.save() }
                 )
                 JournalDestinationRow(template: s.settings.journalPathTemplate)
+                JournalCoverageRow(template: s.settings.journalPathTemplate)
             } header: {
                 Text("Where it goes")
             } footer: {
-                SectionFootnote("Folders are created as needed. The default nests by year and month, so a few years of daily notes stay browsable.")
+                SectionFootnote("Folders are created as needed. The default nests by year and month, so a few years of daily notes stay browsable. Changing this doesn't move or delete anything you've already written.")
             }
 
             Section {
@@ -101,6 +102,67 @@ struct JournalPane: View {
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
+    }
+}
+
+/// What the template in the box can actually read of what's already on disk.
+///
+/// Changing where entries go is the one setting here that can cost the user
+/// something, and the cost is invisible at the moment of making it: the files
+/// are already written, in the old shape. Rather than a warning that fires on
+/// every edit and overstates the risk — a change between two numeric layouts
+/// loses nothing, because the date can still be read from the digits — this
+/// counts the real archive and says what would actually happen.
+///
+/// Recomputed as the field is typed in, debounced, and off the main actor: it's
+/// a directory walk, and Settings shouldn't stutter under it.
+private struct JournalCoverageRow: View {
+    let template: String
+
+    @State private var coverage: JournalCoverage?
+
+    var body: some View {
+        Group {
+            if let coverage {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: coverage.tone == .warning
+                          ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(coverage.tone == .warning
+                                         ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(coverage.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let examples = coverage.examplesLine {
+                            Text(examples)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .task(id: template) {
+            // Typing a template goes through a lot of half-finished paths on
+            // the way to a real one; none of them deserve a directory walk.
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            coverage = await measure()
+        }
+    }
+
+    private func measure() async -> JournalCoverage? {
+        guard let root = JournalWriter.root(pathTemplate: template) else { return nil }
+        let pattern = JournalPathPattern.make(pathTemplate: template)
+        return await Task.detached {
+            JournalCoverage.measure(root: root, pattern: pattern)
+        }.value
     }
 }
 
