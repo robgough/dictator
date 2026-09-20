@@ -12,6 +12,19 @@ struct JournalArchive {
     /// Directory holding the journal files, at any depth.
     let root: URL
 
+    /// The user's path template, compiled so it can be read backwards. When it
+    /// matches a file, the date is *known* rather than guessed — which is the
+    /// only way a month written as "September", or a day-first date, can be
+    /// read at all. Files it doesn't match fall back to reading digits, so
+    /// entries written under a template the user has since changed stay
+    /// visible.
+    let pattern: JournalPathPattern?
+
+    init(root: URL, pattern: JournalPathPattern? = nil) {
+        self.root = root
+        self.pattern = pattern
+    }
+
     /// One journal entry: the `## HH:MM` heading and everything under it.
     struct Entry: Identifiable, Sendable {
         let day: String
@@ -253,20 +266,37 @@ struct JournalArchive {
     /// are considered — the root is wherever the user pointed their template,
     /// and a home directory or a backup folder with a year in its name has no
     /// business dating their entries.
-    static func dateKey(for url: URL, root: URL) -> String? {
-        dateKey(forRelativePath: relativeComponents(of: url, under: root))
+    static func dateKey(for url: URL, root: URL, pattern: JournalPathPattern? = nil) -> String? {
+        let relative = relativePath(of: url, under: root)
+        // The template first, because it *knows*; digits only when the file
+        // isn't one the current template would have written.
+        if let key = pattern?.dayKey(forRelativePath: relative) { return key }
+        return dateKey(forRelativePath: components(ofRelativePath: relative))
     }
 
-    /// Path components of `url` below `root`, filename included, extension
-    /// dropped.
-    static func relativeComponents(of url: URL, under root: URL) -> [String] {
-        let filePath = url.standardizedFileURL.deletingPathExtension().path
+    /// The path of `url` below `root`, extension and all — which is what the
+    /// template describes.
+    static func relativePath(of url: URL, under root: URL) -> String {
+        let filePath = url.standardizedFileURL.path
         var rootPath = root.standardizedFileURL.path
         if !rootPath.hasSuffix("/") { rootPath += "/" }
-        let relative = filePath.hasPrefix(rootPath)
+        return filePath.hasPrefix(rootPath)
             ? String(filePath.dropFirst(rootPath.count))
-            : url.deletingPathExtension().lastPathComponent
-        return relative.split(separator: "/").map(String.init)
+            : url.lastPathComponent
+    }
+
+    /// The same, split into components with the extension dropped — what the
+    /// digit-reading fallback works over.
+    static func relativeComponents(of url: URL, under root: URL) -> [String] {
+        components(ofRelativePath: relativePath(of: url, under: root))
+    }
+
+    static func components(ofRelativePath relative: String) -> [String] {
+        var components = relative.split(separator: "/").map(String.init)
+        if let last = components.last {
+            components[components.count - 1] = (last as NSString).deletingPathExtension
+        }
+        return components
     }
 
     /// Work out a date from path components, cheapest test first.
@@ -388,7 +418,7 @@ struct JournalArchive {
             .filter { Self.noteExtensions.contains($0.pathExtension.lowercased()) }
             .map { url in
                 File(url: url,
-                     key: Self.dateKey(for: url, root: root),
+                     key: Self.dateKey(for: url, root: root, pattern: pattern),
                      modified: (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                         .contentModificationDate ?? .distantPast)
             }

@@ -475,7 +475,10 @@ enum BuiltInChatTools {
             guard let root = journalRoot(settings: settings) else {
                 return "There are no journal files yet."
             }
-            return JournalArchive(root: root).read(
+            return JournalArchive(
+                root: root,
+                pattern: JournalPathPattern.make(pathTemplate: settings.journalPathTemplate)
+            ).read(
                 query: arguments["query"]?.stringValue ?? "", daysBack: daysBack)
 
         case "remember_fact":

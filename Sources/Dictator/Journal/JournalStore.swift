@@ -131,7 +131,8 @@ final class JournalStore {
         daysUnavailable = !JournalTemplateShape.daysAreFindable(
             pathTemplate: settings.journalPathTemplate)
         Task {
-            let found = await Task.detached { JournalArchive(root: root).days() }.value
+            let pattern = pathPattern
+            let found = await Task.detached { JournalArchive(root: root, pattern: pattern).days() }.value
             self.days = found
             self.populatedKeys = Set(found.map(\.key))
             if self.selectedKey == nil {
@@ -198,7 +199,15 @@ final class JournalStore {
         guard let root = JournalWriter.root(pathTemplate: settings.journalPathTemplate) else {
             return JournalArchive.dateKey(from: url)
         }
-        return JournalArchive.dateKey(for: url, root: root)
+        return JournalArchive.dateKey(for: url, root: root, pattern: pathPattern)
+    }
+
+    /// The user's template, compiled. Rebuilt on each use rather than cached:
+    /// it's a regex over a short string, the template can change in Settings at
+    /// any moment, and a stale matcher would silently stop recognising the
+    /// files being written right now.
+    private var pathPattern: JournalPathPattern? {
+        JournalPathPattern.make(pathTemplate: settings.journalPathTemplate)
     }
 
     func beginObserving() { isObserving = true }
