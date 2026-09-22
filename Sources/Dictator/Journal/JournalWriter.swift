@@ -47,7 +47,15 @@ enum JournalWriter {
     /// puts 365 files a year in one directory, and after two years that
     /// folder is unusable in Finder. Nesting costs one extra click and keeps
     /// it browsable indefinitely.
-    static let defaultPathTemplate = "~/Documents/Dictator/Journal/{yyyy}/{MM}-{MMMM}/{yyyy}-{MM}-{dd}.md"
+    ///
+    /// The month folder is a number rather than `09-September`, which is what
+    /// this used to be. The filename already spells the date out in full, so
+    /// the folder only has to sort and be unambiguous — and a numeric month
+    /// beside a numeric year is easier to type into the field than a name
+    /// whose spelling has to be got right. Anyone already on the old shape
+    /// keeps it: a stored setting is never overwritten by a change to the
+    /// default, and either way both are read.
+    static let defaultPathTemplate = "~/Documents/Dictator/Journal/{yyyy}/{MM}/{yyyy}-{MM}-{dd}.md"
     static let defaultHeaderTemplate = "# {EEEE} {d} {MMMM} {yyyy}\n"
     static let defaultEntryTemplate = "\n## {HH}:{mm}\n\n{text}\n"
 

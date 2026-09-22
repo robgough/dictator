@@ -63,6 +63,18 @@ struct JournalPane: View {
                 )
                 JournalDestinationRow(template: s.settings.journalPathTemplate)
                 JournalCoverageRow(template: s.settings.journalPathTemplate)
+                HStack {
+                    Spacer()
+                    Button("Reset to default") {
+                        s.settings.journalPathTemplate = JournalWriter.defaultPathTemplate
+                        state.save()
+                    }
+                    .controlSize(.small)
+                    // Disabled rather than hidden: greyed out is also how you
+                    // find out you're already on the default, which is a
+                    // question this field otherwise can't answer.
+                    .disabled(s.settings.journalPathTemplate == JournalWriter.defaultPathTemplate)
+                }
             } header: {
                 Text("Where it goes")
             } footer: {
@@ -86,13 +98,19 @@ struct JournalPane: View {
                 )
                 HStack {
                     Spacer()
+                    // Only the two fields in this section. It used to reset the
+                    // file path as well — which lives in "Where it goes", so
+                    // the button that fixed a mangled path was in a section
+                    // nobody would think to look in, and it took the user's
+                    // entry wording with it when they did find it.
                     Button("Reset to defaults") {
-                        s.settings.journalPathTemplate = JournalWriter.defaultPathTemplate
                         s.settings.journalEntryTemplate = JournalWriter.defaultEntryTemplate
                         s.settings.journalHeaderTemplate = JournalWriter.defaultHeaderTemplate
                         state.save()
                     }
                     .controlSize(.small)
+                    .disabled(s.settings.journalEntryTemplate == JournalWriter.defaultEntryTemplate
+                              && s.settings.journalHeaderTemplate == JournalWriter.defaultHeaderTemplate)
                 }
             } header: {
                 Text("What gets written")
