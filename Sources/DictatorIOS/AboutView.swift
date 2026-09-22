@@ -102,7 +102,7 @@ struct AboutView: View {
 
             Section {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("I'm **Rob Gough** — a tech advisor and fractional CTO, offering a senior pair of eyes on tech strategy and what to build next, drawing on a long career in senior engineering and tech leadership. I'm also building **Stay Upfront**, a unified support and incident management tool for B2B SaaS companies.")
+                    Text("I'm **Rob Gough** — a tech advisor and fractional CTO, offering a senior pair of eyes on tech strategy and what to build next, drawing on a long career in senior engineering and tech leadership. I'm also building **StayUpfront**, a unified support and incident management tool for B2B SaaS companies.")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
 
