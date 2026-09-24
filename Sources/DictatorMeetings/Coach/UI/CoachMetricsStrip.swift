@@ -21,18 +21,22 @@ struct CoachMetricsStrip: View {
         let totalTalk = s.myTalkSeconds + s.theirTalkSeconds
 
         if totalTalk >= Self.minTalkSecondsToShow {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+            // Words first, the bar small beneath them: it sits beside the two
+            // audio meters, and a full-width bar of its own read as a third.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
                     Text("You \(Int((s.talkShareMe * 100).rounded()))%")
-                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .font(.caption.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
-                    balanceBar(share: s.talkShareMe)
                     if let pace = s.paceWordsPerMinute {
-                        Text("\(Int(pace.rounded())) wpm")
+                        Text("· \(Int(pace.rounded())) wpm")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
                 }
+                .lineLimit(1)
+                balanceBar(share: s.talkShareMe)
+                    .frame(width: 118)
                 if s.currentMonologueSeconds >= Self.monologueShowSeconds {
                     Label(
                         "You've held the floor \(Int(s.currentMonologueSeconds))s",
@@ -42,7 +46,7 @@ struct CoachMetricsStrip: View {
                     .foregroundStyle(.orange)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .help("Your share of the talking so far, and how fast you're speaking.")
         }
     }
 
@@ -59,6 +63,5 @@ struct CoachMetricsStrip: View {
             }
         }
         .frame(height: 4)
-        .frame(maxWidth: .infinity)
     }
 }

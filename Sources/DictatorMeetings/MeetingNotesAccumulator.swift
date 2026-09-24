@@ -19,8 +19,10 @@ import Observation
 ///     whole document each time.
 ///   - One LLM call at a time. A pass only starts when enough new transcript
 ///     has landed (or enough time has passed) and no call is already running.
-///   - The full, polished four-section notes are produced once the meeting
-///     stops (`MeetingSummaryService.generateNotes`), superseding this.
+///   - The full, polished notes are written after the meeting, when the user
+///     asks (`MeetingSummaryService.generateNotes`). They replace this in
+///     `meta.notes`; this pass is kept in `meta.rawNotes` for the Live notes
+///     tab.
 ///
 /// Gated by the caller on `meetingLiveNotesEnabled` + an LLM being configured;
 /// the accumulator itself assumes an engine is available. The LLM runs on the

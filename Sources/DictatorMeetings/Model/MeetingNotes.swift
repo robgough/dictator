@@ -8,8 +8,9 @@ import Foundation
 /// Two flavours live in the same shape, distinguished by `isFinal`:
 ///   - the *live first-pass* built incrementally while the meeting records
 ///     (`isFinal == false`), and
-///   - the *full* pass produced once the meeting stops and the canonical
-///     diarized transcript exists (`isFinal == true`), which supersedes it.
+///   - the *full* pass, written on demand after the meeting from the
+///     canonical diarized transcript (`isFinal == true`). It replaces the
+///     draft in `meta.notes`; the draft stays in `meta.rawNotes`.
 ///
 /// Supersedes `MeetingSummaryResult` for new meetings. Old meetings that only
 /// carry the structured `meta.summary` still render via the back-compat path

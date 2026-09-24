@@ -194,13 +194,9 @@ struct MeetingInspector: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
             }
-            HStack {
-                NotesGenerationControls(session: session)
-                Spacer(minLength: 0)
-            }
-            Text("Notes are written on demand. Use the menu to pick a style or tune the run for this meeting.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // Status only. Writing the notes happens on the Notes tab, where
+            // they appear — a second button here made two places to look and
+            // put the main action of the page in a metadata panel.
         }
     }
 
@@ -209,8 +205,7 @@ struct MeetingInspector: View {
         if meta.notes?.isFinal == true || meta.summary != nil {
             return "Written"
         }
-        if meta.notes != nil { return "Live draft — not final yet" }
-        return "Not generated yet"
+        return "Not written yet"
     }
 
     // MARK: - Actions

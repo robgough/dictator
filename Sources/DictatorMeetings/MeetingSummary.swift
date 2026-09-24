@@ -74,9 +74,8 @@ enum MeetingSummaryService {
     /// end-of-meeting pass that supersedes any live first-pass.
     ///
     /// `meetingType` is the explicit override the caller wants this run
-    /// biased toward — UI surfaces it via the "Summarise as ▾" picker.
-    /// When nil (the auto-run call path from MeetingProcessor),
-    /// we resolve in this order: `meta.meetingType` if the user has
+    /// biased toward — the UI sets it by pinning a style from the Write
+    /// notes / Re-run menu. When nil, we resolve in this order: `meta.meetingType` if the user has
     /// already picked a non-`.auto` type for this meeting, otherwise
     /// `settings.defaultMeetingType`.
     static func generateNotes(

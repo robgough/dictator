@@ -22,6 +22,7 @@ the last section.)
 | `docs/media/mac/journal.png` | The Journal window on today: calendar dots on the days with entries, three timestamped entries on the page | `journal` |
 | `docs/media/mac/chat.png` | The Chat window: a `search_journal` call, a saved note's file card, and the reply | `chat` |
 | `docs/media/mac/demo-history.png` | Settings → Dictation → History with the Demo-mode fixture dictations. **Not on `docs/index.html`** — it exists so the fixtures behind Demo mode can be eyeballed like any other shot | `demo-history` |
+| *(not written anywhere)* | Dictator Meetings: the featured meeting as recording leaves it — live notes only, the Notes tab showing Write notes. Run by hand like the `env` example below; not in the script | `notes-unwritten` |
 | `docs/media/meetings/live-recording.png` | Dictator Meetings mid-call: pad + live notes left, levels, key points and live transcript right | `live-recording` |
 | `docs/media/meetings/notes.png` | A finished meeting on the Notes tab, with the Details inspector | `notes` |
 | `docs/media/meetings/coach.png` | The Coach tab: metrics, key-points scorecard, the written read | `coach` |

@@ -34,10 +34,12 @@ struct TranscriptView: View {
     @State private var screenshotQuickLook: URL?
 
     /// Notes are the primary surface; the user's own pad and the transcript
-    /// (two-lane mic/system view) live behind other tabs. The rough live
-    /// first-pass notes get their own tab too, but only when a meeting actually
-    /// has them (see `hasLiveNotes`) — so they're one click away to compare
-    /// against the final notes without cluttering meetings that have none.
+    /// (two-lane mic/system view) live behind other tabs. The rough notes
+    /// written during the call always have a tab of their own when a meeting
+    /// has them (see `hasLiveNotes`), and never appear on Notes: Notes is the
+    /// final notes and nothing else. Showing the live draft there until the
+    /// final pass replaced it made one tab hold two different documents, with
+    /// the button that turned one into the other below the fold.
     enum Tab: Hashable { case notes, liveNotes, transcript, pad, coach }
 
     var body: some View {
@@ -54,7 +56,9 @@ struct TranscriptView: View {
                     Group {
                         switch tab {
                         case .notes:
-                            NotesPanel(session: session, meta: meta, onSeek: seekFromNotes)
+                            NotesPanel(
+                                session: session, meta: meta, onSeek: seekFromNotes,
+                                onShowLiveNotes: hasLiveNotes ? { tab = .liveNotes } : nil)
                         case .liveNotes:
                             liveNotesTab
                         case .pad:
@@ -195,30 +199,36 @@ struct TranscriptView: View {
         return segments
     }
 
-    /// True when the meeting carries rough first-pass notes captured live —
-    /// gates the conditional "Live notes" tab.
-    private var hasLiveNotes: Bool {
-        meta.rawNotes.map { !$0.markdown.isEmpty } ?? false
+    /// The rough notes written during the call. `rawNotes` is where they're
+    /// kept; a draft still sitting in `notes` covers meetings recorded before
+    /// that copy was made.
+    private var liveNotesMarkdown: String? {
+        if let raw = meta.rawNotes, !raw.markdown.isEmpty { return raw.markdown }
+        if let draft = meta.notes, !draft.isFinal, !draft.markdown.isEmpty { return draft.markdown }
+        return nil
     }
+
+    /// Gates the conditional "Live notes" tab.
+    private var hasLiveNotes: Bool { liveNotesMarkdown != nil }
 
     /// The rough first-pass notes captured live during the recording, kept
     /// alongside the polished final notes (they're often more complete, if less
     /// tidy). Read-only and selectable; only reachable when `hasLiveNotes`.
     @ViewBuilder
     private var liveNotesTab: some View {
-        if let raw = meta.rawNotes {
+        if let markdown = liveNotesMarkdown {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles").foregroundStyle(.purple)
                     Text("Live notes").font(.headline)
-                    Text("captured live").font(.caption).foregroundStyle(.secondary)
+                    Text("written during the call").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                 }
-                MarkdownNotesView(markdown: raw.markdown, speakers: meta.speakers, onSeek: seekFromNotes)
+                MarkdownNotesView(markdown: markdown, speakers: meta.speakers, onSeek: seekFromNotes)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .notesSurface()
-                Text("Rough notes captured live as the meeting ran — kept because they're often more complete than the polished final notes.")
+                Text("Rough notes built every half minute or so while the meeting ran, with speakers as Me and Them. Kept after the final notes are written, because they're often more complete.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -735,29 +745,31 @@ struct SpeakerEditor: View {
     }
 }
 
-/// Meeting notes block — the primary content of the Notes tab. States:
-///   1. Notes present → rendered markdown (editable), re-run button.
-///   2. Legacy structured summary present (old meeting) → rendered via the
-///      back-compat `SummaryBody`.
-///   3. No notes yet, no LLM configured → muted hint pointing at Settings.
-///   4. No notes yet, LLM configured → "Generate" button + hint.
+/// The Notes tab: the final notes, and only those. States:
+///   1. Writing → spinner.
+///   2. Final notes → rendered markdown (editable); Re-run in the header.
+///   3. Legacy structured summary (old meeting) → the back-compat `SummaryBody`.
+///   4. Not written yet → the Write card, first thing on the page. A live
+///      draft is *not* shown here — it has its own tab, which the card links to.
 private struct NotesPanel: View {
     @Environment(MeetingsAppState.self) private var state
     @Bindable var session: MeetingSession
     let meta: MeetingMeta
     var onSeek: ((Double) -> Void)?
+    /// Switches to the Live notes tab; nil when the meeting has none.
+    var onShowLiveNotes: (() -> Void)?
     @State private var assistant = MeetingAssistantController()
 
     /// There's something for the assistant to act on — notes exist and an LLM
     /// is configured. Gates both the prominent button and the hotkey hint.
     private var canUseAssistant: Bool {
-        meta.notes != nil && ProviderRegistry.shared.provider(for: .final) != nil
+        hasFinalNotes && ProviderRegistry.shared.provider(for: .final) != nil
     }
 
     /// The notes were written before the user's last speaker rename/merge —
     /// the names baked into the text no longer match the roster.
     private var notesAreStale: Bool {
-        guard let notes = meta.notes, let edited = meta.speakersEditedAt else { return false }
+        guard let notes = meta.notes, notes.isFinal, let edited = meta.speakersEditedAt else { return false }
         return edited > notes.generatedAt
     }
 
@@ -775,17 +787,20 @@ private struct NotesPanel: View {
                     .foregroundStyle(.purple)
                 Text("Notes")
                     .font(.headline)
-                if let notes = meta.notes, !notes.isFinal {
-                    DraftChip()
-                }
-                if let notes = meta.notes, let type = notes.meetingType {
+                if hasFinalNotes, let notes = meta.notes, let type = notes.meetingType {
                     meetingTypeChip(type: type, detected: notes.meetingTypeWasDetected ?? false)
                 }
                 if meta.oneOffPrompt != nil {
                     MeetingChip("Tuned", tone: .accent, systemImage: "slider.horizontal.3")
-                        .help("A one-off instruction is set for this meeting's notes. Edit or clear it in the Details panel under Re-run ▾ → Tune this run.")
+                        .help("A one-off instruction is set for this meeting's notes. Edit or clear it under Re-run ▾ → Tune this run.")
                 }
                 Spacer()
+                // Re-run lives beside the notes it rewrites. Before there are
+                // notes the Write card below carries the same control, larger.
+                if hasFinalNotes, ProviderRegistry.shared.requirementMessage == nil {
+                    NotesGenerationControls(session: session)
+                        .controlSize(.small)
+                }
                 if canUseAssistant {
                     Button { assistant.present() } label: {
                         Label("Assistant", systemImage: "wand.and.stars")
@@ -805,7 +820,7 @@ private struct NotesPanel: View {
                     .foregroundStyle(.secondary)
             }
             if notesAreStale {
-                Label("Speakers were edited after these notes were written — re-run from the Details panel to update who said what.", systemImage: "exclamationmark.triangle")
+                Label("Speakers were edited after these notes were written — Re-run to update who said what.", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.vertical, 2)
@@ -818,7 +833,7 @@ private struct NotesPanel: View {
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let notes = meta.notes {
+            if hasFinalNotes, let notes = meta.notes {
                 provenanceFooter(notes)
             }
         }
@@ -852,8 +867,8 @@ private struct NotesPanel: View {
             systemImage: detected ? "sparkles" : nil
         )
         .help(detected
-            ? "Auto-detected from the conversation. Pick a style in the Details panel to override."
-            : "Notes style for this meeting. Change it in the Details panel.")
+            ? "Auto-detected from the conversation. Pick a style from Re-run's menu to override."
+            : "Notes style for this meeting. Change it from Re-run's menu.")
     }
 
     /// "Written by <model> · 2:14 PM" — turns the notes from an anonymous blob
@@ -861,7 +876,7 @@ private struct NotesPanel: View {
     @ViewBuilder
     private func provenanceFooter(_ notes: MeetingNotes) -> some View {
         HStack(spacing: 4) {
-            Text(notes.isFinal ? "Written by" : "Draft by")
+            Text("Written by")
             Text(Self.modelDisplayName(notes.modelID)).foregroundStyle(.secondary)
             Text("·")
             Text(notes.generatedAt, format: .dateTime.hour().minute())
@@ -880,10 +895,8 @@ private struct NotesPanel: View {
     }
 
     /// The notes body. Final notes (or a legacy summary) sit in the same
-    /// `.notesSurface()` card the live-recording pane uses. With notes manual
-    /// now, the no-final-notes states lead with a review-first call to action:
-    /// a live draft is shown above its "generate the real notes" prompt; a bare
-    /// transcript shows the prompt alone.
+    /// `.notesSurface()` card the live-recording pane uses. Until they're
+    /// written, the Write card is the whole tab.
     @ViewBuilder
     private var content: some View {
         if case .summarising = session.state {
@@ -901,16 +914,8 @@ private struct NotesPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .notesSurface()
-        } else if let draft = meta.notes {
-            // Live first-pass draft, no final notes yet: show the draft, then
-            // invite the user to generate the polished version from the full
-            // transcript when they're ready.
-            VStack(alignment: .leading, spacing: 12) {
-                notesCard(markdown: draft.markdown, editable: false)
-                generateCTA(hasDraft: true)
-            }
         } else {
-            generateCTA(hasDraft: false)
+            writeCard
         }
     }
 
@@ -929,51 +934,56 @@ private struct NotesPanel: View {
         .notesSurface()
     }
 
-    /// Review-first call to action shown whenever the final notes haven't been
-    /// written. Generation is on demand now, so the prompt nudges the user to
-    /// fix speaker names first, then generate — now or later. Hosts the full
-    /// `NotesGenerationControls` so it's fully usable with the inspector closed.
-    @ViewBuilder
-    private func generateCTA(hasDraft: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(hasDraft ? "Polish these into final notes" : "Ready when you are",
-                  systemImage: "sparkles")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.purple)
-            Text(hasDraft
-                 ? "These are the rough notes captured live. Check who said what in the Details panel, then generate the full notes from the complete transcript — now, or whenever's convenient."
-                 : "Your transcript is ready. Check who said what and fix any speaker names in the Details panel, then generate the notes — now, or whenever's convenient.")
-                .font(.caption)
+    /// Shown whenever the final notes haven't been written. Generation is on
+    /// demand, because the notes take their names from the transcript: the
+    /// card says to check who said what first, then write — now or later.
+    /// Hosts the full `NotesGenerationControls`, so the style menu and "Tune
+    /// this run" are here too.
+    private var writeCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Not written yet")
+                .font(.title3.weight(.semibold))
+            Text("The notes are written from the whole transcript, with speakers' names and your pad. Names come from the transcript, so check who said what in the Details panel first.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let requirement = ProviderRegistry.shared.requirementMessage {
                 Text(requirement)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 Button("Open Settings → Models") { state.openSettingsAction?() }
-                    .controlSize(.small)
             } else {
-                NotesGenerationControls(session: session)
-                    .controlSize(.large)
-                    .padding(.top, 2)
+                HStack(spacing: 14) {
+                    NotesGenerationControls(session: session, prominent: true)
+                        .controlSize(.large)
+                    Text("Style: \(MeetingTypeRegistry.displayName(for: meta.meetingType, settings: state.settings))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
                 if let note = ProviderRegistry.shared.qualityNote {
                     Label(note, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.top, 2)
                 }
+            }
+            if let onShowLiveNotes {
+                Button("See the rough notes from the call", action: onShowLiveNotes)
+                    .buttonStyle(.link)
+                    .font(.callout)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(20)
         .notesSurface()
     }
 }
 
 /// The notes generation control — a Generate / Re-run split button whose menu
-/// pins a notes style or opens "Tune this run". Extracted so it can live in
-/// both the Details inspector (its primary home) and the Notes-tab call to
-/// action, with the generation + persistence logic in one place. Reads
+/// pins a notes style or opens "Tune this run". Used in two spots on the
+/// Notes tab — large on the Write card, small as Re-run in the header — with
+/// the generation + persistence logic in one place. Reads
 /// settings from the environment; drives `session.generateNotes` /
 /// `session.setOneOffPrompt`. Disabled while a pass is in flight or when
 /// there's no usable LLM to write notes at all
@@ -982,6 +992,9 @@ private struct NotesPanel: View {
 struct NotesGenerationControls: View {
     @Environment(MeetingsAppState.self) private var state
     @Bindable var session: MeetingSession
+    /// A filled button rather than a borderless one — for the Write card,
+    /// where this is the one thing on the page to press.
+    var prominent = false
     @State private var showTuneSheet = false
 
     private var meta: MeetingMeta { session.meta }
@@ -996,42 +1009,73 @@ struct NotesGenerationControls: View {
         // "Re-run" only once the polished notes (or a legacy summary) exist; a
         // bare transcript or a live draft still reads as the first "Generate".
         let hasFinal = meta.notes?.isFinal == true || meta.summary != nil
-        let primaryLabel = hasFinal ? "Re-run" : "Generate notes"
+        let primaryLabel = hasFinal ? "Re-run" : "Write notes"
 
-        Menu {
-            Section("Notes for") {
-                ForEach(MeetingTypeRegistry.all(settings: state.settings)) { def in
+        Group {
+            if prominent {
+                // A filled button and a separate options menu: macOS draws a
+                // split `Menu` in the plain bezel whatever button style it's
+                // given, so the one action on the Write card would otherwise
+                // be grey like everything around it.
+                HStack(spacing: 6) {
                     Button {
-                        generateNotes(as: def.meetingTypeID)
+                        Task { await session.generateNotes(settings: state.settings) }
                     } label: {
-                        if def.meetingTypeID == meta.meetingType {
-                            Label(def.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(def.displayName)
-                        }
+                        Label(primaryLabel, systemImage: "wand.and.stars")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    Menu {
+                        menuItems
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .help("Pick a style or tune this run")
                 }
+            } else {
+                Menu {
+                    menuItems
+                } label: {
+                    Label(primaryLabel, systemImage: "wand.and.stars")
+                } primaryAction: {
+                    Task { await session.generateNotes(settings: state.settings) }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
             }
-            Divider()
-            Button {
-                showTuneSheet = true
-            } label: {
-                Label(meta.oneOffPrompt == nil ? "Tune this run…" : "Tune this run… (active)",
-                      systemImage: "slider.horizontal.3")
-            }
-        } label: {
-            Label(primaryLabel, systemImage: "wand.and.stars")
-        } primaryAction: {
-            Task { await session.generateNotes(settings: state.settings) }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.visible)
         .fixedSize()
         .disabled(!isEnabled)
         .help(llmRequirement
               ?? "Write the notes for this meeting. Use the menu to pick a style or tune the run.")
         .sheet(isPresented: $showTuneSheet) {
             TuneRunSheet(session: session)
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Section("Notes for") {
+            ForEach(MeetingTypeRegistry.all(settings: state.settings)) { def in
+                Button {
+                    generateNotes(as: def.meetingTypeID)
+                } label: {
+                    if def.meetingTypeID == meta.meetingType {
+                        Label(def.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(def.displayName)
+                    }
+                }
+            }
+        }
+        Divider()
+        Button {
+            showTuneSheet = true
+        } label: {
+            Label(meta.oneOffPrompt == nil ? "Tune this run…" : "Tune this run… (active)",
+                  systemImage: "slider.horizontal.3")
         }
     }
 
@@ -1099,16 +1143,6 @@ private struct TuneRunSheet: View {
             .padding()
         }
         .frame(width: 520, height: 360)
-    }
-}
-
-/// Small "Draft" pill shown on the notes header while the notes are the live
-/// first-pass (`!isFinal`) — so a rough draft is never mistaken for the
-/// finished, full-transcript notes.
-private struct DraftChip: View {
-    var body: some View {
-        MeetingChip("Draft", tone: .draft, uppercased: true)
-            .help("These are the rough notes built while recording. Re-run to write the full notes from the complete transcript.")
     }
 }
 

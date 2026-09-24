@@ -38,7 +38,7 @@ enum MeetingsScreenshotRunner {
     static var detailTab: String? {
         switch ScreenshotMode.shot {
         case "coach": return "coach"
-        case "notes": return "notes"
+        case "notes", "notes-unwritten": return "notes"
         default: return nil
         }
     }
@@ -93,7 +93,7 @@ enum MeetingsScreenshotRunner {
     static func configure(selection: Binding<UUID?>, liveSession: Binding<MeetingSession?>) {
         guard ScreenshotMode.isActive else { return }
         switch ScreenshotMode.shot {
-        case "notes", "coach":
+        case "notes", "coach", "notes-unwritten":
             selection.wrappedValue = featuredID
         case "live-recording":
             liveSession.wrappedValue = liveFixtureSession()
@@ -146,7 +146,15 @@ enum MeetingsScreenshotRunner {
     private static let tom = MeetingsDemoFixtures.tom
 
     private static func fixtureMetas() -> [MeetingMeta] {
-        MeetingsDemoFixtures.metas()
+        var metas = MeetingsDemoFixtures.metas()
+        // `notes-unwritten` (developer-only, not on the site): the featured
+        // meeting as it stands the moment recording stops — the live draft in
+        // both slots, as `stopRecording` leaves it, and no final notes.
+        if ScreenshotMode.shot == "notes-unwritten",
+           let i = metas.firstIndex(where: { $0.id == featuredID }) {
+            metas[i].notes = MeetingsDemoFixtures.featuredLiveNotes
+        }
+        return metas
     }
 
     private static func featuredTranscript() -> MeetingTranscript {
@@ -233,8 +241,9 @@ enum MeetingsScreenshotRunner {
 
         session.applyScreenshotFixture(
             elapsed: 23 * 60 + 41,
-            micLevel: 0.42,
-            systemLevel: 0.18,
+            // Peak RMS for ordinary speech; the fixture varies it from here.
+            micLevel: 0.22,
+            systemLevel: 0.16,
             transcriber: transcriber,
             notes: notes,
             coach: coach,

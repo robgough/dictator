@@ -269,6 +269,26 @@ final class MeetingSession: Identifiable {
         self.micHeard = true
         self.systemHeard = true
         self.state = .recording(elapsed: elapsed, micLevel: micLevel, sysLevel: systemLevel)
+        // The meters are scrolling waveforms fed one sample per level update,
+        // so a single fixed level renders as a flat line with one tall bar.
+        // Feed them something speech-shaped for the few seconds the capture
+        // settles. The process exits after the shot, which ends the timer.
+        let start = Date()
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, case .recording = self.state else { return }
+                let phase = Date().timeIntervalSince(start)
+                func speech(_ base: Float, _ offset: Double) -> Float {
+                    let syllables = abs(sin(phase * 7 + offset)) * 0.6 + 0.4
+                    let phrase = sin(phase * 1.3 + offset) > -0.4 ? 1.0 : 0.15
+                    return base * Float(syllables * phrase * Double.random(in: 0.8...1.1))
+                }
+                self.state = .recording(
+                    elapsed: elapsed,
+                    micLevel: speech(micLevel, 0),
+                    sysLevel: speech(systemLevel, 2.1))
+            }
+        }
     }
 
     // MARK: - Live recording
@@ -579,9 +599,11 @@ final class MeetingSession: Identifiable {
         // Finalise the live transcript + live notes before tearing them down:
         // settle the held-back tail (the last couple of phrases) into the
         // transcript, then run one last notes pass so the live notes are
-        // complete. Persisted below (isFinal=false) so they survive even if the
-        // post-capture notes pass doesn't run (auto-notes off) or fails; the
-        // full pass overwrites them with isFinal=true when it succeeds.
+        // complete. Persisted below (isFinal=false) in both `notes` and
+        // `rawNotes`: the final pass only runs when the user asks for it, and
+        // may fail, so until then this is the meeting's only notes. When it
+        // succeeds it replaces `notes`; `rawNotes` is kept for the Live notes
+        // tab.
         await liveTranscriber?.finishPending()
         let liveNotesMarkdown = ((await notesAccumulator?.finish()) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1003,13 +1025,15 @@ final class MeetingSession: Identifiable {
     /// Run the LLM notes pass on the current transcript and persist the
     /// finished markdown notes on meta. Non-destructive: a failure surfaces
     /// in NSLog and leaves the transcript (and any prior notes) intact (state
-    /// returns to .ready). Used both by the auto-run after processing and the
-    /// manual "Generate" / "Re-run" button.
+    /// returns to .ready). The only way final notes get written: the Write
+    /// notes / Re-run control on the Notes tab calls this, and nothing runs it
+    /// automatically — the names in the notes come from the transcript, so the
+    /// user checks who said what first.
     func generateNotes(settings: MeetingsSettings) async {
         guard let transcript = MeetingStorage.readTranscript(for: id) else {
             NSLog("[Dictator] Skipping notes: no transcript on disk for \(id)")
-            // runProcessor may have parked us in .summarising in anticipation
-            // of this pass — don't strand the meeting there.
+            // Defensive: nothing parks a meeting in .summarising ahead of this
+            // call any more, but if something ever does, don't strand it.
             if case .summarising = state { state = .ready }
             return
         }
@@ -1025,7 +1049,7 @@ final class MeetingSession: Identifiable {
             try? MeetingStorage.writeMeta(meta)
             MeetingsStore.shared.upsert(meta)
             state = .ready
-            // The coach report rides the same user action — one Generate
+            // The coach report rides the same user action — one Write notes
             // produces notes AND the private report (it also wants the
             // fresh notes as context, and the detected type's rubric).
             // Best-effort: a report failure never disturbs the notes.
@@ -1033,7 +1057,7 @@ final class MeetingSession: Identifiable {
         } catch {
             NSLog("[Dictator] Meeting notes failed for \(id): \(error)")
             notesError = (error as? LocalizedError)?.errorDescription
-                ?? "Couldn't write the notes. Tap Generate to try again."
+                ?? "Couldn't write the notes. Try again from the Notes tab."
             state = .ready
         }
     }

@@ -61,6 +61,36 @@ enum MeetingsDemoFixtures {
     /// Dates are relative to "now" whenever the fixtures are built, so the
     /// sidebar always shows Today / Yesterday / Previous 7 Days sections
     /// rather than a stale block under "Earlier".
+    /// The featured meeting's live notes — the same draft the live-recording
+    /// shot shows building, as it stood when the call ended.
+    static var featuredLiveNotes: MeetingNotes {
+        MeetingNotes(
+            markdown: featuredLiveNotesMarkdown,
+            modelID: "qwen3-8b-mlx",
+            generatedAt: date(daysAgo: 0, hour: 10, minute: 44),
+            isFinal: false
+        )
+    }
+
+    static let featuredLiveNotesMarkdown = """
+    ## Scope for the quarter
+    - Draft plan needs ~9 engineers; the team has 5.
+    - Onboarding drop-off is concentrated on the permission screen (just under half of abandons).
+    - Importer is ~50% done and blocks two June commitments, so it stays in.
+
+    ## Reporting
+    - Two customers asking; a CSV export covers both.
+    - Dashboard would be rebuilt once the import work moves the data model.
+    - Them: CSV export is about three days, not three weeks.
+
+    ## Hiring
+    - Second backend role still open.
+
+    ## Actions
+    - Me: send the revised plan to the wider team.
+    - Them: rewrite the permission screen copy and test with five trial users.
+    """
+
     static func metas() -> [MeetingMeta] {
         let audio = MeetingMeta.AudioFiles(
             mic: MeetingStorage.micFilename, system: MeetingStorage.systemFilename)
@@ -81,6 +111,9 @@ enum MeetingsDemoFixtures {
                 meetingType: .planning,
                 meetingTypeWasDetected: true
             ),
+            // Every meeting recorded live keeps the rough notes written during
+            // the call; without them the fixture hides the Live notes tab.
+            rawNotes: featuredLiveNotes,
             meetingType: .planning,
             coach: featuredCoach,
             sourceApp: MeetingSourceApp(bundleID: "us.zoom.xos", name: "Zoom"),

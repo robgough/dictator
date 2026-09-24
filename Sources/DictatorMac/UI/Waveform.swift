@@ -54,12 +54,16 @@ struct Waveform: View {
     }
 
     /// Map a raw RMS level to a 0…1 bar height. Honest mode uses a dB scale
-    /// (−60 dB → 0, 0 dB → 1) so the meter is truthful; the default biases
-    /// toward filling for legibility on the dictation HUD.
+    /// so the meter is truthful; the default biases toward filling for
+    /// legibility on the dictation HUD.
+    ///
+    /// The honest range is −30 dB → empty, −6 dB → full. It used to run from
+    /// −60 dB, which put quiet room noise at about half height and pinned
+    /// ordinary speech near the top, so silence and talking looked the same.
     private static func normalized(_ level: Double, honest: Bool) -> Double {
         if honest {
             let db = 20 * (log10(max(level, 0.0001)))
-            return max(0.04, min(1.0, (db + 60) / 60))
+            return max(0.04, min(1.0, (db + 30) / 24))
         }
         return max(0.05, min(1.0, level * 1.7))
     }

@@ -81,7 +81,8 @@ struct MeetingsSettings: Codable, Equatable {
 
     /// Build a rough first-pass of the notes *while the meeting records* —
     /// the LLM runs periodically over the live transcript and appends bullet
-    /// points, superseded by the full pass once the meeting stops. Default
+    /// points, kept alongside the full notes the user writes after the
+    /// meeting (never automatically). Default
     /// ON: watching the notes take shape is the point of the feature. It runs
     /// the LLM on the GPU during the call, so the toggle is there for users who
     /// want to save battery, but it's on out of the box.

@@ -54,7 +54,7 @@ struct MeetingsPane: View {
             } header: {
                 Text("Notes")
             } footer: {
-                SectionFootnote("Notes are written by your selected MLX formatting model (Settings → Models) — capable models only; the smallest are off here and Apple's on-device model is too small. Tuned for \(ModelCatalog.meetingsRecommendedLLMName); others work but can be weaker on long calls. Notes aren't automatic: after a meeting, check who said what and press Generate. The default style shapes the notes — Auto-detect lets the model decide; override per meeting via Re-run ▾.")
+                SectionFootnote("Notes are written by your selected MLX formatting model (Settings → Models) — capable models only; the smallest are off here and Apple's on-device model is too small. Tuned for \(ModelCatalog.meetingsRecommendedLLMName); others work but can be weaker on long calls. Notes aren't automatic: after a meeting, check who said what, then press Write notes on the Notes tab. The default style shapes the notes — Auto-detect lets the model decide; override per meeting via Re-run ▾.")
             }
 
             Section {

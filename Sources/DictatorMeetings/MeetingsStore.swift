@@ -89,7 +89,7 @@ final class MeetingsStore {
     }
 
     /// Persist a meeting-type override for one meeting. Used by the
-    /// "Summarise as ▾" picker on the transcript page — the picker
+    /// style menu on the Notes tab's Write notes / Re-run control — it
     /// updates the store (which writes meta.json) and the session's
     /// in-memory meta in lockstep, then kicks off a re-summary that
     /// reads the new type. Silent no-op for unknown ids or when the
