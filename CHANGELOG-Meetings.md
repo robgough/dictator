@@ -14,6 +14,10 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- A companion panel floats beside the call while you record: the time and Stop, whether both sides are being heard, how the talking is split, your key points, the last few things the notes caught, and a field to jot something into your pad. Drag it wherever suits; turn it off in Settings.
+- New Today screen: your next meeting from the calendar, with a button to record it the moment it starts, the meetings still waiting for notes, and the action items from all your notes, yours first. Ticking one off ticks it in that meeting's notes.
+- The sidebar is now a library: All meetings, Needs notes (with a count), each kind of meeting, and the people you meet with. Choosing one lists those meetings beside the meeting you're reading, each marked with whether its notes are written.
+- After a call, the Notes tab walks you through it: first who spoke, with the longest thing each person said and a button to hear it, then writing the notes, then sending them.
 - The recording screen has been rearranged. The time, both audio levels, your share of the talking, the notes style and Stop now sit in one strip across the top, and the right-hand side shows one thing at a time — key points, the live transcript or the shared screen — at full height, instead of four cramped cards and a transcript that cut off mid-line.
 - The audio meters while recording are the same live waveform Dictator uses when you dictate, instead of flat bars. Each side stays grey until it's actually heard, and quiet rooms now read as quiet rather than filling half the meter.
 - The Notes tab now only ever holds the final notes. Until they're written it opens with a Write notes button at the top of the page, rather than a draft with the button somewhere below it. The rough notes from the call always have their own Live notes tab, and the Details panel just shows whether the notes have been written.

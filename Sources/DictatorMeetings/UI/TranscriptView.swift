@@ -58,7 +58,9 @@ struct TranscriptView: View {
                         case .notes:
                             NotesPanel(
                                 session: session, meta: meta, onSeek: seekFromNotes,
-                                onShowLiveNotes: hasLiveNotes ? { tab = .liveNotes } : nil)
+                                onShowLiveNotes: hasLiveNotes ? { tab = .liveNotes } : nil,
+                                transcript: transcript,
+                                onPlay: playAction)
                         case .liveNotes:
                             liveNotesTab
                         case .pad:
@@ -254,6 +256,19 @@ struct TranscriptView: View {
 
     /// Jump from a note's timestamp pill into the transcript + audio so the
     /// user can verify what was actually said.
+    private var playAction: ((Double) -> Void)? {
+        guard hasAudio else { return nil }
+        return { seconds in playFrom(seconds) }
+    }
+
+    /// Play from a moment without leaving the current tab — the speaker
+    /// review's "hear this voice".
+    private func playFrom(_ seconds: Double) {
+        guard hasAudio else { return }
+        player.seek(to: seconds)
+        player.play()
+    }
+
     private func seekFromNotes(_ seconds: Double) {
         tab = .transcript
         guard hasAudio else { return }
@@ -758,7 +773,14 @@ private struct NotesPanel: View {
     var onSeek: ((Double) -> Void)?
     /// Switches to the Live notes tab; nil when the meeting has none.
     var onShowLiveNotes: (() -> Void)?
+    /// For the speaker review's samples.
+    var transcript: MeetingTranscript?
+    var onPlay: ((Double) -> Void)?
     @State private var assistant = MeetingAssistantController()
+    /// The user has been through (or skipped) the speaker step for this
+    /// meeting. Only this visit: the step reappears while names are still
+    /// guesses, because that's still worth knowing before writing.
+    @State private var speakersReviewed = false
 
     /// There's something for the assistant to act on — notes exist and an LLM
     /// is configured. Gates both the prominent button and the hotkey hint.
@@ -844,6 +866,7 @@ private struct NotesPanel: View {
         .onChange(of: session.id) { _, _ in
             assistant.bind(session: session)
             state.meetingAssistant = assistant
+            speakersReviewed = false
         }
         .onDisappear {
             assistant.dialogClosed()
@@ -908,15 +931,42 @@ private struct NotesPanel: View {
                 Spacer()
             }
         } else if hasFinalNotes, let notes = meta.notes {
-            notesCard(markdown: notes.markdown, editable: true)
+            VStack(alignment: .leading, spacing: 12) {
+                if session.notesJustWritten {
+                    SendBar(title: meta.title, markdown: notes.markdown) {
+                        session.notesJustWritten = false
+                    }
+                }
+                notesCard(markdown: notes.markdown, editable: true)
+            }
         } else if hasFinalNotes, let summary = meta.summary {
             SummaryBody(summary: summary, meta: meta)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .notesSurface()
         } else {
-            writeCard
+            VStack(alignment: .leading, spacing: 18) {
+                ReviewStepper(current: showsSpeakerStep ? .speakers : .notes)
+                if showsSpeakerStep {
+                    SpeakerReview(session: session, transcript: transcript, onPlay: onPlay) {
+                        speakersReviewed = true
+                    }
+                } else {
+                    writeCard
+                    if meta.speakers.count > 1 {
+                        Button("Back to who spoke") { speakersReviewed = false }
+                            .buttonStyle(.link)
+                            .font(.callout)
+                    }
+                }
+            }
         }
+    }
+
+    /// The speaker step comes first while any name is still a guess (or a
+    /// placeholder), until the user moves on from it.
+    private var showsSpeakerStep: Bool {
+        !speakersReviewed && meta.speakers.contains(where: SpeakerReview.needsCheck)
     }
 
     @ViewBuilder
@@ -941,9 +991,9 @@ private struct NotesPanel: View {
     /// this run" are here too.
     private var writeCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Not written yet")
+            Text("Write the notes")
                 .font(.title3.weight(.semibold))
-            Text("The notes are written from the whole transcript, with speakers' names and your pad. Names come from the transcript, so check who said what in the Details panel first.")
+            Text("Written from the whole transcript, with the names from the last step and anything in your pad treated as fact.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

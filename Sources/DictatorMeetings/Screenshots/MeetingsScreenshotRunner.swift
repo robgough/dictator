@@ -25,9 +25,9 @@ enum MeetingsScreenshotRunner {
     /// content rather than trailing empty space.
     static var windowSize: NSSize {
         switch ScreenshotMode.shot {
-        case "coach":          return NSSize(width: 1360, height: 528)
-        case "live-recording": return NSSize(width: 1360, height: 980)
-        default:               return NSSize(width: 1360, height: 860)
+        case "coach":          return NSSize(width: 1440, height: 560)
+        case "live-recording": return NSSize(width: 1440, height: 980)
+        default:               return NSSize(width: 1440, height: 860)
         }
     }
 
@@ -90,13 +90,38 @@ enum MeetingsScreenshotRunner {
 
     /// Hand the root view's selection + live-session state to the runner, so a
     /// shot can open on a specific meeting or on a fabricated live recording.
-    static func configure(selection: Binding<UUID?>, liveSession: Binding<MeetingSession?>) {
+    static func configure(
+        selection: Binding<UUID?>,
+        liveSession: Binding<MeetingSession?>,
+        scope: Binding<LibraryScope?>
+    ) {
         guard ScreenshotMode.isActive else { return }
         switch ScreenshotMode.shot {
-        case "notes", "coach", "notes-unwritten":
+        case "notes", "coach":
+            scope.wrappedValue = .all
+            selection.wrappedValue = featuredID
+        case "notes-unwritten":
+            scope.wrappedValue = .needsNotes
             selection.wrappedValue = featuredID
         case "live-recording":
-            liveSession.wrappedValue = liveFixtureSession()
+            let session = liveFixtureSession()
+            liveSession.wrappedValue = session
+            selection.wrappedValue = session.id
+            scope.wrappedValue = nil
+        case "today":
+            scope.wrappedValue = .today
+            let start = Date().addingTimeInterval(12 * 60)
+            UpcomingMeetings.shared.applyScreenshotFixture([
+                .init(id: "fixture-1", title: "Northwind renewal follow-up", start: start,
+                      end: start.addingTimeInterval(30 * 60), attendeeCount: 4,
+                      joinService: "Zoom", joinURL: URL(string: "https://zoom.us/j/0000000000")),
+                .init(id: "fixture-2", title: "Design sync", start: start.addingTimeInterval(2 * 3600),
+                      end: start.addingTimeInterval(2.5 * 3600), attendeeCount: 3,
+                      joinService: nil, joinURL: nil),
+                .init(id: "fixture-3", title: "1-on-1 — Priya", start: start.addingTimeInterval(4 * 3600),
+                      end: start.addingTimeInterval(4.5 * 3600), attendeeCount: 1,
+                      joinService: "Google Meet", joinURL: nil),
+            ])
         default:
             break
         }
@@ -116,6 +141,7 @@ enum MeetingsScreenshotRunner {
         // The window scene needs a beat to build the split view, the detail
         // pane and the inspector.
         ScreenshotWindowCapture.settle(seconds: 2.0)
+        if ScreenshotMode.shot == "companion" { captureCompanion() }
         guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Meetings" })
                 ?? ScreenshotWindowCapture.window(where: { $0.contentView != nil && $0.styleMask.contains(.titled) })
         else {
@@ -256,5 +282,65 @@ enum MeetingsScreenshotRunner {
             """
         )
         return session
+    }
+
+    // MARK: - Companion
+
+    /// The companion over a stand-in video call, drawn in a window of its
+    /// own. The real panel floats over whatever is on the screen, and its
+    /// glass would carry that into the capture — the person running it's
+    /// desktop — so the shot supplies its own backdrop instead.
+    private static func captureCompanion() -> Never {
+        let session = liveFixtureSession()
+        let scene = CompanionShotScene(session: session).environment(MeetingsAppState.shared)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 760),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.title = "Companion"
+        window.contentView = NSHostingView(rootView: scene)
+        window.orderFrontRegardless()
+        ScreenshotWindowCapture.place(window, size: NSSize(width: 1200, height: 760))
+        ScreenshotWindowCapture.settle(seconds: 5.0)
+        guard let path = ScreenshotMode.outputPath else {
+            NSLog("[Screenshot] DICTATOR_SCREENSHOT_OUT unset")
+            exit(1)
+        }
+        let size = ScreenshotWindowCapture.capture(window, to: path)
+        ScreenshotWindowCapture.finish(size, path: path)
+    }
+}
+
+/// A made-up video call — four tiles of initials — for the companion to sit
+/// over in its screenshot.
+private struct CompanionShotScene: View {
+    let session: MeetingSession
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            LinearGradient(colors: [Color(white: 0.20), Color(white: 0.12)], startPoint: .top, endPoint: .bottom)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                tile("PN", "Priya Natarajan", .orange)
+                tile("TR", "Tom Reilly", .purple)
+                tile("SO", "Sam Okafor", .blue)
+                tile("NW", "Northwind (2)", .teal)
+            }
+            .padding(EdgeInsets(top: 28, leading: 28, bottom: 28, trailing: CompanionView.width + 56))
+            CompanionView(session: session)
+                .padding(28)
+        }
+        .frame(width: 1200, height: 760)
+    }
+
+    private func tile(_ initials: String, _ name: String, _ color: Color) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(white: 0.26))
+            Circle().fill(color.gradient).frame(width: 88, height: 88)
+                .overlay(Text(initials).font(.title.weight(.semibold)).foregroundStyle(.white))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Text(name).font(.callout.weight(.semibold)).foregroundStyle(.white).padding(12)
+        }
+        .frame(height: 330)
     }
 }

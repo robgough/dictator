@@ -161,7 +161,11 @@ enum MeetingsDemoFixtures {
                     "**Priya** — rewrite the permission screen in plain language.",
                     "**Sam** — book a second round of five trial users for next week.",
                 ],
-                type: .teamMeeting
+                type: .teamMeeting,
+                // One meeting still waiting for its notes, so the library's
+                // "Needs notes" list and Today's "Waiting for notes" have
+                // something in them.
+                written: false
             ),
             supporting(
                 5, "Interview — platform engineer", date(daysAgo: 3, hour: 14, minute: 0), 52,
@@ -193,7 +197,8 @@ enum MeetingsDemoFixtures {
         _ speakers: [MeetingMeta.Speaker],
         summary: String,
         actions: [String],
-        type: MeetingTypeID
+        type: MeetingTypeID,
+        written: Bool = true
     ) -> MeetingMeta {
         let body = "## Summary\n\(summary)\n\n## Action items\n"
             + actions.map { "- \($0)" }.joined(separator: "\n") + "\n"
@@ -210,9 +215,15 @@ enum MeetingsDemoFixtures {
                 markdown: body,
                 modelID: "qwen3-8b-mlx",
                 generatedAt: createdAt.addingTimeInterval(Double(minutes) * 60 + 300),
-                isFinal: true
+                isFinal: written
             ),
-            meetingType: type
+            rawNotes: written ? nil : MeetingNotes(
+                markdown: body,
+                modelID: "qwen3-8b-mlx",
+                generatedAt: createdAt.addingTimeInterval(Double(minutes) * 60),
+                isFinal: false
+            ),
+            meetingType: written ? type : .auto
         )
     }
 

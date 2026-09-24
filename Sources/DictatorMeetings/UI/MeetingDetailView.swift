@@ -424,6 +424,15 @@ struct LiveRecordingView: View {
                     .layoutPriority(-1)
             }
             Spacer(minLength: 8)
+            if state.companionDismissed, state.settings.meetingCompanionEnabled {
+                Button {
+                    state.companionDismissed = false
+                } label: {
+                    Label("Companion", systemImage: "rectangle.inset.topright.filled")
+                }
+                .buttonStyle(.borderless)
+                .help("Bring back the floating companion")
+            }
             meetingTypeRow
             stopButton
         }
@@ -730,7 +739,7 @@ private struct FirstMouseCatcher: NSViewRepresentable {
 /// delivered audio and takes its colour once it has, with a check beside the
 /// name; the words "Hearing audio" live in the tooltip rather than repeating
 /// under both meters. A problem is the one thing spelled out.
-private struct SourceMeter: View {
+struct SourceMeter: View {
     let label: String
     let level: Float
     let tint: Color

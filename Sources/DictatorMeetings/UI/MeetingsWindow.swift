@@ -14,9 +14,12 @@ private final class SessionCache {
     var byID: [UUID: MeetingSession] = [:]
 }
 
-/// Root view of the Meetings window. NavigationSplitView with a sidebar
-/// listing every saved meeting and a detail pane that renders either a
-/// live recording, a processing run, or a finished transcript.
+/// Root view of the Meetings window: a library, shaped like Mail and Notes.
+/// The sidebar picks Today or a list (all meetings, the ones needing notes, a
+/// kind of meeting, a person); a list puts a meeting column beside the
+/// meeting itself. A recording on screen takes the full width, because the
+/// live layout needs it — choosing a list brings the column back, and the
+/// recording stays one click away at the top of it.
 struct MeetingsRootView: View {
     @Environment(MeetingsAppState.self) private var state
     @Environment(\.controlActiveState) private var controlActiveState
@@ -25,6 +28,11 @@ struct MeetingsRootView: View {
     /// list re-renders the moment it's switched on or off.
     @State private var demo = MeetingsDemoMode.shared
     @State private var selectedID: UUID?
+    /// What the sidebar has selected. Optional because a sidebar `List` needs
+    /// a way to show nothing selected — which is what it shows while the
+    /// recording has the window, so that choosing any list, Today included,
+    /// registers as a change and takes you back to it.
+    @State private var scope: LibraryScope? = .today
     @State private var liveSession: MeetingSession?
     @State private var searchText = ""
     /// One session per opened meeting, memoised so the detail pane
@@ -128,10 +136,11 @@ struct MeetingsRootView: View {
         .onAppear {
             // Screenshot mode picks the meeting (or installs a fabricated live
             // session) the capture is meant to show. Inert otherwise.
-            MeetingsScreenshotRunner.configure(selection: $selectedID, liveSession: $liveSession)
+            MeetingsScreenshotRunner.configure(selection: $selectedID, liveSession: $liveSession, scope: $scope)
             store.refresh()
             consumePendingRecordingRequest()
             consumePendingStopRequest()
+            consumePendingShowLive()
             state.meetingsWindowIsKey = (controlActiveState == .key)
         }
         .onDisappear { state.meetingsWindowIsKey = false }
@@ -150,9 +159,26 @@ struct MeetingsRootView: View {
         .onChange(of: state.pendingMeetingRecording) { _, isPending in
             if isPending { consumePendingRecordingRequest() }
         }
+        // The companion's "Open in window", and stopping from it.
+        .onChange(of: state.pendingShowLive) { _, isPending in
+            if isPending { consumePendingShowLive() }
+        }
         // Same for the menu bar's "Stop recording".
         .onChange(of: state.pendingStopRecording) { _, isPending in
             if isPending { consumePendingStopRequest() }
+        }
+        // Choosing a list while the recording has the window means "let me
+        // browse": let go of the live meeting so the list can show. It keeps
+        // recording, pinned at the top of the list and on Today. A meeting
+        // that isn't in the new list is let go too, as Mail does.
+        .onChange(of: scope) { _, newScope in
+            guard let newScope else { return }
+            if let live = liveSession, selectedID == live.id, live.isLive {
+                selectedID = nil
+            } else if let id = selectedID, newScope != .today,
+                      !Library.filter(filteredMetas, by: newScope).contains(where: { $0.id == id }) {
+                selectedID = nil
+            }
         }
         // Demo mode switching either way changes which meetings exist, so drop
         // any selection and cached session that no longer does — otherwise a
@@ -295,58 +321,97 @@ struct MeetingsRootView: View {
             // and the window is the thing being recorded, so it has to be here.
             // Everything below it looks exactly as it normally does.
             if demo.isOn { DemoSidebarPill() }
-            // Pinned "return to recording" banner while a meeting records and
-            // the user has navigated away to browse another.
-            if let live = liveSession, live.isLive, selectedID != live.id {
-                RecordingReturnBanner(session: live) { selectedID = live.id }
-            }
-            if store.visibleMetas.isEmpty {
-                // SwiftUI renders the empty state in the detail pane; the
-                // sidebar collapses to a hint.
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Meetings")
-                        .font(.headline)
-                    Text("No meetings yet.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                MeetingSidebarList(selection: $selectedID, metas: filteredMetas) { id in
-                    store.delete(id: id)
-                    if selectedID == id { selectedID = nil }
-                    sessionCache.byID.removeValue(forKey: id)
-                }
+            LibrarySidebar(scope: $scope, metas: store.visibleMetas)
                 .frame(maxHeight: .infinity)
-                .overlay {
-                    if filteredMetas.isEmpty && !searchText.isEmpty {
-                        ContentUnavailableView.search(text: searchText)
-                    }
-                }
-            }
             SyncFooterChip()
         }
     }
 
+    /// True when the recording (or the import) in progress has the window.
+    private var isShowingLive: Bool {
+        guard let live = liveSession, let id = selectedID else { return false }
+        return id == live.id && (live.isLive || live.isProcessing)
+    }
+
+    /// The list the meeting column shows. Today has no list of its own, so
+    /// searching from Today searches everything.
+    private var listScope: LibraryScope {
+        guard let scope, scope != .today else { return .all }
+        return scope
+    }
+
     @ViewBuilder
     private var detail: some View {
-        // Selecting a different meeting while one records lets you browse it —
-        // the recording keeps running (menu-bar dot + the sidebar "return"
-        // banner). Otherwise the live session owns the detail pane.
-        if let id = selectedID, id != liveSession?.id, let session = session(for: id) {
-            MeetingDetailView(session: session)
-        } else if let live = liveSession, live.isLive || live.isProcessing {
+        if (scope ?? .all) == .today && searchText.isEmpty && !isShowingLive {
+            TodayView(
+                metas: store.visibleMetas,
+                live: liveSession,
+                onRecord: { Task { await startRecording() } },
+                onOpen: { id, target in
+                    scope = target
+                    selectedID = id
+                },
+                onOpenLive: openLive)
+        } else {
+            HStack(spacing: 0) {
+                // A live recording takes the full width; see the type's doc.
+                if !(isShowingLive && liveSession?.isLive == true) {
+                    let metas = Library.filter(filteredMetas, by: listScope)
+                    MeetingListColumn(
+                        scope: listScope,
+                        selection: $selectedID,
+                        metas: metas,
+                        live: liveSession
+                    ) { id in
+                        store.delete(id: id)
+                        if selectedID == id { selectedID = nil }
+                        sessionCache.byID.removeValue(forKey: id)
+                    }
+                    .frame(width: 290)
+                    .overlay {
+                        if metas.isEmpty && !searchText.isEmpty {
+                            ContentUnavailableView.search(text: searchText)
+                        }
+                    }
+                    Divider()
+                }
+                meetingPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var meetingPane: some View {
+        if let id = selectedID, let live = liveSession, id == live.id {
             MeetingDetailView(session: live)
         } else if let id = selectedID, let session = session(for: id) {
             MeetingDetailView(session: session)
-        } else {
+        } else if store.visibleMetas.isEmpty {
             MeetingsEmptyState(
                 onRecord: { Task { await startRecording() } },
                 onImport: { Task { await importFile() } },
                 permissionMessage: permissionMessage
             )
+        } else {
+            ContentUnavailableView(
+                "No meeting selected",
+                systemImage: "rectangle.stack",
+                description: Text("Choose a meeting from the list."))
         }
+    }
+
+    private func consumePendingShowLive() {
+        guard state.pendingShowLive else { return }
+        state.pendingShowLive = false
+        openLive()
+    }
+
+    /// Give the window back to the recording in progress.
+    private func openLive() {
+        guard let live = liveSession else { return }
+        selectedID = live.id
+        scope = nil
     }
 
     private func session(for id: UUID) -> MeetingSession? {
@@ -381,14 +446,9 @@ struct MeetingsRootView: View {
     /// unlike `shareableSession`, which also requires there to be something to
     /// copy/export.
     private var currentSession: MeetingSession? {
-        if let id = selectedID, id != liveSession?.id, let s = session(for: id) {
-            return s
-        } else if let live = liveSession, live.isLive || live.isProcessing {
-            return live
-        } else if let id = selectedID, let s = session(for: id) {
-            return s
-        }
-        return nil
+        guard let id = selectedID else { return nil }
+        if let live = liveSession, id == live.id { return live }
+        return session(for: id)
     }
 
     private var shareableSession: MeetingSession? {
@@ -581,6 +641,11 @@ struct MeetingsRootView: View {
         let session = MeetingSession(forLiveRecording: UUID())
         liveSession = session
         selectedID = session.id
+        scope = nil
+        // The companion follows this; a new recording brings it back even if
+        // it was hidden during the last one.
+        state.liveSession = session
+        state.companionDismissed = false
         sessionCache.byID[session.id] = session
         let preferred = AudioDeviceManager.shared.preferredConnectedDevice()
         await session.startRecording(preferredMicDevice: preferred)
@@ -620,6 +685,7 @@ struct MeetingsRootView: View {
             }
             sessionCache.byID[session.id] = session
             selectedID = session.id
+            scope = nil
             liveSession = session
             let modelID = state.settings.parakeetModelID
             // runImport drives off-main re-encode → .captured → processor.
@@ -695,51 +761,6 @@ private struct SyncFooterChip: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-    }
-}
-
-/// Pinned to the top of the sidebar while a meeting records and the user has
-/// navigated away to browse another — one click returns to the live session.
-/// Reads the session's `.recording` state (which ticks every 250 ms) for the
-/// elapsed time, so it counts up in place.
-private struct RecordingReturnBanner: View {
-    @Bindable var session: MeetingSession
-    let onReturn: () -> Void
-
-    var body: some View {
-        Button(action: onReturn) {
-            HStack(spacing: 8) {
-                Circle().fill(.red).frame(width: 8, height: 8)
-                Text("Recording")
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Text(elapsedText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .glassEffect(
-                .regular.tint(.red.opacity(0.18)).interactive(),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-        }
-        .buttonStyle(.plain)
-        .padding(8)
-        .help("Return to the meeting being recorded.")
-    }
-
-    private var elapsedText: String {
-        if case .recording(let elapsed, _, _) = session.state {
-            let t = Int(elapsed.rounded())
-            return t >= 3600
-                ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
-                : String(format: "%d:%02d", (t % 3600) / 60, t % 60)
-        }
-        return "0:00"
     }
 }
 

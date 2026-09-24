@@ -111,6 +111,12 @@ struct MeetingsSettings: Codable, Equatable {
     /// floating presence off. Default ON; synced.
     var meetingCoachChipEnabled: Bool = true
 
+    /// Show the floating companion panel while a meeting records — the time,
+    /// both meters, key points, the latest notes and a quick-note field,
+    /// beside the call so the window can stay out of the way. Default ON;
+    /// synced.
+    var meetingCompanionEnabled: Bool = true
+
     /// Recognise people across meetings by voice: persist speaker
     /// embeddings to people.json, link returning voices to their person
     /// (applying the known name), learn named strangers. Default ON — one
@@ -259,6 +265,7 @@ struct MeetingsSettings: Codable, Equatable {
         case meetingLiveNotesSelfCorrectEnabled
         case meetingCoachEnabled
         case meetingCoachChipEnabled
+        case meetingCompanionEnabled
         case peopleRecognitionEnabled
         case meetingCalendarMatchingEnabled
         case meetingCaptureScreenshots
@@ -299,6 +306,7 @@ struct MeetingsSettings: Codable, Equatable {
         self.meetingLiveNotesSelfCorrectEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingLiveNotesSelfCorrectEnabled) ?? d.meetingLiveNotesSelfCorrectEnabled
         self.meetingCoachEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachEnabled) ?? d.meetingCoachEnabled
         self.meetingCoachChipEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCoachChipEnabled) ?? d.meetingCoachChipEnabled
+        self.meetingCompanionEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCompanionEnabled) ?? d.meetingCompanionEnabled
         self.peopleRecognitionEnabled = try c.decodeIfPresent(Bool.self, forKey: .peopleRecognitionEnabled) ?? d.peopleRecognitionEnabled
         self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
         self.meetingCaptureScreenshots = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureScreenshots) ?? d.meetingCaptureScreenshots
@@ -333,6 +341,7 @@ struct MeetingsSettings: Codable, Equatable {
         "meetingLiveNotesSelfCorrectEnabled",
         "meetingCoachEnabled",
         "meetingCoachChipEnabled",
+        "meetingCompanionEnabled",
         "peopleRecognitionEnabled",
         "meetingCalendarMatchingEnabled",
         "meetingCaptureScreenshots",

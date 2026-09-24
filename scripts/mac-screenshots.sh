@@ -4,7 +4,11 @@
 # docs/index.html, plus `demo-history`, which isn't on the page but keeps the
 # Demo-mode fixtures visible.
 #
-#   ./scripts/mac-screenshots.sh
+#   ./scripts/mac-screenshots.sh                  # every shot
+#   ./scripts/mac-screenshots.sh today companion  # just these
+#
+# Each capture opens a window on screen, so name the shots you need rather
+# than re-running the lot; an app with no shots named isn't even built.
 #
 # Both Mac apps carry a developer-only "screenshot mode" (inert unless
 # DICTATOR_SCREENSHOT is set — see Sources/DictatorCore/Screenshots/
@@ -27,6 +31,15 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+DICTATOR_SHOTS="modes hud-styles assistant-draft journal chat demo-history"
+MEETINGS_SHOTS="today companion live-recording notes coach"
+WANT="$*"
+wanted() { [ -z "$WANT" ] || [[ " $WANT " == *" $1 "* ]]; }
+any_wanted() { local s; for s in $1; do wanted "$s" && return 0; done; return 1; }
+for s in $WANT; do
+  [[ " $DICTATOR_SHOTS $MEETINGS_SHOTS " == *" $s "* ]] || { echo "Unknown shot: $s" >&2; exit 64; }
+done
 cd "$REPO"
 
 WORK="${DICTATOR_SHOTS_WORK:-$REPO/.screenshots-work}"
@@ -98,19 +111,20 @@ build() {
     exit 1
   fi
 }
-build Dictator
-build DictatorMeetings
+if any_wanted "$DICTATOR_SHOTS"; then build Dictator; fi
+if any_wanted "$MEETINGS_SHOTS"; then build DictatorMeetings; fi
 
 DICTATOR_APP="$DD/Build/Products/Debug/Dictator.app"
 MEETINGS_APP="$DD/Build/Products/Debug/Dictator Meetings.app"
 # Ad-hoc signing is all this environment can do, and it is all an unsigned
 # scratch build needs to launch. Nothing under ~/Applications is touched.
-codesign --force --deep --sign - "$DICTATOR_APP" >/dev/null 2>&1
-codesign --force --deep --sign - "$MEETINGS_APP" >/dev/null 2>&1
+codesign --force --deep --sign - "$DICTATOR_APP" >/dev/null 2>&1 || true
+codesign --force --deep --sign - "$MEETINGS_APP" >/dev/null 2>&1 || true
 
 # ----------------------------------------------------------------- 3. captures
 shoot() {
   local app="$1" binary="$2" shot="$3"
+  wanted "$shot" || return 0
   local data="$WORK/data-$shot"
   rm -rf "$data"; mkdir -p "$data"
   # Never let a previous run's PNG stand in for a capture that failed.
@@ -126,10 +140,10 @@ shoot() {
   fi
 }
 
-for shot in modes hud-styles assistant-draft journal chat demo-history; do
+for shot in $DICTATOR_SHOTS; do
   shoot "$DICTATOR_APP" "Dictator" "$shot"
 done
-for shot in live-recording notes coach; do
+for shot in $MEETINGS_SHOTS; do
   shoot "$MEETINGS_APP" "Dictator Meetings" "$shot"
 done
 
@@ -142,6 +156,7 @@ mkdir -p docs/media/mac docs/media/meetings
 # out heavy is re-run at 1300, which is still >= the display width.
 place() {
   local shot="$1" dest="$2" bytes
+  wanted "$shot" || return 0
   for edge in 1400 1300; do
     sips -Z "$edge" "$RAW/$shot.png" --out "$dest" >/dev/null
     bytes=$(stat -f%z "$dest")
@@ -159,6 +174,8 @@ place journal         docs/media/mac/journal.png
 place chat            docs/media/mac/chat.png
 # Not referenced by docs/index.html — a look at the Demo-mode fixtures.
 place demo-history    docs/media/mac/demo-history.png
+place today           docs/media/meetings/today.png
+place companion       docs/media/meetings/companion.png
 place live-recording  docs/media/meetings/live-recording.png
 place notes           docs/media/meetings/notes.png
 place coach           docs/media/meetings/coach.png

@@ -122,6 +122,9 @@ final class MeetingSession: Identifiable {
     /// instead of silently leaving stale/empty notes. Cleared when a new pass
     /// starts or succeeds.
     private(set) var notesError: String?
+    /// True from the moment a notes pass succeeds until the user dismisses the
+    /// send bar — the review's third step, shown once, not on every visit.
+    var notesJustWritten = false
 
     /// Live coach signals (talk balance, monologue timer, pace…), present for
     /// the duration of a recording when the coach is enabled. Fed from the
@@ -1048,6 +1051,7 @@ final class MeetingSession: Identifiable {
             meta.notes = notes
             try? MeetingStorage.writeMeta(meta)
             MeetingsStore.shared.upsert(meta)
+            notesJustWritten = true
             state = .ready
             // The coach report rides the same user action — one Write notes
             // produces notes AND the private report (it also wants the
@@ -1160,6 +1164,17 @@ final class MeetingSession: Identifiable {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         meta.title = trimmed
+        try? MeetingStorage.writeMeta(meta)
+        MeetingsStore.shared.upsert(meta)
+    }
+
+    /// Accept a guessed speaker name as right. Clears the "auto-detected"
+    /// flag the way a rename does, without the rename — which is a no-op for
+    /// an unchanged name, and so can't be used to say "yes, that's Priya".
+    func confirmSpeaker(id: String) {
+        guard let idx = meta.speakers.firstIndex(where: { $0.id == id }),
+              meta.speakers[idx].nameInferred else { return }
+        meta.speakers[idx].nameInferred = false
         try? MeetingStorage.writeMeta(meta)
         MeetingsStore.shared.upsert(meta)
     }

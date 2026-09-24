@@ -6,8 +6,12 @@ eight — plus the off-site `demo-history` shot — are rebuilt from the current
 with fabricated data:
 
 ```bash
-./scripts/mac-screenshots.sh
+./scripts/mac-screenshots.sh                 # every shot
+./scripts/mac-screenshots.sh today companion # only these
 ```
+
+Each capture opens a window on screen and takes focus, so name the shots you
+need; an app with none named isn't built.
 
 Everything below documents that pipeline. (The iPhone shots are separate — see
 the last section.)
@@ -23,6 +27,8 @@ the last section.)
 | `docs/media/mac/chat.png` | The Chat window: a `search_journal` call, a saved note's file card, and the reply | `chat` |
 | `docs/media/mac/demo-history.png` | Settings → Dictation → History with the Demo-mode fixture dictations. **Not on `docs/index.html`** — it exists so the fixtures behind Demo mode can be eyeballed like any other shot | `demo-history` |
 | *(not written anywhere)* | Dictator Meetings: the featured meeting as recording leaves it — live notes only, the Notes tab showing Write notes. Run by hand like the `env` example below; not in the script | `notes-unwritten` |
+| `docs/media/meetings/today.png` | The Today screen: a calendar fixture's next event, a meeting waiting for notes, earlier meetings, action items | `today` |
+| `docs/media/meetings/companion.png` | The companion over a stand-in video call, drawn in its own window (the real panel's surroundings would be the capturing person's desktop) | `companion` |
 | `docs/media/meetings/live-recording.png` | Dictator Meetings mid-call: pad + live notes left, levels, key points and live transcript right | `live-recording` |
 | `docs/media/meetings/notes.png` | A finished meeting on the Notes tab, with the Details inspector | `notes` |
 | `docs/media/meetings/coach.png` | The Coach tab: metrics, key-points scorecard, the written read | `coach` |

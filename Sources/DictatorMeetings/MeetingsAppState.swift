@@ -63,6 +63,21 @@ final class MeetingsAppState {
     /// or the coach is disabled.
     var activeCoachEngine: MeetingCoachEngine?
 
+    /// The meeting being recorded, mirrored from the window's root view so
+    /// the companion panel can show it with the window closed or buried. Set
+    /// when a recording starts; left in place afterwards (the companion only
+    /// shows while `isLive`), and replaced by the next one.
+    var liveSession: MeetingSession?
+
+    /// One-shot: bring the window back to the recording in progress. Set by
+    /// the companion's "Open in window" and by stopping from the companion,
+    /// drained by the root view.
+    var pendingShowLive: Bool = false
+
+    /// The user closed the companion for the current recording. Reset when
+    /// the next recording starts.
+    var companionDismissed: Bool = false
+
     /// True while the meetings window is the key window. Set by the root view
     /// from its `controlActiveState`; drives the "⌘⌥A to ask" affordance on the
     /// notes view, which only makes sense when the window is focused.

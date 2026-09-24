@@ -58,6 +58,14 @@ struct MeetingsPane: View {
             }
 
             Section {
+                Toggle("Show the companion while recording", isOn: Binding(
+                    get: { s.settings.meetingCompanionEnabled },
+                    set: { s.settings.meetingCompanionEnabled = $0; state.save() }
+                ))
+                SectionFootnote("A small floating panel beside the call with the time, both sides' audio, key points, the latest notes and a place to jot something down. Drag it wherever suits.")
+            }
+
+            Section {
                 Toggle("Coach your meetings", isOn: Binding(
                     get: { s.settings.meetingCoachEnabled },
                     set: { s.settings.meetingCoachEnabled = $0; state.save() }

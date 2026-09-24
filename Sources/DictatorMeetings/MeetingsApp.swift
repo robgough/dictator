@@ -56,16 +56,18 @@ struct DictatorMeetingsApp: App {
         // only makes sense as a single instance anyway.
         Window("Meetings", id: "meetings") {
             MeetingsRootHost()
-                // 1000 = sidebar max (320) + the detail's compressed width +
-                // the Details inspector's 240pt minimum, with room for the
-                // dividers. At the old 760 the three columns could not all be
-                // satisfied at once, and rather than collapsing one, SwiftUI
-                // and AppKit traded min-size updates until the window
-                // exhausted its Update Constraints passes and the app aborted.
-                .frame(minWidth: 1000, minHeight: 480)
+                // 1290 = sidebar max (320) + the meeting column (290) + the
+                // detail's compressed width + the Details inspector's 240pt
+                // minimum, with room for the dividers. Below the sum the
+                // columns could not all be satisfied at once, and rather than
+                // collapsing one, SwiftUI and AppKit traded min-size updates
+                // until the window exhausted its Update Constraints passes and
+                // the app aborted (it did at the old 760, before the meeting
+                // column existed and 1000 was enough).
+                .frame(minWidth: 1290, minHeight: 520)
                 .environment(state)
         }
-        .defaultSize(width: 1280, height: 760)
+        .defaultSize(width: 1440, height: 860)
         .handlesExternalEvents(matching: ["meetings", "record"])
         .commands {
             // The notes assistant. In Dictator this rode the global assistant
@@ -200,6 +202,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// outlives the window: the strip's whole purpose is to be visible with
     /// the meetings window buried behind the call.
     private var coachIsland: CoachIslandController?
+    /// The floating companion shown while a meeting records. Here for the
+    /// same reason as the island: it outlives the window.
+    private var companion: CompanionController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Developer-only screenshot mode: render one window to a PNG and exit.
@@ -234,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MeetingsAppState.shared.bootstrap()
 
         coachIsland = CoachIslandController(state: MeetingsAppState.shared)
+        companion = CompanionController(state: MeetingsAppState.shared)
     }
 
     /// Routes `dictator-meetings://…` URLs. Two hosts: `record` starts a
