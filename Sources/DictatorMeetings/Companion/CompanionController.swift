@@ -28,8 +28,20 @@ final class CompanionController {
     private var shownSessionID: UUID?
     private var observationTask: Task<Void, Never>?
 
+    private var screensObserver: (any NSObjectProtocol)?
+
     init(state: MeetingsAppState) {
         self.state = state
+        // A display unplugged or rearranged mid-call can leave the panel on
+        // no screen at all; bring it back.
+        screensObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let panel = self?.panel, panel.isVisible else { return }
+                self?.keepOnScreen(panel)
+            }
+        }
         observationTask = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
                 self.update()
@@ -86,6 +98,11 @@ final class CompanionController {
         }
         if !panel.isVisible {
             if !panel.setFrameUsingName(Self.frameName) { placeTopRight(panel) }
+            // A remembered position can be off every screen now — a display
+            // that's since been unplugged or moved, or a height that grew
+            // past the top — and a panel off the screen can't even be
+            // dragged back.
+            keepOnScreen(panel)
             panel.alphaValue = 0
             panel.orderFrontRegardless()
             NSAnimationContext.runAnimationGroup { ctx in
@@ -116,7 +133,36 @@ final class CompanionController {
             frame.origin.y += frame.height - target
             frame.size.height = target
             panel.setFrame(frame, display: true)
+            self?.keepOnScreen(panel)
         }
+    }
+
+    /// Pull the panel fully inside the visible area of the screen it's
+    /// mostly on; if it's on none, put it back at the top right of the
+    /// screen in use.
+    private func keepOnScreen(_ panel: NSPanel) {
+        let frame = panel.frame
+        var best: NSScreen?
+        var bestArea: CGFloat = 0
+        for screen in NSScreen.screens {
+            let overlap = screen.visibleFrame.intersection(frame)
+            guard !overlap.isNull else { continue }
+            let area = overlap.width * overlap.height
+            if area > bestArea {
+                bestArea = area
+                best = screen
+            }
+        }
+        guard let screen = best else {
+            placeTopRight(panel)
+            return
+        }
+        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+        var fixed = frame
+        fixed.size.height = min(fixed.height, visible.height)
+        fixed.origin.x = min(max(fixed.minX, visible.minX), visible.maxX - fixed.width)
+        fixed.origin.y = min(max(fixed.minY, visible.minY), visible.maxY - fixed.height)
+        if fixed != frame { panel.setFrame(fixed, display: true) }
     }
 
     private static let frameName = "DictatorMeetingsCompanion"

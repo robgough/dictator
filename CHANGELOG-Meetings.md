@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The companion panel always opens where you can see it. It could reappear partly off the top of a screen, out of reach, after the displays changed or it grew; it's now kept inside the screen it's on, and comes back if a display is unplugged mid-call.
 - Dictator Meetings no longer crashes a few minutes into a recording. The companion panel resized itself in a way that could send the window's layout round in circles until the app gave up; it now resizes calmly as its contents change.
 - Dictator Meetings responds straight away when you click. Opening a meeting no longer loads its whole transcript and both audio recordings before the window can react — the audio opens when you first press play — and switching back to the window no longer re-reads every meeting before your click lands.
 - Writing notes with a cloud model can no longer sit on "Rewriting notes…" indefinitely. A request that couldn't reach the service used to wait silently for up to 20 minutes; it now fails straight away and is retried. While notes are being written you can see which model is writing them and for how long, and Cancel stops it.
