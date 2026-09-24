@@ -23,6 +23,12 @@ struct MeetingDetailView: View {
     /// Whether the trailing Details inspector is showing. Remembered across
     /// launches; only takes effect for finished meetings (see `canShowInspector`).
     @AppStorage("meetingsInspectorVisible") private var inspectorVisible = true
+    /// Which of the side panel's two faces shows: "details" or "ask".
+    @AppStorage("meetingsInspectorTab") private var inspectorTab = "details"
+    /// The conversation about this meeting. Owned here, not by the notes,
+    /// because three things reach it: the Assistant button on the notes,
+    /// ⌘⌥A, and the Ask panel itself.
+    @State private var assistant = MeetingAssistantController()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,8 +97,24 @@ struct MeetingDetailView: View {
         // on-demand notes control. Only for finished meetings, so it never
         // squeezes the fixed-width live-recording layout.
         .inspector(isPresented: inspectorBinding) {
-            MeetingInspector(session: session)
-                .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+            MeetingSidePanel(session: session, assistant: assistant, tab: $inspectorTab)
+                .inspectorColumnWidth(min: 240, ideal: 280, max: 400)
+        }
+        .onAppear {
+            assistant.bind(session: session)
+            state.meetingAssistant = assistant
+        }
+        .onChange(of: session.id) { _, _ in
+            assistant.bind(session: session)
+            state.meetingAssistant = assistant
+        }
+        .onChange(of: assistant.openRequests) { _, _ in
+            inspectorTab = "ask"
+            inspectorVisible = true
+        }
+        .onDisappear {
+            assistant.teardown()
+            if state.meetingAssistant === assistant { state.meetingAssistant = nil }
         }
     }
 

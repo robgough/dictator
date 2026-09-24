@@ -75,12 +75,12 @@ struct DictatorMeetingsApp: App {
             // which is both simpler and honest — this app has no global
             // hotkeys and asks for no Accessibility grant.
             CommandMenu("Assistant") {
-                Button("Ask About These Notes") {
+                Button("Ask About This Meeting") {
                     MeetingsAppState.shared.meetingAssistant?.toggleFromCommand()
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
                 // Deliberately never disabled. `meetingAssistant` is a weak,
-                // observation-ignored registration made by the notes view
+                // observation-ignored registration made by the meeting view
                 // while it's on screen, so a `.disabled(...)` reading it
                 // wouldn't re-evaluate when the view registers — the item
                 // would sit greyed out forever. `toggleFromCommand` already

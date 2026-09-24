@@ -101,6 +101,12 @@ struct TranscriptView: View {
             // Re-process finished — pick up the freshly written track data.
             if !processing { loadAudio() }
         }
+        // A time clicked in the Ask panel.
+        .onChange(of: session.pendingSeek) { _, seconds in
+            guard let seconds else { return }
+            session.pendingSeek = nil
+            seekFromNotes(seconds)
+        }
         .onChange(of: session.transcriptRevision) { _, _ in
             // Speaker merge rewrote the files in place.
             reloadInspection()
@@ -776,7 +782,6 @@ private struct NotesPanel: View {
     /// For the speaker review's samples.
     var transcript: MeetingTranscript?
     var onPlay: ((Double) -> Void)?
-    @State private var assistant = MeetingAssistantController()
     /// The user has been through (or skipped) the speaker step for this
     /// meeting. Only this visit: the step reappears while names are still
     /// guesses, because that's still worth knowing before writing.
@@ -824,20 +829,20 @@ private struct NotesPanel: View {
                         .controlSize(.small)
                 }
                 if canUseAssistant {
-                    Button { assistant.present() } label: {
+                    Button { state.meetingAssistant?.present() } label: {
                         Label("Assistant", systemImage: "wand.and.stars")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color.assistantIndigo)
                     .controlSize(.small)
-                    .help("Ask about or edit these notes with the on-device assistant.")
+                    .help("Ask about this meeting, or ask for changes to the notes.")
                 }
             }
             if canUseAssistant, state.meetingsWindowIsKey {
                 // ⌘⌥A is an in-app menu command now (Assistant ▸ Ask about
                 // these notes), not the global push-to-talk hotkey Dictator
                 // owned — so it's a plain "press", never "hold".
-                Label("Press ⌘⌥A to ask the assistant — by voice, hands-free.", systemImage: "mic")
+                Label("Press ⌘⌥A to ask about this meeting by voice; press it again to send.", systemImage: "mic")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -859,21 +864,8 @@ private struct NotesPanel: View {
                 provenanceFooter(notes)
             }
         }
-        .onAppear {
-            assistant.bind(session: session)
-            state.meetingAssistant = assistant
-        }
         .onChange(of: session.id) { _, _ in
-            assistant.bind(session: session)
-            state.meetingAssistant = assistant
             speakersReviewed = false
-        }
-        .onDisappear {
-            assistant.dialogClosed()
-            if state.meetingAssistant === assistant { state.meetingAssistant = nil }
-        }
-        .sheet(isPresented: $assistant.isPresented) {
-            NotesAssistantSheet(assistant: assistant)
         }
     }
 
@@ -1316,99 +1308,6 @@ private extension Color {
         let g = Double((value >> 8) & 0xff) / 255
         let b = Double(value & 0xff) / 255
         self = Color(red: r, green: g, blue: b)
-    }
-}
-
-/// Runs the on-device assistant against the meeting notes. Ask a question → get
-/// an answer (the model returns DRAFT); ask for an edit → preview a rewrite and
-/// apply it (REPLACE). Reuses the same `assist()` path and prompt as Assistant
-/// Mode, with the notes passed as the selection so it has the full context.
-private struct NotesAssistantSheet: View {
-    @Bindable var assistant: MeetingAssistantController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Notes assistant", systemImage: "wand.and.stars")
-                    .font(.headline)
-                    .foregroundStyle(Color.assistantIndigo)
-                Spacer()
-                Button("Done") { assistant.isPresented = false }
-                    .keyboardShortcut(.cancelAction)
-            }
-            Text("Ask a question about these notes, or tell it how to edit them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                TextField("e.g. “What did we decide about pricing?” or “tighten the action items”", text: $assistant.instruction, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { assistant.run() }
-                Button {
-                    assistant.toggleListening()
-                } label: {
-                    Image(systemName: assistant.isListening ? "mic.fill" : "mic")
-                        .foregroundStyle(assistant.isListening ? .red : .secondary)
-                }
-                .help(assistant.isListening ? "Stop and transcribe" : "Speak your instruction")
-                .disabled(assistant.isTranscribing || assistant.isRunning)
-                Button("Ask") { assistant.run() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.assistantIndigo)
-                    .disabled(assistant.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || assistant.isRunning || assistant.isListening)
-            }
-
-            if assistant.isListening {
-                Label("Listening… tap the mic (or release the hotkey) to finish.", systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else if assistant.isTranscribing {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Transcribing…").foregroundStyle(.secondary)
-                }
-                .font(.caption)
-            }
-
-            if assistant.isRunning {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Thinking…").foregroundStyle(.secondary)
-                }
-                .font(.caption)
-            }
-            if let errorText = assistant.errorText {
-                Label(errorText, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-            if let result = assistant.result {
-                Divider()
-                Text(result.mode == .replace ? "Suggested edit" : "Answer")
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
-                ScrollView {
-                    MarkdownNotesView(markdown: result.text, speakers: assistant.speakers)
-                        .padding(12)
-                }
-                .frame(maxHeight: 280)
-                .notesSurface()
-                HStack {
-                    CopyButton(text: result.text, label: "Copy")
-                    Spacer()
-                    if result.mode == .replace {
-                        Button("Replace notes") { assistant.applyReplace() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.assistantIndigo)
-                    }
-                }
-            }
-        }
-        .padding(18)
-        .frame(width: 580)
-        .onDisappear { assistant.dialogClosed() }
     }
 }
 

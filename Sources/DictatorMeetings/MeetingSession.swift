@@ -125,6 +125,9 @@ final class MeetingSession: Identifiable {
     /// True from the moment a notes pass succeeds until the user dismisses the
     /// send bar — the review's third step, shown once, not on every visit.
     var notesJustWritten = false
+    /// A moment something outside the transcript asked to jump to — a time
+    /// in an assistant answer. The transcript view takes it and clears it.
+    var pendingSeek: Double?
 
     /// Live coach signals (talk balance, monologue timer, pace…), present for
     /// the duration of a recording when the coach is enabled. Fed from the

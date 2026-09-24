@@ -38,7 +38,7 @@ enum MeetingsScreenshotRunner {
     static var detailTab: String? {
         switch ScreenshotMode.shot {
         case "coach": return "coach"
-        case "notes", "notes-unwritten": return "notes"
+        case "notes", "notes-unwritten", "ask": return "notes"
         default: return nil
         }
     }
@@ -66,6 +66,7 @@ enum MeetingsScreenshotRunner {
         let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
         UserDefaults.standard.setVolatileDomain([
             "meetingsInspectorVisible": true,
+            "meetingsInspectorTab": ScreenshotMode.shot == "ask" ? "ask" : "details",
             "NSWindow Frame meetings":
                 "160 140 \(Int(windowSize.width)) \(Int(windowSize.height)) 0 0 \(Int(screen.width)) \(Int(screen.height)) ",
             "NSSplitView Subview Frames meetings, SidebarNavigationSplitView": [],
@@ -85,7 +86,30 @@ enum MeetingsScreenshotRunner {
         if let featured = fixtureMetas().first(where: { $0.id == featuredID }) {
             try? MeetingStorage.writeMeta(featured)
         }
+        if ScreenshotMode.shot == "ask" {
+            MeetingStorage.writeAssistantChat(askFixture, for: featuredID)
+        }
         MeetingsStore.shared.refresh()
+    }
+
+    /// A short conversation for the developer-only `ask` shot: a question
+    /// answered with times, then a change to the notes proposed.
+    private static var askFixture: [MeetingChatMessage] {
+        [
+            MeetingChatMessage(role: .user, text: "What did I agree to do?"),
+            MeetingChatMessage(role: .assistant, text: """
+            Two things:
+
+            - Send the revised one-page plan to the wider team [31:02]
+            - Book the month-one scope check [34:40]
+
+            Priya also asked you to confirm the trial numbers before Friday, but you didn't commit to it [18:15].
+            """),
+            MeetingChatMessage(role: .user, text: "Add the trial numbers one to my action items"),
+            MeetingChatMessage(role: .assistant,
+                               text: "Added it under Action items, owned by you and due Friday.",
+                               proposedNotes: "## Action items\n\n- [ ] **Sam** — send the revised one-page plan to the wider team.\n- [ ] **Sam** — book the month-one scope check.\n- [ ] **Sam** — confirm the trial numbers with Priya, by Friday."),
+        ]
     }
 
     /// Hand the root view's selection + live-session state to the runner, so a
@@ -97,7 +121,7 @@ enum MeetingsScreenshotRunner {
     ) {
         guard ScreenshotMode.isActive else { return }
         switch ScreenshotMode.shot {
-        case "notes", "coach":
+        case "notes", "coach", "ask":
             scope.wrappedValue = .all
             selection.wrappedValue = featuredID
         case "notes-unwritten":

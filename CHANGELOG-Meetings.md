@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The meeting assistant is now a conversation. Ask in the Ask panel beside the notes and follow up without repeating yourself; answers come from the notes, your pad and the transcript, with times you can click to jump to that moment. Ask it to change the notes and it shows the change for you to apply. The conversation is saved with the meeting, and ⌘⌥A still asks by voice.
 - API keys for cloud providers save again with "Sync keys with iCloud Keychain" switched on. That sync isn't available to this build, and every save was silently failing; keys are now kept in this Mac's Keychain, the setting says why it's unavailable, and the key field tells you it was saved.
 - Choosing a model for OpenRouter, OpenAI or another compatible service no longer means typing its id: Choose… lists every model the service offers, searchable, with its context size and price.
 - A companion panel floats beside the call while you record: the time and Stop, whether both sides are being heard, how the talking is split, your key points, the last few things the notes caught, and a field to jot something into your pad. Drag it wherever suits; turn it off in Settings.

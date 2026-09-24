@@ -296,6 +296,23 @@ enum MeetingStorage {
     }
 
     /// Empty string when the meeting has no pad — callers treat "" as absent.
+    /// The meeting's assistant conversation (`assistant-chat.json`, beside
+    /// the notes, so it syncs with them). Empty when there isn't one.
+    static func readAssistantChat(for id: UUID) -> [MeetingChatMessage] {
+        guard let data = try? Data(contentsOf: folder(for: id).appendingPathComponent("assistant-chat.json")) else { return [] }
+        return (try? jsonDecoder.decode([MeetingChatMessage].self, from: data)) ?? []
+    }
+
+    static func writeAssistantChat(_ messages: [MeetingChatMessage], for id: UUID) {
+        let url = folder(for: id).appendingPathComponent("assistant-chat.json")
+        if messages.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        guard let data = try? jsonEncoder.encode(messages) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
     static func readPad(for id: UUID) -> String {
         (try? String(contentsOf: padURL(for: id), encoding: .utf8)) ?? ""
     }
