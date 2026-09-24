@@ -23,6 +23,13 @@ final class MeetingPlayer {
 
     private var micPlayer: AVAudioPlayer?
     private var systemPlayer: AVAudioPlayer?
+    /// The tracks `load` found, not yet opened. Opening an hour of audio
+    /// into two `AVAudioPlayer`s and preparing them is real work on the main
+    /// thread, and it used to happen every time a meeting was selected —
+    /// most of which are opened to be read, not listened to. They're opened
+    /// on the first play, seek or scrub instead.
+    @ObservationIgnored private var pendingMicURL: URL?
+    @ObservationIgnored private var pendingSystemURL: URL?
     private var timerTask: Task<Void, Never>?
 
     /// True between `beginScrub` and `endScrub` while the user drags the
@@ -86,19 +93,38 @@ final class MeetingPlayer {
     /// audio files have been pruned. Returns `true` if at least one
     /// player came up.
     @discardableResult
-    func load(micURL: URL?, systemURL: URL?) -> Bool {
+    ///
+    /// Only notes which files exist — see `pendingMicURL`. `expectedDuration`
+    /// (the meeting's recorded length) stands in for the players' own until
+    /// they're opened, so the playback bar is right from the start.
+    func load(micURL: URL?, systemURL: URL?, expectedDuration: TimeInterval = 0) -> Bool {
         unload()
-        if let micURL, FileManager.default.fileExists(atPath: micURL.path) {
-            micPlayer = try? AVAudioPlayer(contentsOf: micURL)
+        let fm = FileManager.default
+        pendingMicURL = micURL.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
+        pendingSystemURL = systemURL.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
+        duration = expectedDuration
+        currentTime = 0
+        return pendingMicURL != nil || pendingSystemURL != nil
+    }
+
+    /// Open the tracks `load` noted, the first time they're needed.
+    private func openPlayersIfNeeded() {
+        guard micPlayer == nil, systemPlayer == nil,
+              pendingMicURL != nil || pendingSystemURL != nil else { return }
+        if let url = pendingMicURL {
+            micPlayer = try? AVAudioPlayer(contentsOf: url)
             micPlayer?.prepareToPlay()
         }
-        if let systemURL, FileManager.default.fileExists(atPath: systemURL.path) {
-            systemPlayer = try? AVAudioPlayer(contentsOf: systemURL)
+        if let url = pendingSystemURL {
+            systemPlayer = try? AVAudioPlayer(contentsOf: url)
             systemPlayer?.prepareToPlay()
         }
-        duration = max(micPlayer?.duration ?? 0, systemPlayer?.duration ?? 0)
-        currentTime = 0
-        return micPlayer != nil || systemPlayer != nil
+        pendingMicURL = nil
+        pendingSystemURL = nil
+        systemPlayer?.volume = systemBaseVolume
+        let actual = max(micPlayer?.duration ?? 0, systemPlayer?.duration ?? 0)
+        if actual > 0 { duration = actual }
+        applyDucking(at: currentTime)
     }
 
     /// Stop any in-flight playback, release both players. Safe to call
@@ -109,6 +135,8 @@ final class MeetingPlayer {
         systemPlayer?.stop()
         micPlayer = nil
         systemPlayer = nil
+        pendingMicURL = nil
+        pendingSystemURL = nil
         isPlaying = false
         isScrubbing = false
         currentTime = 0
@@ -124,6 +152,7 @@ final class MeetingPlayer {
     }
 
     func play() {
+        openPlayersIfNeeded()
         guard micPlayer != nil || systemPlayer != nil else { return }
         // If we're sitting at the end, start over.
         if currentTime >= duration - 0.05 { currentTime = 0 }
@@ -148,6 +177,7 @@ final class MeetingPlayer {
     /// Seek both players. We clamp to [0, duration]; a track with no audio
     /// left at the target is paused rather than pinned to its end.
     func seek(to seconds: TimeInterval) {
+        openPlayersIfNeeded()
         let t = max(0, min(seconds, duration))
         currentTime = t
         positionPlayers(to: t)
@@ -161,6 +191,7 @@ final class MeetingPlayer {
     /// in `endScrub`.
     func beginScrub() {
         guard !isScrubbing else { return }
+        openPlayersIfNeeded()
         wasPlayingBeforeScrub = isPlaying
         isScrubbing = true
         micPlayer?.pause()

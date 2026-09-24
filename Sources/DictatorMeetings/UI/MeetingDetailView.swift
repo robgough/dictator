@@ -19,6 +19,9 @@ struct MeetingDetailView: View {
     @State private var titleTarget: MeetingSession?
     @FocusState private var titleFocused: Bool
     @State private var transcriptCache: MeetingTranscript?
+    /// Matches the transcript load in flight; a load for a meeting the user
+    /// has already left is dropped when it lands.
+    @State private var transcriptLoadToken = UUID()
     @State private var titleHovered = false
     /// Whether the trailing Details inspector is showing. Remembered across
     /// launches; only takes effect for finished meetings (see `canShowInspector`).
@@ -91,7 +94,7 @@ struct MeetingDetailView: View {
         // A speaker merge rewrites transcript.json in place without a state
         // transition — refresh the cache so the new attribution shows.
         .onChange(of: session.transcriptRevision) { _, _ in
-            transcriptCache = MeetingStorage.readTranscript(for: session.id)
+            loadTranscript()
         }
         // Trailing Details inspector — metadata, speaker editing, and the
         // on-demand notes control. Only for finished meetings, so it never
@@ -311,6 +314,22 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Decode transcript.json off the main thread. A long meeting's runs to
+    /// over a megabyte of word timings, and decoding it inline held up the
+    /// click that selected the meeting.
+    private func loadTranscript() {
+        let id = session.id
+        let token = UUID()
+        transcriptLoadToken = token
+        Task.detached(priority: .userInitiated) {
+            let transcript = MeetingStorage.readTranscript(for: id)
+            await MainActor.run {
+                guard transcriptLoadToken == token else { return }
+                transcriptCache = transcript
+            }
+        }
+    }
+
     private func reloadTranscriptIfNeeded() {
         // Only clear the cache when the new state could regenerate the
         // transcript on disk — that's the transcribe / diarize / merge
@@ -319,7 +338,7 @@ struct MeetingDetailView: View {
         // jarring blank flash mid-regenerate.
         switch session.state {
         case .ready:
-            transcriptCache = MeetingStorage.readTranscript(for: session.id)
+            loadTranscript()
         case .summarising:
             // The summary pass reads transcript.json without touching it.
             // Keep whatever's already rendered visible.

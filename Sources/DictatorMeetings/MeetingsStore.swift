@@ -36,6 +36,28 @@ final class MeetingsStore {
         MeetingAudioCompactor.shared.sweepOnce()
     }
 
+    /// `refresh`, with the disk scan off the main thread — for the window
+    /// coming to the front, which happens on the click that brought it
+    /// there. Scanning every meeting's folder inline held that click up,
+    /// and replacing the list even when nothing had changed redrew
+    /// everything that reads it; this only replaces it when something has.
+    @ObservationIgnored private var backgroundRefreshInFlight = false
+
+    func refreshInBackground() {
+        guard !backgroundRefreshInFlight else { return }
+        backgroundRefreshInFlight = true
+        Task.detached(priority: .userInitiated) {
+            let loaded = MeetingStorage.loadAllMetas().sorted { $0.createdAt > $1.createdAt }
+            await MainActor.run {
+                self.backgroundRefreshInFlight = false
+                guard loaded != self.metas else { return }
+                self.metas = loaded
+                self.applyAutoDeleteIfConfigured()
+                self.applyAudioRetentionIfConfigured()
+            }
+        }
+    }
+
     /// What the UI lists. Identical to `metas` normally; while demo mode is on
     /// it's the fixtures plus anything recorded since (see `MeetingsDemoMode`).
     /// The list, its search and the sidebar's empty state all read this rather

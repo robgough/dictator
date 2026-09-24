@@ -17,6 +17,12 @@ struct TodayView: View {
     let onOpenLive: () -> Void
 
     @State private var upcoming = UpcomingMeetings.shared
+    /// Action items, worked out off the main thread whenever the meetings
+    /// change — parsing every meeting's notes on every redraw is what a
+    /// screen you glance at shouldn't cost.
+    @State private var mine: [ActionItem] = []
+    @State private var others: [ActionItem] = []
+    @State private var anyItems = false
 
     var body: some View {
         ScrollView {
@@ -42,6 +48,22 @@ struct TodayView: View {
             .frame(maxWidth: .infinity)
         }
         .task { await upcoming.refresh(settings: state.settings) }
+        .task(id: metas) {
+            let metas = self.metas
+            let userName = state.settings.userName
+            let result = await Task.detached(priority: .userInitiated) {
+                let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantPast
+                let recent = metas.filter { $0.createdAt >= cutoff }
+                let open = ActionItems.collect(from: recent).filter { !$0.done }
+                let byID = Dictionary(uniqueKeysWithValues: recent.map { ($0.id, $0) })
+                let mine = open.filter { ActionItems.isMine($0, meta: byID[$0.meetingID], userName: userName) }
+                let others = open.filter { !ActionItems.isMine($0, meta: byID[$0.meetingID], userName: userName) }
+                return (mine, others, !open.isEmpty)
+            }.value
+            mine = result.0
+            others = result.1
+            anyItems = result.2
+        }
     }
 
     // MARK: - Header
@@ -163,17 +185,10 @@ struct TodayView: View {
 
     @ViewBuilder
     private var actionItems: some View {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantPast
-        let recent = metas.filter { $0.createdAt >= cutoff }
-        let open = ActionItems.collect(from: recent).filter { !$0.done }
-        let byID = Dictionary(uniqueKeysWithValues: recent.map { ($0.id, $0) })
-        let mine = open.filter { ActionItems.isMine($0, meta: byID[$0.meetingID], userName: state.settings.userName) }
-        let others = open.filter { !ActionItems.isMine($0, meta: byID[$0.meetingID], userName: state.settings.userName) }
-
         VStack(alignment: .leading, spacing: 10) {
             sectionHeading("Your action items", count: mine.count)
             if mine.isEmpty {
-                quiet(open.isEmpty
+                quiet(!anyItems
                       ? "Action items from your meetings' notes collect here."
                       : "Nothing of yours is outstanding.")
             } else {

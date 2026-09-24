@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictator Meetings responds straight away when you click. Opening a meeting no longer loads its whole transcript and both audio recordings before the window can react — the audio opens when you first press play — and switching back to the window no longer re-reads every meeting before your click lands.
 - Writing notes with a cloud model can no longer sit on "Rewriting notes…" indefinitely. A request that couldn't reach the service used to wait silently for up to 20 minutes; it now fails straight away and is retried. While notes are being written you can see which model is writing them and for how long, and Cancel stops it.
 - Very long meetings get complete notes. The notes for each part of a long meeting were merged in one step, which could overflow a smaller model and cut the result short; they're now merged in stages when they don't fit, and the final merge has room to write notes for the whole meeting.
 - Cloud models that think before they answer — GLM, Claude and OpenAI's reasoning models among them — can write meeting notes. A reply was capped at 4,096 tokens, their thinking counts against that, and they could run out before writing a word. Cloud replies now get 16,000 tokens, one that still runs out is retried with twice the room, and a model chosen from the list uses the limits the service reports for it.

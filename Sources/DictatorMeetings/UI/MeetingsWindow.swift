@@ -151,7 +151,7 @@ struct MeetingsRootView: View {
         .onChange(of: controlActiveState) { _, newValue in
             let becameKey = (newValue == .key)
             state.meetingsWindowIsKey = becameKey
-            if becameKey { store.refresh() }
+            if becameKey { store.refreshInBackground() }
         }
         // Catches the case where the Meetings window is *already* open
         // when the user hits "Record meeting" in the menu bar — onAppear

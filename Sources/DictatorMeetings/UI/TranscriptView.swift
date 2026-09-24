@@ -368,7 +368,7 @@ struct TranscriptView: View {
         // for both. Player handles missing files defensively too.
         let micURL: URL? = meta.audioFiles.mic.map { _ in MeetingStorage.micURL(for: meta.id) }
         let sysURL: URL? = meta.audioFiles.system.map { _ in MeetingStorage.systemURL(for: meta.id) }
-        hasAudio = player.load(micURL: micURL, systemURL: sysURL)
+        hasAudio = player.load(micURL: micURL, systemURL: sysURL, expectedDuration: meta.durationSeconds)
         screenshots = (meta.screenshotCount ?? 0) > 0
             ? (MeetingStorage.readScreenshotIndex(for: meta.id)?.screenshots ?? [])
             : []
