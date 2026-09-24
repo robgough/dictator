@@ -9,6 +9,8 @@ struct RemoteModel: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let contextLength: Int?
+    /// The longest reply the service allows, when it says.
+    let maxCompletionTokens: Int?
     /// Dollars per million tokens, when the service says.
     let promptPrice: Double?
     let completionPrice: Double?
@@ -44,6 +46,7 @@ enum RemoteModelList {
                     id: entry.id,
                     name: entry.name ?? entry.id,
                     contextLength: entry.context_length,
+                    maxCompletionTokens: entry.top_provider?.max_completion_tokens,
                     promptPrice: entry.pricing?.prompt.flatMap(Double.init).map { $0 * 1_000_000 },
                     completionPrice: entry.pricing?.completion.flatMap(Double.init).map { $0 * 1_000_000 })
             }
@@ -57,6 +60,10 @@ enum RemoteModelList {
             let name: String?
             let context_length: Int?
             let pricing: Pricing?
+            let top_provider: TopProvider?
+        }
+        struct TopProvider: Decodable {
+            let max_completion_tokens: Int?
         }
         struct Pricing: Decodable {
             let prompt: String?
@@ -71,7 +78,7 @@ struct RemoteModelPicker: View {
     let baseURL: String?
     let apiKey: String?
     let selection: String
-    let onPick: (String) -> Void
+    let onPick: (RemoteModel) -> Void
 
     @State private var models: [RemoteModel] = []
     @State private var query = ""
@@ -92,7 +99,7 @@ struct RemoteModelPicker: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(filtered) { model in
-                        Button { onPick(model.id) } label: {
+                        Button { onPick(model) } label: {
                             HStack(alignment: .firstTextBaseline) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(model.name).fontWeight(model.id == selection ? .semibold : .regular)

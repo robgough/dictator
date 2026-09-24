@@ -432,6 +432,9 @@ private struct ProviderEditor: View {
     /// What the last key save did, shown under the field.
     @State private var keyOutcome: KeychainStore.SaveOutcome?
     @State private var showingModelPicker = false
+    /// Limits reported for the model picked from the list, and which model
+    /// they belong to — typing a different id drops them.
+    @State private var pickedLimits: (modelID: String, context: Int?, maxOutput: Int?)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -509,7 +512,8 @@ private struct ProviderEditor: View {
                                             apiKey: apiKey.isEmpty ? nil : apiKey,
                                             selection: modelID
                                         ) { picked in
-                                            modelID = picked
+                                            pickedLimits = (picked.id, picked.contextLength, picked.maxCompletionTokens)
+                                            modelID = picked.id
                                             showingModelPicker = false
                                         }
                                     }
@@ -591,6 +595,9 @@ private struct ProviderEditor: View {
         preset = config.preset ?? .custom
         baseURL = config.baseURL ?? ""
         modelID = config.modelID ?? (config.kind == .localMLX ? state.settings.localLLMModelID : "")
+        if let id = config.modelID {
+            pickedLimits = (id, config.knownContextTokens, config.knownMaxOutputTokens)
+        }
         if let account = config.keychainAccount {
             apiKey = KeychainStore.get(account: account) ?? ""
             // So reopening the sheet confirms the key really is there.
@@ -610,6 +617,9 @@ private struct ProviderEditor: View {
         }
         state.settings.providers[index].baseURL = baseURL.isEmpty ? nil : baseURL
         state.settings.providers[index].modelID = modelID.isEmpty ? nil : modelID
+        let limits = pickedLimits?.modelID == modelID ? pickedLimits : nil
+        state.settings.providers[index].knownContextTokens = limits?.context
+        state.settings.providers[index].knownMaxOutputTokens = limits?.maxOutput
         if config.kind == .localMLX, !modelID.isEmpty {
             // Keep the per-Mac fallback in step, so a provider entry that
             // arrives from another Mac with an unknown id still resolves.

@@ -106,10 +106,20 @@ extension MeetingLLM {
     /// meeting at the local MLX provider produces byte-identical requests to
     /// what the old in-Dictator path sent. The only differences are that
     /// meetings never carry prior turns or a compaction summary (each ask is
-    /// standalone), and the reply cap is `min(maxOutputTokens, 4096)` rather
-    /// than MLX's flat 8192 — a notes answer is a paragraph or a rewritten
-    /// section, and 4096 tokens keeps a mis-steered cloud model from billing
-    /// for an essay.
+    /// standalone), and the reply cap is `replyCap` rather than MLX's flat
+    /// 8192.
+    /// The most a notes pass lets one reply run to.
+    ///
+    /// 4096 for a local model: a notes answer is a paragraph or a rewritten
+    /// section, and a small model that runs on is looping. A cloud model gets
+    /// 16K, because the newer ones think before they answer and the thinking
+    /// counts against the same cap — at 4096, Claude Sonnet 5 via OpenRouter
+    /// spent the whole allowance thinking about a meeting and returned no
+    /// notes at all. Only what's generated is billed, so the headroom costs
+    /// nothing until it's used; the most a runaway reply can cost is 16K
+    /// output tokens.
+    var replyCap: Int { min(maxOutputTokens, isLocal ? 4_096 : 16_000) }
+
     func assist(selection: String?,
                 instruction: String,
                 systemPrompt: String,
@@ -118,7 +128,7 @@ extension MeetingLLM {
         let raw = try await complete(
             system: systemPrompt,
             user: user,
-            maxTokens: min(maxOutputTokens, 4096),
+            maxTokens: replyCap,
             temperature: 0.2,
             cancellation: cancellation
         )

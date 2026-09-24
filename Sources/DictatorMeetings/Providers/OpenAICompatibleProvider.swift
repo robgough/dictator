@@ -17,6 +17,7 @@ final class OpenAICompatibleProvider: MeetingLLM {
     private let preset: ProviderConfig.Preset
     private let baseURL: String?
     private let configuredModelID: String?
+    private let limits: CloudModelLimits
 
     /// Parameters this endpoint rejected, learned from its own 400s. See
     /// `adaptedBody`.
@@ -29,6 +30,7 @@ final class OpenAICompatibleProvider: MeetingLLM {
         self.preset = config.preset ?? .custom
         self.baseURL = config.resolvedBaseURL
         self.configuredModelID = config.modelID?.trimmingCharacters(in: .whitespaces)
+        self.limits = config.limits
     }
 
     var modelID: String {
@@ -36,7 +38,6 @@ final class OpenAICompatibleProvider: MeetingLLM {
         return configuredModelID
     }
 
-    private var limits: CloudModelLimits { CloudModelLimits.forModel(configuredModelID) }
     var contextWindowTokens: Int { limits.contextWindowTokens }
     var maxOutputTokens: Int { limits.maxOutputTokens }
 
@@ -66,8 +67,14 @@ final class OpenAICompatibleProvider: MeetingLLM {
         // (the newer OpenAI models) or a fixed-temperature reasoning model
         // answers 400 with the offending parameter named, and we retry once
         // having learned it. Everything else surfaces as-is.
-        for _ in 0..<3 {
-            let body = requestBody(system: system, user: user, maxTokens: maxTokens, temperature: temperature)
+        //
+        // A reply that ran out of room before writing anything — a model that
+        // thinks first and spent the whole cap doing it — is retried once with
+        // double the room, up to the model's own limit.
+        var cap = maxTokens
+        var retriedForRoom = false
+        for _ in 0..<4 {
+            let body = requestBody(system: system, user: user, maxTokens: cap, temperature: temperature)
             let request = try makeRequest(url: url, key: key, body: body)
             let response = try await CloudHTTP.sendWithRetry(
                 request,
@@ -75,7 +82,20 @@ final class OpenAICompatibleProvider: MeetingLLM {
                 cancellation: cancellation
             )
             if response.isSuccess {
-                return try parseCompletion(response.data)
+                do {
+                    return try parseCompletion(response.data)
+                } catch let ranOut as RanOutBeforeWriting {
+                    let bigger = min(cap * 2, maxOutputTokens)
+                    if !retriedForRoom, bigger > cap {
+                        NSLog("[DictatorMeetings] \(displayName): no reply within \(cap) tokens (\(ranOut.reasoningTokens) spent thinking); retrying with \(bigger)")
+                        retriedForRoom = true
+                        cap = bigger
+                        continue
+                    }
+                    throw MeetingLLMError.emptyResponse(ranOut.reasoningTokens > 0
+                        ? "\(displayName) (it spent its whole reply allowance thinking and never wrote the answer)"
+                        : "\(displayName) (hit the reply length cap before writing anything)")
+                }
             }
             if response.status == 400, adapt(to: response.errorMessage) { continue }
             throw httpError(response)
@@ -232,11 +252,18 @@ final class OpenAICompatibleProvider: MeetingLLM {
         let cleaned = LLMTextUtilities.clean(content)
         guard !cleaned.isEmpty else {
             if let reason = first["finish_reason"] as? String, reason == "length" {
-                throw MeetingLLMError.emptyResponse("\(displayName) (hit the reply length cap before writing anything)")
+                let details = (object["usage"] as? [String: Any])?["completion_tokens_details"] as? [String: Any]
+                throw RanOutBeforeWriting(reasoningTokens: (details?["reasoning_tokens"] as? Int) ?? 0)
             }
             throw MeetingLLMError.emptyResponse(displayName)
         }
         return cleaned
+    }
+
+    /// The reply stopped at the length cap with nothing written — caught by
+    /// `complete`, which retries once with more room.
+    private struct RanOutBeforeWriting: Error {
+        let reasoningTokens: Int
     }
 
     /// Model ids from a `/models` listing, or nil when the body isn't the

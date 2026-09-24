@@ -50,6 +50,21 @@ struct ProviderConfig: Codable, Equatable, Identifiable, Sendable {
     /// default (`MeetingsSettings.localLLMModelID` for local MLX,
     /// `AnthropicProvider.defaultModelID` for Anthropic).
     var modelID: String?
+    /// The model's real limits, as the service reported them when the model
+    /// was picked from its list — so a model the built-in table doesn't know
+    /// isn't stuck with the fallback guess. Cleared when the model id is
+    /// typed over, since they describe the model that was picked.
+    var knownContextTokens: Int?
+    var knownMaxOutputTokens: Int?
+
+    /// The limits to plan requests with: what the service reported, else
+    /// the built-in table.
+    var limits: CloudModelLimits {
+        let table = CloudModelLimits.forModel(modelID)
+        return CloudModelLimits(
+            contextWindowTokens: knownContextTokens ?? table.contextWindowTokens,
+            maxOutputTokens: knownMaxOutputTokens ?? table.maxOutputTokens)
+    }
 
     init(id: String,
          kind: Kind,
@@ -250,6 +265,9 @@ struct CloudModelLimits: Sendable, Equatable {
         // Google, via OpenRouter
         "gemini-3":   .init(contextWindowTokens: 1_048_576, maxOutputTokens: 65_536),
         "gemini-2.5": .init(contextWindowTokens: 1_048_576, maxOutputTokens: 65_536),
+        // Z.ai
+        "glm-5":      .init(contextWindowTokens: 1_000_000, maxOutputTokens: 131_072),
+        "glm-4":      .init(contextWindowTokens: 128_000, maxOutputTokens: 32_768),
         // Meta / Mistral / Qwen, via OpenRouter or a self-hosted server
         "llama-4":    .init(contextWindowTokens: 128_000, maxOutputTokens: 8_192),
         "mistral":    .init(contextWindowTokens: 128_000, maxOutputTokens: 8_192),

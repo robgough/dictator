@@ -53,7 +53,7 @@ enum MeetingSummaryService {
     /// hour of transcript every model we've tried starts dropping whole topics
     /// from a single pass, and the map-reduce reliably doesn't.
     static func singlePassInputBudgetTokens(for provider: any MeetingLLM) -> Int {
-        let reserve = min(provider.maxOutputTokens, 4_096) + 2_000
+        let reserve = provider.replyCap + 2_000
         let usable = provider.contextWindowTokens - reserve
         return min(max(usable, 1_500), 24_000)
     }

@@ -177,7 +177,7 @@ final class MeetingAssistantController {
         let pad = session.padText
         let history = messages
         let userName = MeetingsAppState.shared.settings.userName
-        let maxReply = min(provider.maxOutputTokens, 3000)
+        let maxReply = provider.isLocal ? min(provider.maxOutputTokens, 3_000) : provider.replyCap
         let budget = max(6_000, (provider.contextWindowTokens - maxReply) * 3 - 3_000)
         runTask = Task {
             let transcript = await Task.detached { MeetingStorage.readTranscript(for: meta.id) }.value
