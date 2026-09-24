@@ -120,15 +120,30 @@ extension MeetingLLM {
     /// output tokens.
     var replyCap: Int { min(maxOutputTokens, isLocal ? 4_096 : 16_000) }
 
+    /// The room the final merge of a long meeting gets. It writes the notes
+    /// for the whole meeting in one reply, so a local model gets everything
+    /// it can produce rather than the 4096 a single window needs — a
+    /// three-hour meeting's notes don't fit in 4096.
+    var mergeReplyCap: Int { isLocal ? maxOutputTokens : replyCap }
+
     func assist(selection: String?,
                 instruction: String,
                 systemPrompt: String,
+                cancellation: @Sendable @escaping () -> Bool) async throws -> AssistantResult {
+        try await assist(selection: selection, instruction: instruction, systemPrompt: systemPrompt,
+                         maxTokens: replyCap, cancellation: cancellation)
+    }
+
+    func assist(selection: String?,
+                instruction: String,
+                systemPrompt: String,
+                maxTokens: Int,
                 cancellation: @Sendable @escaping () -> Bool) async throws -> AssistantResult {
         let user = LLMTextUtilities.renderAssistantUserMessage(selection: selection, instruction: instruction)
         let raw = try await complete(
             system: systemPrompt,
             user: user,
-            maxTokens: replyCap,
+            maxTokens: maxTokens,
             temperature: 0.2,
             cancellation: cancellation
         )

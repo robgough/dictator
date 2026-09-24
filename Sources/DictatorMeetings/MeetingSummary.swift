@@ -273,12 +273,27 @@ enum MeetingSummaryService {
 
         try Task.checkCancellation()
 
+        // A long meeting on a small window makes many windows, and all their
+        // notes together can outgrow what the model can read in one go. Merge
+        // them a stretch at a time until they fit.
+        partials = try await condense(
+            partials, provider: provider, systemPrompt: systemPrompt,
+            budgetChars: chunkBudgetChars)
+
         // Reduce pass — feed the concatenated per-window notes back through
         // and ask for one merged Markdown document. The system prompt is
         // unchanged so the same section contract and attribution rules apply.
         var merged = partials.enumerated().map { idx, body in
             "WINDOW \(idx + 1) OF \(partials.count):\n\(body)"
         }.joined(separator: "\n\n---\n\n")
+
+        // The live outline is a checklist, not a source: when there's no room
+        // for it beside the windows' notes, the notes win.
+        var rawOutline = rawOutline
+        if let outline = rawOutline, merged.count + outline.count + (pad?.count ?? 0) > chunkBudgetChars {
+            NSLog("[Dictator] Notes: leaving the live-outline checklist out of the merge — no room beside \(partials.count) windows")
+            rawOutline = nil
+        }
 
         var instruction = "The selection contains per-window Markdown notes from a long meeting, in chronological order. Merge them into a SINGLE set of Markdown notes in the section shape the system prompt specifies — one `## Summary` covering the whole meeting first, then each of the other sections the system prompt specifies (including every type-specific section the system prompt defines for this meeting type) merged across the windows, owners preserved exactly. PRESERVE DETAIL: keep every distinct point from the windows; only collapse genuine duplicates. Do NOT shorten for brevity — a long meeting must yield thorough notes. Output ONLY the merged Markdown."
         if let rawOutline, !rawOutline.isEmpty {
@@ -297,9 +312,63 @@ enum MeetingSummaryService {
             selection: merged,
             instruction: instruction,
             systemPrompt: systemPrompt,
+            maxTokens: provider.mergeReplyCap,
             cancellation: { Task.isCancelled }
         )
         return finalResult.text
+    }
+
+    /// Merges consecutive windows' notes in groups until they all fit in one
+    /// read of `budgetChars`, so the final merge sees every window.
+    ///
+    /// Each group becomes the notes for one stretch of the meeting — every
+    /// point and owner kept, no whole-meeting summary yet (that's the final
+    /// merge's job, once it can see all of it). Stops if a round can't shrink
+    /// anything, which happens only when single windows are already too big
+    /// to pair, and leaves the final merge to do what it can.
+    private static func condense(
+        _ partials: [String],
+        provider: any MeetingLLM,
+        systemPrompt: String,
+        budgetChars: Int
+    ) async throws -> [String] {
+        var level = partials
+        var round = 0
+        while level.count > 1, level.reduce(0, { $0 + $1.count + 40 }) > budgetChars, round < 6 {
+            round += 1
+            var groups: [[String]] = []
+            var current: [String] = []
+            var size = 0
+            for part in level {
+                if !current.isEmpty, size + part.count > budgetChars {
+                    groups.append(current)
+                    current = []
+                    size = 0
+                }
+                current.append(part)
+                size += part.count + 40
+            }
+            if !current.isEmpty { groups.append(current) }
+            guard groups.count < level.count else { break }
+            NSLog("[Dictator] Notes: merging \(level.count) windows' notes in \(groups.count) stretches (round \(round))")
+
+            var next: [String] = []
+            for group in groups {
+                try Task.checkCancellation()
+                guard group.count > 1 else { next.append(group[0]); continue }
+                let joined = group.enumerated().map { "PART \($0.offset + 1) OF \(group.count):\n\($0.element)" }
+                    .joined(separator: "\n\n---\n\n")
+                let result = try await provider.assist(
+                    selection: joined,
+                    instruction: "The selection contains notes from consecutive parts of a long meeting, in order. Merge them into ONE set of notes for this stretch of the meeting, in the section shape the system prompt specifies. Keep every distinct point and every owner exactly as written; only collapse genuine duplicates. This is one stretch, not the whole meeting, so do not write an overall summary. Output ONLY the Markdown.",
+                    systemPrompt: systemPrompt,
+                    maxTokens: provider.mergeReplyCap,
+                    cancellation: { Task.isCancelled })
+                next.append(result.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            level = next
+        }
+        return level
     }
 
     // MARK: - Short-meeting detection

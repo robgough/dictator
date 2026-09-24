@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Very long meetings get complete notes. The notes for each part of a long meeting were merged in one step, which could overflow a smaller model and cut the result short; they're now merged in stages when they don't fit, and the final merge has room to write notes for the whole meeting.
 - Cloud models that think before they answer — GLM, Claude and OpenAI's reasoning models among them — can write meeting notes. A reply was capped at 4,096 tokens, their thinking counts against that, and they could run out before writing a word. Cloud replies now get 16,000 tokens, one that still runs out is retried with twice the room, and a model chosen from the list uses the limits the service reports for it.
 - The meeting assistant is now a conversation. Ask in the Ask panel beside the notes and follow up without repeating yourself; answers come from the notes, your pad and the transcript, with times you can click to jump to that moment. Ask it to change the notes and it shows the change for you to apply. The conversation is saved with the meeting, and ⌘⌥A still asks by voice.
 - API keys for cloud providers save again with "Sync keys with iCloud Keychain" switched on. That sync isn't available to this build, and every save was silently failing; keys are now kept in this Mac's Keychain, the setting says why it's unavailable, and the key field tells you it was saved.
