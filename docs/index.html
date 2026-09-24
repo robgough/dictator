@@ -511,6 +511,18 @@
             max-width: 620px;
             line-height: 1.5;
         }
+        /* Sits inside an h2, so it inherits the uppercase small caps and
+           only needs to read as a warning. */
+        .beta-tag {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            border: 1px solid color-mix(in oklab, #ff9f0a 55%, var(--border));
+            color: #ff9f0a;
+            font-size: 11px;
+            vertical-align: 1px;
+        }
         .lede + p {
             font-size: 15.5px;
             color: var(--fg-dim);
@@ -1170,6 +1182,8 @@
         <li><a href="#assistant">Assistant mode</a></li>
         <li><a href="#fits">Fits how you work</a></li>
         <li><a href="#scratchpad">Scratchpad</a></li>
+        <li><a href="#journal">Journal</a></li>
+        <li><a href="#chat">Chat</a></li>
         <li><a href="#models">Choose your models</a></li>
         <li><a href="#tradeoff">Local-first, honestly</a></li>
         <li><a href="#why">Why I built this</a></li>
@@ -1244,6 +1258,7 @@
             <li class="chip">Paragraphs, not a wall of text</li>
             <li class="chip">A style per app</li>
             <li class="chip">Edit text by talking to it</li>
+            <li class="chip">A journal on a hotkey</li>
             <li class="chip">Free &amp; open source</li>
         </ul>
 
@@ -1433,7 +1448,7 @@
             </div>
             <div class="feature">
                 <h3>Conversations, not one-shots</h3>
-                <p>Follow-ups extend the same thread, with automatic compaction when the model's context fills up. Recent conversations are one click away in the menu bar.</p>
+                <p>Follow-ups extend the same thread, with automatic compaction when the model's context fills up. Every conversation is kept in the chat window, where you can pick it back up.</p>
             </div>
         </div>
 
@@ -1511,6 +1526,36 @@
         </figure>
 
         <p style="margin-top: 22px;">There's one pad, kept as <code>scratchpad.md</code> alongside your other settings, so the note you started on the laptop is there on the desktop. Four widths (Small, Medium, Large, Extra large), and the shortcut, width and an on/off switch live in Settings → General.</p>
+    </section>
+
+    <section id="journal" class="platform-mac">
+        <h2>Journal</h2>
+        <p class="lede">Press ⌥J and say what's on your mind. It's tidied up like any other dictation and added to that day's Markdown file, not pasted into the app you're in.</p>
+        <p>The files are yours: one per day, in your Dictator folder, readable in Obsidian or anything else. The journal window shows them as a calendar, and you can edit entries there.</p>
+
+        <figure class="shot">
+            <div class="demo-frame">
+                <img src="media/mac/journal.png"
+                     alt="The Dictator Journal window: a calendar with dots on the days that have entries, and today's page showing three timestamped entries."
+                     width="1400" height="953" loading="lazy">
+            </div>
+            <figcaption>The journal window. Each dot is a day with entries; each entry is timestamped.</figcaption>
+        </figure>
+    </section>
+
+    <section id="chat" class="platform-mac">
+        <h2>Chat <span class="beta-tag">Beta</span></h2>
+        <p class="lede">Click Dictator in the Dock to chat with the model already on your Mac. It can read your journal and dictation history, search the web, run your Shortcuts and save files.</p>
+        <p><strong>Very much a beta.</strong> It's a small local model, and it will say untrue things with total confidence. Expect it to change a lot between releases.</p>
+
+        <figure class="shot">
+            <div class="demo-frame">
+                <img src="media/mac/chat.png"
+                     alt="The Dictator Chat window: the assistant reads the journal, saves a short Markdown note, and replies with a summary."
+                     width="1400" height="1042" loading="lazy">
+            </div>
+            <figcaption>Asked about the week's journal, it reads the entries and saves a note from them.</figcaption>
+        </figure>
     </section>
 
     <section class="platform-mac" aria-label="Dictator Meetings">
