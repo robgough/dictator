@@ -1524,6 +1524,17 @@ final class ChatEngine {
         be their own: check what you remember and search their journal before saying \
         you have not heard of it.
         """
+        if toolset.advertised.contains(where: { $0.name == "search_meetings" }) {
+            prompt += """
+
+
+            Their meetings are recorded, transcribed and written up. When they ask about \
+            a meeting, a call, what someone said, what was decided or who agreed to do \
+            what, search their meetings and read the notes before answering; read the \
+            transcript when the notes don't settle it, and say which meeting and roughly \
+            when an answer came from.
+            """
+        }
         if toolset.isDeferred {
             prompt += "\n\n" + toolset.indexBlock
         }

@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The chat assistant can search and read your meetings from Dictator Meetings. Ask what was decided on a call, what someone said, or who agreed to do what, and it finds the meeting, reads its notes, and goes to the transcript when the notes don't say.
 - The journal has a window of its own, in the menu under Chat. A calendar on the left shows which days you wrote something; clicking one opens that day as a page, with each entry's time in the margin. Record Entry at the foot of the calendar records exactly as the journal hotkey does, style and all — and the entry draws itself on the page while it's being transcribed and polished, so you can see it coming rather than wondering where it went. You can also type an entry, or drop photos into one, at the bottom of the page.
 - Settings → Journal has a Reset to default button next to the file template itself. There was one before, but it lived under "What gets written" and took your entry wording with it, so the button that fixed a mangled file path was in a section you'd have no reason to open. Each section now resets only its own fields, and the button greys out when you're already on the default.
 - New installs nest the journal by year and numeric month — Journal/2026/09/2026-09-21.md — rather than Journal/2026/09-September/. The filename already spells the date out, so the folder only has to sort. Existing journals are untouched and both shapes are read.

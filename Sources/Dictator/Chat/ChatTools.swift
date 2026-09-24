@@ -79,6 +79,56 @@ enum BuiltInChatTools {
                 ))
         }
 
+        if meetingsExist() {
+            tools.append(
+                tool(
+                    name: "search_meetings",
+                    displayName: "Search meetings",
+                    detail: "Finds meetings recorded with Dictator Meetings, by topic, person or date.",
+                    description: "Find the user's recorded meetings. With no query this lists the most recent meetings, newest first, each with who was there and a one-line summary. Give a query to search titles, notes and transcripts for particular words, `with` to find meetings with a person, and days_back to limit how far back to look (1 = today only). Each result has an id to pass to read_meeting.",
+                    parameters: [
+                        "query": [
+                            "type": "string",
+                            "description": "Words to search for. Leave this out to list recent meetings.",
+                        ] as [String: any Sendable],
+                        "with": [
+                            "type": "string",
+                            "description": "Only meetings this person was in (a first name is enough).",
+                        ] as [String: any Sendable],
+                        "days_back": [
+                            "type": "integer",
+                            "description": "Only meetings from the last N days. 1 means today.",
+                        ] as [String: any Sendable],
+                    ],
+                    required: [],
+                    safe: true
+                ))
+            tools.append(
+                tool(
+                    name: "read_meeting",
+                    displayName: "Read a meeting",
+                    detail: "Reads a meeting's notes or transcript.",
+                    description: "Read one meeting found with search_meetings. part \"notes\" (the default) gives the written notes: summary, decisions and action items with owners. part \"transcript\" gives who said what, with times, a page at a time; use from_minute to read further. Read the transcript when the notes don't answer the question, or to quote exactly.",
+                    parameters: [
+                        "id": [
+                            "type": "string",
+                            "description": "The meeting's id from search_meetings.",
+                        ] as [String: any Sendable],
+                        "part": [
+                            "type": "string",
+                            "enum": ["notes", "transcript", "all"],
+                            "description": "What to read. Defaults to notes.",
+                        ] as [String: any Sendable],
+                        "from_minute": [
+                            "type": "integer",
+                            "description": "For the transcript: start this many minutes in.",
+                        ] as [String: any Sendable],
+                    ],
+                    required: ["id"],
+                    safe: true
+                ))
+        }
+
         tools.append(
             tool(
                 name: "create_file",
@@ -481,6 +531,22 @@ enum BuiltInChatTools {
             ).read(
                 query: arguments["query"]?.stringValue ?? "", daysBack: daysBack)
 
+        case "search_meetings":
+            let daysBack: Int?
+            if case .int(let value)? = arguments["days_back"] { daysBack = value } else { daysBack = nil }
+            return meetingArchive().search(
+                query: arguments["query"]?.stringValue ?? "",
+                person: arguments["with"]?.stringValue,
+                daysBack: daysBack)
+
+        case "read_meeting":
+            let fromMinute: Int?
+            if case .int(let value)? = arguments["from_minute"] { fromMinute = value } else { fromMinute = nil }
+            return meetingArchive().read(
+                id: arguments["id"]?.stringValue ?? "",
+                part: arguments["part"]?.stringValue ?? "notes",
+                fromMinute: fromMinute)
+
         case "remember_fact":
             let fact = arguments["fact"]?.stringValue ?? ""
             guard !fact.isEmpty else { return "No fact was given, so nothing was stored." }
@@ -513,6 +579,22 @@ enum BuiltInChatTools {
         default:
             return "ERROR: \(name) isn't a tool Dictator provides."
         }
+    }
+
+    /// Where Dictator Meetings keeps its meetings: the synced folder both apps
+    /// share, then the per-Mac folder it uses when there isn't one.
+    static func meetingArchive() -> MeetingArchive {
+        MeetingArchive(roots: [
+            SyncedStorage.directory.appendingPathComponent("Meetings", isDirectory: true),
+            AppSupportPaths.dictator.appendingPathComponent("Meetings", isDirectory: true),
+        ])
+    }
+
+    /// The meeting tools are offered only to someone who has meetings. Like
+    /// the journal check, a directory test and nothing deeper: this runs
+    /// inside a SwiftUI body.
+    private static func meetingsExist() -> Bool {
+        meetingArchive().roots.contains { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// The journal's root folder. Lives on `JournalWriter` — it's derived from

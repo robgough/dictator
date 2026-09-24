@@ -6,6 +6,7 @@
 #
 #   ./scripts/mac-screenshots.sh                  # every shot
 #   ./scripts/mac-screenshots.sh today companion  # just these
+#   BUILD_ONLY=1 ./scripts/mac-screenshots.sh     # compile both apps, capture nothing
 #
 # Each capture opens a window on screen, so name the shots you need rather
 # than re-running the lot; an app with no shots named isn't even built.
@@ -113,6 +114,11 @@ build() {
 }
 if any_wanted "$DICTATOR_SHOTS"; then build Dictator; fi
 if any_wanted "$MEETINGS_SHOTS"; then build DictatorMeetings; fi
+if [ -n "${BUILD_ONLY:-}" ]; then
+  say "Build only — no captures"
+  ./gen >/dev/null
+  exit 0
+fi
 
 DICTATOR_APP="$DD/Build/Products/Debug/Dictator.app"
 MEETINGS_APP="$DD/Build/Products/Debug/Dictator Meetings.app"
