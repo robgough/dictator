@@ -168,6 +168,7 @@ enum MeetingSummaryService {
         let padText = MeetingStorage.readPad(for: meta.id).trimmingCharacters(in: .whitespacesAndNewlines)
         let pad: String? = padText.isEmpty ? nil : padText
 
+        CloudRequestLog.write("Notes for \(meta.id.uuidString.prefix(8)) with \(provider.displayName): ~\(approxTokens) tokens of transcript, \(approxTokens <= inputBudgetTokens ? "one pass" : "windows of \(inputBudgetTokens)"), type \(resolvedType.rawValue)")
         let raw: String
         if approxTokens <= inputBudgetTokens {
             raw = try await runSinglePass(

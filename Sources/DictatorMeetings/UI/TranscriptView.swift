@@ -915,13 +915,22 @@ private struct NotesPanel: View {
     @ViewBuilder
     private var content: some View {
         if case .summarising = session.state {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(hasFinalNotes ? "Rewriting notes…" : "Writing notes…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
+            // Which model, for how long, and a way out — a cloud model on a
+            // long meeting can take minutes, and a pass that never came back
+            // used to leave this line on screen with nothing to do about it.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(writingLine(now: context.date))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") { session.cancelNotes() }
+                        .controlSize(.small)
+                }
             }
+            .padding(12)
+            .notesSurface()
         } else if hasFinalNotes, let notes = meta.notes {
             VStack(alignment: .leading, spacing: 12) {
                 if session.notesJustWritten {
@@ -953,6 +962,16 @@ private struct NotesPanel: View {
                 }
             }
         }
+    }
+
+    private func writingLine(now: Date) -> String {
+        var line = hasFinalNotes ? "Rewriting the notes" : "Writing the notes"
+        if let name = ProviderRegistry.shared.provider(for: .final)?.displayName { line += " with \(name)" }
+        if let started = session.notesStartedAt {
+            let s = max(0, Int(now.timeIntervalSince(started)))
+            line += " · \(s / 60):" + String(format: "%02d", s % 60)
+        }
+        return line + "…"
     }
 
     /// The speaker step comes first while any name is still a guess (or a

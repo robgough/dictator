@@ -22,7 +22,13 @@ enum CloudHTTP {
         // after the headers arrive.
         config.timeoutIntervalForRequest = 600
         config.timeoutIntervalForResource = 1_200
-        config.waitsForConnectivity = true
+        // Not `waitsForConnectivity`: with it, a request started while macOS
+        // thought the network was unusable (switching interfaces, waking)
+        // waited silently for up to the 20-minute resource timeout, with no
+        // connection open and "Writing notes…" on screen the whole time. A
+        // request that can't connect now fails at once, and `sendWithRetry`
+        // tries it again a moment later.
+        config.waitsForConnectivity = false
         config.httpAdditionalHeaders = ["User-Agent": userAgent]
         // Transcripts are the user's private conversations: never let the URL
         // loading system write them (or the replies) into a disk cache.
@@ -88,8 +94,12 @@ enum CloudHTTP {
         var lastError: Error?
         while attempt <= maxAttempts {
             try MeetingLLMCancellation.check(cancellation)
+            let started = Date()
+            let size = request.httpBody?.count ?? 0
+            CloudRequestLog.write("\(providerName) → \(request.url?.path ?? "?") · \(size / 1024) KB · attempt \(attempt)")
             do {
                 let response = try await send(request, cancellation: cancellation)
+                CloudRequestLog.write("\(providerName) ← HTTP \(response.status) · \(response.data.count / 1024) KB · \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
                 if response.isSuccess { return response }
                 let retryable = response.status == 429 || (500...599).contains(response.status)
                 guard retryable, attempt < maxAttempts else { return response }
@@ -97,6 +107,7 @@ enum CloudHTTP {
                 NSLog("[DictatorMeetings] \(providerName) HTTP \(response.status) — retry \(attempt)/\(maxAttempts - 1) in \(wait)s")
                 try await sleep(seconds: wait, cancellation: cancellation)
             } catch let error as MeetingLLMError {
+                CloudRequestLog.write("\(providerName) ✕ \(error) · \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
                 // `.cancelled` is the user, never a flake — never retry it.
                 if case .cancelled = error { throw error }
                 lastError = error
@@ -212,5 +223,35 @@ private final class CancellableHTTPCall: @unchecked Sendable {
         let continuation = self.continuation
         self.continuation = nil
         continuation?.resume(with: result)
+    }
+}
+
+/// A running record of cloud requests: when each started, where it went, how
+/// big it was and how it ended — never what it said. Kept because a notes
+/// pass that stalled left nothing to go on: no request in flight, nothing in
+/// the provider's own log, and the unified log unreadable after the fact.
+/// `~/Library/Application Support/Dictator/meetings-cloud-requests.log`,
+/// trimmed to its last ~200 KB.
+enum CloudRequestLog {
+    private static let queue = DispatchQueue(label: "net.robgough.DictatorMeetings.cloud-log")
+    private static let url = AppSupportPaths.dictator.appendingPathComponent("meetings-cloud-requests.log")
+
+    static func write(_ line: String) {
+        let stamped = "\(Date().formatted(.iso8601)) \(line)\n"
+        queue.async {
+            let fm = FileManager.default
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data(stamped.utf8))
+                if let size = try? handle.offset(), size > 400_000,
+                   let data = try? Data(contentsOf: url) {
+                    try? Data(data.suffix(200_000)).write(to: url, options: .atomic)
+                }
+            } else {
+                try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? Data(stamped.utf8).write(to: url)
+            }
+        }
     }
 }

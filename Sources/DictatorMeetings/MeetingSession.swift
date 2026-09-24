@@ -128,6 +128,10 @@ final class MeetingSession: Identifiable {
     /// A moment something outside the transcript asked to jump to — a time
     /// in an assistant answer. The transcript view takes it and clears it.
     var pendingSeek: Double?
+    /// When the notes pass in progress started, for the elapsed time shown
+    /// while it runs.
+    private(set) var notesStartedAt: Date?
+    @ObservationIgnored private var notesWork: Task<MeetingNotes, Error>?
 
     /// Live coach signals (talk balance, monologue timer, pace…), present for
     /// the duration of a recording when the coach is enabled. Fed from the
@@ -1045,12 +1049,20 @@ final class MeetingSession: Identifiable {
         }
         notesError = nil
         state = .summarising
+        notesStartedAt = Date()
+        defer {
+            notesStartedAt = nil
+            notesWork = nil
+        }
+        // Held so Cancel can stop it: the cloud requests underneath honour
+        // Task cancellation and abort the upload.
+        let snapshot = meta
+        let work = Task {
+            try await MeetingSummaryService.generateNotes(transcript: transcript, meta: snapshot, settings: settings)
+        }
+        notesWork = work
         do {
-            let notes = try await MeetingSummaryService.generateNotes(
-                transcript: transcript,
-                meta: meta,
-                settings: settings
-            )
+            let notes = try await work.value
             meta.notes = notes
             try? MeetingStorage.writeMeta(meta)
             MeetingsStore.shared.upsert(meta)
@@ -1062,11 +1074,22 @@ final class MeetingSession: Identifiable {
             // Best-effort: a report failure never disturbs the notes.
             await generateCoachReport(settings: settings)
         } catch {
+            if work.isCancelled {
+                // The user pressed Cancel: nothing went wrong, so say nothing.
+                NSLog("[Dictator] Meeting notes cancelled for \(id)")
+                state = .ready
+                return
+            }
             NSLog("[Dictator] Meeting notes failed for \(id): \(error)")
             notesError = (error as? LocalizedError)?.errorDescription
                 ?? "Couldn't write the notes. Try again from the Notes tab."
             state = .ready
         }
+    }
+
+    /// Stop the notes pass in progress. The notes already there are kept.
+    func cancelNotes() {
+        notesWork?.cancel()
     }
 
     /// Generate (or regenerate) the private coach report. Rides every notes
