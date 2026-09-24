@@ -43,6 +43,9 @@ final class ChatInsertion {
     /// A name for the button, so it can say where the text is going rather than
     /// just "Insert". nil when there's nowhere to send it.
     var targetName: String? {
+        // A screenshot run would otherwise print whatever the person running
+        // it happened to have in front.
+        if ScreenshotMode.isActive { return "Notes" }
         guard let target, !target.isTerminated else { return nil }
         return target.localizedName
     }

@@ -61,7 +61,9 @@ enum ChatAvailability {
             let name = ModelCatalog.llm(id: id)?.displayName ?? id
             return .unavailable(.modelNotCapable(name))
         }
-        guard ModelManager.shared.llmStates[id] == .ready else {
+        // A screenshot run loads no models, and the window it's there to
+        // capture is the one a user with a downloaded model sees.
+        guard ModelManager.shared.llmStates[id] == .ready || ScreenshotMode.isActive else {
             return .unavailable(.modelNotDownloaded(model.displayName))
         }
         return .ready

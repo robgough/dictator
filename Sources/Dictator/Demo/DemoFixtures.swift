@@ -326,4 +326,59 @@ enum DemoFixtures {
 
     Follow up with Tom about the revised estimate.
     """
+
+    // MARK: - Journal
+
+    /// Where the journal fixtures live: relative, so it resolves under the
+    /// synced folder. The shipping default is `~/Documents/…`, which would
+    /// escape a screenshot run's throwaway data root and land in the real
+    /// journal.
+    static let journalPathTemplate = "Journal/{yyyy}/{MM}/{yyyy}-{MM}-{dd}.md"
+
+    /// A week and a bit of entries, `(days ago, hour, minute, text)`, oldest
+    /// first so they append in order. Today carries three so the page has a
+    /// shape; the rest exist to put dots on the calendar.
+    static let journalEntries: [(daysAgo: Int, hour: Int, minute: Int, text: String)] = [
+        (11, 21, 40, "First week with the new team structure. Tom seems relieved to have fewer meetings; Priya less so."),
+        (9, 7, 55, "Northwind want a pilot before they commit to the renewal. Fair. I'd want the same."),
+        (6, 22, 10, "Couldn't switch off tonight. Wrote the pilot plan three times in my head and none of them were better than the one on paper."),
+        (4, 13, 5, "Priya suggested moving the onboarding work into Q4 so the pilot gets our best people. She's right, and I should have seen it first."),
+        (2, 18, 30, "Lumenfield demo went well. Tom ran it, not me, and it was better for it."),
+        (1, 8, 20, "Short one. Northwind call moved to Thursday. More time to get the import dry-run finished."),
+        (0, 8, 14, "Slept badly again. The Northwind renewal is taking up more room in my head than it deserves. Talk to Priya before Thursday about what we can actually promise."),
+        (0, 12, 47, "Walked to the river at lunch instead of eating at my desk. Two ideas came out of it: a shorter Lumenfield trial, and letting Tom own the pilot outright. I keep saying I'll let go of things."),
+        (0, 18, 5, "Good day in the end. The dry-run works, and Priya has the deck. Remember this the next time I spend a whole night worrying about a call."),
+    ]
+
+    // MARK: - Chat
+
+    /// A chat that shows the two things the window is for: a tool reading the
+    /// user's own data, and a file made from it.
+    static let chatUserMessage = "What have I written about Northwind lately? Turn it into a short note I can take into Thursday's call."
+
+    static let chatJournalResult = """
+    4 entries mention Northwind:
+    - today 08:14: Slept badly again. The Northwind renewal is taking up more room…
+    - yesterday 08:20: Northwind call moved to Thursday…
+    - 6 days ago 22:10: Couldn't switch off tonight. Wrote the pilot plan three times…
+    - 9 days ago 07:55: Northwind want a pilot before they commit to the renewal…
+    """
+
+    static let chatNoteName = "northwind-thursday.md"
+
+    static let chatNote = """
+    # Northwind — Thursday
+
+    - They want a pilot before committing to the renewal
+    - Import dry-run now works; show it rather than describe it
+    - Tom owns the pilot; Priya has the roadmap deck
+    - Onboarding work moves to Q4 so the pilot gets the best people
+    - Don't promise an SSO date
+    """
+
+    static let chatReply = """
+    You've mentioned Northwind four times in the last ten days. The short version: they want a pilot before they'll renew, the call moved to Thursday, and since then the import dry-run has started working.
+
+    I've saved the note above as **northwind-thursday.md**. One thing it doesn't cover: you haven't written down what the pilot would cost them — worth deciding before the call.
+    """
 }

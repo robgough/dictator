@@ -50,6 +50,8 @@ enum ScreenshotRunner {
         case "hud-styles":      captureHUDStyles()
         case "assistant-draft": captureAssistantDraft()
         case "demo-history":    captureDemoHistory()
+        case "journal":         captureJournal()
+        case "chat":            captureChat()
         default:
             NSLog("[Screenshot] Unknown shot '\(ScreenshotMode.shot ?? "")' for Dictator")
             exit(64)
@@ -80,6 +82,79 @@ enum ScreenshotRunner {
         for record in DemoFixtures.historyRecords().reversed() {
             DictationHistory.shared.append(record)
         }
+    }
+
+    /// The journal fixtures, written through `JournalWriter` into this capture
+    /// process's throwaway synced folder so the window reads them the way it
+    /// reads a real journal.
+    private static func seedJournal() {
+        AppState.shared.settings.journalPathTemplate = DemoFixtures.journalPathTemplate
+        let settings = AppState.shared.settings
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        for entry in DemoFixtures.journalEntries {
+            guard let day = calendar.date(byAdding: .day, value: -entry.daysAgo, to: today),
+                  let date = calendar.date(
+                      bySettingHour: entry.hour, minute: entry.minute, second: 0, of: day)
+            else { continue }
+            do {
+                try JournalWriter.append(
+                    text: entry.text,
+                    pathTemplate: settings.journalPathTemplate,
+                    headerTemplate: settings.journalHeaderTemplate,
+                    entryTemplate: settings.journalEntryTemplate,
+                    appName: nil,
+                    date: date)
+            } catch {
+                fail("journal seed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// One chat: the journal read as a tool, a note saved from it, and the
+    /// reply. The note is written to disk for real, because the file card
+    /// re-reads it on every render.
+    private static func seedChat() -> UUID {
+        let modelID = "mlx-community/Qwen3.5-4B-4bit"
+        AppState.shared.settings.llmEngine = .mlx
+        AppState.shared.settings.llmModelID = modelID
+
+        let start = Date().addingTimeInterval(-90)
+        var thread = ChatThread(createdAt: start, modelID: modelID)
+        thread.append(ChatMessage(kind: .user, text: DemoFixtures.chatUserMessage, timestamp: start))
+
+        var search = ChatMessage(
+            kind: .tool, text: "Read the journal", timestamp: start.addingTimeInterval(4),
+            toolCall: ChatWireToolCall(
+                name: "search_journal",
+                arguments: .object(["query": .string("Northwind"), "days_back": .int(14)])))
+        search.toolResult = DemoFixtures.chatJournalResult
+        thread.append(search)
+
+        guard let folder = try? ChatFiles.folder(for: thread) else { fail("no chat folder") }
+        thread.filesFolderName = folder.folderName
+        try? FileManager.default.createDirectory(at: folder.url, withIntermediateDirectories: true)
+        let noteURL = folder.url.appendingPathComponent(DemoFixtures.chatNoteName)
+        let noteData = Data(DemoFixtures.chatNote.utf8)
+        do { try noteData.write(to: noteURL) } catch { fail("chat note: \(error.localizedDescription)") }
+
+        var save = ChatMessage(
+            kind: .tool, text: "Save a file", timestamp: start.addingTimeInterval(9),
+            toolCall: ChatWireToolCall(
+                name: "create_file",
+                arguments: .object([
+                    "name": .string(DemoFixtures.chatNoteName),
+                    "contents": .string(DemoFixtures.chatNote),
+                ])),
+            producedFile: ProducedFile(
+                name: DemoFixtures.chatNoteName, path: noteURL.path, byteCount: noteData.count))
+        save.toolResult = "Saved \(DemoFixtures.chatNoteName)."
+        thread.append(save)
+
+        thread.append(ChatMessage(
+            kind: .assistant, text: DemoFixtures.chatReply, timestamp: start.addingTimeInterval(14)))
+        ChatStore.shared.upsert(thread)
+        return thread.id
     }
 
     // MARK: - Shots
@@ -124,10 +199,47 @@ enum ScreenshotRunner {
         let controller = AssistantResultController()
         controller.showThread(id: id, surface: true)
         ScreenshotWindowCapture.settle(seconds: 1.0)
-        guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Assistant" }) else {
+        guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Dictator Assistant" }) else {
             fail("no assistant window")
         }
         ScreenshotWindowCapture.place(window, size: NSSize(width: 780, height: 430))
+        ScreenshotWindowCapture.settle(seconds: 1.0)
+        write(window)
+    }
+
+    private static func captureJournal() {
+        seedJournal()
+        JournalWindowController.shared.show()
+        // The journal loads its days in a `Task`, and main-actor tasks can't
+        // run while we're still inside the main-queue block `run()` scheduled —
+        // `settle()` spins the run loop, not the main queue. Return, and finish
+        // from a timer, whose callback leaves the main queue free to drain.
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
+            MainActor.assumeIsolated { finishJournal() }
+        }
+    }
+
+    private static func finishJournal() {
+        ScreenshotWindowCapture.settle(seconds: 1.0)
+        guard !JournalStore.shared.populatedKeys.isEmpty else { fail("journal loaded no days") }
+        guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Dictator Journal" }) else {
+            fail("no journal window")
+        }
+        ScreenshotWindowCapture.place(window, size: NSSize(width: 940, height: 640))
+        ScreenshotWindowCapture.settle(seconds: 1.0)
+        write(window)
+    }
+
+    private static func captureChat() {
+        let id = seedChat()
+        let controller = ChatWindowController.shared
+        controller.show()
+        controller.select(threadID: id)
+        ScreenshotWindowCapture.settle(seconds: 1.5)
+        guard let window = ScreenshotWindowCapture.window(where: { $0.title == "Dictator Chat" }) else {
+            fail("no chat window")
+        }
+        ScreenshotWindowCapture.place(window, size: NSSize(width: 940, height: 700))
         ScreenshotWindowCapture.settle(seconds: 1.0)
         write(window)
     }

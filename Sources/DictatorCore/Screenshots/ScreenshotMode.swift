@@ -13,7 +13,8 @@ import Foundation
 /// Contract (see `scripts/mac-screenshots.sh`):
 ///
 ///   - `DICTATOR_SCREENSHOT=<shot>` — which capture to perform.
-///     Dictator: `modes`, `assistant-draft`, `hud-styles`.
+///     Dictator: `modes`, `assistant-draft`, `hud-styles`, `journal`, `chat`,
+///     `demo-history`.
 ///     Dictator Meetings: `live-recording`, `notes`, `coach`.
 ///   - `DICTATOR_SCREENSHOT_OUT=<path.png>` — where to write the PNG.
 ///   - `DICTATOR_SCREENSHOT_DATA=<dir>` — a throwaway data root. EVERY

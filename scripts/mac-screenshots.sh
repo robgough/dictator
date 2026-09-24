@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Regenerate the Mac screenshots from the real apps — the six on
+# Regenerate the Mac screenshots from the real apps — the eight on
 # docs/index.html, plus `demo-history`, which isn't on the page but keeps the
 # Demo-mode fixtures visible.
 #
@@ -22,7 +22,8 @@
 #   4. down-samples the PNGs and copies them into docs/media/;
 #   5. restores the real project with ./gen.
 #
-# Safe to re-run. Requires .env (DICTATOR_TEAM_ID etc.) and Xcode-beta.
+# Safe to re-run. Requires .env (DICTATOR_TEAM_ID etc.) and Xcode (the beta if
+# it's installed, otherwise the release).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,7 +33,13 @@ WORK="${DICTATOR_SHOTS_WORK:-$REPO/.screenshots-work}"
 DD="$WORK/derived"
 RAW="$WORK/raw"
 SPEC="$WORK/project-noinstall.yml"
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+if [ -z "${DEVELOPER_DIR:-}" ]; then
+  if [ -d /Applications/Xcode-beta.app ]; then
+    DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer
+  else
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  fi
+fi
 export DEVELOPER_DIR
 
 mkdir -p "$WORK" "$RAW"
@@ -106,6 +113,8 @@ shoot() {
   local app="$1" binary="$2" shot="$3"
   local data="$WORK/data-$shot"
   rm -rf "$data"; mkdir -p "$data"
+  # Never let a previous run's PNG stand in for a capture that failed.
+  rm -f "$RAW/$shot.png"
   say "Capturing $shot"
   DICTATOR_SCREENSHOT="$shot" \
   DICTATOR_SCREENSHOT_OUT="$RAW/$shot.png" \
@@ -117,7 +126,7 @@ shoot() {
   fi
 }
 
-for shot in modes hud-styles assistant-draft demo-history; do
+for shot in modes hud-styles assistant-draft journal chat demo-history; do
   shoot "$DICTATOR_APP" "Dictator" "$shot"
 done
 for shot in live-recording notes coach; do
@@ -146,6 +155,8 @@ place() {
 place modes           docs/media/mac/modes.png
 place hud-styles      docs/media/mac/hud-styles.png
 place assistant-draft docs/media/mac/assistant-draft.png
+place journal         docs/media/mac/journal.png
+place chat            docs/media/mac/chat.png
 # Not referenced by docs/index.html — a look at the Demo-mode fixtures.
 place demo-history    docs/media/mac/demo-history.png
 place live-recording  docs/media/meetings/live-recording.png
