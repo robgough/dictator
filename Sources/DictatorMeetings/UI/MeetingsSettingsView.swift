@@ -212,11 +212,16 @@ private struct ProvidersTab: View {
 
             Section {
                 Toggle("Sync keys with iCloud Keychain", isOn: Binding(
-                    get: { s.settings.keychainSyncEnabled },
+                    get: { s.settings.keychainSyncEnabled && KeychainStore.iCloudSyncAvailable },
                     set: { setKeychainSync($0) }
                 ))
+                .disabled(!KeychainStore.iCloudSyncAvailable)
             } footer: {
-                SectionFootnote("Off by default. When on, API keys are stored as iCloud Keychain items so your other Macs pick them up; when off they stay on this Mac only.")
+                if KeychainStore.iCloudSyncAvailable {
+                    SectionFootnote("Off by default. When on, API keys are stored as iCloud Keychain items so your other Macs pick them up; when off they stay on this Mac only.")
+                } else {
+                    SectionFootnote("Not available in this build of Dictator Meetings, so API keys are kept in this Mac's Keychain. Enter them once on each Mac.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -424,6 +429,9 @@ private struct ProviderEditor: View {
     @State private var modelID: String = ""
     @State private var apiKey: String = ""
     @State private var loaded = false
+    /// What the last key save did, shown under the field.
+    @State private var keyOutcome: KeychainStore.SaveOutcome?
+    @State private var showingModelPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -490,8 +498,23 @@ private struct ProviderEditor: View {
                     }
                 } else if config.kind != .dictator && config.kind != .apple {
                     Section {
-                        TextField("Model id", text: $modelID, prompt: Text(modelPlaceholder))
-                            .onChange(of: modelID) { _, _ in commit() }
+                        HStack {
+                            TextField("Model id", text: $modelID, prompt: Text(modelPlaceholder))
+                                .onChange(of: modelID) { _, _ in commit() }
+                            if config.kind == .openAICompatible {
+                                Button("Choose…") { showingModelPicker = true }
+                                    .popover(isPresented: $showingModelPicker, arrowEdge: .trailing) {
+                                        RemoteModelPicker(
+                                            baseURL: effectiveBaseURL,
+                                            apiKey: apiKey.isEmpty ? nil : apiKey,
+                                            selection: modelID
+                                        ) { picked in
+                                            modelID = picked
+                                            showingModelPicker = false
+                                        }
+                                    }
+                            }
+                        }
                     } footer: {
                         SectionFootnote("Exactly as the service names it — a wrong id is the most common cause of a failed test.")
                     }
@@ -502,10 +525,12 @@ private struct ProviderEditor: View {
                         SecureField("API key", text: $apiKey)
                             .onChange(of: apiKey) { _, newValue in
                                 guard loaded, let account = config.keychainAccount else { return }
-                                KeychainStore.set(newValue,
-                                                  account: account,
-                                                  synchronizable: state.settings.keychainSyncEnabled)
+                                keyOutcome = KeychainStore.save(
+                                    newValue,
+                                    account: account,
+                                    synchronizable: state.settings.keychainSyncEnabled && KeychainStore.iCloudSyncAvailable)
                             }
+                        if let keyOutcome { keyStatus(keyOutcome) }
                     } header: {
                         Text("Authentication")
                     } footer: {
@@ -527,6 +552,32 @@ private struct ProviderEditor: View {
         .onAppear(perform: load)
     }
 
+    /// The server the model list comes from: the typed URL, else the
+    /// preset's.
+    private var effectiveBaseURL: String? {
+        let typed = baseURL.trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty { return typed.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        return preset.defaultBaseURL
+    }
+
+    @ViewBuilder
+    private func keyStatus(_ outcome: KeychainStore.SaveOutcome) -> some View {
+        switch outcome {
+        case .saved(let synced):
+            Label(synced ? "Saved to iCloud Keychain" : "Saved to this Mac's Keychain", systemImage: "checkmark.circle.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .savedLocallyInstead:
+            Label("Saved to this Mac's Keychain — iCloud Keychain isn't available to this build", systemImage: "checkmark.circle.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .cleared:
+            Label("No key saved", systemImage: "circle.dashed")
+                .font(.callout).foregroundStyle(.secondary)
+        case .failed(let status):
+            Label("Couldn't save the key to your Keychain (error \(status))", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(.orange)
+        }
+    }
+
     private var modelPlaceholder: String {
         switch config.kind {
         case .anthropic:        return AnthropicProvider.defaultModelID
@@ -542,6 +593,8 @@ private struct ProviderEditor: View {
         modelID = config.modelID ?? (config.kind == .localMLX ? state.settings.localLLMModelID : "")
         if let account = config.keychainAccount {
             apiKey = KeychainStore.get(account: account) ?? ""
+            // So reopening the sheet confirms the key really is there.
+            if !apiKey.isEmpty { keyOutcome = .saved(synced: false) }
         }
         // Only after the fields are populated, so the initial assignment
         // doesn't count as an edit and re-write the Keychain.

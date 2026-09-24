@@ -58,6 +58,17 @@ enum KeychainStore {
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
+    /// What a save actually did — shown under the key field, because a key
+    /// that silently didn't save looks exactly like one that did until the
+    /// first meeting fails.
+    enum SaveOutcome: Equatable {
+        case saved(synced: Bool)
+        /// Asked to sync, but iCloud Keychain refused, so it's on this Mac.
+        case savedLocallyInstead
+        case cleared
+        case failed(OSStatus)
+    }
+
     /// Writes (or clears) a provider's key.
     ///
     /// Delete-then-add rather than `SecItemUpdate`: `kSecAttrSynchronizable`
@@ -65,15 +76,33 @@ enum KeychainStore {
     /// recreate the item, and a single code path for both cases is one fewer
     /// thing to get wrong. An empty or whitespace-only value deletes.
     ///
-    /// Returns false when the write failed — the caller surfaces that rather
-    /// than silently leaving the provider keyless.
+    /// A synchronizable item lives in the data-protection keychain, which
+    /// needs a keychain-access-groups entitlement this app doesn't carry
+    /// (Developer ID, not sandboxed, no provisioning profile), so that write
+    /// fails with `errSecMissingEntitlement`. It used to fail silently —
+    /// with sync on, no key was ever saved — so now it falls back to a key
+    /// on this Mac and says so.
     @discardableResult
-    static func set(_ value: String?, account: String, synchronizable: Bool) -> Bool {
-        if ScreenshotMode.isActive { return false }
+    static func save(_ value: String?, account: String, synchronizable: Bool) -> SaveOutcome {
+        if ScreenshotMode.isActive { return .failed(errSecNotAvailable) }
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         delete(account: account)
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return true }
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return .cleared }
 
+        if synchronizable {
+            let status = add(data, account: account, synchronizable: true)
+            if status == errSecSuccess { return .saved(synced: true) }
+            NSLog("[DictatorMeetings] iCloud Keychain write refused for \(account): OSStatus \(status); saving on this Mac instead")
+        }
+        let status = add(data, account: account, synchronizable: false)
+        if status != errSecSuccess {
+            NSLog("[DictatorMeetings] Keychain write failed for \(account): OSStatus \(status)")
+            return .failed(status)
+        }
+        return synchronizable ? .savedLocallyInstead : .saved(synced: false)
+    }
+
+    private static func add(_ data: Data, account: String, synchronizable: Bool) -> OSStatus {
         var attributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -82,20 +111,25 @@ enum KeychainStore {
             kSecAttrLabel as String: "Dictator Meetings API key",
             kSecAttrDescription as String: "API key for a Dictator Meetings note-writing provider",
         ]
-        attributes[kSecAttrSynchronizable as String] = synchronizable ? kCFBooleanTrue! : kCFBooleanFalse!
-        if !synchronizable {
-            // Only meaningful on a local item; a synchronizable item's
-            // accessibility is fixed by iCloud Keychain.
+        if synchronizable {
+            attributes[kSecAttrSynchronizable as String] = kCFBooleanTrue!
+        } else {
+            attributes[kSecAttrSynchronizable as String] = kCFBooleanFalse!
             attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         }
-
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        if status != errSecSuccess {
-            NSLog("[DictatorMeetings] Keychain write failed for \(account): OSStatus \(status)")
-            return false
-        }
-        return true
+        return SecItemAdd(attributes as CFDictionary, nil)
     }
+
+    /// Whether this build can write iCloud Keychain items at all — probed
+    /// once with a throwaway item. The settings toggle is only honest when
+    /// this is true.
+    static let iCloudSyncAvailable: Bool = {
+        if ScreenshotMode.isActive { return false }
+        let account = "__sync-probe__"
+        let status = add(Data("probe".utf8), account: account, synchronizable: true)
+        delete(account: account)
+        return status == errSecSuccess
+    }()
 
     /// Removes a provider's key, both the local and the synchronizable item.
     static func delete(account: String) {
@@ -119,7 +153,7 @@ enum KeychainStore {
     static func migrateSynchronizable(accounts: [String], to synchronizable: Bool) {
         for account in accounts {
             guard let existing = get(account: account) else { continue }
-            _ = set(existing, account: account, synchronizable: synchronizable)
+            save(existing, account: account, synchronizable: synchronizable)
         }
     }
 }
