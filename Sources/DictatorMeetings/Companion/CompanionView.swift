@@ -9,6 +9,9 @@ struct CompanionView: View {
 
     @Environment(MeetingsAppState.self) private var state
     @Bindable var session: MeetingSession
+    /// Reports the content's height so the controller can size the panel —
+    /// see `CompanionController` for why it isn't done by the hosting view.
+    var onHeightChange: (CGFloat) -> Void = { _ in }
     @State private var jot = ""
     @FocusState private var jotFocused: Bool
 
@@ -58,6 +61,11 @@ struct CompanionView: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeightChange($0) }
+        // The panel may briefly be taller than the content while it catches
+        // up; keep the content at the top rather than centred in it.
+        .frame(maxHeight: .infinity, alignment: .top)
         // The panel is never the key window — it mustn't take focus from the
         // call — so AppKit would draw every control as inactive: a grey Stop,
         // a dimmed record dot. It's always the thing being used, so draw it so.

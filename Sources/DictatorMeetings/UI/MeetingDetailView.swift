@@ -800,7 +800,11 @@ struct SourceMeter: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(waitingHint != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
-                    .fixedSize()
+                    // Truncates rather than insisting on its width: it changes
+                    // mid-call ("No call audio yet"), and a label that grows
+                    // the strip's minimum can make the window resize itself
+                    // from inside layout.
+                    .truncationMode(.tail)
             }
             Waveform(
                 level: level,

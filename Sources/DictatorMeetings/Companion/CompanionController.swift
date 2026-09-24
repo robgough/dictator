@@ -10,6 +10,16 @@ import SwiftUI
 /// protect — so it's simply ordered in and out. It becomes key only when a
 /// control inside it needs to be (`becomesKeyOnlyIfNeeded`), so clicking it
 /// never takes focus away from the call.
+///
+/// Its height follows its content — notes and key points come and go during
+/// a call — but NOT through the hosting controller's `preferredContentSize`.
+/// That drove the window frame from inside layout: the resize invalidated the
+/// (hidden) title bar's safe area, which asked for another layout pass, until
+/// AppKit ran out of passes and threw. It crashed twice within minutes of a
+/// recording starting. Now the panel is borderless (no title bar to have a
+/// safe area), its hosting view never sizes the window, and the content
+/// reports its height, which the controller applies on the next turn of the
+/// run loop — outside layout, keeping the top edge where the user put it.
 @MainActor
 final class CompanionController {
     private let state: MeetingsAppState
@@ -64,9 +74,14 @@ final class CompanionController {
         // itself to it. A panel the user has never moved starts at the
         // top-right of the screen they're on.
         if shownSessionID != session.id {
-            let host = NSHostingController(rootView: CompanionView(session: session).environment(state))
-            host.sizingOptions = [.preferredContentSize]
-            panel.contentViewController = host
+            let view = CompanionView(session: session) { [weak self] height in
+                self?.contentHeightChanged(height)
+            }
+            let host = NSHostingView(rootView: AnyView(view.environment(state)))
+            host.sizingOptions = []
+            host.autoresizingMask = [.width, .height]
+            host.frame = NSRect(origin: .zero, size: panel.frame.size)
+            panel.contentView = host
             shownSessionID = session.id
         }
         if !panel.isVisible {
@@ -90,19 +105,28 @@ final class CompanionController {
         })
     }
 
+    /// Resize to the content's height, after the layout pass that measured it
+    /// — never during one — pinning the top edge.
+    private func contentHeightChanged(_ height: CGFloat) {
+        DispatchQueue.main.async { [weak self] in
+            guard let panel = self?.panel else { return }
+            let target = ceil(height)
+            guard target > 0, abs(panel.frame.height - target) > 1 else { return }
+            var frame = panel.frame
+            frame.origin.y += frame.height - target
+            frame.size.height = target
+            panel.setFrame(frame, display: true)
+        }
+    }
+
     private static let frameName = "DictatorMeetingsCompanion"
 
     private func makePanel() -> CompanionPanel {
         let panel = CompanionPanel(
             contentRect: NSRect(x: 0, y: 0, width: CompanionView.width, height: 480),
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false)
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            panel.standardWindowButton(button)?.isHidden = true
-        }
         panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
