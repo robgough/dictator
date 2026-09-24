@@ -135,9 +135,14 @@ enum JournalWriter {
         let fixed = pathTemplate.split(separator: "{", maxSplits: 1,
                                        omittingEmptySubsequences: false).first.map(String.init)
             ?? pathTemplate
+        // Ask whether the fixed part ends in a folder *before* expanding it:
+        // `expandingTildeInPath` strips a trailing slash, so asking afterwards
+        // trimmed one folder too many — the default template's root became
+        // the whole Dictator folder, and a relative one's became nothing.
+        let endsInFolder = fixed.hasSuffix("/")
         var path = (fixed as NSString).expandingTildeInPath
         // Trim back to a directory: the fixed part may end mid-filename.
-        if !path.hasSuffix("/") {
+        if !endsInFolder {
             path = (path as NSString).deletingLastPathComponent
         }
         guard !path.isEmpty else { return nil }
