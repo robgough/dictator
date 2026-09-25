@@ -13,6 +13,7 @@ struct MeetingsPane: View {
     @State private var showSummaryPromptSheet = false
     @State private var showingSetsEditor = false
     @State private var showingPeopleEditor = false
+    @State private var showingCalendarPicker = false
     @State private var typeEditor: MeetingTypeEditorMode?
 
     var body: some View {
@@ -87,6 +88,14 @@ struct MeetingsPane: View {
                     set: { s.settings.meetingCalendarMatchingEnabled = $0; state.save() }
                 ))
                 .help("Asks for calendar access the first time, then gives each recording its real title, attendees, and scheduled length (which powers the coach's wrapping-up reminder). Calendar data never leaves your Mac.")
+                Button {
+                    showingCalendarPicker = true
+                } label: {
+                    Label("Choose calendars…", systemImage: "calendar")
+                }
+                .disabled(!s.settings.meetingCalendarMatchingEnabled)
+                .padding(.leading, 18)
+                .help("Switch off calendars you don't want read — a shared family calendar, holidays, someone else's. They're left out of Today and never used to name a recording.")
                 Toggle("Recognise people across meetings", isOn: Binding(
                     get: { s.settings.peopleRecognitionEnabled },
                     set: { s.settings.peopleRecognitionEnabled = $0; state.save() }
@@ -158,6 +167,9 @@ struct MeetingsPane: View {
         }
         .sheet(isPresented: $showingPeopleEditor) {
             PeopleEditor()
+        }
+        .sheet(isPresented: $showingCalendarPicker) {
+            CalendarPickerSheet()
         }
         .sheet(isPresented: $showSummaryPromptSheet) {
             SummaryPromptSheet(isPresented: $showSummaryPromptSheet)

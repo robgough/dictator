@@ -26,10 +26,13 @@ enum MeetingCalendarMatcher {
             return nil
         }
 
+        guard let calendars = MeetingCalendars.included(in: store, settings: MeetingsAppState.shared.settings) else {
+            return nil
+        }
         let predicate = store.predicateForEvents(
             withStart: recordingStart.addingTimeInterval(-windowSeconds),
             end: recordingStart.addingTimeInterval(windowSeconds),
-            calendars: nil
+            calendars: calendars
         )
         let candidates = store.events(matching: predicate).filter { event in
             guard !event.isAllDay else { return false }

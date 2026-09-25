@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- You can choose which calendars Dictator Meetings reads. Settings → Meetings → Choose calendars lists each of your calendars by name; switch off any you don't want, and it's left out of Today's up next and never used to name a recording.
 - Connect Calendar on the Today screen now works. The app was missing the permission it needs to ask for calendar access, so clicking it did nothing; it now shows the macOS prompt, and if access is off it offers a button straight to the right place in System Settings.
 - The companion panel always opens where you can see it. It could reappear partly off the top of a screen, out of reach, after the displays changed or it grew; it's now kept inside the screen it's on, and comes back if a display is unplugged mid-call.
 - Dictator Meetings no longer crashes a few minutes into a recording. The companion panel resized itself in a way that could send the window's layout round in circles until the app gave up; it now resizes calmly as its contents change.

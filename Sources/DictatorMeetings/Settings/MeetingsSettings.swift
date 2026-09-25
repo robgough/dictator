@@ -130,6 +130,13 @@ struct MeetingsSettings: Codable, Equatable {
     /// Default ON; synced.
     var meetingCalendarMatchingEnabled: Bool = true
 
+    /// Calendars (by `EKCalendar.calendarIdentifier`) the app never reads —
+    /// neither for Today's "up next" nor for naming recordings. An exclusion
+    /// list rather than an inclusion one, so a newly added calendar shows up
+    /// without a visit to Settings. Per-Mac: calendar identifiers aren't
+    /// stable across Macs, even for the same iCloud calendar.
+    var meetingExcludedCalendarIDs: [String] = []
+
     /// Capture keyframes of shared screen content during meetings
     /// (window-scoped, kept as HEICs in the meeting's local folder). OFF by
     /// default — it needs the Screen Recording permission, the heaviest grant
@@ -268,6 +275,7 @@ struct MeetingsSettings: Codable, Equatable {
         case meetingCompanionEnabled
         case peopleRecognitionEnabled
         case meetingCalendarMatchingEnabled
+        case meetingExcludedCalendarIDs
         case meetingCaptureScreenshots
         case meetingCoachPromptAddendum
         case meetingCoachPromptOverride
@@ -309,6 +317,7 @@ struct MeetingsSettings: Codable, Equatable {
         self.meetingCompanionEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCompanionEnabled) ?? d.meetingCompanionEnabled
         self.peopleRecognitionEnabled = try c.decodeIfPresent(Bool.self, forKey: .peopleRecognitionEnabled) ?? d.peopleRecognitionEnabled
         self.meetingCalendarMatchingEnabled = try c.decodeIfPresent(Bool.self, forKey: .meetingCalendarMatchingEnabled) ?? d.meetingCalendarMatchingEnabled
+        self.meetingExcludedCalendarIDs = try c.decodeIfPresent([String].self, forKey: .meetingExcludedCalendarIDs) ?? d.meetingExcludedCalendarIDs
         self.meetingCaptureScreenshots = try c.decodeIfPresent(Bool.self, forKey: .meetingCaptureScreenshots) ?? d.meetingCaptureScreenshots
         self.meetingCoachPromptAddendum = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptAddendum) ?? d.meetingCoachPromptAddendum
         self.meetingCoachPromptOverride = try c.decodeIfPresent(String.self, forKey: .meetingCoachPromptOverride) ?? d.meetingCoachPromptOverride
@@ -378,6 +387,7 @@ struct MeetingsSettings: Codable, Equatable {
         "meetingAudioRetentionDays",
         "meetingDedupeMicEchoes",
         "localLLMModelID",
+        "meetingExcludedCalendarIDs",
     ]
 
     /// Whether the named field belongs in the synced file. Used by the

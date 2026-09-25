@@ -35,7 +35,9 @@ final class UpcomingMeetings {
     private(set) var armedEventID: String?
     @ObservationIgnored private var armTimer: Timer?
     @ObservationIgnored private var changeObserver: (any NSObjectProtocol)?
-    @ObservationIgnored private let store = EKEventStore()
+    /// Also what the calendar picker lists from, so it sees the same
+    /// calendars this reads.
+    @ObservationIgnored let store = EKEventStore()
     /// Set by a screenshot run, which has no calendar to read.
     @ObservationIgnored private var usingFixture = false
 
@@ -66,7 +68,12 @@ final class UpcomingMeetings {
         observeChanges(settings: settings)
         let now = Date()
         let horizon = Calendar.current.date(byAdding: .hour, value: 12, to: now) ?? now
-        let predicate = store.predicateForEvents(withStart: now.addingTimeInterval(-3600), end: horizon, calendars: nil)
+        guard let calendars = MeetingCalendars.included(in: store, settings: settings) else {
+            events = []
+            disarm()
+            return
+        }
+        let predicate = store.predicateForEvents(withStart: now.addingTimeInterval(-3600), end: horizon, calendars: calendars)
         events = store.events(matching: predicate)
             .filter { !$0.isAllDay && ($0.endDate ?? now) > now && $0.status != .canceled }
             .sorted { ($0.startDate ?? now) < ($1.startDate ?? now) }
