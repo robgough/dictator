@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Transcription picks up the latest fixes to the Parakeet speech engine, including words that could be dropped or doubled where a long recording is stitched together from shorter pieces.
 - "Double" and "triple" now work in a number read out loud: "my number is double seven three four" becomes 7734. On its own, "press double seven" is left exactly as said — it only expands inside something long enough to be a number.
 - Numbers said the short way are no longer half-converted. "Three sixty one" was coming out as "three 61", which is wrong however you read it. The whole phrase is now left for the language model, which can tell a price from a quantity from a time.
 - Numbers read out digit by digit are now judged from the sentence rather than by counting words. "The code is six nine six zero" becomes 6960 and "call me on oh seven nine one two" becomes 07912, while "four five seconds" and "two three days" stay as you said them. In Quick mode, which runs no language model, only unmistakable runs of four or more are joined.

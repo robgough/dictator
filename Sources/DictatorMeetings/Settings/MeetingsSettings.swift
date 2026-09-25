@@ -42,6 +42,18 @@ struct MeetingsSettings: Codable, Equatable {
 
     var parakeetModelID: String = ModelCatalog.defaultParakeet.id
 
+    /// Which speaker diarizer the post-pass runs — a
+    /// `ModelCatalog.diarizationModels` id. Per-Mac, like the other model
+    /// picks: it names weights that have to be on this machine's disk.
+    var diarizationModelID: String = ModelCatalog.defaultDiarization.id
+
+    /// `diarizationModelID`, falling back to pyannote when the pick isn't a
+    /// catalogue id this build knows (a hand-edited file, or a newer build's
+    /// engine synced back to an older one).
+    var effectiveDiarizationModelID: String {
+        ModelCatalog.diarization(id: diarizationModelID)?.id ?? ModelCatalog.defaultDiarization.id
+    }
+
     /// Flips to true the first time the user finishes (or explicitly skips)
     /// the first-run wizard. When false on launch, `AppState.bootstrap()`
     /// shows the wizard window before the user sees the menu bar — the
@@ -262,6 +274,7 @@ struct MeetingsSettings: Codable, Equatable {
         case userName
         case globalPromptAddendum
         case parakeetModelID
+        case diarizationModelID
         case hasCompletedOnboarding
         case syncedDirectoryPath
         case showMenuBarStatus
@@ -304,6 +317,7 @@ struct MeetingsSettings: Codable, Equatable {
         self.userName = try c.decodeIfPresent(String.self, forKey: .userName) ?? d.userName
         self.globalPromptAddendum = try c.decodeIfPresent(String.self, forKey: .globalPromptAddendum) ?? d.globalPromptAddendum
         self.parakeetModelID = try c.decodeIfPresent(String.self, forKey: .parakeetModelID) ?? d.parakeetModelID
+        self.diarizationModelID = try c.decodeIfPresent(String.self, forKey: .diarizationModelID) ?? d.diarizationModelID
         self.hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? d.hasCompletedOnboarding
         self.syncedDirectoryPath = try c.decodeIfPresent(String.self, forKey: .syncedDirectoryPath) ?? d.syncedDirectoryPath
         self.showMenuBarStatus = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarStatus) ?? d.showMenuBarStatus
@@ -380,6 +394,7 @@ struct MeetingsSettings: Codable, Equatable {
     /// file, so storing it in the synced file would be self-defeating.
     private static let localKeys: Set<String> = [
         "parakeetModelID",
+        "diarizationModelID",
         "hasCompletedOnboarding",
         "syncedDirectoryPath",
         "showMenuBarStatus",

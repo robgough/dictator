@@ -348,7 +348,7 @@ The historical swift-transformers diamond (WhisperKit 0.18 capped it `<1.2`, new
 - **`mlx-swift-lm` 3.x** replaced `mlx-swift-examples`. 3.x is decoupled from swift-transformers: model loading takes `Downloader`/`TokenizerLoader` protocols. We deliberately *don't* use its `MLXHuggingFace` macro glue — `LLM/HubBridge.swift` hand-implements both protocols against the legacy `HubApi(downloadBase:)` so LLM weights keep the on-disk layout `<llmRoot>/models/<org>/<name>/` that ModelManager's download/resume/delete logic (and every existing install) depends on. The macro path would switch to HubClient's `models--org--name/snapshots/` cache layout — don't "simplify" to it without a disk-migration story.
 - **swift-transformers** is now a direct dependency (Hub + Tokenizers products) feeding those bridges.
 
-FluidAudio (`from: 0.14.5`) shares no transitive deps with the MLX/WhisperKit side, so it's free to move.
+FluidAudio (`exactVersion: 0.17.4` — the floor for Nemotron 3 Diarization and Parakeet Ultra) shares no transitive deps with the MLX/WhisperKit side, so it's free to move.
 
 ## Persistence
 
@@ -387,6 +387,7 @@ Several files moved from Application Support to the synced folder and are migrat
   turn field by field, plus the compaction split and the tool-messages-skipped
   case. Run it before touching how a turn unfolds into messages: the failure
   mode there is silent data loss, not a crash.
+- `nemotron-eval/` — pyannote vs Nemotron 3 diarization on the labelled clips in `diar-eval/` (speaker counts, bleed overlap, fingerprint similarity, hour-scale speed/memory) plus Parakeet v3 vs Ultra. Where `DiarizerService`'s Nemotron preset, compute units and voiceprint rule came from. `diarizer-service-check/` symlinks the shipping `DiarizerService.swift` and runs its download, load and both engines against those clips.
 - `mcp-client-check/` — symlinks the app's real MCP sources and runs them against a deliberately awkward Python server (non-JSON banner, pagination, a server→client request, an `isError` tool, a tool that never replies). Run it a few times: the two transport bugs it caught were both intermittent.
 - `gemma4-qat-spike/` — the historical 3.31.3 + vendored-architecture reproduction, kept for context only; the vendored `Gemma4/` sources it mirrors were deleted when 3.31.4 landed native support.
 

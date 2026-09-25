@@ -14,6 +14,9 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- You can now choose NVIDIA's Nemotron 3 Diarization for telling speakers apart, in Settings → Models → Speaker separation. It is more accurate than the built-in engine, especially with several people on a call or people talking over each other, and tells apart up to eight voices on each side of the call. It is a 220 MB download. People Dictator Meetings already recognises by voice are still recognised after you switch.
+- Parakeet Ultra is available as a transcription model: a more accurate retrain of Parakeet v3 with the same 25 languages and the same speed. It is a slightly larger download (615 MB rather than 475 MB) and needs no more memory than v3.
+- Transcription picks up the latest fixes to the Parakeet speech engine, including words that could be dropped or doubled where a long recording is stitched together from shorter pieces.
 - You can choose which calendars Dictator Meetings reads. Settings → Meetings → Choose calendars lists each of your calendars by name; switch off any you don't want, and it's left out of Today's up next and never used to name a recording.
 - Connect Calendar on the Today screen now works. The app was missing the permission it needs to ask for calendar access, so clicking it did nothing; it now shows the macOS prompt, and if access is off it offers a button straight to the right place in System Settings.
 - The companion panel always opens where you can see it. It could reappear partly off the top of a screen, out of reach, after the displays changed or it grew; it's now kept inside the screen it's on, and comes back if a display is unplugged mid-call.

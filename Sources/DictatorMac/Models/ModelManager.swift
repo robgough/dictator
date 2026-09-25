@@ -248,6 +248,9 @@ final class ModelManager {
                     self.diarizationStates[id] = self.diskState(forDiarization: id)
                 } else {
                     self.diarizationStates[id] = .ready
+                    // Nemotron's download includes pyannote's bundle, so the
+                    // pyannote row may just have become ready too.
+                    self.refreshOtherDiarizationStates(except: id)
                 }
             } catch is CancellationError {
                 self?.diarizationStates[id] = self?.diskState(forDiarization: id) ?? .notDownloaded
@@ -458,18 +461,29 @@ final class ModelManager {
         return removed
     }
 
-    /// Unload (if loaded) and remove the diarization bundle from disk. The
-    /// whole `<diarizationRoot>/speaker-diarization/` tree is wiped — that's
-    /// where FluidAudio's repo snapshot lives, and removing it cleanly forces
-    /// a fresh download next time the user asks for diarization.
+    /// Unload (if loaded) and remove a diarizer's bundle from disk — the repo
+    /// folder FluidAudio downloaded it into, so the next use re-downloads
+    /// cleanly. Nemotron's removal leaves pyannote's bundle alone (it's a
+    /// separate row); removing pyannote's also takes Nemotron out of service,
+    /// since Nemotron borrows its embeddings, and the refresh shows that.
     @discardableResult
     func removeDiarization(_ id: String, using service: DiarizerService) -> Bool {
         service.unload(modelID: id)
-        let dir = ModelStorage.diarizationRoot()
-            .appendingPathComponent("speaker-diarization", isDirectory: true)
+        let dir = DiarizerService.isNemotron(id)
+            ? DiarizerService.nemotronDirectory
+            : DiarizerService.pyannoteDirectory
         let removed = removeDirectory(at: dir)
         diarizationStates[id] = .notDownloaded
+        refreshOtherDiarizationStates(except: id)
         return removed
+    }
+
+    /// Re-probe the disk for every diarization row except `id` and any still
+    /// downloading. The rows share files, so a change to one can flip another.
+    private func refreshOtherDiarizationStates(except id: String) {
+        for m in ModelCatalog.diarizationModels where m.id != id && diarizationTasks[m.id] == nil {
+            diarizationStates[m.id] = diskState(forDiarization: m.id)
+        }
     }
 
     private func removeDirectory(at url: URL) -> Bool {

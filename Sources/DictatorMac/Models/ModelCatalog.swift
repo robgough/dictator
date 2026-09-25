@@ -116,10 +116,10 @@ struct ParakeetModel: Identifiable, Hashable, Sendable {
     let note: String
 }
 
-/// Catalogue entry for a speaker-diarization bundle. v0.2 ships a single
-/// option (FluidAudio's offline pipeline built on pyannote community-1 +
-/// WeSpeaker), but the catalog/manager shape mirrors Parakeet so we can grow
-/// it later without rewriting the Settings UI.
+/// Catalogue entry for a speaker-diarization engine. Two ship: FluidAudio's
+/// offline pipeline (pyannote community-1 segmentation + WeSpeaker embeddings,
+/// clustered) and NVIDIA's Nemotron 3 Diarization (end-to-end, no clustering).
+/// `DiarizerService` branches on the id.
 struct DiarizationModel: Identifiable, Hashable, Sendable {
     let id: String          // catalogue id (also used as on-disk subdir under diarizationRoot())
     let displayName: String
@@ -145,21 +145,50 @@ enum ModelCatalog {
     static let parakeetModels: [ParakeetModel] = [
         .init(id: "parakeet-tdt-0.6b-v3", displayName: "Parakeet TDT v3", approxSizeMB: 475, approxRAMMB: 700, note: "Multilingual — 25 European languages. ~60–70× realtime on Apple Silicon."),
         .init(id: "parakeet-tdt-0.6b-v2", displayName: "Parakeet TDT v2", approxSizeMB: 475, approxRAMMB: 700, note: "English-only, slightly better English WER than v3."),
+        // moondream's post-trained v3 (FluidAudio 0.17.3): same architecture,
+        // languages and decoder contract, int8 encoder. Measured against v3 on
+        // a 6-minute clip (scratch/nemotron-eval `asr`): 614 vs 477 MB on disk,
+        // same speed (~400× realtime), same resident footprint — it doesn't
+        // need a bigger machine than v3. It also drops the "um / uh" fillers v3
+        // transcribes verbatim. The id is FluidAudio's folder name, as for v3.
+        .init(id: "parakeet-ultra", displayName: "Parakeet Ultra", approxSizeMB: 615, approxRAMMB: 750, note: "A more accurate retrain of v3 — same 25 languages and speed, slightly larger download."),
     ]
 
-    /// Speaker diarization. The id is a Dictator-side label only — FluidAudio
-    /// doesn't take a variant string, the offline pipeline is the one bundle
-    /// it ships. We keep the indirection so future swaps (e.g. an LS-EEND
-    /// streaming variant) don't break stored settings.
+    /// Speaker diarization. The ids are Dictator-side labels (FluidAudio takes
+    /// no variant string) and are what `MeetingsSettings.diarizationModelID`
+    /// persists.
+    ///
+    /// Nemotron's figures are measured (scratch/nemotron-eval, one hour of
+    /// audio): 2.2s on the GPU, ~1 GB peak while it runs — against ~600 MB for
+    /// pyannote, which it also runs for voiceprints (see `DiarizerService`), so
+    /// its download includes pyannote's bundle.
     static let diarizationModels: [DiarizationModel] = [
         .init(
             id: "pyannote-community-1",
             displayName: "Speaker Diarization (pyannote community-1)",
             approxSizeMB: 110,
             approxRAMMB: 600,
-            note: "Identifies who spoke when. Runs after transcription on the system-audio track only — your microphone is always tagged as you."
+            note: "Identifies who spoke when. Small and quick, but can merge similar voices or miss people talking over each other."
+        ),
+        .init(
+            id: nemotronDiarizationID,
+            displayName: "Nemotron 3 Diarization (NVIDIA)",
+            approxSizeMB: 220,
+            approxRAMMB: 1000,
+            note: "More accurate, especially with several people or crosstalk. Tells apart up to 8 voices per track."
         ),
     ]
+
+    static let nemotronDiarizationID = "nemotron-3-diarization"
+
+    /// The embedding space speaker voiceprints live in, and the `modelID` they
+    /// are filed under in `PeopleStore`. Deliberately NOT the active
+    /// diarizer's id: Nemotron produces no embeddings, so `DiarizerService`
+    /// gives its speakers WeSpeaker ones — the same space pyannote uses. Filing
+    /// them under a different id would be actively destructive, because
+    /// `PeopleStore.recordObservation` wipes a person's stored voiceprints when
+    /// the model id changes; switching diarizer would erase everyone.
+    static let voiceprintSpaceID = "pyannote-community-1"
 
     static let llmModels: [LLMModel] = [
         // Qwen 3.5 (March 2026). 3:1 linear-attention to full-attention layers,
@@ -258,7 +287,7 @@ enum ModelCatalog {
     static var meetingsRecommendedLLMName: String {
         llm(id: meetingsRecommendedLLMID)?.displayName ?? meetingsRecommendedLLMID
     }
-    static let defaultDiarization  = diarizationModels[0]   // only option in v0.2
+    static let defaultDiarization  = diarizationModels[0]   // pyannote
 
     static func whisper(id: String) -> WhisperModel? { whisperModels.first { $0.id == id } }
     static func parakeet(id: String) -> ParakeetModel? { parakeetModels.first { $0.id == id } }

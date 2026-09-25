@@ -65,6 +65,7 @@ final class ParakeetService: ASREngine {
         switch id {
         case "parakeet-tdt-0.6b-v3": return .v3
         case "parakeet-tdt-0.6b-v2": return .v2
+        case "parakeet-ultra": return .ultra
         default: return nil
         }
     }

@@ -101,12 +101,17 @@ packages:
   SwiftTransformers:
     url: https://github.com/huggingface/swift-transformers
     exactVersion: 1.3.3
-  # FluidAudio backs the Parakeet TDT v3 transcription engine — CoreML models
-  # that run on the Apple Neural Engine. Zero dep overlap with WhisperKit /
-  # MLX, so no version-pinning conflicts.
+  # FluidAudio backs the Parakeet transcription engines and both speaker
+  # diarizers — CoreML models on the Neural Engine / GPU. Zero dep overlap with
+  # WhisperKit / MLX, so no version-pinning conflicts.
+  #
+  # 0.17.4 is the floor for two things we use: Nemotron 3 Diarization
+  # (`Nemotron3Diarizer`, 0.17.0; 0.17.2 fixed a first-prediction crash on
+  # M5/macOS 27; 0.17.4 fixed the M3 ANE compile) and Parakeet Ultra
+  # (`AsrModelVersion.ultra`, 0.17.3). Its Float16 code is why ARCHS is arm64.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.14.5
+    exactVersion: 0.17.4
   # Sparkle drives in-app auto-updates. The appcast feed at SUFeedURL is
   # served from GitHub Pages (docs/appcast.xml) and is signed per-release
   # with an EdDSA key — public key in Info.plist, private key only in CI.

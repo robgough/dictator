@@ -714,6 +714,7 @@ final class MeetingSession: Identifiable {
             // user's last save wins — the processor instance is held for the
             // lifetime of the session, but the setting is the source of truth.
             processor.dedupeMicEchoes = MeetingsAppState.shared.settings.meetingDedupeMicEchoes
+            processor.diarizationModelID = MeetingsAppState.shared.settings.effectiveDiarizationModelID
             try await processor.run(session: self, parakeetModelID: parakeetModelID) { [weak self] stage, fraction in
                 guard let self else { return }
                 switch stage {
@@ -851,7 +852,7 @@ final class MeetingSession: Identifiable {
     /// harmless but misleading, so the local check keeps the intent honest.
     private func reclaimAfterProcessing() {
         MeetingParakeetServiceHolder.shared.unload()
-        DiarizerServiceHolder.shared.unload(modelID: ModelCatalog.defaultDiarization.id)
+        DiarizerServiceHolder.shared.unloadAll()
         let usedLocalMLX = ProviderSlot.allCases.contains {
             ProviderRegistry.shared.resolvedConfig(for: $0)?.kind == .localMLX
         }
@@ -870,7 +871,7 @@ final class MeetingSession: Identifiable {
         guard MeetingsAppState.shared.settings.peopleRecognitionEnabled else { return }
         guard let embeddings = speakerEmbeddings, !embeddings.isEmpty else { return }
         let store = PeopleStore.shared
-        let modelID = ModelCatalog.defaultDiarization.id
+        let modelID = ModelCatalog.voiceprintSpaceID
         var changed = false
 
         func isDefaultLabel(_ name: String) -> Bool {
@@ -1233,7 +1234,7 @@ final class MeetingSession: Identifiable {
         } else if MeetingsAppState.shared.settings.peopleRecognitionEnabled, !meta.speakers[idx].isMe {
             let store = PeopleStore.shared
             let embedding = speakerEmbeddings?[id]
-            let modelID = ModelCatalog.defaultDiarization.id
+            let modelID = ModelCatalog.voiceprintSpaceID
             let sameName = store.peopleMatching(name: trimmed)
             if sameName.count == 1 {
                 meta.speakers[idx].personID = sameName[0].id

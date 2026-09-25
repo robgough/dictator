@@ -52,10 +52,10 @@ final class MeetingProcessor {
         case writingTranscript
     }
 
-    /// `meetingDiarizationModelID` is wired in MeetingProcessor rather than
-    /// surfaced as a settings field — v0.2 only ships one diarization bundle
-    /// and the catalog id is the single source of truth.
-    private let diarizationModelID = ModelCatalog.defaultDiarization.id
+    /// Which diarizer to run (a `ModelCatalog.diarizationModels` id). Wired
+    /// from `MeetingsSettings.diarizationModelID` by the caller, like
+    /// `dedupeMicEchoes`.
+    var diarizationModelID: String = ModelCatalog.defaultDiarization.id
 
     /// When true, `run` filters mic words that look like echoes of system
     /// words (same token within ±300 ms). Wired from
@@ -462,8 +462,10 @@ final class MeetingProcessor {
         // words after echo-dedup and trivial-fold — so a mic track that was
         // entirely bleed doesn't seed a phantom "Me" on a listen-only meeting.
         let usedSpeakerIDs = Self.discoveredSpeakerIDsInOrder(words: allWords)
-        let micUniqueCount = micDiar?.clusterCentroids.count ?? 0
-        let systemUniqueCount = systemDiar?.clusterCentroids.count ?? 0
+        // Counted from segments, not centroids: a Nemotron speaker can
+        // legitimately have no voiceprint (see `DiarizerService.nemotronCentroids`).
+        let micUniqueCount = Set(micDiar?.segments.map(\.speakerLabel) ?? []).count
+        let systemUniqueCount = Set(systemDiar?.segments.map(\.speakerLabel) ?? []).count
         NSLog("[Dictator] Diarizer[merged]: micClusters=\(micUniqueCount) systemClusters=\(systemUniqueCount) finalSpeakers=\(usedSpeakerIDs.count) ids=\(usedSpeakerIDs.joined(separator: ","))")
 
         // Split the merged timeline into per-speaker turns.
@@ -869,8 +871,8 @@ final class MeetingProcessor {
             let wordMid = (word.start + word.end) / 2
 
             // Find all segments overlapping the word's midpoint. With
-            // overlap enabled there can be 0, 1, 2 or 3 — at most 3 because
-            // pyannote community-1 emits per-frame activity for 3 speakers.
+            // overlap enabled there can be several — up to 3 from pyannote
+            // community-1, up to 8 from Nemotron.
             var bestLabel: String?
             var bestCenterDistance = Double.infinity
             for seg in sortedSegments {
