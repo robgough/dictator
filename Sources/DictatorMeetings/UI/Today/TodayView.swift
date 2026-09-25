@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The home screen: what's next on the calendar, what's waiting for notes,
@@ -48,6 +49,11 @@ struct TodayView: View {
             .frame(maxWidth: .infinity)
         }
         .task { await upcoming.refresh(settings: state.settings) }
+        // Coming back from System Settings with calendar access switched on
+        // should show the calendar without leaving and re-entering Today.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await upcoming.refresh(settings: state.settings) }
+        }
         .task(id: metas) {
             let metas = self.metas
             let userName = state.settings.userName
@@ -264,9 +270,14 @@ private struct UpNextCard: View {
             .padding(18)
             .notesSurface()
         case .denied:
-            Text("Calendar access is off for Dictator Meetings in System Settings → Privacy & Security → Calendars.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Text("Calendar access is off for Dictator Meetings in System Settings → Privacy & Security → Calendars.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Settings") { upcoming.openCalendarPrivacySettings() }
+                    .buttonStyle(.glass)
+            }
         case .granted:
             if let event = upcoming.next {
                 TimelineView(.periodic(from: .now, by: 30)) { context in

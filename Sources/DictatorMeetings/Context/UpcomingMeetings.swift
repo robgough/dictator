@@ -80,8 +80,19 @@ final class UpcomingMeetings {
 
     /// Asks for calendar access — only ever from a button the user pressed.
     func requestAccess(settings: MeetingsSettings) async {
-        _ = try? await store.requestFullAccessToEvents()
+        let granted = (try? await store.requestFullAccessToEvents()) == true
         await refresh(settings: settings)
+        // A request that comes back without a grant and without an answer
+        // (no prompt shown — e.g. the system refused it outright) must not
+        // leave the button looking like it did nothing.
+        if !granted, access == .unknown { access = .denied }
+    }
+
+    /// Privacy & Security → Calendars, for the user to switch access on.
+    func openCalendarPrivacySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Screenshot mode only: stand-in events for a capture.
