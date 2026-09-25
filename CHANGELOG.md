@@ -13,7 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
-- Parakeet Ultra is available as a transcription model: a more accurate retrain of Parakeet v3 with the same 25 languages and the same speed. It is a slightly larger download (615 MB rather than 475 MB) and needs no more memory than v3.
+- Parakeet Ultra is available as a transcription model and is the default for new installs: a more accurate retrain of Parakeet v3 with the same 25 languages and the same speed. It is a slightly larger download (615 MB rather than 475 MB) and needs no more memory than v3. If you already use Parakeet, your current model stays selected until you switch in Settings → Models.
 - Transcription picks up the latest fixes to the Parakeet speech engine, including words that could be dropped or doubled where a long recording is stitched together from shorter pieces.
 - The chat assistant can search and read your meetings from Dictator Meetings. Ask what was decided on a call, what someone said, or who agreed to do what, and it finds the meeting, reads its notes, and goes to the transcript when the notes don't say.
 - The journal has a window of its own, in the menu under Chat. A calendar on the left shows which days you wrote something; clicking one opens that day as a page, with each entry's time in the margin. Record Entry at the foot of the calendar records exactly as the journal hotkey does, style and all — and the entry draws itself on the page while it's being transcribed and polished, so you can see it coming rather than wondering where it went. You can also type an entry, or drop photos into one, at the bottom of the page.

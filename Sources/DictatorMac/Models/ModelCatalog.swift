@@ -143,15 +143,17 @@ enum ModelCatalog {
     ]
 
     static let parakeetModels: [ParakeetModel] = [
-        .init(id: "parakeet-tdt-0.6b-v3", displayName: "Parakeet TDT v3", approxSizeMB: 475, approxRAMMB: 700, note: "Multilingual — 25 European languages. ~60–70× realtime on Apple Silicon."),
-        .init(id: "parakeet-tdt-0.6b-v2", displayName: "Parakeet TDT v2", approxSizeMB: 475, approxRAMMB: 700, note: "English-only, slightly better English WER than v3."),
         // moondream's post-trained v3 (FluidAudio 0.17.3): same architecture,
         // languages and decoder contract, int8 encoder. Measured against v3 on
         // a 6-minute clip (scratch/nemotron-eval `asr`): 614 vs 477 MB on disk,
         // same speed (~400× realtime), same resident footprint — it doesn't
         // need a bigger machine than v3. It also drops the "um / uh" fillers v3
-        // transcribes verbatim. The id is FluidAudio's folder name, as for v3.
-        .init(id: "parakeet-ultra", displayName: "Parakeet Ultra", approxSizeMB: 615, approxRAMMB: 750, note: "A more accurate retrain of v3 — same 25 languages and speed, slightly larger download."),
+        // transcribes verbatim. The default for new installs; existing ones
+        // keep whatever `parakeetModelID` they saved. The id is FluidAudio's
+        // folder name, as for v3.
+        .init(id: "parakeet-ultra", displayName: "Parakeet Ultra", approxSizeMB: 615, approxRAMMB: 750, note: "Recommended. A more accurate retrain of v3 — same 25 languages and speed."),
+        .init(id: "parakeet-tdt-0.6b-v3", displayName: "Parakeet TDT v3", approxSizeMB: 475, approxRAMMB: 700, note: "Multilingual — 25 European languages. ~60–70× realtime on Apple Silicon."),
+        .init(id: "parakeet-tdt-0.6b-v2", displayName: "Parakeet TDT v2", approxSizeMB: 475, approxRAMMB: 700, note: "English-only, slightly better English WER than v3."),
     ]
 
     /// Speaker diarization. The ids are Dictator-side labels (FluidAudio takes
@@ -264,7 +266,9 @@ enum ModelCatalog {
     static let fallbackContextWindowTokens = 32_768
 
     static let defaultWhisper      = whisperModels[2]       // small.en
-    static let defaultParakeet     = parakeetModels[0]      // v3 (multilingual)
+    /// By id, like `defaultLLM`: the list is ordered for display and an
+    /// index silently pointing at the wrong model is easy to miss.
+    static let defaultParakeet     = parakeet(id: "parakeet-ultra") ?? parakeetModels[0]
     /// Looked up by id rather than by index — the list gets reordered whenever
     /// a generation lands, and an index silently pointing at the wrong model is
     /// exactly the kind of bug nobody notices until a user reports it.

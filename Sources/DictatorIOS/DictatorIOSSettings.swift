@@ -26,8 +26,8 @@ enum DictatorIOSSettings {
     static let foundationCleanupKey = "DictatorIOS.foundationCleanupEnabled"
 
     /// Selected Parakeet model ID. Mirrors `ParakeetService.version(forID:)`
-    /// — currently `"parakeet-tdt-0.6b-v3"` (default, latest) or
-    /// `"parakeet-tdt-0.6b-v2"` (older, slightly smaller). Persists the
+    /// — `"parakeet-tdt-0.6b-v3"`, `"parakeet-tdt-0.6b-v2"`, or
+    /// `"parakeet-ultra"` (opt-in; see `ultraModelID`). Persists the
     /// user's pick across launches; first launch falls back to v3 via
     /// `registerDefaults()`.
     static let selectedModelKey = "DictatorIOS.selectedModelID"
@@ -65,6 +65,19 @@ enum DictatorIOSSettings {
     /// Everyone else gets v3 (multilingual). The user can still flip
     /// either way from the onboarding picker or settings — this only
     /// decides what we recommend / pre-select.
+    /// Parakeet Ultra: moondream's more accurate retrain of v3 — same
+    /// languages, same decoder, int8 encoder (~615 MB against ~460 MB). The
+    /// Mac's default, but only an option here and never recommended: it has
+    /// not been run on a phone yet, and its encoder is ~40% bigger for the
+    /// Neural Engine to compile and hold.
+    static let ultraModelID = "parakeet-ultra"
+
+    /// User-facing download size for a Parakeet variant, for copy that names
+    /// the selected model's size (download buttons, the cellular warning).
+    static func downloadSizeLabel(for modelID: String) -> String {
+        modelID == ultraModelID ? "615 MB" : "460 MB"
+    }
+
     @MainActor
     static func recommendedModelID() -> String {
         // `Locale.preferredLanguages` returns BCP-47 tags like "en-GB"

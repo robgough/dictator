@@ -100,6 +100,7 @@ struct SettingsView: View {
                 ) {
                     Text("v3 · Multilingual").tag("parakeet-tdt-0.6b-v3")
                     Text("v2 · English").tag("parakeet-tdt-0.6b-v2")
+                    Text("Ultra · Multilingual").tag(DictatorIOSSettings.ultraModelID)
                 }
             } header: {
                 Text("Transcription Model")
@@ -112,6 +113,7 @@ struct SettingsView: View {
                 Text("""
                 v3 · Multilingual — Transcribes English, German, French, Italian, Spanish, Portuguese, Russian, Ukrainian, and other European languages.
                 v2 · English — English-only; tighter English accuracy than v3 because it isn't splitting capacity across other languages.
+                Ultra · Multilingual — A more accurate retrain of v3 with the same languages. A larger download (about 615 MB).
 
                 Switching triggers a one-time download if the selected model isn't already on this device. The previous one is unloaded from memory but stays on disk for quick switching back.
                 """)

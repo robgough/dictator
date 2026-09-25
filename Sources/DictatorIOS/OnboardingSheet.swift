@@ -160,7 +160,7 @@ struct OnboardingSheet: View {
                     Task { await viewModel.downloadModel() }
                 }
             } message: {
-                Text("The Parakeet speech model is about 460 MB. You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
+                Text("The Parakeet speech model is about \(DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID)). You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
             }
         }
     }
@@ -223,12 +223,10 @@ struct OnboardingSheet: View {
         Step(
             kind: .model,
             title: "Download the speech model",
-            // Size is approximate and the same for both variants — the
-            // raw download is similar, the difference is what's *inside*
-            // the weights. Keeping the copy variant-agnostic avoids the
-            // body text contradicting whichever picker option was chosen
-            // on the previous step.
-            body: "Around 460 MB. Runs on-device — no audio leaves your device. You can leave the app while it downloads; it'll pick up where it left off if your connection drops.",
+            // `steps` is static, so the size is given as the range across
+            // variants rather than the one picked on the previous step —
+            // the button caption below this row names the exact figure.
+            body: "Around 460–615 MB, depending on the model. Runs on-device — no audio leaves your device. You can leave the app while it downloads; it'll pick up where it left off if your connection drops.",
             ctaWhenActive: "Download model"
         ),
         Step(
@@ -482,6 +480,7 @@ struct OnboardingSheet: View {
         switch id {
         case "parakeet-tdt-0.6b-v3": return "Parakeet (multilingual)"
         case "parakeet-tdt-0.6b-v2": return "Parakeet (English-only)"
+        case DictatorIOSSettings.ultraModelID: return "Parakeet Ultra (multilingual)"
         default: return id
         }
     }
@@ -647,7 +646,14 @@ struct OnboardingSheet: View {
             title: "Parakeet (English-only)",
             base: "Around 460 MB. Same speed, slightly tighter on English accuracy because the model isn't splitting capacity across other languages."
         )
-        let ordered: [ModelOption] = (recommendedID == v2Card.id) ? [v2Card, v3Card] : [v3Card, v2Card]
+        // Ultra is offered but never recommended on iOS (see
+        // `DictatorIOSSettings.ultraModelID`), so it always sits last.
+        let ultraCard = ModelOption(
+            id: DictatorIOSSettings.ultraModelID,
+            title: "Parakeet Ultra (multilingual)",
+            base: "Around 615 MB. A more accurate retrain of the multilingual model: the same languages and speed, a larger download."
+        )
+        let ordered: [ModelOption] = ((recommendedID == v2Card.id) ? [v2Card, v3Card] : [v3Card, v2Card]) + [ultraCard]
         VStack(spacing: 8) {
             ForEach(ordered, id: \.id) { card in
                 modelOptionCard(
@@ -737,7 +743,7 @@ struct OnboardingSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                Text("Around 460 MB. You can leave the app once the download starts — it'll keep going in the background.")
+                Text("Around \(DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID)). You can leave the app once the download starts — it'll keep going in the background.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

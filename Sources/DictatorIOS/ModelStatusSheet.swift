@@ -19,7 +19,7 @@ struct ModelStatusSheet: View {
                 Section {
                     LabeledContent("Model", value: Self.displayName(for: viewModel.selectedModelID))
                     LabeledContent("Status", value: statusText)
-                    LabeledContent("Disk size", value: "~460 MB")
+                    LabeledContent("Disk size", value: "~" + DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID))
                 } footer: {
                     Text(footerText)
                 }
@@ -69,6 +69,7 @@ struct ModelStatusSheet: View {
         switch modelID {
         case "parakeet-tdt-0.6b-v3": return "Parakeet TDT 0.6B (v3)"
         case "parakeet-tdt-0.6b-v2": return "Parakeet TDT 0.6B (v2)"
+        case DictatorIOSSettings.ultraModelID: return "Parakeet Ultra"
         default: return modelID
         }
     }

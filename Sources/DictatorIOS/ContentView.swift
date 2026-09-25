@@ -193,6 +193,8 @@ struct DictationTabView: View {
         switch id {
         case "parakeet-tdt-0.6b-v2":
             "Best for English-only dictation. Tighter English accuracy than v3 because it isn't splitting capacity across other languages."
+        case DictatorIOSSettings.ultraModelID:
+            "A more accurate retrain of v3 — the same languages and speed, in a larger download (about 615 MB)."
         case "parakeet-tdt-0.6b-v3":
             "Multilingual — English, German, French, Italian, Spanish, Portuguese, Russian, Ukrainian, and other European languages. Pick this if you dictate in more than one language."
         default:
@@ -258,7 +260,7 @@ struct DictationTabView: View {
             Text("Download transcription model")
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text("Dictator needs the Parakeet speech model (~460 MB) on this device before it can transcribe. One-time download.")
+            Text("Dictator needs the Parakeet speech model (~\(DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID))) on this device before it can transcribe. One-time download.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
@@ -276,8 +278,11 @@ struct DictationTabView: View {
                     set: { viewModel.selectModel($0) }
                 )
             ) {
-                Text("v3 · Multilingual").tag("parakeet-tdt-0.6b-v3")
+                // Short labels: three segments have to fit a phone's width,
+                // and the blurb underneath spells each one out.
+                Text("v3").tag("parakeet-tdt-0.6b-v3")
                 Text("v2 · English").tag("parakeet-tdt-0.6b-v2")
+                Text("Ultra").tag(DictatorIOSSettings.ultraModelID)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
@@ -298,7 +303,7 @@ struct DictationTabView: View {
             Button {
                 Task { await viewModel.confirmAndDownloadModel() }
             } label: {
-                Text("Download (~460 MB)")
+                Text("Download (~\(DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID)))")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .font(.body.weight(.semibold))
@@ -322,7 +327,7 @@ struct DictationTabView: View {
                 Task { await viewModel.downloadModel() }
             }
         } message: {
-            Text("The Parakeet speech model is about 460 MB. You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
+            Text("The Parakeet speech model is about \(DictatorIOSSettings.downloadSizeLabel(for: viewModel.selectedModelID)). You're on cellular — downloading now will count against your data plan. Connect to Wi-Fi for a faster, free download, or tap Download anyway to proceed.")
         }
     }
 

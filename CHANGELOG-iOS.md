@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Parakeet Ultra is available as a transcription model, in Settings or when you first download a model: a more accurate retrain of the multilingual model with the same languages. It is a larger download, about 615 MB rather than 460 MB.
 - Transcription picks up the latest fixes to the Parakeet speech engine, including words that could be dropped or doubled where a long recording is stitched together from shorter pieces.
 - "Double" and "triple" now work in a number read out loud: "my number is double seven three four" becomes 7734. On its own, "press double seven" is left exactly as said — it only expands inside something long enough to be a number.
 - Numbers said the short way are no longer half-converted. "Three sixty one" was coming out as "three 61", which is wrong however you read it. The whole phrase is now left for the language model, which can tell a price from a quantity from a time.

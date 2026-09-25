@@ -755,6 +755,21 @@ private struct ParakeetRepoDescriptor {
                     "JointDecisionv3.mlmodelc",
                 ]
             )
+        case "parakeet-ultra":
+            // Same file layout as v3 (it's a v3 retrain): the repo holds only
+            // these four bundles plus the vocab JSON, and the int8 encoder is
+            // the unsuffixed `Encoder.mlmodelc`. The folder is FluidAudio's
+            // `Repo.parakeetUltra.folderName`.
+            return ParakeetRepoDescriptor(
+                remotePath: "FluidInference/parakeet-ultra-coreml",
+                folderName: "parakeet-ultra",
+                requiredModelDirs: [
+                    "Preprocessor.mlmodelc",
+                    "Encoder.mlmodelc",
+                    "Decoder.mlmodelc",
+                    "JointDecisionv3.mlmodelc",
+                ]
+            )
         case "parakeet-tdt-0.6b-v2":
             return ParakeetRepoDescriptor(
                 remotePath: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
