@@ -1266,14 +1266,15 @@ final class Pipeline {
 
         let reply: String
         do {
-            // 48 tokens is generous for a list of at most a few dozen numbers,
-            // and tight enough that a model that starts writing prose instead
-            // gets cut off long before it costs anything.
+            // 96 tokens covers the ranges for a few dozen sentences (Qwen
+            // spends a token per digit), and is still tight enough that a
+            // model that starts writing prose instead gets cut off long before
+            // it costs anything.
             reply = try await LLMScheduler.shared.run(.interactive) {
                 try await llm.complete(
                     system: DictatorSettings.builtinParagraphsPrompt,
                     user: numbered,
-                    maxTokens: 48
+                    maxTokens: 96
                 )
             }
         } catch {

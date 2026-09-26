@@ -1173,7 +1173,7 @@ struct DictatorSettings: Codable, Equatable {
     /// the split as a whitespace-only edit and a drifting small model can't
     /// rewrite a single word.
     static let builtinParagraphsPrompt = """
-    You split dictated text into paragraphs. The user's message is a numbered list of sentences, in order. Reply with ONLY the numbers of the sentences that should START a new paragraph, comma-separated, e.g. `4, 9`. Never include 1. Start a new paragraph where the topic or subject changes, where the speaker moves to a new point, or before a closing thought. Aim for paragraphs of two to five sentences. If everything is one topic, reply `none`. No other words.
+    You group dictated text into paragraphs. The user's message is a numbered list of sentences, in order. Reply with ONLY the paragraphs as ranges of sentence numbers, in order, covering every sentence exactly once, e.g. `1-4, 5-7, 8-12`. A paragraph is usually two to five sentences about one point; start the next one where the topic or subject changes or the speaker moves to a new point. If everything is one point, reply with a single range. No other words.
     """
 
     /// The final pass of a mode whose output language differs from its spoken

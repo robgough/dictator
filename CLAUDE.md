@@ -382,6 +382,12 @@ Several files moved from Application Support to the synced folder and are migrat
   text and PDF extraction including a PDF with no selectable text, truncation,
   and `availableURL`'s no-clobber naming. Builds its PDFs rather than shipping
   fixtures. Run it before changing what an attachment hands the model.
+- `paragraph-check/` — runs the auto-paragraph pass (shipping prompt read from
+  source, symlinked `DictationText.swift`) over every long dictation in the
+  real history against any downloaded model, and counts splits, over-splits
+  and no-splits. Run it on each model before changing the paragraph prompt or
+  its parser — the old break-point prompt looked fine on Gemma 12B and was
+  rejected more often than not on every Qwen 3.5 size.
 - `chat-merge-check/` — round-trips the real `conversations.json` through the
   shipping migration (`ChatThreadMigration.swift`, symlinked) and compares every
   turn field by field, plus the compaction split and the tool-messages-skipped

@@ -96,9 +96,22 @@ enum DictationText {
 
     // MARK: - Paragraph protocol
 
-    /// Parses the paragraphing model's reply — a comma-separated list of
-    /// sentence numbers, or "none". Every non-numeric shape (a refusal, a
-    /// sentence of prose, an empty string) lands on the same answer: no split.
+    /// Parses the paragraphing model's reply — the paragraphs as ranges of
+    /// sentence numbers (`1-4, 5-7, 8-12`) — into the sentences that start a
+    /// paragraph. Every non-numeric shape (a refusal, a sentence of prose, an
+    /// empty string, "none") lands on the same answer: no split.
+    ///
+    /// Ranges rather than a bare list of break points, because asked for break
+    /// points Qwen 3.5 (2B–9B) and Gemma 4 E4B list nearly every sentence —
+    /// "2, 3, 4, 5, …" — which the over-split guard then rejects, so a long
+    /// dictation silently came back as one paragraph. Asked for groups, the
+    /// same models over-split 0–1 times in 36 real dictations instead of 13–22
+    /// (`scratch/paragraph-check`).
+    ///
+    /// The number *opening* each range is a paragraph start; the number after a
+    /// range dash is an end and is ignored. Anything else still reads as a
+    /// start, so a plain list ("4, 9", "4 and 9") parses the same way it always
+    /// did.
     ///
     /// Returns sorted, de-duplicated numbers in `2...sentenceCount`. 1 is never
     /// a valid paragraph start (the first sentence always starts one), and an
@@ -110,12 +123,18 @@ enum DictationText {
         var found: [Int] = []
         var seen = Set<Int>()
         var digits = ""
+        // Text between the previous number and this one — a bare dash (or
+        // "to") there means this number closes a range.
+        var gap = ""
 
         func flush() {
-            defer { digits = "" }
+            defer { digits = ""; gap = "" }
+            guard !digits.isEmpty else { return }
+            let separator = gap.trimmingCharacters(in: .whitespaces).lowercased()
+            if ["-", "–", "—", "to"].contains(separator) { return }
             // Long digit runs are junk, not sentence numbers; `Int()` also
             // returns nil on overflow, so both paths drop out here.
-            guard !digits.isEmpty, digits.count <= 6, let value = Int(digits) else { return }
+            guard digits.count <= 6, let value = Int(digits) else { return }
             guard value > 1, value <= sentenceCount else { return }
             if seen.insert(value).inserted { found.append(value) }
         }
@@ -124,7 +143,8 @@ enum DictationText {
             if character.isASCII && character.isNumber {
                 digits.append(character)
             } else {
-                flush()
+                if !digits.isEmpty { flush() }
+                gap.append(character)
             }
         }
         flush()
