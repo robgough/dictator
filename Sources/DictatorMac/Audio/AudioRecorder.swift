@@ -382,6 +382,26 @@ final class AudioRecorder {
         return AudioResampler.mono(samples: snap, from: rate, to: targetSampleRate) ?? []
     }
 
+    /// How long the mic stays open after the hotkey is released.
+    ///
+    /// Releasing the key is not the moment the last word reached us: a
+    /// buffer spends ~100–150 ms between the capsule and the delegate (USB
+    /// transfer, the device's own buffering, AVCaptureSession's queue), and
+    /// people let go *as* they finish the word, not after it. Stopping on the
+    /// release itself threw that audio away — "the end of what I said is
+    /// missing, sometimes", depending on how close to the last syllable the
+    /// key came up. The silence trimmer takes back whatever this over-captures.
+    static let releaseTailSeconds: Double = 0.35
+
+    /// `stop()`, after keeping the mic open for `releaseTailSeconds`.
+    ///
+    /// Cancellation cuts the wait short but still stops the recorder, so a
+    /// cancelled caller can never leave the mic running.
+    func stopAfterReleaseTail() async -> [Float] {
+        try? await Task.sleep(for: .seconds(Self.releaseTailSeconds))
+        return stop()
+    }
+
     /// Stop capture and return 16 kHz mono Float32 samples ready for
     /// WhisperKit. All sample-rate conversion happens here on the main
     /// actor, off the capture queue. Safe to call multiple times; later
@@ -421,6 +441,7 @@ final class AudioRecorder {
         if rate > 0, startBegan.timeIntervalSince1970 > 0 {
             let captured = Double(nativeSamples.count) / rate
             let elapsed = Date().timeIntervalSince(startBegan)
+            MicLog.log(String(format: "Mic stop: kept %.2fs of audio, mic open %.2fs.", captured, elapsed))
             if elapsed > 0.5, captured < elapsed - 0.35 {
                 MicLog.log(String(format:
                     "Mic stop: kept %.2fs of audio but the mic was open %.2fs — %.2fs missing.",

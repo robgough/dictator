@@ -795,11 +795,24 @@ final class Pipeline {
             return
         }
         guard case .recording = state else { return }
-        let samples = recorder.stop()
-        audioInterrupter.stop()
+        // Leave `.recording` now so the HUD, a second press and cycleMode all
+        // see the release immediately — the mic itself stays open a moment
+        // longer to catch the last word (`releaseTailSeconds`).
+        state = .transcribing
         if settings.playSounds { SoundEffects.shared.playStop() }
         tearDownInterim()
+        inFlightTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let samples = await self.recorder.stopAfterReleaseTail()
+            self.audioInterrupter.stop()
+            if Task.isCancelled { return }
+            self.processCapture(samples)
+        }
+    }
+
+    private func processCapture(_ samples: [Float]) {
         guard samples.count > 8_000 else { // <0.5s of audio @ 16kHz
+            inFlightTask = nil
             state = .idle
             return
         }
@@ -812,9 +825,11 @@ final class Pipeline {
         if settings.trimSilenceEnabled {
             let trimmed = SilenceTrimmer.trim(samples)
             if trimmed.didTrim {
-                NSLog("[Dictator] Trimmed %.2fs of silence (%.2fs lead, %.2fs tail) from a %.2fs recording.",
-                      trimmed.totalSecondsRemoved, trimmed.leadingSecondsRemoved,
-                      trimmed.trailingSecondsRemoved, Double(samples.count) / 16_000)
+                // In the mic log, not just NSLog: when the end of a dictation
+                // goes missing, whether the trimmer cut it is the first question.
+                MicLog.log(String(format: "Trim: %.2fs lead, %.2fs tail removed from a %.2fs recording.",
+                                  trimmed.leadingSecondsRemoved, trimmed.trailingSecondsRemoved,
+                                  Double(samples.count) / 16_000))
                 speech = trimmed.samples
             }
         }
@@ -2138,18 +2153,23 @@ final class Pipeline {
             return
         }
         guard case .recording = state else { return }
-        let samples = recorder.stop()
-        audioInterrupter.stop()
+        // Same release tail as dictation — see `finishRecording`.
+        state = .transcribing
         if settings.playSounds { SoundEffects.shared.playStop() }
-        guard samples.count > 8_000 else {
-            inFlightAssistant = nil
-            state = .idle
-            return
-        }
         let capturedSelection = inflight.selection
         inFlightTask = Task { @MainActor [weak self] in
-            await self?.runAssistantPipeline(samples: samples, selection: capturedSelection)
-            self?.inFlightTask = nil
+            guard let self else { return }
+            let samples = await self.recorder.stopAfterReleaseTail()
+            self.audioInterrupter.stop()
+            if Task.isCancelled { return }
+            guard samples.count > 8_000 else {
+                self.inFlightAssistant = nil
+                self.inFlightTask = nil
+                self.state = .idle
+                return
+            }
+            await self.runAssistantPipeline(samples: samples, selection: capturedSelection)
+            self.inFlightTask = nil
         }
     }
 

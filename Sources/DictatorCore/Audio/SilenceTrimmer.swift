@@ -42,6 +42,13 @@ public enum SilenceTrimmer {
     /// little silence than to shave a syllable.
     private static let paddingSeconds = 0.15
 
+    /// More room after the speech than before it. A word *ends* quieter than
+    /// it starts — the final "s" of "his", a trailing "-ly" — and the tail is
+    /// where a clipped syllable went missing from the transcript. The ASR
+    /// engines also commit their last token more reliably with a little
+    /// silence after it.
+    private static let trailingPaddingSeconds = 0.35
+
     /// Never hand back anything shorter than this. If the gate only found a
     /// sliver of signal we'd rather send the whole clip and let the engine
     /// decide there was no speech in it.
@@ -94,8 +101,9 @@ public enum SilenceTrimmer {
         else { return untouched }
 
         let padFrames = max(1, Int(paddingSeconds * sampleRate) / frameLength)
+        let tailPadFrames = max(1, Int(trailingPaddingSeconds * sampleRate) / frameLength)
         let startFrame = max(0, firstLoud - padFrames)
-        let endFrame = min(levels.count - 1, lastLoud + padFrames)
+        let endFrame = min(levels.count - 1, lastLoud + tailPadFrames)
 
         let startSample = startFrame * frameLength
         let endSample = min(samples.count, (endFrame + 1) * frameLength)

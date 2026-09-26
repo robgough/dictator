@@ -90,16 +90,19 @@ final class ChatDictation {
     }
 
     private func stopAndTranscribe() {
-        let samples = recorder.stop()
         level = 0
         startedAt = nil
-        guard samples.count >= Self.minimumSamples else {
-            phase = .idle
-            errorMessage = "Too short — hold on a moment longer."
-            return
-        }
         phase = .transcribing
-        Task { await transcribe(samples) }
+        Task {
+            // Keep the mic open a beat past the click so the last word lands.
+            let samples = await recorder.stopAfterReleaseTail()
+            guard samples.count >= Self.minimumSamples else {
+                phase = .idle
+                errorMessage = "Too short — hold on a moment longer."
+                return
+            }
+            await transcribe(samples)
+        }
     }
 
     private func transcribe(_ samples: [Float]) async {
