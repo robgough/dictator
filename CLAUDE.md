@@ -275,6 +275,8 @@ Each LLM pass has a deterministic post-check; the pipeline reverts to the previo
 - **Pass 3 (Structure)**: strict word-sequence equality after lowercasing/stripping non-alphanumerics. Reverts on any word change — bullets/breaks only.
 - **Translate** (only when `mode.outputLanguage` differs from `mode.spokenLanguage`): runs LAST, after the style passes, so those operate on the language actually spoken. Every content-preservation gate is meaningless for a translation by definition, so it gets its own: `translationLooksSane` bounds the output/input word ratio (catches answering and summarising, the two ways this pass fails) and requires numbers to survive.
 
+**Long dictations (≥250 words) run whole-text first**, then must also pass `DeletionAudit` — a word-level alignment that scores each *deleted stretch* by the content words it loses that aren't fillers, stutters, spoken numbers/punctuation, still elsewhere in the output, or near a spoken correction. Ratio gates get more lenient as text grows; this doesn't. On failure the pass reruns as ~180-word sentence-bounded chunks with the old per-chunk gates. Chunking used to be unconditional; `scratch/chunk-check` showed whole-text is as faithful, faster, and the only way the model sees topic changes. Translate still chunks always.
+
 The `Vocabulary` substitution pass runs between Pass 1 and Pass 2. Three match modes per entry (`VocabularyEntry.matchMode`): `.literal` (the original case-insensitive whole-word replace), `.regex`, and `.phonetic` — Metaphone-keyed sound-alike matching via `PhoneticKey`, which is what makes one rule cover every spelling the decoder invents for a name.
 
 `.phonetic` is the default for new rules, and `VocabularyEntry.upgradedMatchMode` migrates pre-match-mode rules to it on decode. That's only safe because **phonetic is a strict superset of literal**: it matches the exact text first, and a pattern too short to key (under `PhoneticKey.minPatternLetters`) falls back to a whole-word literal replace rather than going inert. The migration deliberately skips `caseSensitive` and `wholeWord == false` rules — phonetic can express neither, so upgrading those would silently drop behaviour the user asked for.
@@ -388,6 +390,11 @@ Several files moved from Application Support to the synced folder and are migrat
   and no-splits. Run it on each model before changing the paragraph prompt or
   its parser — the old break-point prompt looked fine on Gemma 12B and was
   rejected more often than not on every Qwen 3.5 size.
+- `chunk-check/` — Polish pass whole-text vs chunked over long real dictations
+  (plus consecutive dictations joined to 250–450 words), shipping prompt and
+  gate, per model; saves every output to `out-<model>.json`. `audit-swift/`
+  runs the shipping `DeletionAudit` over those outputs and over real history.
+  Re-run both before changing the audit threshold or the chunking rules.
 - `chat-merge-check/` — round-trips the real `conversations.json` through the
   shipping migration (`ChatThreadMigration.swift`, symlinked) and compares every
   turn field by field, plus the compaction split and the tool-messages-skipped

@@ -1034,14 +1034,24 @@ final class Pipeline {
 
     // MARK: - Pass execution
 
-    /// Word count at or above which a pass is split into sentence-bounded
-    /// chunks. Long dictations degrade badly in a single call on a 3–4 B model:
-    /// the tail gets summarised, truncated, or quietly dropped, and the
-    /// whole-text gate then reverts everything — so the user's 400-word
-    /// dictation lands completely unformatted. Chunking keeps each call inside
-    /// the range these models are reliable in, and localises a gate failure to
-    /// the one chunk that misbehaved.
+    /// Word count at or above which a pass is *allowed* to fall back to
+    /// sentence-bounded chunks.
+    ///
+    /// Long dictations used to be chunked unconditionally, on the belief that
+    /// small models truncate or summarise long input. Measured on 24 real
+    /// 250–400-word dictations (`scratch/chunk-check`), they don't: Qwen 3.5 4B
+    /// and 9B and Gemma 4 12B all passed whole-text every time, kept as many
+    /// words and every ending, and ran 2–4s faster — each chunk re-prefills the
+    /// long system prompt — and only whole-text lets the model see where the
+    /// topics change. What whole-text does do, occasionally, is drop a stretch
+    /// (or obey an instruction in the dictation) while still clearing the
+    /// ratio gate, because the ratio gets more lenient as the text grows. So a
+    /// long pass runs whole first, must also pass `DeletionAudit`, and falls
+    /// back to chunks only when it doesn't.
     static let chunkThresholdWords = 250
+    /// Above this, don't try whole-text at all: past what was measured, and
+    /// heading for `MLXLLMService.format`'s 2048-token output cap.
+    static let wholeTextMaxWords = 600
     /// Target size of each chunk. Comfortably under the threshold so a
     /// just-over-threshold dictation splits into two balanced halves rather
     /// than one full chunk and a stub.
@@ -1065,6 +1075,19 @@ final class Pipeline {
         let words = DictationText.wordCount(text)
         var pieces = [text]
         if words >= Self.chunkThresholdWords {
+            // Whole text first — see `chunkThresholdWords`. Translate keeps the
+            // old chunk-always behaviour: the audit compares words, and a
+            // translation shares none with its input by design.
+            if pass.kind != .translate, words <= Self.wholeTextMaxWords {
+                let fullPrompt = contextBlock.map { prompt + "\n\n" + $0 } ?? prompt
+                if let whole = try await runPassCandidate(
+                    pass: pass, text: text, prompt: fullPrompt,
+                    echoContext: echoContext, audit: true, llm: llm
+                ) {
+                    return whole
+                }
+                if Task.isCancelled { throw CancellationError() }
+            }
             let split = DictationText.chunks(text, targetWords: Self.chunkTargetWords)
             if split.count > 1 {
                 pieces = split
@@ -1102,6 +1125,22 @@ final class Pipeline {
         echoContext: InsertionContext?,
         llm: any LLMEngine
     ) async throws -> String {
+        try await runPassCandidate(pass: pass, text: text, prompt: prompt,
+                                   echoContext: echoContext, audit: false, llm: llm) ?? text
+    }
+
+    /// One LLM call plus its deterministic post-checks; nil when the output
+    /// can't be trusted. `audit` adds `DeletionAudit` on top of the pass gate —
+    /// used for whole-text runs of long dictations, where the gate alone is
+    /// too lenient (see `chunkThresholdWords`).
+    private func runPassCandidate(
+        pass: DictationPass,
+        text: String,
+        prompt: String,
+        echoContext: InsertionContext?,
+        audit: Bool,
+        llm: any LLMEngine
+    ) async throws -> String? {
         // `.interactive` so a meeting generation borrowing the model over the
         // socket is cancelled at the next token rather than making the user
         // wait. Runs inline in this task, so the existing `Task.isCancelled`
@@ -1122,13 +1161,21 @@ final class Pipeline {
 
         if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             NSLog("[Dictator] Pass '%@' returned empty — kept previous text.", pass.name)
-            return text
+            return nil
         }
         let inputWords = Self.wordSequence(text).count
         guard Self.passesGate(pass, input: text, output: candidate) else {
             NSLog("[Dictator] Pass '%@' failed its '%@' gate (%d words in) — reverted.",
                   pass.name, Self.gateName(for: pass, inputWords: inputWords), inputWords)
-            return text
+            return nil
+        }
+        if audit {
+            let finding = DeletionAudit.worstRun(input: text, output: candidate)
+            guard finding.score <= DeletionAudit.maxUnexplainedRun else {
+                NSLog("[Dictator] Pass '%@' whole-text dropped %d content words (\"%@\") — retrying in chunks.",
+                      pass.name, finding.score, String(finding.run.prefix(120)))
+                return nil
+            }
         }
         return candidate
     }
