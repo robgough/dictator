@@ -114,7 +114,7 @@ enum DemoFixtures {
             record(
                 timestamp: at(26 * 60),
                 raw: "reminder to send tom the revised estimate before standup",
-                style: "Raw",
+                style: "Quick",
                 stages: nil,
                 final: "reminder to send tom the revised estimate before standup ",
                 pasted: true

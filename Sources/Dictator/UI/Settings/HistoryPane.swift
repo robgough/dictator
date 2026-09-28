@@ -89,7 +89,7 @@ private struct HistoryRow: View {
                             Text(Self.formatted(record.timestamp))
                             Text("·")
                             Text(record.inputDevice)
-                            if let style = record.style {
+                            if let style = record.styleLabel {
                                 Text("·")
                                 Text(style)
                             }
@@ -146,35 +146,10 @@ private struct HistoryRow: View {
     @ViewBuilder
     private var expandedStages: some View {
         VStack(alignment: .leading, spacing: 6) {
-            stageRow(label: "Raw (Whisper)", text: record.raw)
-            if let stages = record.stages, !stages.isEmpty {
-                // New-style record: the pipeline's ordered passes, by name.
-                ForEach(stages, id: \.self) { stage in
-                    stageRow(label: stage.name, text: stage.text)
-                }
-                if let c = record.dictionaryCorrected {
-                    stageRow(label: "Dictionary-corrected", text: c)
-                }
-                if record.final != stages.last!.text {
-                    stageRow(label: "Final (delivered)", text: record.final)
-                }
-            } else {
-                // Legacy record (predates the ordered-stages model).
-                if let f = record.formatted, f != record.raw {
-                    stageRow(label: "Formatted", text: f)
-                }
-                if let c = record.dictionaryCorrected {
-                    stageRow(label: "Dictionary-corrected", text: c)
-                }
-                if let t = record.tidied {
-                    stageRow(label: "Grammar-tidied", text: t)
-                }
-                if let r = record.restructured {
-                    stageRow(label: "Restructured", text: r)
-                }
-                if record.final != (record.restructured ?? record.tidied ?? record.dictionaryCorrected ?? record.formatted ?? record.raw) {
-                    stageRow(label: "Final (delivered)", text: record.final)
-                }
+            // Same list the menu bar's versions popover shows
+            // (`DictationRecord.versions`), so the two can't disagree.
+            ForEach(Array(record.versions.enumerated()), id: \.offset) { _, version in
+                stageRow(label: version.name, text: version.text)
             }
         }
         .padding(.top, 4)

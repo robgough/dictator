@@ -69,7 +69,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Apple Intelligence")
                 } footer: {
-                    Text("Runs Apple's on-device foundation model after transcription to drop \"um\", \"uh\", repeated stutters, and false-starts. Strict content-preservation check reverts to the raw transcript if the model paraphrases.")
+                    Text("Runs Apple's on-device foundation model after transcription to drop \"um\", \"uh\", repeated stutters, and false-starts. Strict content-preservation check reverts to the transcript if the model paraphrases.")
                 }
             } else if let explanation = assistAvailability.explanation {
                 // Mirror-image of the section above: when the foundation

@@ -48,7 +48,7 @@ struct HistoryView: View {
                                 Button {
                                     copyRaw(entry)
                                 } label: {
-                                    Label("Copy raw transcript", systemImage: "waveform")
+                                    Label("Copy transcript", systemImage: "waveform")
                                 }
                                 Button {
                                     inspectedEntry = entry
@@ -170,14 +170,14 @@ private struct HistoryRow: View {
                         // Subtle hint that a pre-cleanup version exists.
                         // Discoverability is otherwise zero — users wouldn't
                         // know to long-press without something signalling it.
-                        Label("raw", systemImage: "waveform")
+                        Label("transcript", systemImage: "waveform")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.tertiary)
                             .labelStyle(.titleAndIcon)
                     }
                     Spacer()
                     if justCopiedRaw {
-                        Label("Raw copied", systemImage: "checkmark.circle.fill")
+                        Label("Transcript copied", systemImage: "checkmark.circle.fill")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.green)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -234,7 +234,7 @@ private struct HistoryDetailSheet: View {
                     )
                     if let raw = entry.raw, !raw.isEmpty {
                         section(
-                            title: "Raw transcript",
+                            title: "Transcript",
                             systemImage: "waveform",
                             text: raw
                         )

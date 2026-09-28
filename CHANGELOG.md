@@ -13,6 +13,11 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The no-AI style is now called Quick everywhere, matching the built-in Quick mode, instead of being called Raw in some places.
+- Menu bar items now highlight as you hover over them.
+- The menu bar shows your default mode as a dropdown, and shows which mode the app you were just using gets, so you can set a mode for that app right there and it sticks.
+- History no longer lists an identical-looking final version after every dictation; it only appears, as "Adjusted to fit", when pasting changed the text's spacing, casing or punctuation.
+- Recent dictations in the menu bar show which stages they went through and any warning, link to your full history, and on hover show every version of the text so you can copy a different one.
 - When you dictate an instruction meant for someone else, like "remove the line about pricing", the formatter now writes it down instead of carrying it out. If Polished drops part of what you said, it retries with the lighter Clean style instead of pasting the unformatted transcript.
 - Long dictations are formatted in one go instead of in pieces: a few seconds faster, and the model can see where your topics change. A new check catches the rare case where the model drops part of what you said, or acts on something you dictated instead of writing it down, and redoes it.
 - Long dictations are broken into paragraphs again with the Qwen 3.5 models — they were often coming back as one block of text.

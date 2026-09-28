@@ -231,7 +231,7 @@ private struct FormattingModelsPane: View {
                 // One line, and it says the thing that matters for the current
                 // choice — rather than a paragraph covering all three.
                 if s.settings.llmEngine == .none {
-                    SectionFootnote("Raw transcripts only; the assistant is unavailable.")
+                    SectionFootnote("Plain transcripts only; the assistant is unavailable.")
                 } else {
                     SectionFootnote("Apple's on-device model needs Apple Intelligence; MLX models download once.")
                 }

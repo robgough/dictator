@@ -352,7 +352,7 @@ private struct MachineRAMNote: View {
         let total = SystemMemory.totalGBLabel
         switch SystemMemory.tier {
         case .lean:
-            return "Detected \(total) of RAM — we'll keep things lean and skip the LLM by default. Dictator still works great; you'll get raw transcripts that just paste through."
+            return "Detected \(total) of RAM — we'll keep things lean and skip the LLM by default. Dictator still works great; you'll get plain transcripts that just paste through."
         case .balanced:
             return "Detected \(total) of RAM — we'll default to a small LLM (Qwen 3.5 2B) that fits comfortably alongside the transcription model."
         case .generous:
@@ -824,7 +824,7 @@ private struct LLMSection: View {
                     LeanLLMNotice()
                 }
             case .none:
-                Text("Raw transcripts only. Fastest path — pick this if you'd rather keep things minimal. You can switch to an LLM any time from Settings → Models.")
+                Text("Plain transcripts only. Fastest path — pick this if you'd rather keep things minimal. You can switch to an LLM any time from Settings → Models.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -915,7 +915,7 @@ private struct LeanLLMNotice: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Your Mac has \(SystemMemory.totalGBLabel) of RAM — we recommend skipping the LLM.")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Running a language model alongside transcription would push memory use past what your Mac can comfortably handle. Dictator works fine without one — you'll get raw transcripts with the dictionary substitution applied. Settings → Models lets you add an LLM anyway if you accept the trade-off.")
+                Text("Running a language model alongside transcription would push memory use past what your Mac can comfortably handle. Dictator works fine without one — you'll get plain transcripts with the dictionary substitution applied. Settings → Models lets you add an LLM anyway if you accept the trade-off.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

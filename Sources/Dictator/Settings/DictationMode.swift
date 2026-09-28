@@ -8,6 +8,12 @@ import Foundation
 /// reached anyone who had already saved.
 enum DictationStyle: String, Codable, CaseIterable, Sendable {
     /// No LLM at all. Spoken cues + vocabulary only — the floor.
+    ///
+    /// Shown as "Quick", the name of the built-in mode that uses it, so the
+    /// mode and its style read the same way Clean/Clean and Polished/Polished
+    /// do. The case (and so the on-disk value) stays `raw`; history records
+    /// written before the rename carry "Raw" and are relabelled on display
+    /// (`DictationRecord.styleLabel`).
     case raw
     /// One Format pass. Verbatim wording; punctuation, casing and spoken cues.
     /// Fillers are kept.
@@ -23,7 +29,7 @@ enum DictationStyle: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .raw: return "Raw"
+        case .raw: return "Quick"
         case .clean: return "Clean"
         case .polished: return "Polished"
         case .messages: return "Messages"
@@ -534,7 +540,7 @@ struct DictationMode: Codable, Equatable, Identifiable, Sendable {
             DictationMode(id: UUID(), name: "Clean", style: .clean),
             DictationMode(id: UUID(), name: "Polished", style: .polished),
             DictationMode(id: UUID(), name: "Messages", style: .messages),
-            DictationMode(id: UUID(), name: "Raw", style: .raw),
+            DictationMode(id: UUID(), name: "Quick", style: .raw),
             DictationMode(id: UUID(), name: "Custom", style: .custom,
                           customPrompt: DictatorSettings.builtinFormattingPrompt),
         ]

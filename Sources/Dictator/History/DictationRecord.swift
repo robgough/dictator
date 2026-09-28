@@ -86,3 +86,62 @@ struct DictationRecord: Codable, Identifiable, Equatable, Hashable, Sendable {
     let visionTermCount: Int?
 
 }
+
+extension DictationRecord {
+    /// `style` for display. Records written before the no-LLM style was
+    /// renamed carry "Raw"; it's the same style, now called Quick.
+    var styleLabel: String? {
+        style == "Raw" ? DictationStyle.raw.label : style
+    }
+
+    /// Every distinct text this dictation passed through, in pipeline order,
+    /// each labelled with the stage that produced it — the transcript first,
+    /// what was delivered last.
+    ///
+    /// Shared by the History pane and the menu bar's versions popover so the
+    /// two can't disagree about what a dictation went through. Handles both
+    /// record shapes: the ordered `stages` model, and legacy records that
+    /// carry the fixed formatted/tidied/restructured fields instead.
+    ///
+    /// The delivered text only gets its own entry when delivery changed
+    /// something you could see. Nearly every dictation gains a trailing space
+    /// on the way out (so the next one doesn't glue onto it), and listing an
+    /// identical-looking "final" after every stage was noise. What's left —
+    /// the caret-aware join recasing the first word or dropping a full stop,
+    /// spoken cues re-applied after the model reverted them — is a real
+    /// processing step, and shows as one (`adjustedStageName`).
+    var versions: [DictationStage] {
+        var out = [DictationStage(name: "Transcript", text: raw)]
+        if let stages, !stages.isEmpty {
+            out += stages
+            if let c = dictionaryCorrected {
+                out.append(DictationStage(name: "Dictionary-corrected", text: c))
+            }
+            if Self.visiblyDiffers(final, stages.last!.text) {
+                out.append(DictationStage(name: Self.adjustedStageName, text: final))
+            }
+        } else {
+            if let f = formatted, f != raw {
+                out.append(DictationStage(name: "Formatted", text: f))
+            }
+            if let c = dictionaryCorrected {
+                out.append(DictationStage(name: "Dictionary-corrected", text: c))
+            }
+            if let t = tidied { out.append(DictationStage(name: "Grammar-tidied", text: t)) }
+            if let r = restructured { out.append(DictationStage(name: "Restructured", text: r)) }
+            if Self.visiblyDiffers(final, restructured ?? tidied ?? dictionaryCorrected ?? formatted ?? raw) {
+                out.append(DictationStage(name: Self.adjustedStageName, text: final))
+            }
+        }
+        return out
+    }
+
+    /// The stage `versions` adds when delivery changed the text beyond
+    /// whitespace.
+    static let adjustedStageName = "Adjusted to fit"
+
+    private static func visiblyDiffers(_ a: String, _ b: String) -> Bool {
+        a.trimmingCharacters(in: .whitespacesAndNewlines)
+            != b.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

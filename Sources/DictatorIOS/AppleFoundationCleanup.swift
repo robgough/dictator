@@ -62,7 +62,7 @@ enum AppleFoundationCleanup {
         var errorDescription: String? {
             switch self {
             case .unavailable(let reason): reason
-            case .validationFailed: "Tidy pass altered the meaning — reverted to the raw transcript."
+            case .validationFailed: "Tidy pass altered the meaning — reverted to the transcript."
             }
         }
     }

@@ -1319,7 +1319,7 @@
         <div class="features pair">
             <div class="feature">
                 <h3>The "um"s go</h3>
-                <p>Every style except Raw drops "um", "uh", "er" and "erm" on the way past. Words that carry actual meaning or voice — "yeah", "okay", "so" — stay, unless you've asked for the more aggressive Polished style.</p>
+                <p>Every style except Quick drops "um", "uh", "er" and "erm" on the way past. Words that carry actual meaning or voice — "yeah", "okay", "so" — stay, unless you've asked for the more aggressive Polished style.</p>
             </div>
             <div class="feature">
                 <h3>A question stays a question</h3>
@@ -1371,7 +1371,7 @@
 
         <div class="two-col">
             <div class="mode" style="--mode-color: #f59e0b;">
-                <h3>Raw</h3>
+                <h3>Quick</h3>
                 <p>No model at all. Spoken cues and your dictionary still apply, so it isn't literally unprocessed — it's the fastest path from speech to text, and the one to use for languages the cleanup models handle poorly.</p>
                 <div class="ba">
                     <p class="said"><b>Say</b><span>"let's ship it friday comma before the demo"</span></p>
@@ -1406,7 +1406,7 @@
 
         <p style="margin-top: 18px;"><strong>Custom</strong> drops the built-in styles and runs a prompt you write yourself. Every built-in style shares one set of prompts, so improvements reach every mode using it — and a mode's <strong>Extra instructions</strong> box layers your own tweak on top without forking the whole thing. "Always use British spelling" is one line, and it survives every future update.</p>
 
-        <p>Modes can auto-activate for the app you're in: a Messages mode bound to Slack and Signal, a Polished mode bound to Mail. Or cycle mid-recording with a key (Tab by default) — start in Polished, realise halfway through it should have been Raw, tap once and the rest of the recording switches.</p>
+        <p>Modes can auto-activate for the app you're in: a Messages mode bound to Slack and Signal, a Polished mode bound to Mail. Or cycle mid-recording with a key (Tab by default) — start in Polished, realise halfway through it should have been Quick, tap once and the rest of the recording switches.</p>
 
         <figure class="shot">
             <div class="demo-frame">
@@ -2137,7 +2137,7 @@
 
         <details>
             <summary>What if the AI mangles something?</summary>
-            <p>Every language-model pass is checked afterwards against what went in: enough of your original words have to survive, and the output isn't allowed to grow much. A pass that fails is discarded and the previous version is used instead, with a note in the HUD. If you'd rather it never touched your words at all, the Raw style skips the model entirely — you still get spoken punctuation and your dictionary. And history keeps every intermediate stage, so you can always see exactly what changed.</p>
+            <p>Every language-model pass is checked afterwards against what went in: enough of your original words have to survive, and the output isn't allowed to grow much. A pass that fails is discarded and the previous version is used instead, with a note in the HUD. If you'd rather it never touched your words at all, the Quick style skips the model entirely — you still get spoken punctuation and your dictionary. And history keeps every intermediate stage, so you can always see exactly what changed.</p>
         </details>
 
         <details>
@@ -2152,7 +2152,7 @@
 
         <details>
             <summary>What languages does it transcribe?</summary>
-            <p>The default engine — Parakeet TDT v3 on the Neural Engine — covers 25 European languages. For wider reach, switch to Whisper Large v3 Turbo in Settings (around 100 languages). The cleanup styles are English-centric, so for other languages you'll usually want a Raw-style mode: the transcript ships through with your spoken cues and dictionary still applied.</p>
+            <p>The default engine — Parakeet TDT v3 on the Neural Engine — covers 25 European languages. For wider reach, switch to Whisper Large v3 Turbo in Settings (around 100 languages). The cleanup styles are English-centric, so for other languages you'll usually want the Quick style: the transcript ships through with your spoken cues and dictionary still applied.</p>
         </details>
 
         <details>

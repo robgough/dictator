@@ -55,7 +55,7 @@ struct ModeEditorSheet: View {
                     .font(.title3.weight(.semibold))
                 Image(systemName: "lock.fill")
                     .foregroundStyle(.tertiary)
-                    .help("Quick is built in: its name and Raw style are fixed.")
+                    .help("Quick is built in: its name and style are fixed.")
             } else {
                 TextField("Mode name", text: $mode.name)
                     .font(.title3.weight(.semibold))
