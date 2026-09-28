@@ -13,6 +13,7 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- When you dictate an instruction meant for someone else, like "remove the line about pricing", the formatter now writes it down instead of carrying it out. If Polished drops part of what you said, it retries with the lighter Clean style instead of pasting the unformatted transcript.
 - Long dictations are formatted in one go instead of in pieces: a few seconds faster, and the model can see where your topics change. A new check catches the rare case where the model drops part of what you said, or acts on something you dictated instead of writing it down, and redoes it.
 - Long dictations are broken into paragraphs again with the Qwen 3.5 models — they were often coming back as one block of text.
 - Dictation no longer cuts off your last word or two when you let go of the hotkey right as you finish speaking — the mic now listens a moment longer after release.

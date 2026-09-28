@@ -21,6 +21,8 @@ import Foundation
 ///   said twice), or
 /// - near a spoken self-correction ("no", "sorry", "scratch that", "I mean"),
 ///   where dropping the abandoned version is the job.
+/// A dropped editing instruction ("delete…", "rephrase…") fails on its own,
+/// however short the run.
 /// What's left is content that went missing. The score is the size of the
 /// worst run; a single long unexplained run is what distinguishes a dropped
 /// sentence from ordinary rewording, which scatters one- and two-word
@@ -77,7 +79,11 @@ enum DeletionAudit {
                     if w.count < 3 || ignorable.contains(w) || inOutput.contains(w) { continue }
                     if k > 0, a[k - 1] == w { continue }
                     if k + 1 < a.count, a[k + 1] == w { continue }
-                    score += 1
+                    // A dictated editing instruction that vanished means the
+                    // model treated it as addressed to itself — acted on it,
+                    // or silently dropped it. Short, so the run-length bar
+                    // alone misses it; it fails on its own.
+                    score += instructionVerbs.contains(w) ? maxUnexplainedRun + 1 : 1
                 }
                 if score > worst.score {
                     worst = Finding(score: score, run: a[i..<j].joined(separator: " "))
@@ -124,6 +130,13 @@ enum DeletionAudit {
         }
         return kept
     }
+
+    /// Verbs that open an instruction about other text ("remove the line
+    /// about…", "rephrase that…"). The prompts tell the model these are
+    /// dictation to write down; none of the passes may drop one.
+    private static let instructionVerbs: Set<String> = [
+        "remove", "delete", "rephrase", "rewrite", "replace", "ignore",
+    ]
 
     private static let correctionCues: Set<String> = [
         "no", "actually", "sorry", "wait", "scratch", "rather", "instead", "mean",

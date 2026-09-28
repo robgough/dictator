@@ -983,12 +983,27 @@ final class Pipeline {
                       pass.name, context.textBefore.count, context.textAfter.count, context.documentTerms.count)
             }
 
+            // Polished's second chance: the lighter Clean rewrite, which is
+            // asked to drop far less. Used when a Polish output fails its
+            // checks — before now that meant falling all the way back to
+            // the unformatted transcript.
+            let fallback: PassFallback? = pass.kind == .polish
+                ? PassFallback(
+                    pass: DictationPass(kind: .format, name: pass.name,
+                                        prompt: DictatorSettings.builtinFormattingPrompt),
+                    prompt: DictatorSettings.assemblePrompt(
+                        base: DictatorSettings.builtinFormattingPrompt,
+                        extraInstructions: currentMode.extraInstructions,
+                        global: settings.globalPromptAddendum))
+                : nil
+
             let produced: String
             do {
                 produced = try await runPassPossiblyChunked(
                     pass: pass,
                     text: text,
                     prompt: prompt,
+                    fallback: fallback,
                     contextBlock: contextBlock,
                     echoContext: contextBlock == nil ? nil : inFlight.context,
                     llm: llm!
@@ -1068,6 +1083,7 @@ final class Pipeline {
         pass: DictationPass,
         text: String,
         prompt: String,
+        fallback: PassFallback?,
         contextBlock: String?,
         echoContext: InsertionContext?,
         llm: any LLMEngine
@@ -1075,10 +1091,12 @@ final class Pipeline {
         let words = DictationText.wordCount(text)
         var pieces = [text]
         if words >= Self.chunkThresholdWords {
-            // Whole text first — see `chunkThresholdWords`. Translate keeps the
-            // old chunk-always behaviour: the audit compares words, and a
-            // translation shares none with its input by design.
-            if pass.kind != .translate, words <= Self.wholeTextMaxWords {
+            // Whole text first — see `chunkThresholdWords` — for the passes
+            // `DeletionAudit` can vouch for. Custom and Translate keep the old
+            // chunk-always behaviour: a custom prompt may summarise on purpose,
+            // and a translation shares no words with its input.
+            var wholeFailed = false
+            if Self.auditsDeletions(pass, input: text), words <= Self.wholeTextMaxWords {
                 let fullPrompt = contextBlock.map { prompt + "\n\n" + $0 } ?? prompt
                 if let whole = try await runPassCandidate(
                     pass: pass, text: text, prompt: fullPrompt,
@@ -1087,12 +1105,22 @@ final class Pipeline {
                     return whole
                 }
                 if Task.isCancelled { throw CancellationError() }
+                wholeFailed = true
             }
             let split = DictationText.chunks(text, targetWords: Self.chunkTargetWords)
             if split.count > 1 {
                 pieces = split
                 NSLog("[Dictator] Pass '%@': %d words — running as %d sentence-bounded chunks.",
                       pass.name, words, split.count)
+            } else if wholeFailed {
+                // One unsplittable sentence: a chunked run would repeat the
+                // exact call that just failed. Only the fallback is left.
+                guard let fallback else { return text }
+                let fallbackPrompt = contextBlock.map { fallback.prompt + "\n\n" + $0 } ?? fallback.prompt
+                return try await runPassCandidate(
+                    pass: fallback.pass, text: text, prompt: fallbackPrompt,
+                    echoContext: echoContext, audit: true, llm: llm
+                ) ?? text
             }
         }
 
@@ -1102,11 +1130,16 @@ final class Pipeline {
             if Task.isCancelled { throw CancellationError() }
             let isFirstChunk = index == 0
             var chunkPrompt = prompt
-            if isFirstChunk, let contextBlock { chunkPrompt += "\n\n" + contextBlock }
+            var chunkFallback = fallback
+            if isFirstChunk, let contextBlock {
+                chunkPrompt += "\n\n" + contextBlock
+                chunkFallback = fallback.map { PassFallback(pass: $0.pass, prompt: $0.prompt + "\n\n" + contextBlock) }
+            }
             let chunkOutput = try await runPassChunk(
                 pass: pass,
                 text: piece,
                 prompt: chunkPrompt,
+                fallback: chunkFallback,
                 echoContext: isFirstChunk ? echoContext : nil,
                 llm: llm
             )
@@ -1115,24 +1148,65 @@ final class Pipeline {
         return outputs.count == 1 ? outputs[0] : Self.joinChunks(outputs)
     }
 
-    /// One LLM call plus its deterministic post-checks. Returns `text` unchanged
-    /// whenever the model's output can't be trusted, so the caller never has to
-    /// distinguish "reverted" from "accepted but identical".
+    /// A second attempt for a pass whose output fails its checks: a different
+    /// pass (for its gate) with its fully assembled prompt.
+    struct PassFallback {
+        let pass: DictationPass
+        let prompt: String
+    }
+
+    /// One LLM call plus its deterministic post-checks, then `fallback` once if
+    /// that fails. Returns `text` unchanged whenever no output can be trusted,
+    /// so the caller never has to distinguish "reverted" from "accepted but
+    /// identical".
     private func runPassChunk(
         pass: DictationPass,
         text: String,
         prompt: String,
+        fallback: PassFallback?,
         echoContext: InsertionContext?,
         llm: any LLMEngine
     ) async throws -> String {
-        try await runPassCandidate(pass: pass, text: text, prompt: prompt,
-                                   echoContext: echoContext, audit: false, llm: llm) ?? text
+        let audit = Self.auditsDeletions(pass, input: text)
+        if let candidate = try await runPassCandidate(
+            pass: pass, text: text, prompt: prompt,
+            echoContext: echoContext, audit: audit, llm: llm
+        ) {
+            return candidate
+        }
+        guard let fallback else { return text }
+        if Task.isCancelled { throw CancellationError() }
+        let retry = try await runPassCandidate(
+            pass: fallback.pass, text: text, prompt: fallback.prompt,
+            echoContext: echoContext, audit: Self.auditsDeletions(fallback.pass, input: text), llm: llm
+        )
+        NSLog("[Dictator] Pass '%@' retried with the Clean prompt — %@.",
+              pass.name, retry == nil ? "that failed too, kept the transcript" : "accepted")
+        return retry ?? text
+    }
+
+    /// Whether `DeletionAudit` applies. The rewrite passes are all asked to
+    /// keep the speaker's content; Custom prompts may legitimately summarise
+    /// and Translate shares no words with its input.
+    /// Shortest input `DeletionAudit` runs on. Far below the ratio gates'
+    /// 40-word floor because it doesn't suffer their small-sample problem — it
+    /// looks for a specific missing run, not a proportion — and a dropped
+    /// instruction is short: on 84 real 12–39-word outputs it flagged none.
+    static let auditMinWords = 12
+
+    static func auditsDeletions(_ pass: DictationPass, input: String) -> Bool {
+        switch pass.kind {
+        case .format, .polish, .messages:
+            return wordSequence(input).count >= auditMinWords
+        case .custom, .translate:
+            return false
+        }
     }
 
     /// One LLM call plus its deterministic post-checks; nil when the output
-    /// can't be trusted. `audit` adds `DeletionAudit` on top of the pass gate —
-    /// used for whole-text runs of long dictations, where the gate alone is
-    /// too lenient (see `chunkThresholdWords`).
+    /// can't be trusted. `audit` adds `DeletionAudit` on top of the pass gate,
+    /// whose ratios get more lenient as the text grows and can't see a short
+    /// dropped instruction at all.
     private func runPassCandidate(
         pass: DictationPass,
         text: String,
@@ -1172,7 +1246,7 @@ final class Pipeline {
         if audit {
             let finding = DeletionAudit.worstRun(input: text, output: candidate)
             guard finding.score <= DeletionAudit.maxUnexplainedRun else {
-                NSLog("[Dictator] Pass '%@' whole-text dropped %d content words (\"%@\") — retrying in chunks.",
+                NSLog("[Dictator] Pass '%@' dropped content (audit score %d: \"%@\") — rejected.",
                       pass.name, finding.score, String(finding.run.prefix(120)))
                 return nil
             }
