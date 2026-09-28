@@ -21,6 +21,8 @@ open Dictator.xcodeproj                # then ⌘R
 
 `./gen` sources `.env` before invoking `xcodegen`. `xcodegen generate` works too, but only if the env vars are already exported. `Dictator.xcodeproj` is gitignored — it's a generated artifact from `project.yml`, and it now has two application targets/schemes: `Dictator` and `DictatorMeetings`.
 
+**`./run`** is the CLI equivalent of ⌘R: it runs `./gen`, builds, checks the installed copy is Developer ID-signed, quits the running app (politely, so MCP servers are reaped) and launches the new one. `./run meetings` for Dictator Meetings, `./run all` for both, `--no-launch` to build and install only. The build log lands in `.derivedData/run-<scheme>.log`.
+
 **CLI builds** (useful for headless verification): set `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (the system has `xcode-select` pointed at CommandLineTools by default, which lacks `xcodebuild`), then `xcodebuild -project Dictator.xcodeproj -scheme Dictator -configuration Debug -derivedDataPath .derivedData build` (swap `-scheme DictatorMeetings` to build the notes app instead). A post-build phase installs the signed `.app` to `~/Applications/Dictator.app` (or `~/Applications/Dictator Meetings.app`).
 
 No test target exists. There is no lint config.

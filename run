@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Build, install and relaunch one of the Mac apps — the CLI equivalent of ⌘R.
+#
+#   ./run             # Dictator
+#   ./run meetings    # Dictator Meetings
+#   ./run all         # both
+#   ./run --no-launch # build + install only
+#
+# The build's post-build phase already installs a signed copy to
+# ~/Applications; this adds the two things ⌘R does that a bare xcodebuild
+# doesn't: regenerate the project first (a new source file isn't in the
+# project until ./gen has run) and swap the running app for the new one.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+launch=1
+targets=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-launch) launch=0 ;;
+        dictator|"") targets+=(dictator) ;;
+        meetings) targets+=(meetings) ;;
+        all) targets+=(dictator meetings) ;;
+        *) echo "usage: ./run [dictator|meetings|all] [--no-launch]" >&2; exit 2 ;;
+    esac
+done
+[ ${#targets[@]} -eq 0 ] && targets=(dictator)
+
+# xcode-select points at CommandLineTools here, which has no xcodebuild.
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+
+./gen >/dev/null
+
+for target in "${targets[@]}"; do
+    case "$target" in
+        dictator) scheme=Dictator; name=Dictator; bundle=net.robgough.Dictator ;;
+        meetings) scheme=DictatorMeetings; name="Dictator Meetings"; bundle=net.robgough.DictatorMeetings ;;
+    esac
+    app="$HOME/Applications/$name.app"
+    log=".derivedData/run-$scheme.log"
+    mkdir -p .derivedData
+
+    echo "▸ Building ${name}…"
+    if ! xcodebuild -project Dictator.xcodeproj -scheme "$scheme" -configuration Debug \
+            -derivedDataPath .derivedData build >"$log" 2>&1 \
+       || ! grep -q "BUILD SUCCEEDED" "$log"; then
+        grep -E "error:" "$log" | sort -u | head -30 >&2 || true
+        echo "✘ $name build failed — full log: $log" >&2
+        exit 1
+    fi
+
+    # A build that "succeeds" but leaves an unsigned or ad-hoc copy is the one
+    # that silently loses the Mic / Accessibility grants, so check it.
+    if ! codesign --verify --deep --strict "$app" 2>/dev/null; then
+        echo "✘ $app failed signature verification" >&2
+        exit 1
+    fi
+    authority=$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -1)
+    case "$authority" in
+        "Developer ID Application"*) ;;
+        *) echo "⚠︎ $name is signed by '${authority:-ad-hoc}', not Developer ID — TCC grants won't match releases" >&2 ;;
+    esac
+    echo "✓ Installed $app"
+
+    [ $launch -eq 1 ] || continue
+
+    # Quit politely first: applicationWillTerminate is where MCP servers get
+    # reaped, and a SIGTERM skips it. The single-instance guard makes a new
+    # launch silently quit if the old one is still alive, so wait for it.
+    if pgrep -f "$app/Contents/MacOS/" >/dev/null || \
+       [ "$(osascript -e "application id \"$bundle\" is running" 2>/dev/null)" = "true" ]; then
+        osascript -e "tell application id \"$bundle\" to quit" >/dev/null 2>&1 || true
+        for _ in $(seq 1 50); do
+            [ "$(osascript -e "application id \"$bundle\" is running" 2>/dev/null)" = "true" ] || break
+            sleep 0.2
+        done
+        if [ "$(osascript -e "application id \"$bundle\" is running" 2>/dev/null)" = "true" ]; then
+            echo "  $name didn't quit in 10s — terminating"
+            pkill -TERM -f "/$name.app/Contents/MacOS/" || true
+            sleep 1
+        fi
+    fi
+    open "$app"
+    echo "✓ Launched $name"
+done
