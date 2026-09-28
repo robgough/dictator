@@ -14,6 +14,41 @@ struct DictationStage: Codable, Equatable, Hashable, Sendable {
     let text: String
 }
 
+/// What happened to one LLM pass of a dictation — including the passes that
+/// left no `DictationStage` behind.
+///
+/// Stages only record accepted *changes*, so "the model found nothing to
+/// change", "its output failed a check and was thrown away" and "skipped
+/// because it looked like a question" all used to look identical: a style
+/// that ran nothing. That's the difference between a mode working and a mode
+/// quietly failing, so it's recorded.
+struct PassOutcome: Codable, Hashable, Sendable {
+    enum Kind: String {
+        case changed, unchanged, rejected, skipped, failed
+    }
+
+    /// The pass's display name ("Polish", "Paragraphs"), matching its stage.
+    let pass: String
+    /// A `Kind` raw value, stored as a plain string on purpose: history is
+    /// one JSON array, and a record from a newer build carrying a kind this
+    /// build doesn't know must still decode rather than take the whole file
+    /// down with it.
+    let result: String
+    /// Why, in words for the History pane. nil for a plain accepted change.
+    let detail: String?
+
+    init(pass: String, _ kind: Kind, detail: String? = nil) {
+        self.pass = pass
+        self.result = kind.rawValue
+        self.detail = detail
+    }
+
+    var kind: Kind? { Kind(rawValue: result) }
+
+    /// Rejected or failed: something went wrong, not just "nothing to do".
+    var isProblem: Bool { kind == .rejected || kind == .failed }
+}
+
 struct DictationRecord: Codable, Identifiable, Equatable, Hashable, Sendable {
     let id: UUID
     let timestamp: Date
@@ -85,6 +120,9 @@ struct DictationRecord: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// impossible to judge whether the feature was working at all.
     let visionTermCount: Int?
 
+    /// One entry per pass that was attempted, in order. nil on records
+    /// written before outcomes were tracked, and on modes that run no pass.
+    let passOutcomes: [PassOutcome]?
 }
 
 extension DictationRecord {
@@ -134,6 +172,52 @@ extension DictationRecord {
             }
         }
         return out
+    }
+
+    /// One step of the one-line summary of what a dictation went through.
+    struct TrailStep: Hashable {
+        enum Tone { case normal, quiet, problem }
+        let label: String
+        let tone: Tone
+    }
+
+    /// "Transcript › Polish (no changes) › Paragraphs" as data, so the menu
+    /// bar and History render the same summary. Built from `passOutcomes`
+    /// when the record has them — that's what shows a pass that ran and
+    /// changed nothing, or was rejected — and from the stages otherwise.
+    var trail: [TrailStep] {
+        let adjusted = versions.last?.name == Self.adjustedStageName
+        guard let outcomes = passOutcomes, !outcomes.isEmpty else {
+            return versions.map { version in
+                switch version.name {
+                case "Dictionary-corrected": TrailStep(label: "Dictionary", tone: .normal)
+                case Self.adjustedStageName: TrailStep(label: "Adjusted", tone: .normal)
+                default: TrailStep(label: version.name, tone: .normal)
+                }
+            }
+        }
+        var steps = [TrailStep(label: "Transcript", tone: .normal)]
+        for (index, outcome) in outcomes.enumerated() {
+            switch outcome.kind {
+            case .changed?: steps.append(TrailStep(label: outcome.pass, tone: .normal))
+            case .unchanged?: steps.append(TrailStep(label: "\(outcome.pass) (no changes)", tone: .quiet))
+            case .skipped?: steps.append(TrailStep(label: "\(outcome.pass) (skipped)", tone: .quiet))
+            case .rejected?: steps.append(TrailStep(label: "\(outcome.pass) (rejected)", tone: .problem))
+            case .failed?: steps.append(TrailStep(label: "\(outcome.pass) (failed)", tone: .problem))
+            case nil: steps.append(TrailStep(label: outcome.pass, tone: .quiet))
+            }
+            // The dictionary runs straight after the first pass.
+            if index == 0, dictionaryCorrected != nil {
+                steps.append(TrailStep(label: "Dictionary", tone: .normal))
+            }
+        }
+        if adjusted { steps.append(TrailStep(label: "Adjusted", tone: .normal)) }
+        return steps
+    }
+
+    /// The outcomes worth a sentence: anything with a reason attached.
+    var outcomeNotes: [PassOutcome] {
+        (passOutcomes ?? []).filter { $0.detail != nil }
     }
 
     /// The stage `versions` adds when delivery changed the text beyond

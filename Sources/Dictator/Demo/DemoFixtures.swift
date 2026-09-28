@@ -203,7 +203,8 @@ enum DemoFixtures {
             note: note,
             appBundleID: nil,
             deliveredToJournal: false,
-            visionTermCount: visionTermCount
+            visionTermCount: visionTermCount,
+            passOutcomes: nil
         )
     }
 

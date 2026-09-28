@@ -13,6 +13,8 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- History and the menu bar now show what happened to each step of a dictation, not only the steps that changed it: a step that found nothing to change, was skipped, or had its result rejected and thrown away is listed with the reason, and problems show in orange.
+- Expanding a dictation in History lines its steps up under the text instead of under the icon.
 - The no-AI style is now called Quick everywhere, matching the built-in Quick mode, instead of being called Raw in some places.
 - Menu bar items now highlight as you hover over them.
 - The menu bar shows your default mode as a dropdown, and shows which mode the app you were just using gets, so you can set a mode for that app right there and it sticks.

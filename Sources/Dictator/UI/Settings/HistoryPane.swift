@@ -79,11 +79,14 @@ private struct HistoryRow: View {
                     Image(systemName: record.pasted ? "checkmark.circle.fill" : "doc.on.clipboard.fill")
                         .foregroundStyle(record.pasted ? Color.accentColor : Color.secondary)
                         .font(.system(size: 14))
+                        .frame(width: 14)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(record.final)
                             .font(.system(size: 13))
                             .foregroundStyle(.primary)
-                            .lineLimit(isExpanded ? nil : 2)
+                            // Two lines even when expanded: the full text is
+                            // right below, as the last stage.
+                            .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         HStack(spacing: 6) {
                             Text(Self.formatted(record.timestamp))
@@ -118,6 +121,9 @@ private struct HistoryRow: View {
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        PassTrail(record: record)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -129,7 +135,11 @@ private struct HistoryRow: View {
             .buttonStyle(.plain)
 
             if isExpanded {
+                PassOutcomeNotes(record: record)
+                    .font(.caption)
+                    .padding(.leading, Self.textInset)
                 expandedStages
+                    .padding(.leading, Self.textInset)
                 HStack {
                     Spacer()
                     Button(role: .destructive, action: remove) {
@@ -142,6 +152,10 @@ private struct HistoryRow: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
     }
+
+    /// Status icon width + the header's spacing: the expanded stages line up
+    /// under the dictation's text instead of under its icon.
+    private static let textInset: CGFloat = 24
 
     @ViewBuilder
     private var expandedStages: some View {

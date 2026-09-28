@@ -350,21 +350,6 @@ private struct RecentRow: View {
         return record.pasted ? .secondary : .orange
     }
 
-    /// "Transcript › Clean › Paragraphs" — the stages this dictation went through,
-    /// short enough for one line.
-    private var trail: String {
-        record.versions
-            .map(\.name)
-            .map { name in
-                switch name {
-                case "Dictionary-corrected": "Dictionary"
-                case DictationRecord.adjustedStageName: "Adjusted"
-                default: name
-                }
-            }
-            .joined(separator: " › ")
-    }
-
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             // The glyph says which flow produced the row — a mic for dictation,
@@ -393,7 +378,7 @@ private struct RecentRow: View {
                     Text(copied ? "Copied" : Self.relative(record.timestamp))
                         .monospacedDigit()
                     Text("·")
-                    Text(trail)
+                    PassTrail(record: record)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -453,6 +438,9 @@ private struct VersionsPopover: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(.bottom, 2)
+            PassOutcomeNotes(record: record)
+                .font(.system(size: 10))
+                .padding(.bottom, 4)
             ForEach(Array(versions.enumerated()), id: \.offset) { index, version in
                 if index > 0 { Divider() }
                 Button {

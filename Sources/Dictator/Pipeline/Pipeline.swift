@@ -372,6 +372,18 @@ final class Pipeline {
         /// the History pane renders; the four fields below are the legacy
         /// fixed-pass slots, still written so old History rows keep working.
         var stages: [DictationStage] = []
+        /// What happened to each pass, including the ones that left no stage
+        /// behind — see `PassOutcome`.
+        var passOutcomes: [PassOutcome] = []
+        /// Why candidate outputs for the pass currently running were thrown
+        /// away, and whether the Clean retry rescued it. Reset per pass;
+        /// `runPassCandidate` / `runPassChunk` write them, the pass loop turns
+        /// them into that pass's outcome.
+        var passRejections: [String] = []
+        var passRetried = false
+        /// Set when a long dictation's whole-text attempt was rejected and the
+        /// pass was redone in sections: the reason the whole-text run failed.
+        var passWholeTextRejection: String?
         var formatted: String?
         var dictionaryCorrected: String?
         var tidied: String?
@@ -954,9 +966,15 @@ final class Pipeline {
             // leave one sentence in the wrong language.
             let questionSkip = isFirst && pass.kind != .translate && Self.looksLikeQuestion(text)
             if wordsFree || questionSkip {
+                inFlight.passOutcomes.append(PassOutcome(
+                    pass: pass.name, .skipped,
+                    detail: wordsFree ? "nothing to format" : "looked like a question, which the model tends to answer"))
                 if isFirst { applyDeterministicMidPasses() }
                 continue
             }
+            inFlight.passRejections = []
+            inFlight.passRetried = false
+            inFlight.passWholeTextRejection = nil
 
             state = Self.hudState(for: pass)
 
@@ -1012,6 +1030,8 @@ final class Pipeline {
                 // Engine failure (not loaded, etc.) will hit every later pass
                 // too — stop here and ship what we have with a note.
                 warning = "LLM failed: \(error.localizedDescription)"
+                inFlight.passOutcomes.append(PassOutcome(
+                    pass: pass.name, .failed, detail: error.localizedDescription))
                 if isFirst { applyDeterministicMidPasses() }
                 break
             }
@@ -1019,10 +1039,19 @@ final class Pipeline {
             // `runPassPossiblyChunked` already reverted anything empty or
             // gate-failing, so a text that came back unchanged means the pass
             // contributed nothing and doesn't earn a history stage.
-            if produced != text {
+            let changed = produced != text
+            if changed {
                 text = produced
                 recordStageOutput(pass: pass, isFirst: isFirst, output: produced)
             }
+            // …but it does earn an outcome: "found nothing to change" and "its
+            // output was rejected" both leave the text as it was, and History
+            // couldn't tell them apart — which made a silently failing mode
+            // look like a mode with nothing to do.
+            inFlight.passOutcomes.append(Self.outcome(
+                pass: pass.name, changed: changed,
+                rejections: inFlight.passRejections, retried: inFlight.passRetried,
+                wholeTextRejection: inFlight.passWholeTextRejection))
 
             if isFirst { applyDeterministicMidPasses() }
         }
@@ -1106,6 +1135,10 @@ final class Pipeline {
                 }
                 if Task.isCancelled { throw CancellationError() }
                 wholeFailed = true
+                // Keep the whole-text reason apart from the sections', so the
+                // outcome can say "redone in sections" rather than blame them.
+                inFlight.passWholeTextRejection = inFlight.passRejections.last
+                inFlight.passRejections = []
             }
             let split = DictationText.chunks(text, targetWords: Self.chunkTargetWords)
             if split.count > 1 {
@@ -1117,10 +1150,12 @@ final class Pipeline {
                 // exact call that just failed. Only the fallback is left.
                 guard let fallback else { return text }
                 let fallbackPrompt = contextBlock.map { fallback.prompt + "\n\n" + $0 } ?? fallback.prompt
-                return try await runPassCandidate(
+                let retry = try await runPassCandidate(
                     pass: fallback.pass, text: text, prompt: fallbackPrompt,
                     echoContext: echoContext, audit: true, llm: llm
-                ) ?? text
+                )
+                if retry != nil { inFlight.passRetried = true }
+                return retry ?? text
             }
         }
 
@@ -1182,6 +1217,7 @@ final class Pipeline {
         )
         NSLog("[Dictator] Pass '%@' retried with the Clean prompt — %@.",
               pass.name, retry == nil ? "that failed too, kept the transcript" : "accepted")
+        if retry != nil { inFlight.passRetried = true }
         return retry ?? text
     }
 
@@ -1235,12 +1271,14 @@ final class Pipeline {
 
         if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             NSLog("[Dictator] Pass '%@' returned empty — kept previous text.", pass.name)
+            inFlight.passRejections.append("the model returned nothing")
             return nil
         }
         let inputWords = Self.wordSequence(text).count
         guard Self.passesGate(pass, input: text, output: candidate) else {
             NSLog("[Dictator] Pass '%@' failed its '%@' gate (%d words in) — reverted.",
                   pass.name, Self.gateName(for: pass, inputWords: inputWords), inputWords)
+            inFlight.passRejections.append(Self.gateFailureReason(for: pass, inputWords: inputWords))
             return nil
         }
         if audit {
@@ -1248,6 +1286,7 @@ final class Pipeline {
             guard finding.score <= DeletionAudit.maxUnexplainedRun else {
                 NSLog("[Dictator] Pass '%@' dropped content (audit score %d: \"%@\") — rejected.",
                       pass.name, finding.score, String(finding.run.prefix(120)))
+                inFlight.passRejections.append("it dropped part of what you said")
                 return nil
             }
         }
@@ -1345,6 +1384,48 @@ final class Pipeline {
 
     /// Name of the gate `passesGate` applies for this pass and input length —
     /// for the revert log line, so a rejection says which check fired.
+    /// `gateName` in words a user can act on, for the History outcome line.
+    static func gateFailureReason(for pass: DictationPass, inputWords: Int) -> String {
+        guard inputWords >= strictGateMinWords else { return "it changed a number" }
+        switch pass.kind {
+        case .format, .messages, .custom: return "it changed too many of your words"
+        case .polish: return "it changed too much"
+        case .translate: return "the translation's length or numbers were off"
+        }
+    }
+
+    /// Turns what happened during one pass into its recorded outcome.
+    static func outcome(
+        pass: String, changed: Bool, rejections: [String], retried: Bool,
+        wholeTextRejection: String? = nil
+    ) -> PassOutcome {
+        if let whole = wholeTextRejection {
+            // The sections' own rejections (if any) are folded in below.
+            let rest = outcome(pass: pass, changed: changed, rejections: rejections, retried: retried)
+            let lead = "whole-text rewrite rejected (\(whole)), redone in sections"
+            return PassOutcome(pass: pass, rest.kind ?? .changed,
+                               detail: rest.detail.map { "\(lead); \($0)" } ?? lead)
+        }
+        var reasons: [String] = []
+        for r in rejections where !reasons.contains(r) { reasons.append(r) }
+        let why = reasons.joined(separator: "; ")
+        if changed {
+            if retried {
+                return PassOutcome(pass: pass, .changed,
+                                   detail: "first attempt rejected (\(why)); the lighter Clean rewrite was used")
+            }
+            if !reasons.isEmpty {
+                return PassOutcome(pass: pass, .changed,
+                                   detail: "part kept as it was (\(why))")
+            }
+            return PassOutcome(pass: pass, .changed)
+        }
+        if !reasons.isEmpty {
+            return PassOutcome(pass: pass, .rejected, detail: "\(why) — kept the previous text")
+        }
+        return PassOutcome(pass: pass, .unchanged, detail: "the model found nothing to change")
+    }
+
     static func gateName(for pass: DictationPass, inputWords: Int) -> String {
         guard inputWords >= strictGateMinWords else { return "numbers preserved" }
         switch pass.kind {
@@ -1401,32 +1482,48 @@ final class Pipeline {
         } catch {
             NSLog("[Dictator] Auto-paragraph pass failed (%@) — left as one paragraph.",
                   error.localizedDescription)
+            inFlight.passOutcomes.append(PassOutcome(
+                pass: "Paragraphs", .failed, detail: error.localizedDescription))
             return nil
         }
         if Task.isCancelled { return nil }
 
         let starts = DictationText.parseParagraphStarts(reply, sentenceCount: sentences.count)
         // "none", a refusal, or anything without usable numbers.
-        guard !starts.isEmpty else { return nil }
+        guard !starts.isEmpty else {
+            inFlight.passOutcomes.append(PassOutcome(
+                pass: "Paragraphs", .unchanged, detail: "the model kept it as one paragraph"))
+            return nil
+        }
         // More than half the sentences starting a paragraph isn't paragraphing,
         // it's a line break after every thought — the model misread the task.
         guard starts.count <= sentences.count / 2 else {
             NSLog("[Dictator] Auto-paragraph: %d breaks for %d sentences — rejected as over-splitting.",
                   starts.count, sentences.count)
+            inFlight.passOutcomes.append(PassOutcome(
+                pass: "Paragraphs", .rejected,
+                detail: "\(starts.count) breaks for \(sentences.count) sentences is over-splitting — kept one paragraph"))
             return nil
         }
 
         let split = DictationText.applyParagraphStarts(sentences, starts)
-        guard split != text else { return nil }
+        guard split != text else {
+            inFlight.passOutcomes.append(PassOutcome(
+                pass: "Paragraphs", .unchanged, detail: "the model kept it as one paragraph"))
+            return nil
+        }
         // Belt and braces on the whitespace-only guarantee: if the sentence
         // tokeniser dropped or reordered anything, ship the original.
         guard DictationText.nonWhitespaceSignature(split)
                 == DictationText.nonWhitespaceSignature(text) else {
             NSLog("[Dictator] Auto-paragraph: re-join changed the text — kept one paragraph.")
+            inFlight.passOutcomes.append(PassOutcome(
+                pass: "Paragraphs", .rejected, detail: "splitting would have changed the words — kept one paragraph"))
             return nil
         }
         NSLog("[Dictator] Auto-paragraphs: %d sentences → %d paragraphs.",
               sentences.count, starts.count + 1)
+        inFlight.passOutcomes.append(PassOutcome(pass: "Paragraphs", .changed))
         return split
     }
 
@@ -2012,7 +2109,8 @@ final class Pipeline {
             note: note,
             appBundleID: inFlight.appBundleID,
             deliveredToJournal: lastDeliveryWasJournal,
-            visionTermCount: inFlight.visionAttempted ? inFlight.visionTerms.count : nil
+            visionTermCount: inFlight.visionAttempted ? inFlight.visionTerms.count : nil,
+            passOutcomes: inFlight.passOutcomes.isEmpty ? nil : inFlight.passOutcomes
         )
         DictationHistory.shared.append(record)
         UsageStatsStore.shared.record(
