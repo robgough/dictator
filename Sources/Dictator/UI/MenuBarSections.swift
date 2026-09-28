@@ -80,9 +80,10 @@ struct MenuSectionHeader: View {
 /// answer "Dictator". ChatInsertion already tracks the last app that *wasn't*
 /// us for exactly this reason.
 ///
-/// The app row is both the indicator and the control. It shows when that app
-/// is bound to a mode other than the default (the override that used to be
-/// invisible outside Settings), and picking a mode from it writes the same
+/// The app row is both the indicator and the control. Its picker reads
+/// "Default (…)" or the app's own mode — the override that used to be
+/// invisible outside Settings — and the Default row dims while that override
+/// is in charge. Picking a mode from it writes the same
 /// `appBundleIDs` binding the mode editor does — so it sticks, and the mode
 /// editor shows it afterwards.
 struct MenuModeSection: View {
@@ -100,6 +101,10 @@ struct MenuModeSection: View {
                     .frame(width: 16)
                 Text("Default")
                     .font(.system(size: 13, design: .rounded))
+                    // Dimmed while the app row's own mode is the one that
+                    // applies: which row is in charge reads off the rows
+                    // themselves, without a sentence explaining it.
+                    .foregroundStyle(appOverridesDefault ? .secondary : .primary)
                 Spacer(minLength: 8)
                 Picker("Default mode", selection: defaultBinding) {
                     ForEach(state.settings.modes) { mode in
@@ -130,7 +135,6 @@ struct MenuModeSection: View {
 
     @ViewBuilder
     private func appRow(app: NSRunningApplication, bundleID: String) -> some View {
-        let bound = boundMode(for: bundleID)
         let name = app.localizedName ?? bundleID
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
@@ -158,12 +162,6 @@ struct MenuModeSection: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
-            if let bound, bound.id != state.settings.defaultModeID {
-                Label("Dictating here uses \(bound.name), not your default", systemImage: "arrow.triangle.branch")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.leading, 24)
-            }
             // A website binding beats an app binding, and working out whether
             // one applies means walking the browser's accessibility tree —
             // not something to do every time this popover opens. Say so
@@ -175,6 +173,15 @@ struct MenuModeSection: View {
                     .padding(.leading, 24)
             }
         }
+    }
+
+    /// True when dictating in the target app would use its own mode rather
+    /// than the default.
+    private var appOverridesDefault: Bool {
+        guard let bundleID = targetApp?.bundleIdentifier,
+              let bound = boundMode(for: bundleID)
+        else { return false }
+        return bound.id != state.settings.defaultModeID
     }
 
     /// Mirrors `DictatorSettings.activeMode`'s app tier: first mode in list
