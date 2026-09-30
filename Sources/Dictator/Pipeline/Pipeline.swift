@@ -953,22 +953,22 @@ final class Pipeline {
             // never written for.
             if pass.kind == .translate { applyDeterministicMidPasses() }
 
-            // Skip conditions, preserving the old per-pass guards:
-            //  • pure emoji/punctuation (no words) — nothing to transform, and
-            //    small models narrate instead of echoing;
-            //  • question-shaped input, FIRST pass only — Whisper already
-            //    punctuates questions and the formatter is tempted to answer.
+            // Pure emoji/punctuation (no words): nothing to transform, and
+            // small models narrate instead of echoing.
+            //
+            // Question-shaped input used to be skipped here too, because small
+            // models answered questions instead of writing them down. That cost
+            // a fifth of all dictations their formatting — one "right?" at the
+            // end of three paragraphs switched the pass off for all of them —
+            // and today's models don't do it (scratch/chunk-check `question`
+            // set: 0 answers in 214 runs on Gemma 4 12B and Qwen 3.5 9B). The
+            // pass now runs and `stillAsksQuestion` guards the output instead,
+            // so a model that does answer falls back to the transcript — what
+            // the skip gave, only after trying.
             let wordsFree = Self.wordSequence(text).isEmpty
-            // The question skip exists because the *formatter* is tempted to
-            // answer a question instead of punctuating it. A translator has no
-            // such excuse — "what time is the meeting?" is exactly as
-            // translatable as anything else, and skipping it would silently
-            // leave one sentence in the wrong language.
-            let questionSkip = isFirst && pass.kind != .translate && Self.looksLikeQuestion(text)
-            if wordsFree || questionSkip {
+            if wordsFree {
                 inFlight.passOutcomes.append(PassOutcome(
-                    pass: pass.name, .skipped,
-                    detail: wordsFree ? "nothing to format" : "looked like a question, which the model tends to answer"))
+                    pass: pass.name, .skipped, detail: "nothing to format"))
                 if isFirst { applyDeterministicMidPasses() }
                 continue
             }
@@ -1281,6 +1281,11 @@ final class Pipeline {
             inFlight.passRejections.append(Self.gateFailureReason(for: pass, inputWords: inputWords))
             return nil
         }
+        guard Self.stillAsksQuestion(pass, input: text, output: candidate) else {
+            NSLog("[Dictator] Pass '%@' lost the question in its input (answered it?) — reverted.", pass.name)
+            inFlight.passRejections.append("it didn't keep your question — it may have answered it")
+            return nil
+        }
         if audit {
             let finding = DeletionAudit.worstRun(input: text, output: candidate)
             guard finding.score <= DeletionAudit.maxUnexplainedRun else {
@@ -1382,8 +1387,6 @@ final class Pipeline {
         }
     }
 
-    /// Name of the gate `passesGate` applies for this pass and input length —
-    /// for the revert log line, so a rejection says which check fired.
     /// `gateName` in words a user can act on, for the History outcome line.
     static func gateFailureReason(for pass: DictationPass, inputWords: Int) -> String {
         guard inputWords >= strictGateMinWords else { return "it changed a number" }
@@ -1426,6 +1429,8 @@ final class Pipeline {
         return PassOutcome(pass: pass, .unchanged, detail: "the model found nothing to change")
     }
 
+    /// Name of the gate `passesGate` applies for this pass and input length —
+    /// for the revert log line, so a rejection says which check fired.
     static func gateName(for pass: DictationPass, inputWords: Int) -> String {
         guard inputWords >= strictGateMinWords else { return "numbers preserved" }
         switch pass.kind {
@@ -1867,12 +1872,34 @@ final class Pipeline {
         }
     }
 
-    /// Heuristic for question-shaped input. When true we bypass the formatter pass
-    /// to avoid the "model answers instead of transcribes" failure. Triggers on a
-    /// trailing "?" (the strongest signal — Whisper already gave us one) or a
-    /// classic interrogative first word ("why", "how", "what", ...). False positives
-    /// just lose minor punctuation polish; we trust Whisper's already-capitalised,
-    /// already-punctuated output.
+    /// The answer check for question-shaped input, applied on top of
+    /// `passesGate`.
+    ///
+    /// Under `strictGateMinWords` the only gate is "numbers preserved", so a
+    /// short question the model *answers* — "What's the capital of
+    /// Australia?" → "Canberra." — would sail through. This closes that for
+    /// the one input shape where answering is the known failure: the output
+    /// must still ask (a "?" survives when the input had one) and keep the
+    /// input's content words at any length. Merging two questions into one is
+    /// fine; only losing every question mark fails.
+    ///
+    /// Not for Translate (a different script may not use "?") or Custom (the
+    /// user's own prompt may legitimately respond to what was said).
+    static func stillAsksQuestion(_ pass: DictationPass, input: String, output: String) -> Bool {
+        switch pass.kind {
+        case .format, .polish, .messages: break
+        case .custom, .translate: return true
+        }
+        guard looksLikeQuestion(input) else { return true }
+        if input.contains("?"), !output.contains("?") { return false }
+        return passOnePreservesContent(raw: input, formatted: output)
+    }
+
+    /// Heuristic for question-shaped input: a trailing "?" (the strongest
+    /// signal — the transcriber already gave us one) or a classic
+    /// interrogative first word ("why", "how", "what", ...). Used to skip the
+    /// first pass outright; now it only decides when `stillAsksQuestion`
+    /// applies.
     static func looksLikeQuestion(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
