@@ -252,6 +252,23 @@ enum ModelCatalog {
         .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen 2.5 7B (4-bit)", approxSizeMB: 4400, approxRAMMB: 5500, note: "Superseded by Qwen 3.5 9B", contextWindowTokens: 131_072, meetingsCapable: true, isLegacy: true),
     ]
 
+    /// What each legacy model was replaced by — the target of Dictator's
+    /// "Switch" offer. Kept apart from the entries (rather than a field on
+    /// `LLMModel`) because it's only meaningful for the four legacy ids, and
+    /// it must stay in step with their `note`.
+    static let legacyLLMReplacements: [String: String] = [
+        "mlx-community/Llama-3.2-1B-Instruct-4bit": "mlx-community/Qwen3.5-2B-4bit",
+        "mlx-community/Llama-3.2-3B-Instruct-4bit": "mlx-community/Qwen3.5-4B-4bit",
+        "mlx-community/Qwen2.5-3B-Instruct-4bit": "mlx-community/Qwen3.5-4B-4bit",
+        "mlx-community/Qwen2.5-7B-Instruct-4bit": "mlx-community/Qwen3.5-9B-4bit",
+    ]
+
+    /// The current model a legacy one was superseded by; nil for a model
+    /// that isn't legacy.
+    static func replacement(forLegacy id: String) -> LLMModel? {
+        legacyLLMReplacements[id].flatMap(llm(id:))
+    }
+
     /// The models a picker should offer: everything current, plus any legacy
     /// model the user is actually on or has on disk. `selectedID` is passed in
     /// rather than read from settings so this stays usable from both apps.

@@ -52,16 +52,21 @@ final class ModelManager {
     }
 
     func refreshCachedStates() {
-        for m in ModelCatalog.whisperModels {
+        // A model with a download in flight is skipped: its on-disk state is
+        // "partial" until the last byte lands, and writing that over
+        // `.downloading` froze the progress bar — the progress callback only
+        // advances `.preparingDownload`/`.downloading` — every time the menu
+        // bar (which refreshes on open) was opened mid-download.
+        for m in ModelCatalog.whisperModels where whisperTasks[m.id] == nil {
             whisperStates[m.id] = diskState(forWhisper: m.id, expectedMB: m.approxSizeMB)
         }
-        for m in ModelCatalog.parakeetModels {
+        for m in ModelCatalog.parakeetModels where parakeetTasks[m.id] == nil {
             parakeetStates[m.id] = diskState(forParakeet: m.id)
         }
-        for m in ModelCatalog.llmModels {
+        for m in ModelCatalog.llmModels where llmTasks[m.id] == nil {
             llmStates[m.id] = diskState(forLLM: m.id, expectedMB: m.approxSizeMB)
         }
-        for m in ModelCatalog.diarizationModels {
+        for m in ModelCatalog.diarizationModels where diarizationTasks[m.id] == nil {
             diarizationStates[m.id] = diskState(forDiarization: m.id)
         }
     }

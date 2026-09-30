@@ -24,6 +24,9 @@ struct MenuBarContent: View {
                 MenuModeSection()
             }
 
+            Divider()
+            MenuModelsSection()
+
             if !demo.historyIsEmpty(real: history.records) {
                 Divider()
                 MenuRecentSection(records: Array(demo.history(real: history.records).prefix(5)))

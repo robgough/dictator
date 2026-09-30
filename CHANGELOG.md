@@ -13,6 +13,9 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+- The menu bar shows which transcription and language models are in use and whether they're loaded, so you can see at a glance why a dictation might be slow.
+- If you're still on one of the older language models that the Qwen 3.5 models replaced, Dictator says so once at launch and in the menu bar, and can download and switch to the replacement for you, then remove the old model's files.
+- Opening the menu bar while a model was downloading no longer freezes the download's progress bar.
 - Dictations that contain a question are now formatted and polished like everything else. Before, anything ending in a question mark (about one dictation in five) skipped formatting entirely, even when the question was one line at the end of several paragraphs.
 - History and the menu bar now show what happened to each step of a dictation, not only the steps that changed it: a step that found nothing to change, was skipped, or had its result rejected and thrown away is listed with the reason, and problems show in orange.
 - Expanding a dictation in History lines its steps up under the text instead of under the icon.

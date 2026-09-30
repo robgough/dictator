@@ -219,6 +219,195 @@ struct MenuModeSection: View {
     }
 }
 
+// MARK: - Models
+
+/// Which models Dictator is using and whether they're in memory right now —
+/// "why was that dictation slow?" is usually "the model wasn't loaded". Also
+/// where a superseded language model says so (`LegacyModelUpgrade`), and where
+/// its leftover weights can be removed once the user has moved on.
+struct MenuModelsSection: View {
+    @Environment(AppState.self) private var state
+    @State private var manager = ModelManager.shared
+    @State private var upgrade = LegacyModelUpgrade.shared
+    private let mlx = MLXLLMServiceHolder.shared
+    private let parakeet = ParakeetServiceHolder.shared
+    private let whisper = TranscriptionServiceHolder.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                MenuSectionHeader(title: "Models")
+                Spacer()
+                Button("Models…") {
+                    let settings = SettingsWindowController.shared
+                    settings.model.section = .models
+                    settings.show()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+            }
+            transcriptionRow
+            languageRow
+            if let offer = upgrade.offer(for: state.settings) {
+                upgradeRow(old: offer.old, new: offer.new)
+            }
+            ForEach(upgrade.leftovers(for: state.settings)) { model in
+                leftoverRow(model)
+            }
+        }
+    }
+
+    // MARK: Rows
+
+    private var transcriptionRow: some View {
+        let settings = state.settings
+        let (id, name, service): (String, String, any ASREngine) = switch settings.transcriptionEngine {
+        case .parakeet:
+            (settings.parakeetModelID,
+             ModelCatalog.parakeet(id: settings.parakeetModelID)?.displayName ?? settings.parakeetModelID,
+             parakeet)
+        case .whisper:
+            (settings.whisperModelID,
+             ModelCatalog.whisper(id: settings.whisperModelID)?.displayName ?? settings.whisperModelID,
+             whisper)
+        }
+        let states = settings.transcriptionEngine == .parakeet ? manager.parakeetStates : manager.whisperStates
+        return row(icon: "waveform", name: name,
+                   status: status(loaded: service.currentModelID == id,
+                                  loading: service.isLoading,
+                                  download: states[id]))
+    }
+
+    @ViewBuilder
+    private var languageRow: some View {
+        let settings = state.settings
+        switch settings.llmEngine {
+        case .none:
+            row(icon: "sparkles", name: "No language model", status: .none)
+        case .apple:
+            row(icon: "sparkles", name: "Apple Intelligence",
+                status: AppleFoundationAvailability.isUsable ? .loaded : .problem("Unavailable"))
+        case .mlx:
+            let id = settings.llmModelID
+            row(icon: "sparkles",
+                name: ModelCatalog.llm(id: id)?.displayName ?? id,
+                status: status(loaded: mlx.currentModelID == id && mlx.isLoaded,
+                               loading: mlx.isLoading,
+                               download: manager.llmStates[id]))
+        }
+    }
+
+    private func upgradeRow(old: LLMModel, new: LLMModel) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.up.circle.fill")
+                .foregroundStyle(.orange)
+            Text("Replaced by \(new.displayName)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+            if upgrade.pendingID == new.id {
+                Text(downloadLabel(manager.llmStates[new.id]))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            } else {
+                Button(manager.llmStates[new.id] == .ready ? "Switch" : "Download & Switch") {
+                    upgrade.switchToReplacement(state: state)
+                }
+                .controlSize(.small)
+                .help("\(new.displayName) replaces \(old.displayName). \(manager.llmStates[new.id] == .ready ? "It's already downloaded." : "Downloads about \(formatModelSize(new.approxSizeMB)), then switches.")")
+            }
+        }
+        .font(.system(size: 11))
+        .padding(.leading, 24)
+    }
+
+    private func leftoverRow(_ model: LLMModel) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "externaldrive")
+                .foregroundStyle(.secondary)
+            Text("\(model.displayName) isn't used any more · \(formatModelSize(model.approxSizeMB))")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+            Button("Delete") { upgrade.delete(model) }
+                .controlSize(.small)
+                .help("Removes \(model.displayName)'s files. It has been replaced, so it won't be offered for download again.")
+        }
+        .font(.system(size: 11))
+        .padding(.leading, 24)
+    }
+
+    // MARK: Status
+
+    private enum Status {
+        case none, loaded, loading, idle
+        case downloading(String)
+        case problem(String)
+    }
+
+    private func status(loaded: Bool, loading: Bool, download: ModelDownloadState?) -> Status {
+        if loaded { return .loaded }
+        switch download {
+        case .ready?: return loading ? .loading : .idle
+        case .downloading?, .preparingDownload?: return .downloading(downloadLabel(download))
+        case .failed?: return .problem("Download failed")
+        default: return .problem("Not downloaded")
+        }
+    }
+
+    private func downloadLabel(_ state: ModelDownloadState?) -> String {
+        if case .downloading(let fraction)? = state { return "Downloading \(Int(fraction * 100))%" }
+        return "Downloading…"
+    }
+
+    private func row(icon: String, name: String, status: Status) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(name)
+                .font(.system(size: 13, design: .rounded))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            statusView(status)
+                .font(.system(size: 11))
+        }
+    }
+
+    @ViewBuilder
+    private func statusView(_ status: Status) -> some View {
+        switch status {
+        case .none:
+            EmptyView()
+        case .loaded:
+            HStack(spacing: 4) {
+                Circle().fill(Color.green).frame(width: 6, height: 6)
+                Text("Loaded").foregroundStyle(.secondary)
+            }
+            .help("In memory — dictation won't wait for it to load.")
+        case .loading:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Loading…").foregroundStyle(.secondary)
+            }
+        case .idle:
+            HStack(spacing: 4) {
+                Circle().strokeBorder(Color.secondary, lineWidth: 1).frame(width: 6, height: 6)
+                Text("Loads on first use").foregroundStyle(.secondary)
+            }
+            .help("Downloaded but not in memory. The next dictation loads it, which takes a few seconds.")
+        case .downloading(let label):
+            Text(label).foregroundStyle(.secondary).monospacedDigit()
+        case .problem(let label):
+            Text(label).foregroundStyle(.orange)
+        }
+    }
+}
+
 // MARK: - Recent
 
 /// The last few dictations: what came out, which stages it went through, and

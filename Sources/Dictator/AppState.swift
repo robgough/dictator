@@ -176,6 +176,14 @@ final class AppState {
         if settings.preloadModelsOnLaunch {
             preloadModels()
         }
+        // A superseded language model gets one launch alert per Mac. Delayed so
+        // it lands after launch has settled (and after login, when Dictator
+        // starts with the Mac), and skipped if a dictation is already under way.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard self.pipeline.state == .idle else { return }
+            LegacyModelUpgrade.shared.showLaunchNoticeIfNeeded(state: self)
+        }
         // Publish the loaded LLM for Dictator Meetings to borrow. Deferred into
         // a Task so the listener setup (directory chmod, stale-socket unlink,
         // bind) never sits on the launch path — and so it lands after the
