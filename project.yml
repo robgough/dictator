@@ -670,8 +670,9 @@ targets:
       # target's sources to keep everything in one place, and the
       # keyboard target pulls it in by explicit path.
       - path: Sources/DictatorIOS/KeyboardBridge.swift
-      # The recording meter, so the keyboard's matches the app's.
-      - path: Sources/DictatorIOS/Waveform.swift
+      # Spacing and capitals around an inserted dictation, shared with
+      # the Mac's paste path.
+      - path: Sources/DictatorCore/Pipeline/InsertionJoiner.swift
     info:
       path: Sources/DictatorKeyboard/Info.plist
       properties:

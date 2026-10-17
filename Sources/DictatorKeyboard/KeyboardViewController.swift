@@ -29,6 +29,9 @@ final class KeyboardViewController: UIInputViewController {
     /// stays available until the user uses it or types over the
     /// inserted text manually.
     private var lastInsertedText: String?
+    /// The last dictation this keyboard inserted, as inserted, so the next
+    /// one can finish its sentence (see `insertJoined`).
+    private var lastDictation: String?
     /// Cached "is there something on the system clipboard?" so the
     /// always-on Paste pill can grey out when there's nothing to
     /// paste. Polled via the visible-while-active timer — cheap, and
@@ -76,6 +79,8 @@ final class KeyboardViewController: UIInputViewController {
     /// The host's background-session heartbeat (nil = no session: Dictate
     /// opens the app). Re-read on every refresh.
     private var sessionState: KeyboardBridge.SessionState?
+    /// Recent levels for the recording meter, oldest first.
+    private var levelHistory: [Float] = []
     /// A message about the last request that didn't produce text, shown in
     /// place of the buttons for a few seconds.
     private var notice: String?
@@ -300,6 +305,14 @@ final class KeyboardViewController: UIInputViewController {
         guard hasFullAccess else { return }
         consumeResultIfReady()
         let nextSession = KeyboardBridge.readSessionState()
+        // The meter scrolls on every poll, not only when the level changes,
+        // so a held note still moves along like the app's waveform.
+        if let nextSession, nextSession.phase == .recording {
+            if sessionState?.phase != .recording { levelHistory = [] }
+            levelHistory.append(nextSession.level)
+            if levelHistory.count > 40 { levelHistory.removeFirst(levelHistory.count - 40) }
+            if nextSession == sessionState { refreshRootView() }
+        }
         if nextSession != sessionState {
             let pollFaster = nextSession?.phase == .recording
             let wasFaster = sessionState?.phase == .recording
@@ -550,14 +563,52 @@ final class KeyboardViewController: UIInputViewController {
         }
         if let text = result.text, !text.isEmpty {
             recordAssistProbe("result-before-insert", extra: ["result": (text as NSString).length])
-            textDocumentProxy.insertText(text)
+            lastInsertedText = insertJoined(text)
             recordAssistProbe("result-after-insert")
-            lastInsertedText = text
             refreshRootView()
         } else if let error = result.error {
             recordAssistProbe("result-error", extra: ["error": error])
             showNotice(error)
         }
+    }
+
+    /// Insert a dictation so it sits properly against the text around the
+    /// cursor — a space where it would glue onto a word, a lower-case start
+    /// mid-sentence — using the same rules as the Mac's paste. The keyboard
+    /// reads that text straight from the field, so this works in apps whose
+    /// accessibility the Mac couldn't read. Returns what was inserted.
+    ///
+    /// One rule is the keyboard's own: a short dictation often comes back
+    /// without a full stop, which is right for a one-line message but not
+    /// when another dictation follows it. If the text before the cursor ends
+    /// with the previous dictation, unpunctuated, and this one starts a new
+    /// sentence, the previous one gets its full stop first.
+    private func insertJoined(_ text: String) -> String {
+        let proxy = textDocumentProxy
+        // Assist replacing a highlighted passage: it goes exactly where the
+        // highlight was.
+        if let selected = proxy.selectedText, !selected.isEmpty {
+            proxy.insertText(text)
+            lastDictation = nil
+            return text
+        }
+        var before = proxy.documentContextBeforeInput ?? ""
+        let after = proxy.documentContextAfterInput ?? ""
+        if let previous = lastDictation?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let lastChar = previous.last, lastChar.isLetter || lastChar.isNumber,
+           text.first?.isUppercase == true {
+            let trailing = before.reversed().prefix(while: { $0 == " " }).count
+            let trimmed = String(before.dropLast(trailing))
+            if trimmed.hasSuffix(previous) {
+                for _ in 0..<trailing { proxy.deleteBackward() }
+                proxy.insertText(".")
+                before = trimmed + "."
+            }
+        }
+        let joined = InsertionJoiner.adjust(text, before: before, after: after)
+        proxy.insertText(joined)
+        lastDictation = joined
+        return joined
     }
 
     private func showNotice(_ message: String) {
@@ -619,6 +670,7 @@ final class KeyboardViewController: UIInputViewController {
             onMicPress: { [weak self] in self?.requestDictation(mode: .record) },
             onAssistPress: { [weak self] in self?.requestDictation(mode: .assist) },
             session: sessionState,
+            levels: levelHistory,
             notice: notice,
             onStop: { [weak self] in self?.sendSessionCommand(.stop) },
             onCancel: { [weak self] in self?.sendSessionCommand(.cancel) },

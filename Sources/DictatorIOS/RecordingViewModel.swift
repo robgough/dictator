@@ -112,6 +112,12 @@ final class RecordingViewModel {
     /// that recording ends; any subsequent presses inside the app
     /// use the regular hold gesture.
     private(set) var autoStartedRecordingActive: Bool = false
+    /// The keyboard opened the app to start this recording and is waiting
+    /// for its result. iOS gives no way to send the user back to the app
+    /// they came from, so the UI points them at the status bar's ◀ link.
+    var isKeyboardHandoff: Bool {
+        autoStartedRecordingActive && servingID != nil && status.isCapturing
+    }
 
     /// Wall-clock seconds between `.transcribing` and `.ready` for the
     /// most recent successful run. Surfaced in the status pill's idle

@@ -17,6 +17,8 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The keyboard now fits dictated text to what's already in the field: a space where it would run into the previous word, a lower-case start mid-sentence, and a full stop on the previous dictation when a new sentence follows it.
+- When the keyboard has to open Dictator to start a recording, Dictator now shows how to get back to the app you were in, where you can keep talking and tap Stop.
 - Apple Intelligence cleanup and Assist refuse ordinary dictation far less often. They now use Apple's setting for rewriting text you've given it, rather than its stricter chat filter.
 - Journal has its own tab. Tap the mic to add to today's entry, or write one by hand (with the mic and Reword there too) and add photos from the camera or your library, browse a calendar of earlier days, search everything you have written, and edit or delete entries. Entries go into the same Markdown files as the Mac's journal when you use a shared folder.
 - Vocabulary rules can now match exactly, by sound, or by pattern, as on the Mac, and can be reordered. New rules go to the top of the list.

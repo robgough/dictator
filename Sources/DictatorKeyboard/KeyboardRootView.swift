@@ -13,6 +13,8 @@ struct KeyboardRootView: View {
     let onAssistPress: () -> Void
     /// The host's background-session heartbeat; nil when there isn't one.
     let session: KeyboardBridge.SessionState?
+    /// Recent mic levels, oldest first, while a recording is in flight.
+    var levels: [Float] = []
     /// Why the last request produced no text, briefly.
     let notice: String?
     let onStop: () -> Void
@@ -163,23 +165,31 @@ struct KeyboardRootView: View {
             .accessibilityLabel("Cancel dictation")
 
             Button(action: onStop) {
-                HStack(spacing: 10) {
-                    Waveform(level: session?.level ?? 0, tint: .red, barCount: 14, height: 22)
-                        .frame(width: 80)
-                    Text(session?.mode == .assist ? "Stop · apply" : "Stop")
-                        .font(.callout.weight(.semibold))
-                    Image(systemName: "stop.fill")
+                HStack(spacing: 12) {
+                    Image(systemName: isAssist ? "sparkles" : "mic.fill")
                         .font(.system(size: 16, weight: .semibold))
+                    LevelHistory(levels: levels)
+                        .frame(maxWidth: .infinity)
+                    HStack(spacing: 6) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("Stop")
+                            .font(.callout.weight(.semibold))
+                    }
                 }
-                .foregroundStyle(.red)
+                .foregroundStyle(recordingTint)
+                .padding(.horizontal, 16)
                 .frame(maxWidth: .infinity)
                 .frame(height: 56)
                 .glassEffect(.regular, in: .rect(cornerRadius: 14))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Stop and insert")
+            .accessibilityLabel(isAssist ? "Stop and apply" : "Stop and insert")
         }
     }
+
+    private var isAssist: Bool { session?.mode == .assist }
+    private var recordingTint: Color { isAssist ? .purple : .red }
 
     /// Tap to give up on it — nothing is inserted.
     private var transcribingRow: some View {
@@ -531,5 +541,28 @@ struct KeyboardRootView: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityLabel(label)
+    }
+}
+
+/// A scrolling meter of the last few mic levels, newest on the right, so the
+/// user can see they're being heard while the app doing the hearing is out of
+/// sight. Plain shapes driven by the controller's history rather than the
+/// app's `Waveform`, whose canvas drew nothing inside the keyboard. Boosted
+/// like `Waveform`: flat bars while someone is talking read worse than the
+/// odd loud syllable touching the top.
+private struct LevelHistory: View {
+    let levels: [Float]
+    static let count = 28
+
+    var body: some View {
+        let padded = Array(repeating: Float(0), count: max(0, Self.count - levels.count)) + levels.suffix(Self.count)
+        HStack(spacing: 3) {
+            ForEach(0..<Self.count, id: \.self) { index in
+                Capsule()
+                    .frame(width: 3, height: max(3, 26 * min(1, CGFloat(padded[index]) * 1.7)))
+            }
+        }
+        .frame(height: 26)
+        .animation(.easeOut(duration: 0.08), value: levels)
     }
 }

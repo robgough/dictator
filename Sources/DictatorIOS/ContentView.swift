@@ -93,6 +93,13 @@ struct ContentView: View {
         // attached in `body` (only on that tab) so it doesn't leave an empty
         // glass bar on the others.
         .tabBarMinimizeBehavior(.onScrollDown)
+        .overlay(alignment: .top) {
+            if viewModel.isKeyboardHandoff {
+                KeyboardHandoffBanner()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.isKeyboardHandoff)
         // First-launch onboarding sheet, over the whole TabView.
         // Suppressed in the permission-denied state since the Dictation
         // tab's denial wall already says what to do.
@@ -1468,4 +1475,32 @@ struct KeyboardToggleButton: View {
 
 #Preview {
     ContentView()
+}
+
+/// Shown while a recording the keyboard started is running here. iOS won't
+/// let an app send the user back to the one they came from, so this points
+/// at the ◀ link iOS puts in the status bar; the recording carries on in
+/// the background, and the keyboard there has the Stop.
+private struct KeyboardHandoffBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "arrow.up.left")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recording. Head back to keep talking")
+                    .font(.subheadline.weight(.semibold))
+                Text("Tap ◀ in the top-left corner, or swipe right along the bottom edge. Tap Stop on the keyboard when you're done.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+    }
 }
