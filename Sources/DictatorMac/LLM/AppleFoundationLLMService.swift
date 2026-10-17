@@ -83,7 +83,7 @@ final class AppleFoundationLLMService: LLMEngine {
     /// back as text the caller's own parser rejects.
     func complete(system: String, user: String, maxTokens: Int, temperature: Double = 0) async throws -> String {
         try await ensureReady()
-        let session = LanguageModelSession(instructions: Instructions(system))
+        let session = LanguageModelSession(model: Self.transformModel, instructions: Instructions(system))
         // Greedy decoding is only correct at temperature 0; a warm request has
         // to switch to random sampling or the temperature is silently ignored.
         let options = GenerationOptions(
@@ -106,7 +106,7 @@ final class AppleFoundationLLMService: LLMEngine {
         maxTokenConstant: Int
     ) async throws -> String {
         try await ensureReady()
-        let session = LanguageModelSession(instructions: Instructions(systemPrompt))
+        let session = LanguageModelSession(model: Self.transformModel, instructions: Instructions(systemPrompt))
         let approxInputTokens = max(8, text.count / 4)
         // Floor at 256 so a model that goes off-script (writes a joke
         // instead of formatting the request to write one) produces a
@@ -224,7 +224,7 @@ final class AppleFoundationLLMService: LLMEngine {
         // turn-by-turn `MODE:`-prefixed assistant messages keeps the model
         // emitting MODE markers on follow-ups — the parser falls back to .draft
         // when the marker is missing, which would silently lose REPLACE intent.
-        let session = LanguageModelSession(instructions: Instructions(systemPrompt))
+        let session = LanguageModelSession(model: Self.transformModel, instructions: Instructions(systemPrompt))
         let prompt = Self.composeAssistantPrompt(
             selection: selection,
             instruction: instruction,
@@ -292,7 +292,7 @@ final class AppleFoundationLLMService: LLMEngine {
         >>>
         """
 
-        let session = LanguageModelSession(instructions: Instructions(LLMTextUtilities.summariserSystemPrompt))
+        let session = LanguageModelSession(model: Self.transformModel, instructions: Instructions(LLMTextUtilities.summariserSystemPrompt))
         let options = GenerationOptions(
             temperature: 0.2,
             maximumResponseTokens: 512
@@ -362,6 +362,16 @@ final class AppleFoundationLLMService: LLMEngine {
         let approxIn = max(0, promptCharCount) / 4
         let approxOut = max(0, responseCharCount) / 4
         UsageStatsStore.shared.recordLLMTokens(in: approxIn, out: approxOut)
+    }
+
+    /// The model for every pass that rewrites text the user gave us —
+    /// dictation cleanup, Assistant Mode, summaries. Apple's default
+    /// guardrails are tuned for open-ended chat and refuse to touch
+    /// ordinary dictation that mentions anything that sounds sensitive;
+    /// this mode is Apple's own setting for transforming the user's text.
+    /// The chat window keeps the default, since it's open-ended.
+    static var transformModel: SystemLanguageModel {
+        SystemLanguageModel(guardrails: .permissiveContentTransformations)
     }
 
     private static func map(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> Unavailable {

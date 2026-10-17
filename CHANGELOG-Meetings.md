@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- With Apple Intelligence writing the notes, meetings that touch on sensitive-sounding subjects are refused far less often.
 - A model download's progress bar no longer freezes when its state is refreshed mid-download.
 - You can now choose NVIDIA's Nemotron 3 Diarization for telling speakers apart, in Settings → Models → Speaker separation. It is more accurate than the built-in engine, especially with several people on a call or people talking over each other, and tells apart up to eight voices on each side of the call. It is a 220 MB download. People Dictator Meetings already recognises by voice are still recognised after you switch.
 - Parakeet Ultra is available as a transcription model and is the default for new installs: a more accurate retrain of Parakeet v3 with the same 25 languages and the same speed. It is a slightly larger download (615 MB rather than 475 MB) and needs no more memory than v3. If you already use Parakeet, your current model stays selected until you switch in Settings → Models.
