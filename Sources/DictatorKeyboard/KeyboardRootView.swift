@@ -2,15 +2,22 @@ import SwiftUI
 
 /// The keyboard's SwiftUI layout. Two big buttons (red mic, purple
 /// assist) plus a tiny secondary row with Undo / Return / Backspace.
-/// The Dictate / Assist buttons just open the host app and start it
-/// listening — recording happens in Dictator's foreground (we don't
-/// run a background audio mode), so the keyboard never renders an
-/// in-flight recording UI. When the transcript lands it's auto-copied
-/// to the clipboard and the user drops it in with the always-on Paste
-/// pill.
+///
+/// While Dictator holds a warm mic in the background (`session` is
+/// non-nil), Dictate and Assist record in place: the buttons give way to a
+/// level meter with Stop, then a transcribing row, and the text is inserted
+/// straight into the field. Without a session they open Dictator, as they
+/// always have; the result still comes back here when the user returns.
 struct KeyboardRootView: View {
     let onMicPress: () -> Void
     let onAssistPress: () -> Void
+    /// The host's background-session heartbeat; nil when there isn't one.
+    let session: KeyboardBridge.SessionState?
+    /// Why the last request produced no text, briefly.
+    let notice: String?
+    let onStop: () -> Void
+    let onCancel: () -> Void
+    let onEndSession: () -> Void
     let onUndo: () -> Void
     let onSpace: () -> Void
     let onReturn: () -> Void
@@ -49,7 +56,7 @@ struct KeyboardRootView: View {
     /// proxy — see `KeyboardViewController.pasteFromClipboard`.
     let onPaste: () -> Void
 
-    /// True while the "copy text first" hint is on screen. Set when
+    /// True while the "select text first" hint is on screen. Set when
     /// the user taps a greyed-out Assist button; auto-clears after a
     /// few seconds via `hintHideTask`, and also clears the moment
     /// `canAssist` flips true (a fresh copy made the prompt moot).
@@ -64,7 +71,13 @@ struct KeyboardRootView: View {
             // proxy.
             pasteChip
 
-            if showAssistHint && !canAssist && assistSupported {
+            if let notice {
+                noticeBanner(notice)
+            } else if session?.phase == .recording {
+                recordingRow
+            } else if session?.phase == .transcribing {
+                transcribingRow
+            } else if showAssistHint && !canAssist && assistSupported {
                 // Hint takes over the same slot as Dictate / Assist —
                 // a clean swap at matched height rather than pushing
                 // the secondary row off the bottom of the keyboard.
@@ -77,10 +90,18 @@ struct KeyboardRootView: View {
                 idleContent
             }
 
+            if session?.phase == .ready {
+                sessionLine
+            }
+
             secondaryRow
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        // On a wide keyboard (the iPhone Duo's inner display) a 56pt-tall
+        // button the full width of the screen stops reading as a button.
+        // Phones are all narrower than this, so it only bites there.
+        .frame(maxWidth: 640)
         .frame(maxWidth: .infinity)
         .background(Color(.secondarySystemBackground))
         .animation(.easeInOut(duration: 0.2), value: showAssistHint)
@@ -97,19 +118,19 @@ struct KeyboardRootView: View {
     }
 
     /// Replacement for the Dictate / Assist row while the user has
-    /// tapped the disabled "Copy first" button. Same height (56pt)
+    /// tapped the disabled "Select text" button. Same height (56pt)
     /// as the buttons it replaces so the rest of the keyboard layout
     /// doesn't reflow.
     private var assistHintBanner: some View {
         HStack(spacing: 12) {
-            Image(systemName: "doc.on.clipboard")
+            Image(systemName: "character.cursor.ibeam")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.purple)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Copy text first")
+                Text("Select text first")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text("Highlight and copy in your app, then tap Assist.")
+                Text("Highlight what to rewrite (or copy it), then tap Assist.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -127,6 +148,102 @@ struct KeyboardRootView: View {
         .transition(.opacity)
     }
 
+    // MARK: - In flight (background session)
+
+    private var recordingRow: some View {
+        HStack(spacing: 10) {
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 56, height: 56)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel dictation")
+
+            Button(action: onStop) {
+                HStack(spacing: 10) {
+                    Waveform(level: session?.level ?? 0, tint: .red, barCount: 14, height: 22)
+                        .frame(width: 80)
+                    Text(session?.mode == .assist ? "Stop · apply" : "Stop")
+                        .font(.callout.weight(.semibold))
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop and insert")
+        }
+    }
+
+    /// Tap to give up on it — nothing is inserted.
+    private var transcribingRow: some View {
+        Button(action: onCancel) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(session?.mode == .assist ? "Applying…" : "Transcribing…")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text("Tap to cancel")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Cancel")
+    }
+
+    private func noticeBanner(_ text: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.tertiarySystemBackground))
+        )
+    }
+
+    /// "The mic is on" — it is, the indicator says so, and this is the off
+    /// switch closest to hand.
+    private var sessionLine: some View {
+        HStack(spacing: 6) {
+            Circle().fill(.orange).frame(width: 6, height: 6)
+            if let expiresAt = session?.expiresAt {
+                Text("Mic ready · off at \(expiresAt, style: .time)")
+            } else {
+                Text("Mic ready")
+            }
+            Spacer(minLength: 0)
+            Button("Turn off", action: onEndSession)
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .frame(height: 16)
+    }
+
     // MARK: - Idle (no in-flight session)
 
     @ViewBuilder
@@ -140,11 +257,11 @@ struct KeyboardRootView: View {
                 enabled: true
             )
             if assistSupported {
-                // Assist reads the system clipboard for the text to
-                // transform (selectedText is unreliable across iOS
-                // apps — see KeyboardViewController). When there's
-                // nothing fresh to act on, the button looks disabled
-                // (greyed, "Copy first" label) but stays tappable so we
+                // Assist rewrites the highlighted text, or failing that
+                // what's freshly on the clipboard (see
+                // KeyboardViewController). When there's nothing to act
+                // on, the button looks disabled (greyed, "Select text"
+                // label) but stays tappable so we
                 // can pop a hint explaining what to do — a true
                 // SwiftUI .disabled() button can't fire any action,
                 // which leaves the user prodding a dead control.
@@ -162,10 +279,10 @@ struct KeyboardRootView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: canAssist ? "wand.and.stars" : "doc.on.clipboard")
+                        Image(systemName: canAssist ? "wand.and.stars" : "character.cursor.ibeam")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
-                        Text(canAssist ? "Assist" : "Copy first")
+                        Text(canAssist ? "Assist" : "Select text")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.white)
                     }

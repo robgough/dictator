@@ -73,6 +73,13 @@ final class KeyboardViewController: UIInputViewController {
     /// per-word deletion; `holdTimer` runs until the user releases.
     private var backspaceHoldStartedAt: Date?
     private var backspaceHoldTimer: Timer?
+    /// The host's background-session heartbeat (nil = no session: Dictate
+    /// opens the app). Re-read on every refresh.
+    private var sessionState: KeyboardBridge.SessionState?
+    /// A message about the last request that didn't produce text, shown in
+    /// place of the buttons for a few seconds.
+    private var notice: String?
+    private var noticeHideTimer: Timer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -99,6 +106,27 @@ final class KeyboardViewController: UIInputViewController {
             name: UIPasteboard.changedNotification,
             object: nil
         )
+        // The host posts these the moment a session changes phase or a
+        // result is ready, so Stop appears and text lands without waiting
+        // for the next poll. Registered once per process; the handlers
+        // reach whichever controller is current through `current`.
+        Self.current = self
+        Self.registerDarwinObserversOnce()
+    }
+
+    /// The live controller, for the process-wide Darwin observers.
+    private static weak var current: KeyboardViewController?
+    private static var darwinRegistered = false
+
+    private static func registerDarwinObserversOnce() {
+        guard !darwinRegistered else { return }
+        darwinRegistered = true
+        KeyboardBridge.observeDarwin(KeyboardBridge.sessionNotification) {
+            current?.refreshKeyboardState()
+        }
+        KeyboardBridge.observeDarwin(KeyboardBridge.resultNotification) {
+            current?.refreshKeyboardState()
+        }
     }
 
     deinit {
@@ -204,9 +232,58 @@ final class KeyboardViewController: UIInputViewController {
         stopStatePolling()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        Self.current = self
+    }
+
     override func textDidChange(_ textInput: (any UITextInput)?) {
         super.textDidChange(textInput)
         refreshKeyboardState()
+    }
+
+    /// Highlighting text lights up Assist straight away, rather than on
+    /// the next poll tick.
+    override func selectionDidChange(_ textInput: (any UITextInput)?) {
+        super.selectionDidChange(textInput)
+        refreshKeyboardState()
+    }
+
+    /// The text highlighted in the field, if any — Assist's first choice
+    /// of what to rewrite, ahead of the clipboard. When the user has
+    /// selected something, they've said what they mean; making them copy
+    /// it too was only ever a workaround (see `launchHost`). The result
+    /// replaces it, because inserting over a selection replaces it.
+    #if DEBUG
+    /// What the field handed the keyboard when Assist was tapped, and what
+    /// happened when the result came back — lengths only, never the text.
+    /// The last ten are kept in the App Group (`debug.assistProbes`) to be
+    /// read off the phone when a field misbehaves (Mail's body, so far).
+    private func recordAssistProbe(_ event: String, extra: [String: Any] = [:]) {
+        let proxy = textDocumentProxy
+        var entry: [String: Any] = [
+            "at": Date().timeIntervalSince1970,
+            "event": event,
+            "selected": proxy.selectedText.map { ($0 as NSString).length } ?? -1,
+            "before": proxy.documentContextBeforeInput.map { ($0 as NSString).length } ?? -1,
+            "after": proxy.documentContextAfterInput.map { ($0 as NSString).length } ?? -1,
+            "hasText": proxy.hasText,
+        ]
+        entry.merge(extra) { _, new in new }
+        let defaults = UserDefaults(suiteName: KeyboardBridge.appGroupID)
+        var probes = defaults?.array(forKey: "debug.assistProbes") as? [[String: Any]] ?? []
+        probes.append(entry)
+        defaults?.set(Array(probes.suffix(10)), forKey: "debug.assistProbes")
+    }
+    #else
+    private func recordAssistProbe(_ event: String, extra: [String: Any] = [:]) {}
+    #endif
+
+    private func selectionForAssist() -> String? {
+        guard let text = textDocumentProxy.selectedText,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return text
     }
 
 
@@ -220,6 +297,18 @@ final class KeyboardViewController: UIInputViewController {
     /// never shows an in-flight UI — it just opens the app and waits
     /// for the transcript to land on the clipboard.
     private func refreshKeyboardState() {
+        guard hasFullAccess else { return }
+        consumeResultIfReady()
+        let nextSession = KeyboardBridge.readSessionState()
+        if nextSession != sessionState {
+            let pollFaster = nextSession?.phase == .recording
+            let wasFaster = sessionState?.phase == .recording
+            sessionState = nextSession
+            refreshRootView()
+            // A level meter at the 300 ms idle poll looks broken; tick
+            // faster only while something is recording.
+            if pollFaster != wasFaster, statePollTimer != nil { startStatePolling() }
+        }
         // `hasStrings` and `changeCount` are both metadata-only —
         // neither triggers the "Pasted from X" notification (only
         // reading the actual string does, which we defer to an
@@ -263,6 +352,8 @@ final class KeyboardViewController: UIInputViewController {
             // logic doesn't run — and so the polling code never thinks
             // there's a state change to react to.
             guard assistSupported else { return false }
+            // Highlighted text is the simplest source: no copying needed.
+            if selectionForAssist() != nil { return true }
             guard nextCanPaste else { return false }
             if let last = KeyboardBridge.readLastDictation(),
                currentChangeCount == last.pasteboardChangeCount {
@@ -297,7 +388,8 @@ final class KeyboardViewController: UIInputViewController {
     /// we don't burn battery in the background.
     private func startStatePolling() {
         stopStatePolling()
-        statePollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+        let interval = sessionState?.phase == .recording ? 0.05 : 0.3
+        statePollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refreshKeyboardState()
         }
     }
@@ -333,33 +425,36 @@ final class KeyboardViewController: UIInputViewController {
     /// to find a UIApplication. The responder-chain trick is fragile
     /// across iOS versions; we wrap it in a helper.
     private func launchHost(mode: KeyboardBridge.Mode) {
-        // We deliberately don't read text from the host field here.
-        //   - `record` mode captures a fresh transcript, no context.
-        //   - `assist` mode reads from the *system clipboard* in
-        //     the host app (see RecordingViewModel.beginKeyboardRecording).
-        //     We tried `textDocumentProxy.selectedText` and it's
-        //     fundamentally unreliable across iOS apps (Radar
-        //     FB7789012 — Apple's bridge silently truncates the
-        //     selection to first+last sentence in WebView-backed
-        //     fields like Mail body). The clipboard handoff is the
-        //     only path that works the same everywhere.
+        // Assist's text: the selection if there is one, else the system
+        // clipboard (read on the host side, see
+        // RecordingViewModel.beginKeyboardRecording). The clipboard used to
+        // be the only source — `textDocumentProxy.selectedText` was found to
+        // truncate long selections in WebView-backed fields like a Mail body
+        // (Radar FB7789012, 2020) — so it stays as the fallback for when
+        // nothing is highlighted. `record` mode captures a fresh transcript
+        // and needs no text.
+        var selection: String?
         if mode == .assist {
-            // Mark the current clipboard as "spent for assist" — the
-            // button disables until the user copies again, so a
-            // mistaken second tap can't silently re-act on the same
-            // text. Refresh immediately so the disabled state is
-            // visible on the same frame as the tap rather than
-            // waiting up to a poll tick to flip.
-            consumedAssistChangeCount = UIPasteboard.general.changeCount
-            refreshKeyboardState()
+            selection = selectionForAssist()
+            recordAssistProbe("tap-cold", extra: ["source": selection == nil ? "clipboard" : "selection"])
+            if selection == nil {
+                // Mark the current clipboard as "spent for assist" — the
+                // button disables until the user copies again, so a
+                // mistaken second tap can't silently re-act on the same
+                // text. Refresh immediately so the disabled state is
+                // visible on the same frame as the tap rather than
+                // waiting up to a poll tick to flip.
+                consumedAssistChangeCount = UIPasteboard.general.changeCount
+                refreshKeyboardState()
+            }
         }
-        // `record` and `assist` both source their text on the host
-        // side (a fresh transcript, or the system clipboard), so the
-        // keyboard hands over no surrounding text.
         let session = KeyboardBridge.enqueueRequest(
             mode: mode,
-            surroundingText: nil
+            surroundingText: selection
         )
+        // The host hands the result back under this id, so when the user
+        // returns here the text goes straight into the field.
+        KeyboardBridge.setAwaiting(session)
 
         var components = URLComponents()
         components.scheme = "dictator"
@@ -396,6 +491,83 @@ final class KeyboardViewController: UIInputViewController {
         // the documented public API.
         extensionContext?.open(url, completionHandler: nil)
         return false
+    }
+
+    // MARK: - Dictating in place
+
+    /// Dictate / Assist. With a warm background session the host records
+    /// right away and this keyboard stays put; without one, open Dictator.
+    private func requestDictation(mode: KeyboardBridge.Mode) {
+        guard let session = KeyboardBridge.readSessionState(), session.phase == .ready else {
+            launchHost(mode: mode)
+            return
+        }
+        var sourceText: String?
+        if mode == .assist {
+            recordAssistProbe("tap-warm", extra: ["source": selectionForAssist() == nil ? "clipboard" : "selection"])
+            if let selection = selectionForAssist() {
+                sourceText = selection
+            } else {
+                // The host may be in the background, where it can't count
+                // on reading the clipboard, so the keyboard reads it at tap
+                // time. (This is what shows iOS's "pasted from" banner.)
+                sourceText = UIPasteboard.general.string
+                consumedAssistChangeCount = UIPasteboard.general.changeCount
+            }
+        }
+        let id = UUID()
+        KeyboardBridge.setAwaiting(id)
+        KeyboardBridge.sendCommand(.init(id: id, action: .start, mode: mode, sourceText: sourceText, target: nil, createdAt: Date()))
+        refreshKeyboardState()
+    }
+
+    private func sendSessionCommand(_ action: KeyboardBridge.Command.Action) {
+        KeyboardBridge.sendCommand(.init(
+            id: UUID(),
+            action: action,
+            mode: sessionState?.mode ?? .record,
+            sourceText: nil,
+            target: sessionState?.serving,
+            createdAt: Date()
+        ))
+    }
+
+    /// Insert the result the host produced for the request this keyboard
+    /// is waiting on. A result older than a minute is left alone — it's on
+    /// the clipboard, and the field in front of the user now may well not
+    /// be the one they dictated for.
+    private func consumeResultIfReady() {
+        guard let awaiting = KeyboardBridge.awaiting(),
+              let result = KeyboardBridge.takeResult(for: awaiting)
+        else { return }
+        KeyboardBridge.setAwaiting(nil)
+        guard Date().timeIntervalSince(result.createdAt) < 60 else {
+            recordAssistProbe("result-stale")
+            return
+        }
+        if result.text?.isEmpty ?? true, result.error == nil {
+            recordAssistProbe("result-empty")
+        }
+        if let text = result.text, !text.isEmpty {
+            recordAssistProbe("result-before-insert", extra: ["result": (text as NSString).length])
+            textDocumentProxy.insertText(text)
+            recordAssistProbe("result-after-insert")
+            lastInsertedText = text
+            refreshRootView()
+        } else if let error = result.error {
+            recordAssistProbe("result-error", extra: ["error": error])
+            showNotice(error)
+        }
+    }
+
+    private func showNotice(_ message: String) {
+        notice = message
+        refreshRootView()
+        noticeHideTimer?.invalidate()
+        noticeHideTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+            self?.notice = nil
+            self?.refreshRootView()
+        }
     }
 
     /// User tapped the always-on Paste pill. Reads the system
@@ -444,8 +616,13 @@ final class KeyboardViewController: UIInputViewController {
 
     private func makeDictationView() -> KeyboardRootView {
         KeyboardRootView(
-            onMicPress: { [weak self] in self?.launchHost(mode: .record) },
-            onAssistPress: { [weak self] in self?.launchHost(mode: .assist) },
+            onMicPress: { [weak self] in self?.requestDictation(mode: .record) },
+            onAssistPress: { [weak self] in self?.requestDictation(mode: .assist) },
+            session: sessionState,
+            notice: notice,
+            onStop: { [weak self] in self?.sendSessionCommand(.stop) },
+            onCancel: { [weak self] in self?.sendSessionCommand(.cancel) },
+            onEndSession: { [weak self] in self?.sendSessionCommand(.end) },
             onUndo: { [weak self] in self?.undoLastInsertion() },
             onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
             onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },

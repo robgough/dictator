@@ -17,6 +17,24 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Apple Intelligence cleanup and Assist refuse ordinary dictation far less often. They now use Apple's setting for rewriting text you've given it, rather than its stricter chat filter.
+- Journal has its own tab. Tap the mic to add to today's entry, or write one by hand (with the mic and Reword there too) and add photos from the camera or your library, browse a calendar of earlier days, search everything you have written, and edit or delete entries. Entries go into the same Markdown files as the Mac's journal when you use a shared folder.
+- Vocabulary rules can now match exactly, by sound, or by pattern, as on the Mac, and can be reordered. New rules go to the top of the list.
+- The tab bar is now Dictation, Journal, Scratchpad, History and Settings. Vocabulary has moved into Settings.
+- The keyboard's Assist now works on highlighted text, so there's no need to copy it first. Copying still works when nothing is highlighted.
+- Anything that's transcribing or rewording can now be cancelled with a tap: the Dictation bar, the Scratchpad, the Journal and its entry form, and the keyboard.
+- Recordings where nothing was said no longer sit on "Transcribing…" while Apple Intelligence tidies up an empty transcript.
+- The Dictation tab's two big round buttons are now one bar, split between Dictate and Assist, and Copy has moved to the top bar.
+- The Scratchpad's mic, Reword, space, return and delete now share one row above the tab bar, and tuck in beside it when it shrinks as you scroll.
+- Dictating no longer stops when you leave Dictator or lock your phone. The recording carries on, a Live Activity on the Lock Screen and in the Dynamic Island shows it's listening, and Stop there finishes it and copies the text.
+- The Dictator keyboard can dictate without leaving the app you're in. After your first dictation from the keyboard, Dictator keeps the microphone ready in the background for a while (15 minutes by default, set in Settings). While it's ready, Dictate and Assist record right there, with a level meter and a Stop button, and the text goes straight into the field. The orange microphone indicator and a Live Activity stay on for as long as the microphone is ready, with a button to turn it off.
+- When the keyboard does open Dictator to start a dictation, the text is now typed into the field you came from when you switch back, instead of only being copied to the clipboard.
+- The screen no longer dims or locks while you're dictating.
+
+## Experimental — not currently shipping
+
+- Tidying and Assist can use Apple's larger Private Cloud Compute model, on by default with a switch in Settings, falling back to the on-device model when it can't be reached. Waiting on Apple to grant the Private Cloud Compute entitlement.
+
 - History calls the unedited version of a dictation "Transcript" instead of "raw", matching the Mac app.
 
 - Parakeet Ultra is available as a transcription model, in Settings or when you first download a model: a more accurate retrain of the multilingual model with the same languages. It is a larger download, about 615 MB rather than 460 MB.

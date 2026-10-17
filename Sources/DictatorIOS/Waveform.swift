@@ -20,14 +20,20 @@ struct Waveform: View {
     /// Bar-chart height. Pick something close to the height of the
     /// element you're sitting next to so the bars baseline-align.
     var height: CGFloat = 30
-    @State private var bars: [Double] = Array(repeating: 0.05, count: barCount)
-    private static let barCount = 28
+    @State private var bars: [Double]
+
+    init(level: Float, tint: Color = .accentColor, barCount: Int = 28, height: CGFloat = 30) {
+        self.level = level
+        self.tint = tint
+        self.height = height
+        _bars = State(initialValue: Array(repeating: 0.05, count: max(3, barCount)))
+    }
 
     var body: some View {
         Canvas { ctx, size in
             let gap: CGFloat = 3
-            let totalGap = gap * CGFloat(Self.barCount - 1)
-            let barWidth = max(2, (size.width - totalGap) / CGFloat(Self.barCount))
+            let totalGap = gap * CGFloat(bars.count - 1)
+            let barWidth = max(2, (size.width - totalGap) / CGFloat(bars.count))
             let midY = size.height / 2
 
             for (i, value) in bars.enumerated() {

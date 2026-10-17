@@ -123,7 +123,6 @@ enum AppleFoundationAssist {
             throw AssistError.unavailable(String(describing: reason))
         }
 
-        let session = LanguageModelSession(instructions: Instructions(systemPrompt))
         // Generous budget — assist can legitimately expand text
         // (e.g. "elaborate on this") so we don't cap as tightly as
         // cleanup. Still bounded at 2048 to avoid runaway generation.
@@ -144,7 +143,9 @@ enum AppleFoundationAssist {
         </INSTRUCTION>
         """
 
-        let response = try await session.respond(to: prompt, options: options)
+        let response = try await AppleIntelligenceModel.respond(
+            instructions: systemPrompt, prompt: prompt, options: options
+        )
         AppleFoundationTokenAccounting.record(
             promptCharCount: systemPrompt.count + prompt.count,
             responseCharCount: response.content.count

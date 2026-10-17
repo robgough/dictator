@@ -529,6 +529,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Dictator transcribes your voice on-device to turn speech into text, whether you dictate in the app or from the Dictator keyboard."
+        NSCameraUsageDescription: "Dictator uses the camera when you take a photo to add to your journal."
         # Dictator only uses encryption via the standard HTTPS stack
         # (the one-time Hugging Face model download). That qualifies
         # for the App Store's exempt-encryption category, and setting
@@ -548,17 +549,19 @@ targets:
           - UIInterfaceOrientationPortrait
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        # Deliberately NO `audio` UIBackgroundMode. Dictation records
-        # only while Dictator is foregrounded; the moment the app
-        # backgrounds we stop and transcribe whatever we've captured
-        # so far (see RecordingViewModel.handleEnteredBackground)
-        # rather than keeping the mic live. App Review rejects the
-        # `audio` mode under guideline 2.5.4 for apps that aren't
-        # background *playback* (music / streaming) — the documented
-        # background-recording use isn't enough to satisfy a reviewer,
-        # and it cost us a submission. Don't re-add it without a
-        # deliberate App Review plan (a screen recording of the
-        # background capture attached to the App Review notes).
+        # `audio` keeps a recording going when Dictator leaves the screen
+        # or the phone locks, and lets a warm background session serve the
+        # keyboard in place (BackgroundSession.swift). App Review rejected
+        # this mode once (May 2026, guideline 2.5.4) when the build only
+        # recorded in the foreground and the reviewer couldn't find the
+        # background feature. It's now user-visible on purpose: a Live
+        # Activity shows whenever the mic is held, with an off button, and
+        # the keyboard dictates without leaving the app. Every submission
+        # with this mode needs the App Review notes + screen recording
+        # described in docs/plans/ios-background-review.md.
+        UIBackgroundModes:
+          - audio
+        NSSupportsLiveActivities: true
         # Custom URL scheme — the Dictator keyboard extension calls
         # `dictator://keyboard?mode=record` or `mode=assist` to wake
         # the host app, which then records / transforms and stages
@@ -606,6 +609,15 @@ targets:
         # iOS UI uses the same purple-ish accent.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # Private Cloud Compute for the Apple Intelligence passes
+        # (AppleIntelligenceModel.swift) is compiled out until Apple grants
+        # the managed entitlement — requesting an entitlement the profile
+        # doesn't carry breaks signing. Once the request is approved for
+        # net.robgough.DictatorIOS, do both:
+        #   1. uncomment the line below, and
+        #   2. add `com.apple.developer.private-cloud-compute` = true to
+        #      DictatorIOS.entitlements and DictatorIOS.Debug.entitlements.
+        # SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PRIVATE_CLOUD_COMPUTE"
       configs:
         Debug:
           CODE_SIGN_ENTITLEMENTS: Sources/DictatorIOS/DictatorIOS.Debug.entitlements
@@ -619,6 +631,8 @@ targets:
       # it via Settings → General → Keyboard → Keyboards → Add New,
       # but the keyboard binary ships inside the app bundle.
       - target: DictatorKeyboard
+      # Live Activity UI for a recording / warm mic session.
+      - target: DictatorLiveActivity
 
   # UI test target — primarily used to drive App Store screenshot
   # capture across simulator sizes. See scripts/take-screenshots.sh.
@@ -656,6 +670,8 @@ targets:
       # target's sources to keep everything in one place, and the
       # keyboard target pulls it in by explicit path.
       - path: Sources/DictatorIOS/KeyboardBridge.swift
+      # The recording meter, so the keyboard's matches the app's.
+      - path: Sources/DictatorIOS/Waveform.swift
     info:
       path: Sources/DictatorKeyboard/Info.plist
       properties:
@@ -696,3 +712,38 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Sources/DictatorKeyboard/DictatorKeyboard.Debug.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Sources/DictatorKeyboard/DictatorKeyboard.entitlements
+
+  # Live Activity for a recording in progress or a warm background mic
+  # session (lock screen + Dynamic Island). Renders only; the app starts,
+  # updates and ends the activity, and its buttons are LiveActivityIntents
+  # that run in the app's process — which is why the attributes + intents
+  # file is compiled into both targets.
+  DictatorLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/DictatorLiveActivity
+      - path: Sources/DictatorIOS/LiveActivity/DictationActivity.swift
+    info:
+      path: Sources/DictatorLiveActivity/Info.plist
+      properties:
+        CFBundleName: DictatorLiveActivity
+        CFBundleDisplayName: Dictator
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.LiveActivity
+        # Must match the host app (DictatorIOS) version + build exactly.
+        MARKETING_VERSION: "2026.6.0"
+        CURRENT_PROJECT_VERSION: "6"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        DEAD_CODE_STRIPPING: YES

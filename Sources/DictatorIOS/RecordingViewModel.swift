@@ -58,6 +58,22 @@ final class RecordingViewModel {
         /// transforms the selected note text (or the whole note when nothing
         /// is selected).
         case scratchpadAssist
+        /// Started from the keyboard (or the Live Activity) while Dictator
+        /// is in the background holding a warm mic. The result goes back
+        /// to the keyboard to insert, and onto the clipboard — never into
+        /// the transcript editor, which the user can't see.
+        case keyboard
+        /// As `.keyboard`, but the speech is an instruction applied to
+        /// `keyboardSourceText`.
+        case keyboardAssist
+        /// The Journal tab's mic — appended to today's journal file.
+        case journal
+        /// The mic inside the journal's entry editor — the words go back to
+        /// the editor at its cursor, not to a file.
+        case entry
+        /// The editor's Reword button: the speech is an instruction applied
+        /// to the editor's selection, or its whole text.
+        case entryAssist
     }
 
     /// Disk presence of the Parakeet model files. Independent of the
@@ -77,7 +93,9 @@ final class RecordingViewModel {
         case failed(String)
     }
 
-    private(set) var status: Status = .idle
+    private(set) var status: Status = .idle {
+        didSet { syncBackgroundSession() }
+    }
     private(set) var modelDiskStatus: ModelDiskStatus = .checking
     /// Which button is driving the current capture. Defaults to
     /// dictation; set by `startRecording` / `startAssistRecording` at
@@ -159,6 +177,13 @@ final class RecordingViewModel {
     var cellularConfirmationPending: Bool = false
 
     private let recorder = IOSAudioRecorder()
+    /// Live Activity, keyboard heartbeat and warm-mic lifetime.
+    private let session = BackgroundSession()
+    /// The keyboard command or URL-launch session the current capture is
+    /// for. Its result is written back to the keyboard to insert.
+    private var servingID: UUID?
+    /// `.keyboardAssist` only: the text the keyboard handed over to transform.
+    private var keyboardSourceText: String?
     private let parakeet = ParakeetService()
     /// User-chosen Parakeet variant. Read from UserDefaults at init so a
     /// preference set in a previous session survives relaunch. Mutated
@@ -212,6 +237,7 @@ final class RecordingViewModel {
         modelDiskStatus = ParakeetService.modelsExist(id: storedID) ? .downloaded : .notDownloaded
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
+            self.session.updateLevel(level)
             if case .recording = self.status {
                 self.status = .recording(level: level)
             } else if case .warmingUp = self.status {
@@ -226,7 +252,24 @@ final class RecordingViewModel {
         }
         recorder.onStartFailed = { [weak self] error in
             guard let self else { return }
+            self.deliverKeyboardResult(text: nil, error: "Couldn't start the microphone. Open Dictator and try again.")
             self.status = .error(error.localizedDescription)
+        }
+        recorder.onInterrupted = { [weak self] in
+            self?.handleRecorderInterrupted()
+        }
+        session.onExpire = { [weak self] in
+            self?.endBackgroundSession()
+        }
+        // Keyboard taps reach a backgrounded host as Darwin notifications.
+        KeyboardBridge.observeDarwin(KeyboardBridge.commandNotification) { [weak self] in
+            self?.handleKeyboardCommand()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .dictationActivityCommand, object: nil, queue: .main
+        ) { [weak self] note in
+            let command = (note.object as? String).flatMap(DictationActivityCommand.init(rawValue:))
+            MainActor.assumeIsolated { self?.handleActivityCommand(command) }
         }
         pressFeedback.prepare()
         resultFeedback.prepare()
@@ -324,7 +367,7 @@ final class RecordingViewModel {
             status = .warmingUp
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
-            recorder.start()
+            beginCapture()
         default:
             // Already capturing or busy.
             return
@@ -353,7 +396,7 @@ final class RecordingViewModel {
             status = .warmingUp
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
-            recorder.start()
+            beginCapture()
         default:
             return
         }
@@ -366,10 +409,16 @@ final class RecordingViewModel {
     /// saved as the history entry's `raw` so the user can compare /
     /// roll back via the long-press menu.
     func stopAssistRecording() async {
+        await runProcessing { await self.stopAssistRecordingWork() }
+    }
+
+    private func stopAssistRecordingWork() async {
         guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
+            deliverKeyboardResult(text: nil, error: nil)
             status = .idle
             recordingMode = .dictation
             autoStartedRecordingActive = false
@@ -377,9 +426,11 @@ final class RecordingViewModel {
         }
         status = .transcribing
         transcribingStartedAt = Date()
+        let generation = beginProcessing()
         let originalText = transcript
         do {
             let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
             // See `stopRecording` — successful transcribe proves the
             // model loaded, so keep the bridge in sync even when the
             // prewarm path didn't run or raced.
@@ -395,6 +446,7 @@ final class RecordingViewModel {
             let instruction = SpokenCues.apply(to: rawInstruction, options: DictatorIOSSettings.cueOptions)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !instruction.isEmpty else {
+                deliverKeyboardResult(text: nil, error: nil)
                 transcribingStartedAt = nil
                 status = .ready
                 recordingMode = .dictation
@@ -405,7 +457,9 @@ final class RecordingViewModel {
                 text: originalText,
                 instruction: instruction
             )
+            guard generation == processingGeneration else { return }
             transcript = result
+            deliverKeyboardResult(text: result, error: nil)
             // Invalidate the stale TextSelection — its indices were
             // sampled against `originalText`, and the wholesale swap
             // makes them meaningless.
@@ -429,6 +483,7 @@ final class RecordingViewModel {
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
+            guard generation == processingGeneration else { return }
             // Keep the user's original text on failure — they spoke
             // an instruction expecting a transformation; reverting to
             // raw would lose their intent and confuse the rollback.
@@ -436,6 +491,7 @@ final class RecordingViewModel {
             transcriptSelection = nil
             transcribingStartedAt = nil
             lastTranscriptionDuration = nil
+            deliverKeyboardResult(text: nil, error: error.localizedDescription)
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
             autoStartedRecordingActive = false
@@ -748,6 +804,9 @@ final class RecordingViewModel {
     /// silently — the user already has a working transcript and we don't want
     /// a cleanup hiccup to error out the whole recording.
     private func processTranscript(_ raw: String) async -> String {
+        // Nothing said. Don't hand an empty string to the Apple model —
+        // it has nothing to tidy and can take seconds to say so.
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         var processed = SpokenCues.apply(to: raw, options: DictatorIOSSettings.cueOptions)
         processed = Vocabulary.apply(VocabularyStore.shared.entries, to: processed)
         processed = SpokenCues.tidyDelivery(processed)
@@ -759,6 +818,121 @@ final class RecordingViewModel {
             }
         }
         return processed
+    }
+
+    // MARK: - Entry editor capture
+
+    /// Where an entry-editor capture delivers: the text to insert, or the
+    /// reworded replacement. Set at start, cleared once called.
+    private var entryCompletion: ((String) -> Void)?
+    /// The text an entry Reword applies to.
+    private var entryAssistSource = ""
+
+    /// Start dictating into the journal's entry editor. `assistSource` makes
+    /// it a Reword: the speech becomes an instruction applied to that text.
+    func startEntryCapture(assistSource: String? = nil, onResult: @escaping (String) -> Void) {
+        guard permission == .granted else { return }
+        guard case .downloaded = modelDiskStatus else { return }
+        if assistSource != nil, !AppleFoundationAssist.isAvailable { return }
+        switch status {
+        case .idle, .ready, .error:
+            recordingMode = assistSource == nil ? .entry : .entryAssist
+            entryAssistSource = assistSource ?? ""
+            entryCompletion = onResult
+            recordingStartCount &+= 1
+            lastTranscriptionDuration = nil
+            status = .warmingUp
+            pressFeedback.impactOccurred()
+            prewarmModelIfNeeded()
+            beginCapture()
+        default:
+            return
+        }
+    }
+
+    func stopEntryCapture() async {
+        await runProcessing { await self.stopEntryCaptureWork() }
+    }
+
+    private func stopEntryCaptureWork() async {
+        guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
+        let isAssist = recordingMode == .entryAssist
+        let deliver = entryCompletion
+        entryCompletion = nil
+        let samples = recorder.stop()
+        pressFeedback.impactOccurred()
+        guard !samples.isEmpty else {
+            status = .idle
+            recordingMode = .dictation
+            return
+        }
+        status = .transcribing
+        transcribingStartedAt = Date()
+        let generation = beginProcessing()
+        do {
+            let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
+            if isAssist {
+                // Cues resolved, vocabulary skipped — it's an instruction,
+                // not words for the page. Same as the Scratchpad's Reword.
+                let instruction = SpokenCues.apply(to: raw, options: DictatorIOSSettings.cueOptions)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let source = entryAssistSource
+                if !instruction.isEmpty, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let result = try await AppleFoundationAssist.transform(text: source, instruction: instruction)
+                    guard generation == processingGeneration else { return }
+                    deliver?(result)
+                    UsageStatsStore.shared.record(
+                        mode: .assistant,
+                        wordsIn: UsageStatsStore.wordCount(instruction),
+                        wordsOut: UsageStatsStore.wordCount(result)
+                    )
+                }
+            } else {
+                let processed = await processTranscript(raw)
+                guard generation == processingGeneration else { return }
+                if !processed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    deliver?(processed)
+                    DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
+                    UsageStatsStore.shared.record(
+                        mode: .dictation,
+                        wordsIn: UsageStatsStore.wordCount(raw),
+                        wordsOut: UsageStatsStore.wordCount(processed)
+                    )
+                }
+            }
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
+            status = .ready
+            resultFeedback.notificationOccurred(.success)
+        } catch {
+            guard generation == processingGeneration else { return }
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
+            status = .error(error.localizedDescription)
+            resultFeedback.notificationOccurred(.error)
+        }
+        entryAssistSource = ""
+        recordingMode = .dictation
+    }
+
+    /// The editor closed mid-capture: keep nothing, release the mic.
+    func cancelEntryCapture() {
+        guard recordingMode == .entry || recordingMode == .entryAssist else { return }
+        entryCompletion = nil
+        entryAssistSource = ""
+        if status.isCapturing {
+            _ = recorder.stop()
+            status = .idle
+            recordingMode = .dictation
+        }
     }
 
     /// Hold-to-talk / tap-to-toggle handler for the Scratchpad tab's mic.
@@ -777,7 +951,7 @@ final class RecordingViewModel {
             status = .warmingUp
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
-            recorder.start()
+            beginCapture()
         default:
             return
         }
@@ -789,7 +963,12 @@ final class RecordingViewModel {
     /// shared `TranscriptMerge`, same as the Dictation transcript), autosaves,
     /// and records a history + usage entry.
     func stopScratchpadRecording() async {
+        await runProcessing { await self.stopScratchpadRecordingWork() }
+    }
+
+    private func stopScratchpadRecordingWork() async {
         guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
@@ -799,13 +978,16 @@ final class RecordingViewModel {
         }
         status = .transcribing
         transcribingStartedAt = Date()
+        let generation = beginProcessing()
         do {
             let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
             if !isModelLoaded {
                 isModelLoaded = true
                 publishModelReadiness()
             }
             let processed = await processTranscript(raw)
+            guard generation == processingGeneration else { return }
             let pad = ScratchpadModel.shared
             pad.ensureLoaded()
             pad.snapshotForUndo()
@@ -827,6 +1009,83 @@ final class RecordingViewModel {
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
+            guard generation == processingGeneration else { return }
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
+            status = .error(error.localizedDescription)
+            resultFeedback.notificationOccurred(.error)
+        }
+        recordingMode = .dictation
+    }
+
+    /// The Journal tab's mic. Same capture and post-processing as a
+    /// dictation; the destination is today's journal file.
+    func startJournalRecording() {
+        guard permission == .granted else { return }
+        guard case .downloaded = modelDiskStatus else { return }
+        switch status {
+        case .idle, .ready, .error:
+            recordingMode = .journal
+            recordingStartCount &+= 1
+            lastTranscriptionDuration = nil
+            status = .warmingUp
+            pressFeedback.impactOccurred()
+            prewarmModelIfNeeded()
+            beginCapture()
+        default:
+            return
+        }
+    }
+
+    func stopJournalRecording() async {
+        await runProcessing { await self.stopJournalRecordingWork() }
+    }
+
+    private func stopJournalRecordingWork() async {
+        guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
+        let samples = recorder.stop()
+        pressFeedback.impactOccurred()
+        guard !samples.isEmpty else {
+            status = .idle
+            recordingMode = .dictation
+            return
+        }
+        status = .transcribing
+        transcribingStartedAt = Date()
+        let generation = beginProcessing()
+        do {
+            let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
+            let processed = await processTranscript(raw)
+            // Cancelled while it was being written down: keep nothing.
+            guard generation == processingGeneration else { return }
+            if !processed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do {
+                    try await JournalModel.shared.add(processed)
+                } catch {
+                    UIPasteboard.general.string = processed
+                    throw error
+                }
+                DictationHistoryStore.shared.append(processed, raw: raw, mode: .dictation)
+                UsageStatsStore.shared.record(
+                    mode: .dictation,
+                    wordsIn: UsageStatsStore.wordCount(raw),
+                    wordsOut: UsageStatsStore.wordCount(processed)
+                )
+            }
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
+            status = .ready
+            resultFeedback.notificationOccurred(.success)
+        } catch {
+            guard generation == processingGeneration else { return }
             transcribingStartedAt = nil
             lastTranscriptionDuration = nil
             status = .error(error.localizedDescription)
@@ -852,7 +1111,7 @@ final class RecordingViewModel {
             status = .warmingUp
             pressFeedback.impactOccurred()
             prewarmModelIfNeeded()
-            recorder.start()
+            beginCapture()
         default:
             return
         }
@@ -864,7 +1123,12 @@ final class RecordingViewModel {
     /// whole note otherwise. Mirrors the Dictation assist flow but scoped to
     /// the selection so you can reword just a paragraph.
     func stopScratchpadAssist() async {
+        await runProcessing { await self.stopScratchpadAssistWork() }
+    }
+
+    private func stopScratchpadAssistWork() async {
         guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
@@ -874,6 +1138,7 @@ final class RecordingViewModel {
         }
         status = .transcribing
         transcribingStartedAt = Date()
+        let generation = beginProcessing()
         let pad = ScratchpadModel.shared
         pad.ensureLoaded()
         let fullText = pad.text
@@ -882,6 +1147,7 @@ final class RecordingViewModel {
         let targetText = hasSelection ? (fullText as NSString).substring(with: sel!) : fullText
         do {
             let rawInstruction = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
             if !isModelLoaded {
                 isModelLoaded = true
                 publishModelReadiness()
@@ -898,6 +1164,7 @@ final class RecordingViewModel {
                 return
             }
             let result = try await AppleFoundationAssist.transform(text: targetText, instruction: instruction)
+            guard generation == processingGeneration else { return }
             pad.snapshotForUndo()
             pad.revealCaretOnNextUpdate = true   // gently scroll to the reworded text
             if hasSelection {
@@ -922,6 +1189,7 @@ final class RecordingViewModel {
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
+            guard generation == processingGeneration else { return }
             transcribingStartedAt = nil
             lastTranscriptionDuration = nil
             status = .error(error.localizedDescription)
@@ -935,10 +1203,16 @@ final class RecordingViewModel {
     /// internal ensureLoaded, runs the samples through Parakeet, applies
     /// vocabulary substitution, and persists to history.
     func stopRecording() async {
+        await runProcessing { await self.stopRecordingWork() }
+    }
+
+    private func stopRecordingWork() async {
         guard status.isCapturing else { return }
+        if isKeyboardCapture { return await stopKeyboardCapture() }
         let samples = recorder.stop()
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
+            deliverKeyboardResult(text: nil, error: nil)
             status = .idle
             autoStartedRecordingActive = false
             return
@@ -946,9 +1220,11 @@ final class RecordingViewModel {
 
         status = .transcribing
         transcribingStartedAt = Date()
+        let generation = beginProcessing()
 
         do {
             let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
             // A successful transcribe proves the model is loaded —
             // `transcribe` itself calls `ensureLoaded` and would have
             // thrown if the load failed. The prewarm path also sets
@@ -961,8 +1237,10 @@ final class RecordingViewModel {
                 publishModelReadiness()
             }
             let processed = await processTranscript(raw)
+            guard generation == processingGeneration else { return }
 
             mergeTranscribed(processed)
+            deliverKeyboardResult(text: processed, error: nil)
             // Auto-copy the (possibly-built-up) transcript and stash
             // a preview snapshot so the keyboard's Paste pill is
             // primed without needing an explicit Send. See
@@ -991,12 +1269,59 @@ final class RecordingViewModel {
             status = .ready
             resultFeedback.notificationOccurred(.success)
         } catch {
+            guard generation == processingGeneration else { return }
             transcribingStartedAt = nil
             lastTranscriptionDuration = nil
+            deliverKeyboardResult(text: nil, error: error.localizedDescription)
             status = .error(error.localizedDescription)
             resultFeedback.notificationOccurred(.error)
             autoStartedRecordingActive = false
         }
+    }
+
+    /// Bumped as each capture starts transcribing; `cancelProcessing`
+    /// bumps it again, so the abandoned one sees it's stale when its next
+    /// await returns and delivers nothing — the UI is back at rest at once,
+    /// even while the cancelled work is still winding down.
+    private var processingGeneration = 0
+
+    /// The capture being transcribed, so a cancel can stop the work rather
+    /// than just ignore it: FluidAudio checks for cancellation between
+    /// decoder steps, and the Apple model stops generating. The model
+    /// *load* isn't interrupted — the next recording needs it anyway.
+    private var processingTask: Task<Void, Never>?
+
+    /// Runs one stop-and-transcribe as its own task so `cancelProcessing`
+    /// can cancel it. Waits for it, so callers still see it finish.
+    private func runProcessing(_ work: @escaping @MainActor () async -> Void) async {
+        let task = Task { @MainActor in await work() }
+        processingTask = task
+        await task.value
+        if processingTask == task { processingTask = nil }
+    }
+
+    private func beginProcessing() -> Int {
+        processingGeneration &+= 1
+        return processingGeneration
+    }
+
+    /// Tapped while anything is "Transcribing…" / "Writing it down…" /
+    /// rewording: drop it, whichever mode owns it. The audio is discarded
+    /// and nothing is inserted, saved or handed to the keyboard.
+    func cancelProcessing() {
+        guard case .transcribing = status else { return }
+        processingGeneration &+= 1
+        processingTask?.cancel()
+        processingTask = nil
+        transcribingStartedAt = nil
+        deliverKeyboardResult(text: nil, error: nil)
+        entryCompletion = nil
+        entryAssistSource = ""
+        keyboardSourceText = nil
+        autoStartedRecordingActive = false
+        status = .idle
+        recordingMode = .dictation
+        resultFeedback.notificationOccurred(.warning)
     }
 
     /// Abort a recording mid-flight without transcribing. Safe to
@@ -1004,6 +1329,7 @@ final class RecordingViewModel {
     func cancelRecording() {
         if status.isCapturing {
             _ = recorder.stop()
+            deliverKeyboardResult(text: nil, error: nil)
             status = .idle
             recordingMode = .dictation
             resultFeedback.notificationOccurred(.warning)
@@ -1020,8 +1346,15 @@ final class RecordingViewModel {
     /// picks the tap-to-stop button instead of hold-to-talk; cleared
     /// at the end of this recording, so any subsequent presses use
     /// the regular hold gesture.
-    func beginKeyboardRecording(mode: KeyboardBridge.Mode, surroundingText: String?) {
+    func beginKeyboardRecording(mode: KeyboardBridge.Mode, surroundingText: String?, session request: UUID? = nil) {
+        // A keyboard capture already running in the background (the user
+        // tapped Dictate in the keyboard, then opened Dictator) owns the mic;
+        // leave it be rather than start a second one over it.
+        guard !status.isCapturing else { return }
         autoStartedRecordingActive = true
+        // The keyboard waits on this id; the result is handed back to it
+        // so returning to the original app inserts the text directly.
+        servingID = request
         switch mode {
         case .record:
             // Arriving from the keyboard's Dictate tile means a
@@ -1038,17 +1371,13 @@ final class RecordingViewModel {
             }
             startRecording(snapshotForUndo: false)
         case .assist:
-            // The keyboard's `textDocumentProxy.selectedText` is
-            // unreliable across iOS apps (Radar FB7789012 — silently
-            // truncates the selection to first+last sentence in
-            // WebView-backed fields), so the keyboard now hands us
-            // nothing and we source the text from the system
-            // clipboard instead. The user copies their target text
-            // before tapping Assist on the keyboard; we read it
-            // here. iOS will fire the "Pasted from X" toast on the
-            // read, which is the expected price of any
-            // pasteboard-string access since iOS 16.
-            transcript = UIPasteboard.general.string ?? ""
+            // The keyboard hands over the text the user highlighted.
+            // With nothing highlighted it hands over nothing and we
+            // read what they copied instead (the original route,
+            // because `selectedText` once truncated long selections in
+            // WebView-backed fields — Radar FB7789012). iOS fires the
+            // "Pasted from X" toast on that read.
+            transcript = surroundingText ?? UIPasteboard.general.string ?? ""
             // Pre-select the captured text so the user can
             // immediately re-dictate to replace it (the cursor-aware
             // merge picks the selection up as "replace this range").
@@ -1109,44 +1438,248 @@ final class RecordingViewModel {
         hostActiveHeartbeatTask = nil
     }
 
-    /// The app moved to the background. With no `audio` background
-    /// mode (removed for App Review 2.5.4), iOS suspends us within
-    /// seconds and tears down the live mic session — so any audio
-    /// captured after this point would be silently dropped. Rather
-    /// than leave the user with a truncated or stuck recording, finish
-    /// what we have: stop the recorder and transcribe the samples
-    /// captured up to now, wrapped in a short `beginBackgroundTask` so
-    /// Parakeet inference can complete before suspension. The result
-    /// auto-copies as usual, so it's already on the clipboard (and
-    /// primed in the keyboard's Paste pill) by the time the user is
-    /// back in their target app. No-op when nothing's recording.
-    func handleEnteredBackground() {
+    // MARK: - Background session and keyboard commands
+
+    /// Every capture starts here, so the warm-or-not decision is made before
+    /// the engine is armed: the audio-session category differs (a warm mic
+    /// mixes with other audio instead of ducking it for minutes on end), and
+    /// it can't be changed later without restarting the engine — which iOS
+    /// won't allow from the background.
+    private func beginCapture() {
+        if !recorder.isArmed {
+            recorder.keepWarm = BackgroundSession.shouldKeepWarm
+        }
+        recorder.start()
+    }
+
+    /// Mirror `status` into the session: keyboard heartbeat, Live Activity,
+    /// screen-awake, background runway.
+    private func syncBackgroundSession() {
+        let phase: KeyboardBridge.SessionState.Phase? = switch status {
+        case .warmingUp, .recording: .recording
+        case .transcribing: .transcribing
+        default: nil
+        }
+        let mode: KeyboardBridge.Mode? = switch recordingMode {
+        case .assist, .scratchpadAssist, .keyboardAssist, .entryAssist: .assist
+        default: .record
+        }
+        session.update(
+            phase: phase,
+            mode: phase == nil ? nil : mode,
+            serving: servingID,
+            warm: recorder.keepWarm && recorder.isArmed
+        )
+    }
+
+    /// Release the warm mic and end the Live Activity.
+    func endBackgroundSession() {
+        if status.isCapturing {
+            // Only reached via an explicit End; finish what was said first.
+            recorder.keepWarm = false
+            Task { await finishCurrentCapture() }
+            return
+        }
+        recorder.keepWarm = false
+        recorder.shutdown()
+        session.stop()
+    }
+
+    /// True while the capture in flight belongs to the keyboard. Any of the
+    /// in-app stop buttons then finish it the keyboard's way.
+    private var isKeyboardCapture: Bool {
+        recordingMode == .keyboard || recordingMode == .keyboardAssist
+    }
+
+    /// True while the keyboard can dictate without opening Dictator.
+    var isBackgroundSessionLive: Bool {
+        recorder.keepWarm && recorder.isArmed
+    }
+
+    /// Stop whatever is capturing, through the path that owns it.
+    func finishCurrentCapture() async {
         guard status.isCapturing else { return }
-        let mode = recordingMode
-        let app = UIApplication.shared
-        var taskID: UIBackgroundTaskIdentifier = .invalid
-        taskID = app.beginBackgroundTask(withName: "DictatorFinishTranscription") {
-            // Expiration: we ran out of background runway before the
-            // transcription finished. End the task so iOS doesn't kill
-            // us outright; the in-flight transcribe Task picks back up
-            // if the user foregrounds Dictator again.
-            if taskID != .invalid {
-                app.endBackgroundTask(taskID)
-                taskID = .invalid
+        switch recordingMode {
+        case .assist:           await stopAssistRecording()
+        case .scratchpad:       await stopScratchpadRecording()
+        case .scratchpadAssist: await stopScratchpadAssist()
+        case .dictation:        await stopRecording()
+        case .keyboard, .keyboardAssist: await stopKeyboardCapture()
+        case .journal:          await stopJournalRecording()
+        case .entry, .entryAssist: await stopEntryCapture()
+        }
+    }
+
+    /// A phone call, Siri, or a route change took the mic. Keep what was
+    /// said — `recorder.stop()` still returns it — and end the session,
+    /// since a backgrounded app can't take the mic back.
+    private func handleRecorderInterrupted() {
+        recorder.keepWarm = false
+        if status.isCapturing {
+            Task { await finishCurrentCapture() }
+        } else {
+            session.stop()
+        }
+    }
+
+    /// The keyboard sent a command through the App Group.
+    private func handleKeyboardCommand() {
+        guard let command = KeyboardBridge.takeCommand() else { return }
+        switch command.action {
+        case .start:
+            startKeyboardCapture(id: command.id, mode: command.mode, sourceText: command.sourceText)
+        case .stop:
+            guard status.isCapturing, command.target == nil || command.target == servingID else { return }
+            Task { await finishCurrentCapture() }
+        case .cancel:
+            guard command.target == nil || command.target == servingID else { return }
+            if case .transcribing = status { cancelProcessing() } else { cancelRecording() }
+        case .end:
+            endBackgroundSession()
+        }
+    }
+
+    /// The Live Activity's buttons.
+    private func handleActivityCommand(_ command: DictationActivityCommand?) {
+        switch command {
+        case .toggle:
+            if status.isCapturing {
+                Task { await finishCurrentCapture() }
+            } else {
+                startKeyboardCapture(id: nil, mode: .record, sourceText: nil)
+            }
+        case .end:
+            endBackgroundSession()
+        case nil:
+            break
+        }
+    }
+
+    /// Record for the keyboard (or the Live Activity) while Dictator is in
+    /// the background. Needs a warm mic, unless Dictator happens to be in
+    /// front, where arming one is allowed.
+    private func startKeyboardCapture(id: UUID?, mode: KeyboardBridge.Mode, sourceText: String?) {
+        func refuse(_ message: String) {
+            if let id { KeyboardBridge.writeResult(.init(serving: id, text: nil, error: message, createdAt: Date())) }
+        }
+        guard permission == .granted, case .downloaded = modelDiskStatus else {
+            return refuse("Open Dictator to finish setting up.")
+        }
+        switch status {
+        case .idle, .ready, .error: break
+        default: return refuse("Dictator is busy. Try again in a moment.")
+        }
+        guard recorder.isArmed || UIApplication.shared.applicationState != .background else {
+            return refuse("The microphone was turned off. Tap Dictate again to open Dictator.")
+        }
+        if mode == .assist {
+            guard AppleFoundationAssist.isAvailable else { return refuse("Assist needs Apple Intelligence.") }
+            guard let sourceText, !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return refuse("Copy the text you want to change first.")
             }
         }
-        Task { @MainActor in
-            switch mode {
-            case .assist:          await stopAssistRecording()
-            case .scratchpad:      await stopScratchpadRecording()
-            case .scratchpadAssist: await stopScratchpadAssist()
-            case .dictation:       await stopRecording()
-            }
-            if taskID != .invalid {
-                app.endBackgroundTask(taskID)
-                taskID = .invalid
-            }
+        servingID = id
+        keyboardSourceText = sourceText
+        recordingMode = mode == .assist ? .keyboardAssist : .keyboard
+        recordingStartCount &+= 1
+        lastTranscriptionDuration = nil
+        status = .warmingUp
+        prewarmModelIfNeeded()
+        beginCapture()
+    }
+
+    /// Counterpart to `startKeyboardCapture`. The result goes to the keyboard
+    /// and the clipboard, and into history — not into the transcript editor.
+    private func stopKeyboardCapture() async {
+        await runProcessing { await self.stopKeyboardCaptureWork() }
+    }
+
+    private func stopKeyboardCaptureWork() async {
+        guard status.isCapturing else { return }
+        let assist = recordingMode == .keyboardAssist
+        let samples = recorder.stop()
+        guard !samples.isEmpty else {
+            deliverKeyboardResult(text: nil, error: nil)
+            status = .idle
+            recordingMode = .dictation
+            return
         }
+        status = .transcribing
+        transcribingStartedAt = Date()
+        let generation = beginProcessing()
+        do {
+            let raw = try await parakeet.transcribe(samples: samples, modelID: selectedModelID)
+            guard generation == processingGeneration else { return }
+            if !isModelLoaded {
+                isModelLoaded = true
+                publishModelReadiness()
+            }
+            let output: String
+            if assist {
+                let instruction = SpokenCues.apply(to: raw, options: DictatorIOSSettings.cueOptions)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let source = keyboardSourceText ?? ""
+                output = instruction.isEmpty
+                    ? ""
+                    : try await AppleFoundationAssist.transform(text: source, instruction: instruction)
+                guard generation == processingGeneration else { return }
+                if !output.isEmpty {
+                    DictationHistoryStore.shared.append(output, raw: source, mode: .assist)
+                    UsageStatsStore.shared.record(
+                        mode: .assistant,
+                        wordsIn: UsageStatsStore.wordCount(instruction),
+                        wordsOut: UsageStatsStore.wordCount(output)
+                    )
+                }
+            } else {
+                output = await processTranscript(raw)
+                guard generation == processingGeneration else { return }
+                if !output.isEmpty {
+                    DictationHistoryStore.shared.append(output, raw: raw, mode: .dictation)
+                    UsageStatsStore.shared.record(
+                        mode: .dictation,
+                        wordsIn: UsageStatsStore.wordCount(raw),
+                        wordsOut: UsageStatsStore.wordCount(output)
+                    )
+                }
+            }
+            if !output.isEmpty {
+                // On the clipboard too, so the text is never lost if the
+                // keyboard has gone by the time it's ready.
+                UIPasteboard.general.string = output
+                KeyboardBridge.writeLastDictation(.init(
+                    text: output,
+                    pasteboardChangeCount: UIPasteboard.general.changeCount,
+                    writtenAt: Date()
+                ))
+                session.noteResult(output)
+            }
+            deliverKeyboardResult(text: output.isEmpty ? nil : output, error: nil)
+            if let started = transcribingStartedAt {
+                lastTranscriptionDuration = Date().timeIntervalSince(started)
+            }
+            transcribingStartedAt = nil
+            keyboardSourceText = nil
+            recordingMode = .dictation
+            status = .ready
+        } catch {
+            guard generation == processingGeneration else { return }
+            deliverKeyboardResult(text: nil, error: error.localizedDescription)
+            transcribingStartedAt = nil
+            lastTranscriptionDuration = nil
+            keyboardSourceText = nil
+            recordingMode = .dictation
+            status = .error(error.localizedDescription)
+        }
+    }
+
+    /// Hand a finished capture's outcome to the keyboard waiting on it, if
+    /// one is. A nil text and nil error means "nothing was said" — the
+    /// keyboard just returns to rest.
+    private func deliverKeyboardResult(text: String?, error: String?) {
+        guard let id = servingID else { return }
+        servingID = nil
+        KeyboardBridge.writeResult(.init(serving: id, text: text, error: error, createdAt: Date()))
     }
 
     /// Publish the model's disk + memory status to the App Group so

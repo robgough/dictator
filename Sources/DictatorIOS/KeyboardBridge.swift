@@ -282,6 +282,174 @@ enum KeyboardBridge {
         return snapshot
     }
 
+    // MARK: - Background session (keyboard dictates in place)
+
+    /// While Dictator holds a warm mic in the background (`BackgroundSession`),
+    /// the keyboard can dictate without switching apps: it sends a `Command`,
+    /// the host records and transcribes, and a `Result` comes back for the
+    /// keyboard to insert straight into the field. `SessionState` is the
+    /// host's heartbeat — its absence (or staleness) means "no session; the
+    /// Dictate button has to open the app", which is the old flow.
+    private static let sessionStateKey = "DictatorKeyboard.sessionState"
+    private static let commandKey = "DictatorKeyboard.command"
+    private static let resultKey = "DictatorKeyboard.result"
+    /// The command (or URL-launch session) whose result the keyboard is
+    /// waiting on. Lives in the App Group rather than the keyboard
+    /// controller, because iOS often builds a fresh controller when the
+    /// user switches back from Dictator to their app.
+    private static let awaitingKey = "DictatorKeyboard.awaiting"
+
+    /// Darwin notification names. Darwin notifications carry no payload —
+    /// they only say "look in the App Group now" — and are delivered to a
+    /// running process even while it's in the background, which is what
+    /// lets a backgrounded host react to a keyboard tap at once.
+    static let commandNotification = "net.robgough.DictatorIOS.keyboard.command"
+    static let resultNotification = "net.robgough.DictatorIOS.keyboard.result"
+    static let sessionNotification = "net.robgough.DictatorIOS.keyboard.session"
+
+    struct SessionState: Codable, Sendable, Equatable {
+        enum Phase: String, Codable, Sendable, Equatable {
+            /// Mic warm, nothing being kept. The keyboard dictates in place.
+            case ready
+            case recording
+            case transcribing
+        }
+        var phase: Phase
+        /// What the in-flight capture is for, so the keyboard can show the
+        /// right in-flight UI. nil while `.ready`.
+        var mode: Mode?
+        /// The command or URL-launch session being served. The keyboard
+        /// only shows Stop for a capture it asked for.
+        var serving: UUID?
+        /// 0...1, only meaningful while `.recording`.
+        var level: Float
+        /// When the warm mic will be released if nothing else happens. nil
+        /// for a recording that isn't part of a session (the setting is off).
+        var expiresAt: Date?
+        var updatedAt: Date
+    }
+
+    struct Command: Codable, Sendable, Equatable {
+        enum Action: String, Codable, Sendable, Equatable {
+            case start
+            case stop
+            case cancel
+            /// Release the warm mic now.
+            case end
+        }
+        var id: UUID
+        var action: Action
+        var mode: Mode
+        /// Assist only: the text to transform. The keyboard reads the
+        /// clipboard itself at tap time, because a backgrounded host can't
+        /// rely on reading it.
+        var sourceText: String?
+        /// For `.stop` / `.cancel`: the capture to stop.
+        var target: UUID?
+        var createdAt: Date
+    }
+
+    struct Result: Codable, Sendable, Equatable {
+        var serving: UUID
+        var text: String?
+        var error: String?
+        var createdAt: Date
+    }
+
+    /// How long a heartbeat counts as live. The host rewrites the state at
+    /// least every second while a session is up; a host that iOS has killed
+    /// stops writing, and this is what stops the keyboard trusting it.
+    static let sessionFreshness: TimeInterval = 4
+
+    static func writeSessionState(_ state: SessionState) {
+        guard let defaults, let data = try? JSONEncoder().encode(state) else { return }
+        defaults.set(data, forKey: sessionStateKey)
+    }
+
+    static func clearSessionState() {
+        defaults?.removeObject(forKey: sessionStateKey)
+        postDarwin(sessionNotification)
+    }
+
+    /// The host's session heartbeat, or nil if there's no live session.
+    static func readSessionState() -> SessionState? {
+        guard let defaults,
+              let data = defaults.data(forKey: sessionStateKey),
+              let state = try? JSONDecoder().decode(SessionState.self, from: data),
+              Date().timeIntervalSince(state.updatedAt) < sessionFreshness
+        else { return nil }
+        if let expiresAt = state.expiresAt, expiresAt < Date(), state.phase == .ready { return nil }
+        return state
+    }
+
+    /// Keyboard → host.
+    static func sendCommand(_ command: Command) {
+        guard let defaults, let data = try? JSONEncoder().encode(command) else { return }
+        defaults.set(data, forKey: commandKey)
+        postDarwin(commandNotification)
+    }
+
+    /// Host side: read and remove the pending command. Commands older than
+    /// a few seconds are dropped — a tap the host never saw shouldn't fire
+    /// a recording minutes later.
+    static func takeCommand() -> Command? {
+        guard let defaults, let data = defaults.data(forKey: commandKey) else { return nil }
+        defaults.removeObject(forKey: commandKey)
+        guard let command = try? JSONDecoder().decode(Command.self, from: data),
+              Date().timeIntervalSince(command.createdAt) < 10
+        else { return nil }
+        return command
+    }
+
+    /// Host → keyboard.
+    static func writeResult(_ result: Result) {
+        guard let defaults, let data = try? JSONEncoder().encode(result) else { return }
+        defaults.set(data, forKey: resultKey)
+        postDarwin(resultNotification)
+    }
+
+    /// Keyboard side: the result for `serving`, removed once read so it's
+    /// inserted exactly once.
+    static func takeResult(for serving: UUID) -> Result? {
+        guard let defaults,
+              let data = defaults.data(forKey: resultKey),
+              let result = try? JSONDecoder().decode(Result.self, from: data),
+              result.serving == serving
+        else { return nil }
+        defaults.removeObject(forKey: resultKey)
+        return result
+    }
+
+    static func setAwaiting(_ id: UUID?) {
+        guard let defaults else { return }
+        if let id {
+            defaults.set(id.uuidString, forKey: awaitingKey)
+        } else {
+            defaults.removeObject(forKey: awaitingKey)
+        }
+    }
+
+    static func awaiting() -> UUID? {
+        defaults?.string(forKey: awaitingKey).flatMap(UUID.init(uuidString:))
+    }
+
+    // MARK: - Darwin notifications
+
+    static func postDarwin(_ name: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(name as CFString),
+            nil, nil, true
+        )
+    }
+
+    /// Run `handler` on the main queue whenever `name` is posted by any
+    /// process. Observers live for the life of the process — both callers
+    /// register once.
+    static func observeDarwin(_ name: String, _ handler: @escaping @MainActor () -> Void) {
+        DarwinObservers.shared.add(name: name, handler: handler)
+    }
+
     // MARK: - Host-active flag
 
     /// Host writes its current foreground state. Pair with the
@@ -307,5 +475,44 @@ enum KeyboardBridge {
         else { return false }
         guard Date().timeIntervalSince(state.updatedAt) < 60 else { return false }
         return state.active
+    }
+}
+
+/// Holds Darwin-notification handlers. CFNotificationCenter takes a C
+/// function pointer, which can't capture, so the callback looks the
+/// handlers up here by name.
+private final class DarwinObservers: @unchecked Sendable {
+    static let shared = DarwinObservers()
+    private let lock = NSLock()
+    private var handlers: [String: [@MainActor () -> Void]] = [:]
+
+    func add(name: String, handler: @escaping @MainActor () -> Void) {
+        lock.lock()
+        let first = handlers[name] == nil
+        handlers[name, default: []].append(handler)
+        lock.unlock()
+        guard first else { return }
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, _, cfName, _, _ in
+                guard let raw = cfName?.rawValue as String? else { return }
+                DarwinObservers.shared.fire(raw)
+            },
+            name as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+
+    private func fire(_ name: String) {
+        lock.lock()
+        let list = handlers[name] ?? []
+        lock.unlock()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                for handler in list { handler() }
+            }
+        }
     }
 }

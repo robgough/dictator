@@ -37,10 +37,14 @@ enum JournalAttachments {
         }
     }
 
-    /// Reuses the chat's classification rather than keeping a second list of
-    /// extensions that would drift from it.
+    /// Extensions treated as photos. The Mac chat's attachment classifier
+    /// reads this same list, so the two can't drift.
+    nonisolated static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp",
+    ]
+
     nonisolated static func isImage(_ url: URL) -> Bool {
-        ChatAttachments.kind(of: url) == .image
+        imageExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Copy an image in beside a note and hand back the Markdown that points
@@ -58,7 +62,7 @@ enum JournalAttachments {
         let folder = note.deletingLastPathComponent().appendingPathComponent(folderName, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let destination = ChatFileWriter.availableURL(
+            let destination = availableURL(
                 for: folder.appendingPathComponent(fileName(for: source, date: date)))
             try FileManager.default.copyItem(at: source, to: destination)
             return markdown(for: destination)
@@ -67,6 +71,44 @@ enum JournalAttachments {
         } catch {
             throw AttachError.copyFailed(source.lastPathComponent, error.localizedDescription)
         }
+    }
+
+    /// Write a photo that exists only in memory — a camera capture, or one
+    /// handed over by the photo picker — beside a note, and hand back the
+    /// Markdown that points at it. Same naming and no-clobber rule as
+    /// copying a file in.
+    nonisolated static func attach(_ data: Data,
+                                   name: String,
+                                   fileExtension: String,
+                                   besideNote note: URL,
+                                   date: Date = Date()) throws -> String {
+        let ext = fileExtension.lowercased()
+        let label = "\(name).\(ext)"
+        guard imageExtensions.contains(ext) else { throw AttachError.notAnImage(label) }
+        let folder = note.deletingLastPathComponent().appendingPathComponent(folderName, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let source = URL(fileURLWithPath: label)
+            let destination = availableURL(
+                for: folder.appendingPathComponent(fileName(for: source, date: date)))
+            try data.write(to: destination, options: .withoutOverwriting)
+            return markdown(for: destination)
+        } catch {
+            throw AttachError.copyFailed(label, error.localizedDescription)
+        }
+    }
+
+    /// `url`, or the first free `name 2.ext`, `name 3.ext`… beside it.
+    nonisolated static func availableURL(for url: URL) -> URL {
+        let directory = url.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: url.path) else { return url }
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        for suffix in 2...999 {
+            let candidate = directory.appendingPathComponent("\(base) \(suffix).\(ext)")
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return directory.appendingPathComponent("\(base) \(UUID().uuidString.prefix(6)).\(ext)")
     }
 
     /// `![kitchen](attachments/2026-09-19-1402-kitchen.jpg)`

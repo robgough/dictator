@@ -13,7 +13,7 @@ struct VocabularyView: View {
         List {
             Section {
                 if store.entries.isEmpty {
-                    Text("No replacements yet. Tap + to add one — for example, replace \"laughing emoji\" with 😂, or your codename with the real spelling.")
+                    Text("No replacements yet. Tap + to add one — for example, fix how a name keeps coming out, or replace \"laughing emoji\" with 😂.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
@@ -26,18 +26,22 @@ struct VocabularyView: View {
                         .buttonStyle(.plain)
                     }
                     .onDelete { offsets in
-                        for index in offsets {
-                            store.entries.remove(at: index)
-                        }
+                        store.entries.remove(atOffsets: offsets)
+                    }
+                    .onMove { from, to in
+                        store.entries.move(fromOffsets: from, toOffset: to)
                     }
                 }
             } footer: {
-                Text("Applied after transcription, in order. Matches whole words by default (case-insensitive). Tap a row to change those options.")
+                Text("Rules run top to bottom after transcription, each on the result of the one before. New rules match anything that sounds like what you type.")
             }
         }
         .navigationTitle("Vocabulary")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if store.entries.count > 1 {
+                ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingNewSheet = true
@@ -48,7 +52,9 @@ struct VocabularyView: View {
         }
         .sheet(isPresented: $showingNewSheet) {
             VocabularyEntryEditor(entry: nil) { newEntry in
-                store.entries.append(newEntry)
+                // At the top, as on the Mac: rules run in order, and the
+                // one just written is the one being fixed.
+                store.entries.insert(newEntry, at: 0)
             }
         }
         .sheet(item: $editingEntry) { entry in
@@ -82,11 +88,18 @@ private struct VocabularyEntryRow: View {
             }
 
             HStack(spacing: 6) {
-                if entry.caseSensitive {
+                Badge(text: entry.matchMode.label, systemImage: entry.matchMode.symbol)
+                if entry.matchMode.usesLiteralFlags, entry.caseSensitive {
                     Badge(text: "Aa", systemImage: "textformat")
                 }
-                if entry.wholeWord {
+                if entry.matchMode == .literal, entry.wholeWord {
                     Badge(text: "Whole word", systemImage: "text.word.spacing")
+                }
+                if entry.validationProblem != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("This rule won't do anything")
                 }
             }
         }
@@ -125,6 +138,7 @@ private struct VocabularyEntryEditor: View {
     @State private var replacement: String
     @State private var caseSensitive: Bool
     @State private var wholeWord: Bool
+    @State private var matchMode: VocabularyMatchMode
 
     init(entry: VocabularyEntry?, onSave: @escaping (VocabularyEntry) -> Void) {
         self.entry = entry
@@ -133,29 +147,47 @@ private struct VocabularyEntryEditor: View {
         _replacement = State(initialValue: entry?.replacement ?? "")
         _caseSensitive = State(initialValue: entry?.caseSensitive ?? false)
         _wholeWord = State(initialValue: entry?.wholeWord ?? true)
+        _matchMode = State(initialValue: entry?.matchMode ?? .defaultForNewRule)
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Pattern", text: $pattern, prompt: Text("e.g. laughing emoji"))
+                    TextField(matchMode == .regex ? "Pattern" : "Heard", text: $pattern,
+                              prompt: Text(matchMode == .regex ? "e.g. \\bdictator\\b" : "e.g. laughing emoji"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .font(matchMode == .regex ? .body.monospaced() : .body)
                     TextField("Replacement", text: $replacement, prompt: Text("e.g. 😂"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                } header: {
-                    Text("Match")
                 } footer: {
-                    Text("The pattern is matched literally — no regex needed.")
+                    if let problem = draft.validationProblem {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    } else if let note = draft.validationNote {
+                        Label(note, systemImage: "info.circle")
+                    }
                 }
 
                 Section {
-                    Toggle("Case sensitive", isOn: $caseSensitive)
-                    Toggle("Whole words only", isOn: $wholeWord)
+                    Picker("Match", selection: $matchMode) {
+                        ForEach(VocabularyMatchMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    // Case and word boundaries only mean something for exact
+                    // text or a regex; sounds-like compares sounds word by
+                    // word, so the switches would be lying about what they do.
+                    if matchMode.usesLiteralFlags {
+                        Toggle("Case sensitive", isOn: $caseSensitive)
+                    }
+                    if matchMode == .literal {
+                        Toggle("Whole words only", isOn: $wholeWord)
+                    }
                 } footer: {
-                    Text("With Whole words off, partial matches inside other words count. With case sensitivity on, \"hello\" won't match \"Hello\".")
+                    Text(matchMode.summary)
                 }
             }
             .navigationTitle(entry == nil ? "New Replacement" : "Edit Replacement")
@@ -168,24 +200,35 @@ private struct VocabularyEntryEditor: View {
                     Button("Save") {
                         let trimmedPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmedPattern.isEmpty else { return }
-                        let saved = VocabularyEntry(
-                            id: entry?.id ?? UUID(),
-                            pattern: trimmedPattern,
-                            replacement: replacement,
-                            caseSensitive: caseSensitive,
-                            wholeWord: wholeWord,
-                            // iOS has no match-mode picker, so an edit here
-                            // must carry the mode through — otherwise editing
-                            // a sounds-like rule on the phone would quietly
-                            // downgrade it to exact on every Mac too.
-                            matchMode: entry?.matchMode ?? .defaultForNewRule
-                        )
+                        var saved = draft
+                        saved.pattern = trimmedPattern
                         onSave(saved)
                         dismiss()
                     }
                     .disabled(pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+        }
+    }
+
+    private var draft: VocabularyEntry {
+        VocabularyEntry(
+            id: entry?.id ?? UUID(),
+            pattern: pattern,
+            replacement: replacement,
+            caseSensitive: caseSensitive,
+            wholeWord: wholeWord,
+            matchMode: matchMode
+        )
+    }
+}
+
+private extension VocabularyMatchMode {
+    var symbol: String {
+        switch self {
+        case .literal: "equal"
+        case .phonetic: "waveform"
+        case .regex: "asterisk"
         }
     }
 }

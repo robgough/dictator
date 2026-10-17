@@ -136,9 +136,7 @@ enum ChatAttachments {
 
     // MARK: - Classifying
 
-    nonisolated private static let imageExtensions: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp",
-    ]
+    nonisolated private static var imageExtensions: Set<String> { JournalAttachments.imageExtensions }
 
     /// Decided by extension first, then by looking at the bytes.
     ///

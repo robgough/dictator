@@ -23,13 +23,24 @@ struct ContentView: View {
     /// constant nil so existing call sites keep working.
     init(keyboardRequest: Binding<KeyboardBridge.Request?> = .constant(nil)) {
         self._keyboardRequest = keyboardRequest
+        #if DEBUG
+        // `-DictatorInitialTab journal` (launch arguments land in
+        // UserDefaults) opens on a given tab, for simulator checks.
+        switch UserDefaults.standard.string(forKey: "DictatorInitialTab") {
+        case "journal": _selectedTab = State(initialValue: .journal)
+        case "scratchpad": _selectedTab = State(initialValue: .scratchpad)
+        case "history": _selectedTab = State(initialValue: .history)
+        case "settings": _selectedTab = State(initialValue: .settings)
+        default: break
+        }
+        #endif
     }
 
-    /// The five bottom tabs. Moving to iOS-style tab navigation gives the
-    /// Scratchpad, History and Vocabulary first-class homes alongside
-    /// dictation — and the Scratchpad note syncs with the Mac.
+    /// The five bottom tabs. Five is the most an iPhone tab bar shows before
+    /// it folds the rest into "More", so Vocabulary — configuration you set
+    /// up once, not somewhere you go — lives in Settings.
     enum AppTab: Hashable {
-        case dictation, scratchpad, history, vocabulary, settings
+        case dictation, journal, scratchpad, history, settings
     }
 
     var body: some View {
@@ -42,11 +53,16 @@ struct ContentView: View {
             || CommandLine.arguments.contains("-DictatorScreenshotState_keyboard") {
             return AnyView(KeyboardShowcase())
         }
-        // The bottom accessory is only applied on the Scratchpad tab — an
+        // The bottom accessory is only applied on tabs that use it — an
         // always-applied `tabViewBottomAccessory` renders its glass bar on
         // every tab even when its content is empty (the stray empty row).
         if selectedTab == .scratchpad {
-            return AnyView(tabs.tabViewBottomAccessory { ScratchpadQuickKeysAccessory() })
+            return AnyView(tabs.tabViewBottomAccessory { ScratchpadControlsAccessory(viewModel: viewModel) })
+        }
+        // The Journal's mic lives in the accessory so it tucks in beside the
+        // tab icon when the bar shrinks, rather than floating over the page.
+        if selectedTab == .journal {
+            return AnyView(tabs.tabViewBottomAccessory { JournalMicAccessory(viewModel: viewModel) })
         }
         return AnyView(tabs)
     }
@@ -56,19 +72,22 @@ struct ContentView: View {
             Tab("Dictation", systemImage: "mic.fill", value: AppTab.dictation) {
                 DictationTabView(viewModel: viewModel)
             }
+            Tab("Journal", systemImage: "book.closed", value: AppTab.journal) {
+                JournalView(viewModel: viewModel) { selectedTab = .settings }
+            }
             Tab("Scratchpad", systemImage: "note.text", value: AppTab.scratchpad) {
                 ScratchpadView(viewModel: viewModel) { selectedTab = .settings }
             }
             Tab("History", systemImage: "clock.arrow.circlepath", value: AppTab.history) {
                 NavigationStack { HistoryView() }
             }
-            Tab("Vocabulary", systemImage: "character.book.closed", value: AppTab.vocabulary) {
-                NavigationStack { VocabularyView() }
-            }
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
                 NavigationStack { SettingsView(viewModel: viewModel) }
             }
         }
+        // A tab bar on a phone-width screen, a sidebar on a wide one —
+        // which is what the iPhone Duo's inner display is (regular width).
+        .tabViewStyle(.sidebarAdaptable)
         // Liquid Glass tab bar recedes while scrolling a list or
         // editing the Scratchpad note. The Scratchpad quick-keys accessory is
         // attached in `body` (only on that tab) so it doesn't leave an empty
@@ -93,23 +112,18 @@ struct ContentView: View {
             if viewModel.permission == .granted {
                 viewModel.beginKeyboardRecording(
                     mode: req.mode,
-                    surroundingText: req.surroundingText
+                    surroundingText: req.surroundingText,
+                    session: req.session
                 )
             }
             keyboardRequest = nil
             KeyboardBridge.clearRequest()
         }
-        // App-lifecycle wiring that must run regardless of the active
-        // tab: keep the keyboard's host-active flag fresh, and finish a
-        // recording gracefully if the app is backgrounded mid-capture
-        // (no `audio` background mode — iOS would otherwise drop the
-        // tail). `.background` only: `.inactive` fires for transient
-        // interruptions where the user hasn't actually left.
+        // Keep the keyboard's host-active flag fresh. A recording no longer
+        // has to stop when Dictator goes to the background: the `audio`
+        // background mode keeps it running (see BackgroundSession).
         .onChange(of: scenePhase, initial: true) { _, new in
             viewModel.applyForegroundState(new == .active)
-            if new == .background {
-                viewModel.handleEnteredBackground()
-            }
         }
     }
 
@@ -178,10 +192,26 @@ struct DictationTabView: View {
             .padding(.horizontal, 20)
             .padding(.top, 8)
             .padding(.bottom, 32)
+            .readableWidth(640)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
             .navigationTitle("Dictator")
             .navigationBarTitleDisplayMode(.inline)
+            // Copy is a top-bar action, per the Liquid Glass layout: the
+            // bottom of the screen is for talking.
+            .toolbar {
+                if viewModel.permission == .granted, case .downloaded = viewModel.modelDiskStatus {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            viewModel.copyTranscriptToClipboard()
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .accessibilityLabel("Copy to Clipboard")
+                        .disabled(viewModel.transcript.isEmpty)
+                    }
+                }
+            }
         }
     }
 
@@ -717,102 +747,72 @@ struct DictationTabView: View {
     /// auto-copies to the clipboard anyway, so Copy is just a manual
     /// re-sync for "I edited this and want the new version on the
     /// clipboard now."
+    /// Dictate and Assist share one bar, half each, like the Journal's —
+    /// big enough to find without looking, without the two 84pt circles
+    /// that used to take a third of the screen. Whichever is recording
+    /// takes the whole bar for its listening bars; while its words are
+    /// being worked on, a tap on the bar cancels.
     private var fullControls: some View {
         VStack(spacing: 12) {
             // Error caption only — on a failure a red line surfaces
-            // above the action buttons where the user's eye is drawn.
-            // The standing "can make mistakes" disclaimer no longer
-            // lives here; it's moved into the empty transcript card
-            // (see TranscriptCard) so the resting button cluster stays
-            // uncluttered. When there's no error this renders nothing
-            // and the VStack spacing collapses cleanly.
+            // above the bar where the user's eye is drawn. The standing
+            // "can make mistakes" disclaimer lives in the empty
+            // transcript card (see TranscriptCard).
             errorCaption
 
-            Button {
-                viewModel.copyTranscriptToClipboard()
-            } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .font(.callout.weight(.semibold))
-                    // White label on the strong blue when active; a muted
-                    // secondary-label grey when disabled — a faded white
-                    // label vanishes against the light card, reading as
-                    // broken rather than inactive.
-                    .foregroundStyle(viewModel.transcript.isEmpty ? Color(.secondaryLabel) : .white)
-                    // Tint the whole glass capsule blue (not just the
-                    // label) so Copy reads as the primary action while
-                    // staying translucent rather than a solid fill. The
-                    // tint eases off when disabled since `.opacity` can't
-                    // fade a glassEffect on its own, but stays present
-                    // enough to read as a real (inactive) button.
-                    .glassEffect(
-                        .regular
-                            .tint(.blue.opacity(viewModel.transcript.isEmpty ? 0.28 : 0.55))
-                            .interactive(),
-                        in: .capsule
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.transcript.isEmpty)
-
-            HStack(spacing: 24) {
-                if viewModel.autoStartedRecordingActive {
-                    // Recording was started for the user (keyboard URL
-                    // launch path), not by a button press — a hold-to-
-                    // talk affordance is wrong here, so a tap-to-stop
-                    // mirrors the way the user got into the recording.
-                    // Tint + resting icon match the matching in-app
-                    // button so the user can tell at a glance whether
-                    // they're in a dictate (red) or assist (purple) flow.
-                    TapStopButton(
-                        status: viewModel.status,
-                        tint: viewModel.recordingMode == .assist ? .purple : .red,
-                        restingIcon: viewModel.recordingMode == .assist ? "wand.and.stars" : "mic.fill"
-                    ) {
-                        Task {
-                            if viewModel.recordingMode == .assist {
-                                await viewModel.stopAssistRecording()
-                            } else {
-                                await viewModel.stopRecording()
-                            }
-                        }
-                    }
-                } else {
-                    HoldButton(
-                        status: viewModel.status,
+            let assistShown = AppleFoundationAssist.isAvailable
+                && !(dictationBusy && viewModel.recordingMode == .dictation)
+            let dictateShown = !(dictationBusy && viewModel.recordingMode == .assist)
+            HStack(spacing: 0) {
+                if dictateShown {
+                    RecordKey(
                         tint: .red,
-                        restingIcon: micRestingIcon,
-                        isMyTurn: viewModel.recordingMode == .dictation,
-                        compact: false,
+                        icon: micRestingIcon,
+                        title: "Dictate",
+                        label: "Dictate",
+                        mode: .dictation,
+                        viewModel: viewModel,
+                        height: 60,
+                        autoStarted: viewModel.autoStartedRecordingActive,
+                        enabled: !otherButtonBusy(for: .dictation),
                         onPress: { viewModel.startRecording() },
                         onRelease: { Task { await viewModel.stopRecording() } }
                     )
-                    .disabled(otherButtonBusy(for: .dictation))
-                    .opacity(otherButtonBusy(for: .dictation) ? 0.4 : 1)
-
-                    if AppleFoundationAssist.isAvailable {
-                        HoldButton(
-                            status: viewModel.status,
-                            tint: .purple,
-                            restingIcon: "wand.and.stars",
-                            isMyTurn: viewModel.recordingMode == .assist,
-                            compact: false,
-                            onPress: { viewModel.startAssistRecording() },
-                            onRelease: { Task { await viewModel.stopAssistRecording() } }
-                        )
-                        .disabled(assistDisabled)
-                        .opacity(assistDisabled ? 0.35 : 1)
-                    }
+                }
+                if dictateShown && assistShown {
+                    Divider().frame(height: 28)
+                }
+                if assistShown {
+                    RecordKey(
+                        tint: .purple,
+                        icon: "wand.and.stars",
+                        title: "Assist",
+                        label: "Assist",
+                        mode: .assist,
+                        viewModel: viewModel,
+                        height: 60,
+                        busyLabel: "Applying…",
+                        autoStarted: viewModel.autoStartedRecordingActive,
+                        enabled: !assistDisabled,
+                        onPress: { viewModel.startAssistRecording() },
+                        onRelease: { Task { await viewModel.stopAssistRecording() } }
+                    )
                 }
             }
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: dictationBusy)
         }
-        // Pure crossfade with the compact variant — when the layouts
-        // differ this much (vertical stack vs single horizontal row),
-        // sliding from an edge made the larger block visibly jump
-        // through the smaller one. A clean opacity blend reads as a
-        // single morph rather than two separate gestures.
+        // Pure crossfade with the keyboard-edit layout.
         .transition(.opacity)
+    }
+
+    /// A Dictation-tab capture is recording or being transcribed — the
+    /// stretch where only its own half of the bar shows.
+    private var dictationBusy: Bool {
+        guard viewModel.recordingMode == .dictation || viewModel.recordingMode == .assist else { return false }
+        if viewModel.status.isCapturing { return true }
+        if case .transcribing = viewModel.status { return true }
+        return false
     }
 
     /// Error surface above the action buttons. Renders the failure
@@ -1463,318 +1463,6 @@ struct KeyboardToggleButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(enabled ? "Hide keyboard" : "Show keyboard")
-    }
-}
-
-// MARK: - Tap-to-stop button (keyboard mode)
-
-/// Tap variant used in keyboard mode. Recording is auto-started when
-/// Rotating dashed ring drawn around the active listening button.
-/// Sits outside the button face so it stays visible even when a
-/// thumb is covering the button itself — the soft level-driven
-/// pulse is great for audio-feedback texture but reads as little
-/// more than a halo under most hands.
-///
-/// Driven by `TimelineView(.animation)` rather than a `@State`
-/// rotation + repeatForever animation: the latter has a known
-/// SwiftUI footgun where the rotation desynchronises after a view
-/// re-instantiation. The timeline approach is purely a function
-/// of `Date()`, so the ring picks up exactly where it should
-/// regardless of how SwiftUI is recomposing the tree.
-private struct ActiveListeningRing: View {
-    let tint: Color
-    /// Outer diameter of the ring — should sit outside the button
-    /// the caller is decorating so a thumb-on-button doesn't occlude
-    /// it.
-    let diameter: CGFloat
-    /// Stroke thickness. 3 pt reads cleanly at the button sizes used
-    /// throughout the app; bump up for very large buttons.
-    let lineWidth: CGFloat
-    /// Seconds per full revolution. 4 s feels alive without looking
-    /// frantic; slower than 6 s makes the motion easy to miss.
-    let period: Double
-
-    init(tint: Color, diameter: CGFloat, lineWidth: CGFloat = 3, period: Double = 4) {
-        self.tint = tint
-        self.diameter = diameter
-        self.lineWidth = lineWidth
-        self.period = period
-    }
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let elapsed = context.date.timeIntervalSinceReferenceDate
-            let rotation = (elapsed.truncatingRemainder(dividingBy: period) / period) * 360
-            Circle()
-                .strokeBorder(
-                    tint,
-                    style: StrokeStyle(
-                        lineWidth: lineWidth,
-                        lineCap: .round,
-                        dash: [6, 10]
-                    )
-                )
-                .frame(width: diameter, height: diameter)
-                .rotationEffect(.degrees(rotation))
-        }
-    }
-}
-
-/// the host receives a keyboard request, so the user shouldn't have
-/// to hold anything down — they just tap once to STOP. Single
-/// instance, no assist sibling.
-private struct TapStopButton: View {
-    let status: RecordingViewModel.Status
-    /// Tint for the pulse, ring, and button face. Red for dictate,
-    /// purple for assist — matches the in-app HoldButton pairing so
-    /// the user can tell which flow they're in even when the auto-
-    /// started recording is the only on-screen button.
-    let tint: Color
-    /// Glyph shown when the button isn't actively recording /
-    /// transcribing (idle / ready / error). Recording uses "stop.fill"
-    /// and transcribing uses "hourglass" regardless of mode.
-    let restingIcon: String
-    let onTap: () -> Void
-
-    private var level: Float {
-        if case let .recording(level) = status { return level }
-        return 0
-    }
-
-    private var icon: String {
-        switch status {
-        case .transcribing: "hourglass"
-        case .recording, .warmingUp: "stop.fill"
-        default: restingIcon
-        }
-    }
-
-    private var disabled: Bool {
-        switch status {
-        case .transcribing: true
-        default: false
-        }
-    }
-
-    var body: some View {
-        Button(action: onTap) {
-            ZStack {
-                Circle()
-                    .fill(tint.opacity(0.18))
-                    .frame(width: 84 + CGFloat(level) * 60, height: 84 + CGFloat(level) * 60)
-                    .animation(.easeOut(duration: 0.08), value: level)
-                // Spinning dashed ring sits just outside the button
-                // face so it stays visible under a thumb — the pulse
-                // is too soft to read while held.
-                if status.isCapturing {
-                    ActiveListeningRing(tint: tint, diameter: 108)
-                }
-                // Glass face + tinted icon, matching the rest of the controls.
-                Image(systemName: icon)
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundStyle(tint.opacity(disabled ? 0.4 : 1))
-                    .frame(width: 84, height: 84)
-                    .glassEffect(.regular, in: .circle)
-            }
-            .frame(width: 84 + 60, height: 84 + 60)
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-    }
-}
-
-// MARK: - Hold-to-talk button
-
-/// Round dual-mode button shared between the red mic (records
-/// dictation) and the purple assist wand (records an instruction to
-/// apply to the current transcript). Same gesture shape, different
-/// tint + icon + action.
-///
-/// Two interaction modes resolved from the gesture itself:
-///   - **Tap** (press + release within ~0.35s): toggle-on. Recording
-///     starts on press and continues after the finger lifts; a second
-///     tap stops it. Useful for longer dictation sessions where you
-///     don't want to keep your thumb pinned.
-///   - **Hold** (press for longer than the threshold): push-to-talk.
-///     Recording starts on press and stops on release. Useful for
-///     quick voice messages — you don't have to consciously think
-///     about stopping it.
-///
-/// The mode is decided at release time from the press duration — no
-/// upfront commitment, no second gesture, no menu. From the parent's
-/// perspective the contract is unchanged: `onPress` fires once on
-/// initial touch, `onRelease` fires once when the recording should
-/// stop (on release for push-to-talk, on the second tap for toggle).
-///
-/// `isMyTurn` is set by the parent based on `viewModel.recordingMode`
-/// — it lets the active button show the level-driven outer ring while
-/// the other button stays still. The active button also swaps its
-/// icon to "hourglass" during the transcribing/transforming stage so
-/// the user knows which button's flow is in progress.
-struct HoldButton: View {
-    let status: RecordingViewModel.Status
-    let tint: Color
-    let restingIcon: String
-    let isMyTurn: Bool
-    let compact: Bool
-    let onPress: () -> Void
-    let onRelease: () -> Void
-
-    @State private var isPressed = false
-    /// Reflects `.disabled()`. The face is glass (`.opacity` can't fade a
-    /// glassEffect), so we fade the icon to signal the disabled state.
-    @Environment(\.isEnabled) private var isEnabled
-    /// True after a tap-and-release shorter than `holdThreshold` — the
-    /// button is now in "toggle on" mode and the next tap stops the
-    /// recording. False during push-to-talk (held longer than the
-    /// threshold) and after the recorder finishes for any reason.
-    @State private var isLatched = false
-    /// Wall-clock time the current press started, used at release time
-    /// to decide tap vs. hold. Cleared on release.
-    @State private var pressStartedAt: Date?
-
-    /// Press-duration boundary between "this was a tap" and "this is a
-    /// hold". 0.35s is short enough that a deliberate tap feels
-    /// instant and long enough that a momentary fumble doesn't get
-    /// misread as the toggle path.
-    private static let holdThreshold: TimeInterval = 0.35
-
-    private var diameter: CGFloat { compact ? 52 : 84 }
-
-    /// Level-driven ring only shown around the button whose press is
-    /// currently driving the recording. Without the `isMyTurn` gate
-    /// both buttons would pulse on every dictation.
-    private var level: Float {
-        if isMyTurn, case let .recording(level) = status { return level }
-        return 0
-    }
-
-    private var displayedIcon: String {
-        if isMyTurn, case .transcribing = status {
-            return "hourglass"
-        }
-        if isMyTurn, isLatched {
-            // Latched into tap-to-toggle mode — swap the resting icon
-            // for `stop.fill` so the next-tap-stops affordance is
-            // obvious. The hold path doesn't get an icon swap because
-            // the user's thumb is on the button while the press is
-            // active; the scaleEffect + listening ring already cover
-            // "you are recording".
-            return "stop.fill"
-        }
-        return restingIcon
-    }
-
-    var body: some View {
-        let ringMax: CGFloat = compact ? 14 : 60
-        let iconSize: CGFloat = compact ? 22 : 32
-        let ringDiameter: CGFloat = diameter + (compact ? 14 : 24)
-        let ringLineWidth: CGFloat = compact ? 2 : 3
-        ZStack {
-            Circle()
-                .fill(tint.opacity(0.18))
-                .frame(
-                    width: diameter + CGFloat(level) * ringMax,
-                    height: diameter + CGFloat(level) * ringMax
-                )
-                .animation(.easeOut(duration: 0.08), value: level)
-
-            // Spinning dashed listening ring — sits just outside the
-            // button so the thumb doesn't occlude it. Only shows on
-            // the active side via `isMyTurn` so the inactive button
-            // stays calm.
-            if isMyTurn, status.isCapturing {
-                ActiveListeningRing(tint: tint, diameter: ringDiameter, lineWidth: ringLineWidth)
-            }
-
-            // Glass face with a tinted icon (matches the Scratchpad controls),
-            // rather than a solid tinted fill. The faint tinted halo behind it
-            // (and the listening ring) carry the colour.
-            Image(systemName: displayedIcon)
-                .font(.system(size: iconSize, weight: .semibold))
-                .foregroundStyle(tint.opacity(isEnabled ? 1 : 0.3))
-                .frame(width: diameter, height: diameter)
-                .glassEffect(.regular, in: .circle)
-                .scaleEffect(isPressed ? 0.96 : 1)
-                .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
-                .contentShape(Circle())
-        }
-        .frame(
-            width: diameter + (compact ? 8 : 20),
-            height: diameter + 12,
-            alignment: .center
-        )
-        .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
-            // Tap-completion — unused; press/release fire via
-            // onPressingChanged so we can implement the tap-vs-hold
-            // split on release rather than committing up front.
-        } onPressingChanged: { pressing in
-            if pressing, !isPressed {
-                isPressed = true
-                if isLatched {
-                    // Already toggled on from a previous tap — this
-                    // press is the tap-to-stop. Defer the stop to
-                    // release for consistency with how iOS native
-                    // toggle controls behave (touch-up-inside) and so
-                    // a fumbled touch doesn't kill the recording.
-                } else {
-                    pressStartedAt = Date()
-                    onPress()
-                }
-            } else if !pressing, isPressed {
-                isPressed = false
-                if isLatched {
-                    // Second tap on a latched button — stop the
-                    // recording and clear the latch regardless of
-                    // press duration.
-                    isLatched = false
-                    onRelease()
-                } else {
-                    let elapsed = pressStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-                    pressStartedAt = nil
-                    if elapsed >= Self.holdThreshold {
-                        // Push-to-talk: held past the threshold, so
-                        // release stops the recording.
-                        onRelease()
-                    } else {
-                        // Tap: latch on, recording continues until the
-                        // next tap.
-                        isLatched = true
-                    }
-                }
-            }
-        }
-        // Auto-clear the latch if the recorder finishes for any other
-        // reason (auto-finish, transcription error, the parent flipping
-        // to autoStartedRecordingActive, etc.) — otherwise a stale
-        // latch would leave the button thinking it's "on" with nothing
-        // actually recording, and the next tap would silently start a
-        // brand-new recording instead of cancelling the "active"
-        // state the user expects.
-        .onChange(of: isMyTurn) { _, nowMine in
-            if !nowMine { isLatched = false }
-        }
-        .onChange(of: statusKey) { _, _ in
-            if !status.isCapturing,
-               !{ if case .transcribing = status { return true } else { return false } }() {
-                isLatched = false
-            }
-        }
-    }
-
-    /// Coarse identifier for the current status case — used as the
-    /// `.onChange` value so we react when the recorder transitions
-    /// across phases (e.g. recording → transcribing → idle) without
-    /// firing on every level update inside `.recording(level:)`.
-    private var statusKey: String {
-        switch status {
-        case .idle: "idle"
-        case .warmingUp: "warmingUp"
-        case .recording: "recording"
-        case .transcribing: "transcribing"
-        case .ready: "ready"
-        case .error: "error"
-        }
     }
 }
 

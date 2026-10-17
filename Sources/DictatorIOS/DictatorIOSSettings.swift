@@ -58,6 +58,18 @@ enum DictatorIOSSettings {
     /// an un-set bool reads false, so the hint shows until explicitly closed.
     static let scratchpadSyncHintDismissedKey = "DictatorIOS.scratchpadSyncHintDismissed"
 
+    /// How many minutes Dictator keeps the microphone warm in the background
+    /// after a dictation, so the keyboard can dictate in place. 0 = off: the
+    /// keyboard's Dictate button always opens the app. See BackgroundSession.
+    static let backgroundSessionMinutesKey = "DictatorIOS.backgroundSessionMinutes"
+    static let backgroundSessionChoices = [0, 5, 15, 60]
+
+    /// Use Apple's Private Cloud Compute model for the Apple Intelligence
+    /// passes (filler cleanup, Assist) when it's available, falling back to
+    /// the on-device model. On by default; the larger model is markedly
+    /// better at both, and the text goes to Apple's PCC servers, never ours.
+    static let privateCloudComputeKey = "DictatorIOS.privateCloudComputeEnabled"
+
     /// Best-guess default Parakeet variant based on the device's
     /// preferred language. English-locale users get v2 (English-only)
     /// — it's slightly tighter on English accuracy because the model
@@ -111,6 +123,8 @@ enum DictatorIOSSettings {
             // v2, everyone else gets v3. The picker in the onboarding
             // sheet still lets the user flip either way.
             selectedModelKey: recommendedModelID(),
+            backgroundSessionMinutesKey: 15,
+            privateCloudComputeKey: true,
         ])
     }
 

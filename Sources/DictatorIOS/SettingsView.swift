@@ -25,6 +25,8 @@ struct SettingsView: View {
     @State private var sharedFolderError: String?
 
     @AppStorage(DictatorIOSSettings.foundationCleanupKey) private var foundationCleanupEnabled = false
+    @AppStorage(DictatorIOSSettings.backgroundSessionMinutesKey) private var backgroundMinutes = 15
+    @AppStorage(DictatorIOSSettings.privateCloudComputeKey) private var privateCloudEnabled = true
 
     /// Snapshotted once on view appear — `SystemLanguageModel.default.availability`
     /// doesn't change during a session except via going to Settings to
@@ -57,19 +59,34 @@ struct SettingsView: View {
                             .foregroundStyle(.purple)
                     }
                 }
+                Picker("Keep the mic ready", selection: $backgroundMinutes) {
+                    Text("Off").tag(0)
+                    Text("5 minutes").tag(5)
+                    Text("15 minutes").tag(15)
+                    Text("1 hour").tag(60)
+                }
+                .onChange(of: backgroundMinutes) { _, minutes in
+                    if minutes == 0 { viewModel.endBackgroundSession() }
+                }
             } header: {
-                Text("Keyboard")
-            } footer: {
-                Text("Walks you through enabling the Dictator keyboard in iOS Settings, with one-tap deep-link to the right page.")
+                InfoHeader("Keyboard", info: "iOS won't let an app turn the microphone on from the background, so the keyboard normally has to open Dictator to start. Keeping the mic ready lets it dictate straight into the app you're in. While it's ready the microphone indicator stays on and a Live Activity lets you turn it off. Nothing is recorded until you tap Dictate.")
             }
 
             if foundationAvailable {
                 Section {
                     Toggle("Tidy filler words", isOn: $foundationCleanupEnabled)
+                    if AppleIntelligenceModel.cloudSupported {
+                        Toggle("Use Private Cloud Compute", isOn: $privateCloudEnabled)
+                        if privateCloudEnabled, let reason = AppleIntelligenceModel.cloudUnavailableReason {
+                            Text(reason)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 } header: {
-                    Text("Apple Intelligence")
-                } footer: {
-                    Text("Runs Apple's on-device foundation model after transcription to drop \"um\", \"uh\", repeated stutters, and false-starts. Strict content-preservation check reverts to the transcript if the model paraphrases.")
+                    InfoHeader("Apple Intelligence", info: AppleIntelligenceModel.cloudSupported
+                        ? "Tidy filler words drops \"um\", \"uh\", stutters and false starts. If the model changes your words, Dictator keeps the original transcript.\n\nPrivate Cloud Compute uses Apple's larger model for tidying and Assist. Your text goes to Apple for that one request, isn't stored, and can't be seen by Apple. Speech is always transcribed on this iPhone, and if Private Cloud Compute can't be reached the on-device model is used instead."
+                        : "Tidy filler words drops \"um\", \"uh\", stutters and false starts. If the model changes your words, Dictator keeps the original transcript.")
                 }
             } else if let explanation = assistAvailability.explanation {
                 // Mirror-image of the section above: when the foundation
@@ -103,19 +120,12 @@ struct SettingsView: View {
                     Text("Ultra · Multilingual").tag(DictatorIOSSettings.ultraModelID)
                 }
             } header: {
-                Text("Transcription Model")
-            } footer: {
-                // Spell out the actual tradeoff. Both models are the same
-                // size (~600M params, ~460 MB download); v3 trades a small
-                // amount of English accuracy for coverage of ~25 European
-                // languages. v2 is the better pick if you only ever dictate
-                // in English.
-                Text("""
-                v3 · Multilingual — Transcribes English, German, French, Italian, Spanish, Portuguese, Russian, Ukrainian, and other European languages.
-                v2 · English — English-only; tighter English accuracy than v3 because it isn't splitting capacity across other languages.
-                Ultra · Multilingual — A more accurate retrain of v3 with the same languages. A larger download (about 615 MB).
+                InfoHeader("Transcription Model", info: """
+                v3 transcribes English and about 25 European languages.
+                v2 is English only, and a little more accurate at it.
+                Ultra is a more accurate v3 with the same languages, and a larger download (about 615 MB).
 
-                Switching triggers a one-time download if the selected model isn't already on this device. The previous one is unloaded from memory but stays on disk for quick switching back.
+                Switching downloads the model once; the previous one stays on this iPhone.
                 """)
             }
 
@@ -143,7 +153,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Use a shared folder")
                                     .foregroundStyle(.primary)
-                                Text("Sync vocabulary and usage stats with your Mac")
+                                Text("Sync your journal, scratchpad and vocabulary with your Mac")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -159,12 +169,15 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("Shared folder")
-            } footer: {
-                Text("Pick a folder in iCloud Drive — typically iCloud Drive › Documents › Dictator on a Mac with Desktop & Documents syncing turned on — to share your custom vocabulary and your usage counters with the Mac app or another iPhone signed in to the same iCloud account. Dictation history and assistant conversations stay on this device only.")
+                InfoHeader("Shared folder", info: "Pick the Dictator folder in iCloud Drive (usually Documents › Dictator, with Desktop & Documents syncing on the Mac) to share your journal, scratchpad, vocabulary and stats with your Mac. Dictation history stays on this iPhone.")
             }
 
             Section {
+                NavigationLink {
+                    VocabularyView()
+                } label: {
+                    Label("Vocabulary", systemImage: "character.book.closed")
+                }
                 NavigationLink {
                     SubstitutionsView()
                 } label: {
@@ -186,6 +199,7 @@ struct SettingsView: View {
             debugSection
             #endif
         }
+        .readableWidth(background: Color(.systemGroupedBackground))
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

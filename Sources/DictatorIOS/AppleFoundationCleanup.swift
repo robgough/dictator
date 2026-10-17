@@ -82,7 +82,6 @@ enum AppleFoundationCleanup {
             throw CleanupError.unavailable(String(describing: reason))
         }
 
-        let session = LanguageModelSession(instructions: Instructions(systemPrompt))
         // Generous token budget. Cleanup itself wants very few tokens
         // (~equal to or shorter than input), but capping that tight
         // means a model that goes off-script gets truncated mid-joke,
@@ -103,7 +102,9 @@ enum AppleFoundationCleanup {
         // The prompt instructs the model to ignore the wrapping in its
         // output.
         let wrapped = "<TRANSCRIPT>\(text)</TRANSCRIPT>"
-        let response = try await session.respond(to: wrapped, options: options)
+        let response = try await AppleIntelligenceModel.respond(
+            instructions: systemPrompt, prompt: wrapped, options: options
+        )
         AppleFoundationTokenAccounting.record(
             promptCharCount: systemPrompt.count + wrapped.count,
             responseCharCount: response.content.count

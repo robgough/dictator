@@ -41,7 +41,6 @@ struct ScratchpadView: View {
     /// but `EditableTranscript` requires the binding).
     @State private var editorFocused = false
     @Environment(\.scenePhase) private var scenePhase
-    @Namespace private var glass
 
     var body: some View {
         NavigationStack {
@@ -56,21 +55,36 @@ struct ScratchpadView: View {
                         .allowsHitTesting(false)
                 }
             }
-            // Controls live in a bottom bar, NOT an overlay over the editor:
-            // the editor is a UITextView whose gesture recognizers swallow
-            // taps on SwiftUI views layered over it. A safeAreaInset insets
-            // the editor above the bar (taps land) and the bar rises above the
-            // keyboard when it appears (so the keyboard toggle stays reachable).
-            // Quick edit keys (space / return / delete) live in the TabView's
-            // bottom accessory (see ContentView) so they can dock with the
-            // minimized tab bar; only the record / undo / keyboard controls
-            // sit here. `safeAreaBar` (not `safeAreaInset`) so the note scrolls
-            // UNDER the controls with the iOS 26 progressive scroll-edge blur,
-            // instead of a hard cut-off — while still reserving their height so
-            // the last line stays reachable above them.
-            .safeAreaBar(edge: .bottom) { bottomBar }
+            // Every control at the bottom — mic, Reword, space, return,
+            // delete — is one row in the TabView's bottom accessory (see
+            // `ScratchpadControlsAccessory`), so it docks beside the tab bar
+            // when that shrinks on scroll and nothing floats over the note.
             .navigationTitle("Scratchpad")
             .navigationBarTitleDisplayMode(.inline)
+            // Only the hold-to-talk buttons float at the bottom; everything
+            // else is a top-bar action, per the Liquid Glass layout. Undo and
+            // the keyboard are different kinds of action, so separate capsules.
+            .toolbar {
+                if model.canUndo && !recordingInProgress {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            model.undo()
+                        } label: {
+                            Image(systemName: model.didUndo ? "arrow.uturn.forward" : "arrow.uturn.backward")
+                        }
+                        .accessibilityLabel(model.didUndo ? "Redo" : "Undo")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        keyboardEnabled.toggle()
+                    } label: {
+                        Image(systemName: keyboardEnabled ? "keyboard.chevron.compact.down" : "keyboard")
+                    }
+                    .accessibilityLabel(keyboardEnabled ? "Hide keyboard" : "Show keyboard")
+                    .disabled(recordingInProgress)
+                }
+            }
             // Match the bottom: content scrolls under the sync hint with the
             // scroll-edge blur, rather than stopping at a hard edge below it.
             .safeAreaBar(edge: .top) { syncHint }
@@ -87,6 +101,11 @@ struct ScratchpadView: View {
                 }
             }
             .onDisappear { model.saveNow() }
+            // The mic and Reword live in the accessory; starting either puts
+            // the keyboard away, as pressing them always has.
+            .onChange(of: recordingInProgress) { _, recording in
+                if recording { keyboardEnabled = false }
+            }
         }
     }
 
@@ -110,6 +129,7 @@ struct ScratchpadView: View {
             bottomTextInset: 220
         )
         .padding(.horizontal, 8)
+        .readableWidth(760)
         // Extend the editor under the bottom controls / tab bar so its content
         // scrolls under them (Liquid Glass), rather than the frame stopping at a
         // hard edge above the bar.
@@ -182,138 +202,6 @@ struct ScratchpadView: View {
         }
     }
 
-    // MARK: - Bottom bar
-
-    private var bottomBar: some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                // Recording controls (mic + assist), bottom-leading. While
-                // recording, the inactive button is replaced by a clear
-                // placeholder of the same size (not hidden via opacity —
-                // `.opacity` doesn't affect glassEffect views) so the active
-                // button keeps its exact position and expands in place into a
-                // pill with the listening bars inside.
-                if !keyboardEnabled {
-                    micSlot
-                    if assistAvailable { assistSlot }
-                }
-
-                Spacer(minLength: 8)
-
-                if let reason = micDisabledReason {
-                    Text(reason)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .glassEffect(.regular, in: .capsule)
-                        .frame(maxWidth: 170, alignment: .trailing)
-                }
-
-                // Trailing controls: undo/redo (when there's something) +
-                // keyboard, on the right-hand side. Hidden while recording.
-                // The same button flips to "redo" after an undo.
-                if !recordingInProgress {
-                    if model.canUndo {
-                        circleButton(
-                            systemImage: model.didUndo ? "arrow.uturn.forward" : "arrow.uturn.backward",
-                            label: model.didUndo ? "Redo" : "Undo"
-                        ) {
-                            model.undo()
-                        }
-                    }
-                    circleButton(
-                        systemImage: keyboardEnabled ? "keyboard.chevron.compact.down" : "keyboard",
-                        label: keyboardEnabled ? "Hide keyboard" : "Show keyboard"
-                    ) {
-                        keyboardEnabled.toggle()
-                    }
-                }
-            }
-        }
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: recordingInProgress)
-        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: keyboardEnabled)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: model.canUndo)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
-    }
-
-    /// Red dictation mic. Glassy, like the other controls; expands in place into
-    /// a pill with the listening bars when it's the active recorder, and fades
-    /// (without moving) when assist is recording.
-    private var micButton: some View {
-        ScratchpadRecordButton(
-            tint: .red,
-            restingIcon: micRestingIcon,
-            status: viewModel.status,
-            isMyTurn: viewModel.recordingMode == .scratchpad,
-            recordingStartCount: viewModel.recordingStartCount,
-            onPress: { startMic() },
-            onRelease: { Task { await viewModel.stopScratchpadRecording() } }
-        )
-        .id("scratchpad-mic")
-        .disabled(micDisabled)
-    }
-
-    /// Mic in its slot, or a same-size clear placeholder when it's hidden
-    /// during an assist recording (keeps the assist button's position fixed).
-    @ViewBuilder private var micSlot: some View {
-        if micShown { micButton }
-        else { Color.clear.frame(width: 52, height: 52) }
-    }
-
-    @ViewBuilder private var assistSlot: some View {
-        if assistShown { assistButton }
-        else { Color.clear.frame(width: 52, height: 52) }
-    }
-
-    /// Purple assist button (spoken instruction transforms the note).
-    private var assistButton: some View {
-        ScratchpadRecordButton(
-            tint: .purple,
-            restingIcon: "wand.and.stars",
-            status: viewModel.status,
-            isMyTurn: viewModel.recordingMode == .scratchpadAssist,
-            recordingStartCount: viewModel.recordingStartCount,
-            onPress: { startAssist() },
-            onRelease: { Task { await viewModel.stopScratchpadAssist() } }
-        )
-        .id("scratchpad-assist")
-        .disabled(assistDisabled)
-    }
-
-    /// 52pt glass circle matching the mic/assist size — used for undo and the
-    /// keyboard toggle.
-    private func circleButton(
-        systemImage: String,
-        label: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 52, height: 52)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .accessibilityLabel(label)
-        .transition(.scale.combined(with: .opacity))
-    }
-
-    // MARK: - Actions
-
-    private func startMic() {
-        keyboardEnabled = false
-        viewModel.startScratchpadRecording()
-    }
-
-    private func startAssist() {
-        keyboardEnabled = false
-        viewModel.startScratchpadAssist()
-    }
-
     // MARK: - Derived state
 
     /// True while a scratchpad-owned capture is live (either mode). Gated on
@@ -336,107 +224,120 @@ struct ScratchpadView: View {
     private var isScratchpadMode: Bool {
         viewModel.recordingMode == .scratchpad || viewModel.recordingMode == .scratchpadAssist
     }
+}
 
-    /// Each button shows when idle (and not typing) or when it's the active
-    /// recorder; during the OTHER button's recording it's swapped for a clear
-    /// placeholder so the active button's position never shifts.
-    private var micShown: Bool {
-        if recordingInProgress { return viewModel.recordingMode == .scratchpad }
-        return true
-    }
-    private var assistShown: Bool {
-        if recordingInProgress { return viewModel.recordingMode == .scratchpadAssist }
-        return true
-    }
+// MARK: - Controls accessory
 
-    /// Speech ready = mic permission granted AND the model is on disk.
-    private var baseReady: Bool {
-        guard viewModel.permission == .granted else { return false }
-        if case .downloaded = viewModel.modelDiskStatus { return true }
+/// Every Scratchpad control in one row of the TabView's bottom accessory
+/// (`tabViewBottomAccessory`): mic and Reword on the left, then space, return
+/// and delete — the Dictator keyboard's bottom row. The accessory provides
+/// the glass bar; these are plain keys on top of it. Keys insert at / delete
+/// from the note's caret.
+///
+/// While one of the two records, it takes the whole row for its listening
+/// bars and the rest step aside. When the placement is `.inline` (the tab
+/// bar has minimized on scroll) the row compacts beside the shrunken tab
+/// button, so it all moves together.
+struct ScratchpadControlsAccessory: View {
+    @Bindable var viewModel: RecordingViewModel
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @State private var model = ScratchpadModel.shared
+    @State private var blocker: MicBlocker?
+
+    private var isInline: Bool { placement == .inline }
+    private var keyHeight: CGFloat { isInline ? 32 : 40 }
+
+    private var isScratchpadMode: Bool {
+        viewModel.recordingMode == .scratchpad || viewModel.recordingMode == .scratchpadAssist
+    }
+    private var recordingInProgress: Bool {
+        guard isScratchpadMode else { return false }
+        if viewModel.status.isCapturing { return true }
+        if case .transcribing = viewModel.status { return true }
         return false
     }
-
-    private var assistAvailable: Bool { AppleFoundationAssist.isAvailable }
-
+    private var micShown: Bool { !recordingInProgress || viewModel.recordingMode == .scratchpad }
+    private var assistShown: Bool {
+        AppleFoundationAssist.isAvailable
+            && (!recordingInProgress || viewModel.recordingMode == .scratchpadAssist)
+    }
     private var noteIsEmpty: Bool {
         model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var micDisabled: Bool { !baseReady }
-
-    private var assistDisabled: Bool { !baseReady || noteIsEmpty }
-
     /// Cursor-aware mic glyph, mirroring the Dictation page: plain mic on an
     /// empty note, "replace" badge when there's a selection, "append" badge
     /// otherwise.
-    private var micRestingIcon: String {
+    private var micIcon: String {
         if model.text.isEmpty { return "microphone.fill" }
         if (model.selection?.length ?? 0) > 0 { return "microphone.badge.ellipsis.fill" }
         return "microphone.badge.plus.fill"
     }
 
-    /// Why the controls can't dictate, shown as a small caption. nil when
-    /// ready (or already mid-capture/transcribe, where the caption is noise).
-    private var micDisabledReason: String? {
-        if recordingInProgress { return nil }
-        if viewModel.permission != .granted {
-            return "Allow microphone access to dictate."
-        }
-        if case .downloaded = viewModel.modelDiskStatus {} else {
-            return "Download the speech model on the Dictation tab to dictate."
-        }
-        return nil
-    }
-}
-
-// MARK: - Quick keys accessory
-
-/// Space / return / delete keys for the Scratchpad, rendered inside the
-/// TabView's bottom accessory (`tabViewBottomAccessory`). The accessory itself
-/// provides the glass bar; these are plain keys on top of it. Space is wide
-/// (like a spacebar); return and delete sit on the right — matching the Dictator
-/// keyboard's bottom row. They insert at / delete from the note's caret.
-///
-/// When the placement is `.inline` (the tab bar has minimized on scroll), the
-/// keys compact so they fit beside the shrunken tab button.
-struct ScratchpadQuickKeysAccessory: View {
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-
-    private var isInline: Bool { placement == .inline }
-
     var body: some View {
-        HStack(spacing: 6) {
-            Button { edit { $0.insertText(" ") } } label: {
-                Text("space")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: isInline ? 32 : 40)
-                    .contentShape(.rect)
+        HStack(spacing: isInline ? 2 : 4) {
+            // Same view identity throughout a recording — swapping the view
+            // under a held finger would lose the release.
+            if micShown {
+                RecordKey(
+                    tint: .red, icon: micIcon, label: "Dictate into note",
+                    mode: .scratchpad, viewModel: viewModel, height: keyHeight,
+                    onPress: { viewModel.startScratchpadRecording() },
+                    onRelease: { Task { await viewModel.stopScratchpadRecording() } },
+                    onBlocked: { handleBlockedMic(viewModel, showing: $blocker) }
+                )
             }
-            .buttonStyle(.plain)
+            if assistShown {
+                RecordKey(
+                    tint: .purple, icon: "wand.and.stars", label: "Reword note",
+                    mode: .scratchpadAssist, viewModel: viewModel, height: keyHeight,
+                    busyLabel: "Rewording…",
+                    enabled: !noteIsEmpty,
+                    onPress: { viewModel.startScratchpadAssist() },
+                    onRelease: { Task { await viewModel.stopScratchpadAssist() } },
+                    onBlocked: { handleBlockedMic(viewModel, showing: $blocker) }
+                )
+            }
+            if !recordingInProgress {
+                Divider()
+                    .frame(height: isInline ? 18 : 24)
+                    .padding(.horizontal, 2)
 
-            Button { edit { $0.insertText("\n") } } label: {
-                Image(systemName: "return")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 48, height: isInline ? 32 : 40)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Return")
+                Button { edit { $0.insertText(" ") } } label: {
+                    Text("space")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: keyHeight)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
 
-            Button { edit { $0.deleteBackward() } } label: {
-                Image(systemName: "delete.left")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 48, height: isInline ? 32 : 40)
-                    .contentShape(.rect)
+                Button { edit { $0.insertText("\n") } } label: {
+                    Image(systemName: "return")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: isInline ? 36 : 44, height: keyHeight)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Return")
+
+                Button { edit { $0.deleteBackward() } } label: {
+                    Image(systemName: "delete.left")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: isInline ? 36 : 44, height: keyHeight)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete backward")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Delete backward")
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, isInline ? 4 : 8)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: recordingInProgress)
+        .micBlockerAlert($blocker, viewModel: viewModel)
     }
 
     /// Run an edit on the live editor at its real caret (like a keyboard key) —
@@ -456,14 +357,14 @@ struct ScratchpadQuickKeysAccessory: View {
 
 // MARK: - Scratchpad record button
 
-/// Glassy, tinted dictation/assist button for the Scratchpad. Idle, it's a 52pt
+/// Glassy, tinted dictation/assist button (the journal entry sheet). Idle, it's a 64pt
 /// glass circle with an icon; while it's the active recorder it expands in place
 /// (leading edge fixed) into a pill containing the live listening bars — the
 /// "listening" animation happens *inside* the button rather than as a separate
 /// element, so nothing jumps. Same tap-vs-hold gesture as the Dictation page's
 /// `HoldButton`: a quick tap latches recording on (tap again to stop); a longer
 /// hold is push-to-talk (release stops).
-private struct ScratchpadRecordButton: View {
+struct ScratchpadRecordButton: View {
     let tint: Color
     let restingIcon: String
     let status: RecordingViewModel.Status
@@ -471,6 +372,13 @@ private struct ScratchpadRecordButton: View {
     let recordingStartCount: Int
     let onPress: () -> Void
     let onRelease: () -> Void
+    /// Can't record yet (no permission, no model). The button stays live so
+    /// a press can explain why, via `onBlocked`, instead of a caption sitting
+    /// beside it all the time.
+    var blocked = false
+    var onBlocked: () -> Void = {}
+    /// Tapped while transcribing or rewording.
+    var onCancel: () -> Void = {}
 
     @State private var isPressed = false
     @State private var isLatched = false
@@ -480,8 +388,11 @@ private struct ScratchpadRecordButton: View {
     @Environment(\.isEnabled) private var isEnabled
 
     private static let holdThreshold: TimeInterval = 0.35
-    private let height: CGFloat = 52
-    private let expandedWidth: CGFloat = 184
+    /// The mic is the reason the app exists, so it's the biggest control on
+    /// the screen — bigger than the 44pt toolbar buttons above.
+    static let size: CGFloat = 64
+    private var height: CGFloat { Self.size }
+    private let expandedWidth: CGFloat = 210
 
     private var isCapturing: Bool { isMyTurn && status.isCapturing }
     private var isTranscribing: Bool {
@@ -509,8 +420,8 @@ private struct ScratchpadRecordButton: View {
                 ProgressView().tint(tint)
             } else {
                 Image(systemName: restingIcon)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(tint.opacity(isEnabled ? 1 : 0.3))
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(tint.opacity(isEnabled && !blocked ? 1 : 0.3))
                     .transition(.opacity)
             }
         }
@@ -526,6 +437,16 @@ private struct ScratchpadRecordButton: View {
         // Tap-vs-hold resolved on release, matching HoldButton.
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
         } onPressingChanged: { pressing in
+            // While its words are being worked on, a tap cancels.
+            if isTranscribing {
+                if pressing { onCancel() }
+                return
+            }
+            if blocked {
+                if pressing { onBlocked() }
+                isPressed = false
+                return
+            }
             if pressing, !isPressed {
                 isPressed = true
                 if !isLatched {

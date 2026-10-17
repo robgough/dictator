@@ -174,15 +174,9 @@ enum ChatFileWriter {
     /// Shared with `ChatAttachments`, which has the same problem from the other
     /// direction: attaching the same file twice must not overwrite the first.
     nonisolated static func availableURL(for url: URL) -> URL {
-        let directory = url.deletingLastPathComponent()
-        guard FileManager.default.fileExists(atPath: url.path) else { return url }
-        let base = url.deletingPathExtension().lastPathComponent
-        let ext = url.pathExtension
-        for suffix in 2...999 {
-            let candidate = directory.appendingPathComponent("\(base) \(suffix).\(ext)")
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-        }
-        return directory.appendingPathComponent("\(base) \(UUID().uuidString.prefix(6)).\(ext)")
+        // One no-clobber rule for everything Dictator writes into a folder;
+        // it lives in shared code so the iPhone's journal photos use it too.
+        JournalAttachments.availableURL(for: url)
     }
 
     // MARK: - Working with files already in the chat

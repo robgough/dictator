@@ -100,13 +100,10 @@ enum JournalWriter {
     /// Absolute file URL a path template resolves to right now. Exposed so
     /// Settings can show a live preview under the field — a template language
     /// nobody can see the output of is a template language nobody uses.
-    /// `@MainActor` because a relative template resolves against
-    /// `SyncedStorage.directory`, which is main-actor state. Both callers —
-    /// the pipeline's delivery step and the Settings preview — are already
-    /// there. Template *resolution* itself stays nonisolated, so the default
-    /// constants below can still be used as settings defaults.
-    @MainActor
-    static func resolvedURL(pathTemplate: String, date: Date = Date()) throws -> URL {
+    ///
+    /// A relative template resolves against `base`: the synced folder on the
+    /// Mac (see `JournalWriter+Synced.swift`), the shared folder on iOS.
+    static func resolvedURL(pathTemplate: String, relativeTo base: URL, date: Date = Date()) throws -> URL {
         let resolved = resolve(template: pathTemplate, date: date)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !resolved.isEmpty else { throw JournalError.emptyPath }
@@ -118,7 +115,7 @@ enum JournalWriter {
         if expanded.hasPrefix("/") {
             url = URL(fileURLWithPath: expanded)
         } else {
-            url = SyncedStorage.directory.appendingPathComponent(expanded)
+            url = base.appendingPathComponent(expanded)
         }
         guard !url.hasDirectoryPath else { throw JournalError.notAFile(url.path) }
         return url
@@ -130,8 +127,7 @@ enum JournalWriter {
     /// nil when that folder doesn't exist yet — which is the honest answer
     /// before the first entry is ever written, and what tells the journal
     /// window to show its "nothing here yet" state rather than an error.
-    @MainActor
-    static func root(pathTemplate: String) -> URL? {
+    static func root(pathTemplate: String, relativeTo base: URL) -> URL? {
         let fixed = pathTemplate.split(separator: "{", maxSplits: 1,
                                        omittingEmptySubsequences: false).first.map(String.init)
             ?? pathTemplate
@@ -148,7 +144,7 @@ enum JournalWriter {
         guard !path.isEmpty else { return nil }
         let url: URL = path.hasPrefix("/")
             ? URL(fileURLWithPath: path, isDirectory: true)
-            : SyncedStorage.directory.appendingPathComponent(path, isDirectory: true)
+            : base.appendingPathComponent(path, isDirectory: true)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue
@@ -159,15 +155,15 @@ enum JournalWriter {
     /// Append one dictation. Creates intermediate directories and the file
     /// itself, writing the header template only when the file is new.
     @discardableResult
-    @MainActor
     static func append(text: String,
                        pathTemplate: String,
+                       relativeTo base: URL,
                        headerTemplate: String,
                        entryTemplate: String,
                        appName: String?,
                        date: Date = Date()) throws -> Written {
         try append(text: text,
-                   to: resolvedURL(pathTemplate: pathTemplate, date: date),
+                   to: resolvedURL(pathTemplate: pathTemplate, relativeTo: base, date: date),
                    headerTemplate: headerTemplate,
                    entryTemplate: entryTemplate,
                    appName: appName,
@@ -179,9 +175,7 @@ enum JournalWriter {
     /// `nonisolated` so the journal window can do this off the main actor. The
     /// file is usually local and the write sub-millisecond, but an
     /// iCloud-evicted file blocks on a download, and that is not something to
-    /// do on the thread drawing the window. The main-actor version above stays
-    /// as the pipeline's entry point, because resolving the template needs
-    /// `SyncedStorage.directory`, which is main-actor state.
+    /// do on the thread drawing the window.
     @discardableResult
     nonisolated static func append(text: String,
                                    to url: URL,
