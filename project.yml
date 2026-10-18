@@ -582,8 +582,8 @@ targets:
         # MARKETING_VERSION. Keep this in lockstep with the keyboard
         # extension's value below — App Store validation rejects an
         # extension whose version/build doesn't match its host app.
-        MARKETING_VERSION: "2026.6.0"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "2026.10.0"
+        CURRENT_PROJECT_VERSION: "7"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -696,8 +696,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.Keyboard
         # Must match the host app (DictatorIOS) version + build exactly.
-        MARKETING_VERSION: "2026.6.0"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "2026.10.0"
+        CURRENT_PROJECT_VERSION: "7"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
@@ -738,8 +738,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOS.LiveActivity
         # Must match the host app (DictatorIOS) version + build exactly.
-        MARKETING_VERSION: "2026.6.0"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "2026.10.0"
+        CURRENT_PROJECT_VERSION: "7"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
