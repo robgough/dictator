@@ -48,7 +48,7 @@ enum AppleFoundationAssist {
             case .notEnabled:
                 return "Assist requires Apple Intelligence. Turn it on in Settings → Apple Intelligence & Siri to enable Assist in the app and the Dictator keyboard."
             case .deviceNotEligible:
-                return "Assist features require an iPhone with Apple Intelligence (iPhone 15 Pro, iPhone 15 Pro Max, or any iPhone 16). Dictation works on all supported devices."
+                return "Assist features require a device with Apple Intelligence (iPhone 15 Pro or later, or an iPad with an M1 or A17 Pro chip or later). Dictation works on all supported devices."
             case .modelNotReady:
                 return "Apple Intelligence is still downloading the on-device model. Assist will switch on automatically once it's ready."
             case .unknown(let reason):

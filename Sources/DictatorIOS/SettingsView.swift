@@ -85,7 +85,7 @@ struct SettingsView: View {
                     }
                 } header: {
                     InfoHeader("Apple Intelligence", info: AppleIntelligenceModel.cloudSupported
-                        ? "Tidy filler words drops \"um\", \"uh\", stutters and false starts. If the model changes your words, Dictator keeps the original transcript.\n\nPrivate Cloud Compute uses Apple's larger model for tidying and Assist. Your text goes to Apple for that one request, isn't stored, and can't be seen by Apple. Speech is always transcribed on this iPhone, and if Private Cloud Compute can't be reached the on-device model is used instead."
+                        ? "Tidy filler words drops \"um\", \"uh\", stutters and false starts. If the model changes your words, Dictator keeps the original transcript.\n\nPrivate Cloud Compute uses Apple's larger model for tidying and Assist. Your text goes to Apple for that one request, isn't stored, and can't be seen by Apple. Speech is always transcribed on this device, and if Private Cloud Compute can't be reached the on-device model is used instead."
                         : "Tidy filler words drops \"um\", \"uh\", stutters and false starts. If the model changes your words, Dictator keeps the original transcript.")
                 }
             } else if let explanation = assistAvailability.explanation {
@@ -169,7 +169,7 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                InfoHeader("Shared folder", info: "Pick the Dictator folder in iCloud Drive (usually Documents › Dictator, with Desktop & Documents syncing on the Mac) to share your journal, scratchpad, vocabulary and stats with your Mac. Dictation history stays on this iPhone.")
+                InfoHeader("Shared folder", info: "Pick the Dictator folder in iCloud Drive (usually Documents › Dictator, with Desktop & Documents syncing on the Mac) to share your journal, scratchpad, vocabulary and stats with your Mac. Dictation history stays on this device.")
             }
 
             Section {

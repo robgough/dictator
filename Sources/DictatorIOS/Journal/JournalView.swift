@@ -9,8 +9,8 @@ import UIKit
 /// because a journal has one author and is read top to bottom.
 struct JournalView: View {
     @Bindable var viewModel: RecordingViewModel
-    /// Jump to Settings to connect a shared folder.
-    var onConnectFolder: () -> Void
+    /// Opens Settings: the top-bar gear, and connecting a shared folder.
+    var onOpenSettings: () -> Void
 
     @State private var model = JournalModel.shared
     @State private var composing = false
@@ -230,7 +230,7 @@ struct JournalView: View {
     private var notes: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !model.isShared {
-                Button(action: onConnectFolder) {
+                Button(action: onOpenSettings) {
                     HStack(spacing: 6) {
                         Image(systemName: "icloud.slash")
                         Text("Not syncing with your Mac.")
@@ -243,7 +243,7 @@ struct JournalView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.tertiary)
             } else if let elsewhere = model.macJournalElsewhere {
-                Label("Your Mac keeps its journal at \(elsewhere), outside the shared folder. Entries from this iPhone go to Journal in the shared folder.",
+                Label("Your Mac keeps its journal at \(elsewhere), outside the shared folder. Entries from this device go to Journal in the shared folder.",
                       systemImage: "folder.badge.questionmark")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -375,6 +375,10 @@ struct JournalView: View {
             }
             .accessibilityLabel("Add to today")
             .disabled(journalBusy)
+        }
+        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+        ToolbarItem(placement: .topBarTrailing) {
+            SettingsToolbarButton(action: onOpenSettings)
         }
     }
 

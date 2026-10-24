@@ -3,14 +3,18 @@ import UIKit
 
 struct ContentView: View {
     /// Optional keyboard-extension hand-off. When non-nil, the app jumps
-    /// to the Dictation tab and the view model writes the next successful
+    /// to the Dictate tab and the view model writes the next successful
     /// transcript to the shared App Group container for the keyboard.
     @Binding var keyboardRequest: KeyboardBridge.Request?
 
     @State private var viewModel = RecordingViewModel()
-    /// Selected bottom tab. Reset to `.dictation` when the keyboard
-    /// extension hands off a recording so the user lands on the mic.
-    @State private var selectedTab: AppTab = .dictation
+    /// Selected tab. Reset to `.dictate` when the keyboard extension hands
+    /// off a recording so the user lands on the mic.
+    @State private var selectedTab: AppTab = .dictate
+    /// History is a toolbar button on Dictate, presented as a sheet.
+    @State private var showingHistory = false
+    /// Settings is a gear on every tab, presented as a sheet.
+    @State private var showingSettings = false
     @Environment(\.scenePhase) private var scenePhase
     /// Drives the unified first-launch sheet over the whole TabView.
     @AppStorage(DictatorIOSSettings.onboardingCompletedKey) private var onboardingCompleted = false
@@ -29,18 +33,18 @@ struct ContentView: View {
         switch UserDefaults.standard.string(forKey: "DictatorInitialTab") {
         case "journal": _selectedTab = State(initialValue: .journal)
         case "scratchpad": _selectedTab = State(initialValue: .scratchpad)
-        case "history": _selectedTab = State(initialValue: .history)
-        case "settings": _selectedTab = State(initialValue: .settings)
+        case "history": _showingHistory = State(initialValue: true)
+        case "settings": _showingSettings = State(initialValue: true)
         default: break
         }
         #endif
     }
 
-    /// The five bottom tabs. Five is the most an iPhone tab bar shows before
-    /// it folds the rest into "More", so Vocabulary — configuration you set
-    /// up once, not somewhere you go — lives in Settings.
+    /// The three tabs: places you go to write. History is a button on
+    /// Dictate and Settings a gear on every tab, both presented as sheets,
+    /// so the tab bar (or sidebar, on a wide window) only holds destinations.
     enum AppTab: Hashable {
-        case dictation, journal, scratchpad, history, settings
+        case dictate, scratchpad, journal
     }
 
     var body: some View {
@@ -69,20 +73,18 @@ struct ContentView: View {
 
     private var tabs: some View {
         TabView(selection: $selectedTab) {
-            Tab("Dictation", systemImage: "mic.fill", value: AppTab.dictation) {
-                DictationTabView(viewModel: viewModel)
-            }
-            Tab("Journal", systemImage: "book.closed", value: AppTab.journal) {
-                JournalView(viewModel: viewModel) { selectedTab = .settings }
+            Tab("Dictate", systemImage: "mic.fill", value: AppTab.dictate) {
+                DictationTabView(
+                    viewModel: viewModel,
+                    onShowHistory: { showingHistory = true },
+                    onOpenSettings: { showingSettings = true }
+                )
             }
             Tab("Scratchpad", systemImage: "note.text", value: AppTab.scratchpad) {
-                ScratchpadView(viewModel: viewModel) { selectedTab = .settings }
+                ScratchpadView(viewModel: viewModel) { showingSettings = true }
             }
-            Tab("History", systemImage: "clock.arrow.circlepath", value: AppTab.history) {
-                NavigationStack { HistoryView() }
-            }
-            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
-                NavigationStack { SettingsView(viewModel: viewModel) }
+            Tab("Journal", systemImage: "book.closed", value: AppTab.journal) {
+                JournalView(viewModel: viewModel) { showingSettings = true }
             }
         }
         // A tab bar on a phone-width screen, a sidebar on a wide one —
@@ -106,15 +108,38 @@ struct ContentView: View {
         .sheet(isPresented: onboardingSheetBinding) {
             OnboardingSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $showingHistory) {
+            NavigationStack {
+                HistoryView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingHistory = false }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            NavigationStack {
+                SettingsView(viewModel: viewModel)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingSettings = false }
+                        }
+                    }
+            }
+        }
         .task { await viewModel.requestPermissionIfNeeded() }
         // Keyboard-extension hand-off (cold + warm launch). Jump to the
-        // Dictation tab, then auto-start the recording the user already
+        // Dictate tab, then auto-start the recording the user already
         // initiated from the keyboard. `.task(id:)` rather than
         // `.onChange(initial:)` so a cold launch via `dictator://…`
         // doesn't mutate observed state during SwiftUI's first update.
         .task(id: keyboardRequest) {
             guard let req = keyboardRequest else { return }
-            selectedTab = .dictation
+            selectedTab = .dictate
+            // Put away any sheet so the recording is what's on screen.
+            showingHistory = false
+            showingSettings = false
             keyboardOnboardingDismissed = true
             if viewModel.permission == .granted {
                 viewModel.beginKeyboardRecording(
@@ -170,6 +195,10 @@ struct ContentView: View {
 /// stay usable before the model is downloaded or if the mic is denied.
 struct DictationTabView: View {
     @Bindable var viewModel: RecordingViewModel
+    /// Presents History (a sheet owned by `ContentView`).
+    var onShowHistory: () -> Void = {}
+    /// Presents Settings (a sheet owned by `ContentView`).
+    var onOpenSettings: () -> Void = {}
     /// True while the transcript editor holds focus. A plain `@State Bool`
     /// (not `@FocusState`) because the editor is UIKit-backed and pushes
     /// focus changes through the bridged binding.
@@ -207,6 +236,12 @@ struct DictationTabView: View {
             // Copy is a top-bar action, per the Liquid Glass layout: the
             // bottom of the screen is for talking.
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onShowHistory) {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityLabel("History")
+                }
                 if viewModel.permission == .granted, case .downloaded = viewModel.modelDiskStatus {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -217,6 +252,10 @@ struct DictationTabView: View {
                         .accessibilityLabel("Copy to Clipboard")
                         .disabled(viewModel.transcript.isEmpty)
                     }
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    SettingsToolbarButton(action: onOpenSettings)
                 }
             }
         }
@@ -1502,5 +1541,18 @@ private struct KeyboardHandoffBanner: View {
         .padding(.horizontal, 16)
         .padding(.top, 4)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The gear in every tab's top bar. Settings is a sheet rather than a tab,
+/// so it stays one tap away from whichever tab you're on.
+struct SettingsToolbarButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "gearshape")
+        }
+        .accessibilityLabel("Settings")
     }
 }

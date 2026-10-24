@@ -101,7 +101,7 @@ private struct MicBlockerAlert: ViewModifier {
         case .permissionDenied:
             "Dictator needs the microphone to hear you. Turn it on in Settings › Dictator."
         case .needsModel:
-            "Dictator transcribes on this iPhone, so it needs its speech model first. It's a one-time download."
+            "Dictator transcribes on this device, so it needs its speech model first. It's a one-time download."
         case .downloading(let percent):
             "The speech model is \(percent)% downloaded. The mic works as soon as it finishes."
         default:

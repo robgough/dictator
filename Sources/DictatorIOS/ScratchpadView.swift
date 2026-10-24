@@ -22,8 +22,8 @@ struct ScratchpadView: View {
     /// Shared with the Dictation tab so only one recording runs at a time and
     /// the model prewarm/readiness is reused.
     @Bindable var viewModel: RecordingViewModel
-    /// Jump to the Settings tab so the user can connect a shared folder.
-    var onConnectFolder: () -> Void
+    /// Opens Settings: the top-bar gear, and connecting a shared folder.
+    var onOpenSettings: () -> Void
 
     @State private var model = ScratchpadModel.shared
     /// Mirrors `SharedFolderBookmark.isConfigured`. Re-read on appear so the
@@ -83,6 +83,10 @@ struct ScratchpadView: View {
                     }
                     .accessibilityLabel(keyboardEnabled ? "Hide keyboard" : "Show keyboard")
                     .disabled(recordingInProgress)
+                }
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    SettingsToolbarButton(action: onOpenSettings)
                 }
             }
             // Match the bottom: content scrolls under the sync hint with the
@@ -161,7 +165,7 @@ struct ScratchpadView: View {
             // nested — a Button inside another Button's label doesn't get its
             // own tap on iOS, so the X lives outside the card's tappable area.
             HStack(spacing: 8) {
-                Button(action: onConnectFolder) {
+                Button(action: onOpenSettings) {
                     HStack(spacing: 10) {
                         Image(systemName: "icloud.slash")
                             .foregroundStyle(.orange)

@@ -46,7 +46,7 @@ enum AppleIntelligenceModel {
                 }
                 return nil
             case .unavailable(.deviceNotEligible):
-                return "This iPhone can't use Private Cloud Compute."
+                return "This device can't use Private Cloud Compute."
             case .unavailable:
                 return "Private Cloud Compute isn't ready yet. Dictator uses the on-device model until it is."
             }

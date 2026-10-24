@@ -41,29 +41,32 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         attach(name: "02-idle", from: app)
 
-        // 3. History — now a bottom tab.
-        let historyTab = app.tabBars.buttons["History"]
-        XCTAssertTrue(historyTab.waitForExistence(timeout: 4))
-        historyTab.tap()
+        // 3. History — a toolbar button on Dictate that opens a sheet.
+        let historyButton = app.navigationBars.buttons["History"]
+        XCTAssertTrue(historyButton.waitForExistence(timeout: 4))
+        historyButton.tap()
         sleep(1)
         attach(name: "04-history", from: app)
+        app.navigationBars.buttons["Done"].tap()
+        sleep(1)
 
-        // 4. Scratchpad — bottom tab; the note syncs with the Mac.
-        let scratchpadTab = app.tabBars.buttons["Scratchpad"]
+        // 4. Scratchpad — a tab; the note syncs with the Mac. `tabBars`
+        // only exists while the window is narrow (it's a sidebar when
+        // wide), so match the tab button anywhere.
+        let scratchpadTab = app.buttons["Scratchpad"].firstMatch
         XCTAssertTrue(scratchpadTab.waitForExistence(timeout: 4))
         scratchpadTab.tap()
         sleep(1)
         attach(name: "07-scratchpad", from: app)
 
-        // 5. Settings — bottom tab. (No back navigation needed between
-        // tabs; the next relaunch lands back on the Dictation tab.)
-        let settingsTab = app.tabBars.buttons["Settings"]
-        XCTAssertTrue(settingsTab.waitForExistence(timeout: 4))
-        settingsTab.tap()
+        // 5. Settings — the gear in every tab's top bar opens a sheet.
+        let settingsButton = app.navigationBars.buttons["Settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
+        settingsButton.tap()
         sleep(1)
         attach(name: "06-settings", from: app)
 
-        // 5. Mid-dictation — fake the recording status via the
+        // 6. Mid-dictation — fake the recording status via the
         // `RecordingViewModel.init` hook. Need a relaunch for the env
         // var to take effect.
         app.terminate()
@@ -72,7 +75,7 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         attach(name: "03-dictating", from: app)
 
-        // 6. Keyboard showcase — swap the env var to render the
+        // 7. Keyboard showcase — swap the env var to render the
         // standalone keyboard mockup in `ContentView`. The real
         // keyboard is an app extension that can't be summoned
         // automatically in the simulator, so we use a pixel-faithful

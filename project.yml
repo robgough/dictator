@@ -559,8 +559,22 @@ targets:
           UIImageRespectsSafeAreaInsets: false
         UIRequiredDeviceCapabilities:
           - arm64
+        # Universal (iPhone, iPhone Duo, iPad) and every orientation. The
+        # layouts key off available width, never device or orientation, so
+        # an iPad split view, Slide Over or floating window gets the same
+        # treatment as a narrow iPhone. iPad multitasking needs all four
+        # orientations and no UIRequiresFullScreen.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: false
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         # `audio` keeps a recording going when Dictator leaves the screen
@@ -601,7 +615,7 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         # Team ID drives signing on real devices and App Store builds.
         # Read from `${DICTATOR_IOS_TEAM_ID}` so the value stays out of
         # the repo (the .env file is gitignored). Falls back to empty
@@ -657,7 +671,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.robgough.DictatorIOSUITests
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
         DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
@@ -713,7 +727,7 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         # Must match the host app's team — extensions are signed
         # alongside the parent .app. See the host-app comment above.
         DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
@@ -755,7 +769,7 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         DEVELOPMENT_TEAM: ${DICTATOR_IOS_TEAM_ID}
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO

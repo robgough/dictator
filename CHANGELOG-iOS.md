@@ -17,6 +17,7 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- Dictator now runs on iPad, including split view, Slide Over and floating windows, and works in any orientation on iPhone and iPad. Dictate, Scratchpad and Journal are the three tabs, with History a button on Dictate and Settings a gear at the top of every tab.
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions, plus a matching launch screen.
 - The keyboard now fits dictated text to what's already in the field: a space where it would run into the previous word, a lower-case start mid-sentence, and a full stop on the previous dictation when a new sentence follows it.
 - When the keyboard has to open Dictator to start a recording, Dictator now shows how to get back to the app you were in, where you can keep talking and tap Stop.
