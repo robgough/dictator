@@ -20,8 +20,15 @@ struct DictatorApp: App {
                 .environment(appState)
                 .onOpenURL { url in handleURL(url) }
         } label: {
-            Image(systemName: appState.pipeline.state.iconName)
-                .symbolRenderingMode(.hierarchical)
+            // At rest the menu bar shows the app's own mark (the app icon's
+            // disc and type block, as a template glyph); every other state
+            // keeps its SF Symbol so you can see what Dictator is doing.
+            if case .idle = appState.pipeline.state {
+                Image("MenuBarGlyph")
+            } else {
+                Image(systemName: appState.pipeline.state.iconName)
+                    .symbolRenderingMode(.hierarchical)
+            }
         }
         .menuBarExtraStyle(.window)
         // The app's real menu bar. Invisible while Dictator is an `.accessory`

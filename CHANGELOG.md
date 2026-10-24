@@ -14,6 +14,7 @@ entries as plain bullet lines.
 ## Unreleased
 
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions.
+- The menu bar shows the new Dictator mark while Dictator is idle, and switches to a symbol for what it is doing while it records and processes.
 - With Apple Intelligence as the language model, cleanup and Assistant Mode refuse ordinary dictation far less often. They now use Apple's setting for rewriting text you've given it, rather than its stricter chat filter.
 - The menu bar shows which transcription and language models are in use and whether they're loaded, so you can see at a glance why a dictation might be slow.
 - If you're still on one of the older language models that the Qwen 3.5 models replaced, Dictator says so once at launch and in the menu bar, and can download and switch to the replacement for you, then remove the old model's files.
