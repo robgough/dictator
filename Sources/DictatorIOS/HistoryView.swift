@@ -3,12 +3,12 @@ import UIKit
 
 /// History list — newest first. Tap a row to copy the cleaned/delivered
 /// transcript; long-press to access the raw (pre-cleanup) version too.
-/// Swipe to delete a single entry; the toolbar's "Clear" button wipes
+/// Swipe to delete a single entry; "Clear History" in the "…" menu wipes
 /// everything after a confirmation.
 struct HistoryView: View {
     @Bindable var store: DictationHistoryStore = .shared
     /// True in the column beside Dictate, which has no navigation bar: the
-    /// title and Clear are drawn at the top of the list instead.
+    /// title and the "…" menu are drawn at the top of the list instead.
     var drawsOwnHeader = false
     @State private var confirmClear = false
     @State private var copiedID: UUID?
@@ -20,6 +20,19 @@ struct HistoryView: View {
 
     /// Held strongly so the haptic doesn't lag on first tap.
     private let copyFeedback = UINotificationFeedbackGenerator()
+
+    /// Wiping every transcript sits behind "…" rather than a bare "Clear":
+    /// beside Dictate, "Clear" read as clearing the transcript card.
+    private var moreMenu: some View {
+        Menu {
+            Button("Clear History", systemImage: "trash", role: .destructive) {
+                confirmClear = true
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .accessibilityLabel("More")
+    }
 
     var body: some View {
         Group {
@@ -86,7 +99,7 @@ struct HistoryView: View {
         .toolbar {
             if !store.entries.isEmpty && !drawsOwnHeader {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Clear") { confirmClear = true }
+                    moreMenu
                 }
             }
         }
@@ -96,8 +109,9 @@ struct HistoryView: View {
                     Text("History")
                         .font(.headline)
                     if !store.entries.isEmpty {
-                        Button("Clear") { confirmClear = true }
+                        moreMenu
                             .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
