@@ -15,6 +15,11 @@ struct ContentView: View {
     @State private var showingHistory = false
     /// Settings is a gear on every tab, presented as a sheet.
     @State private var showingSettings = false
+    /// The tabs are a bottom bar (iPhone), as the tab content reports it.
+    /// Not on an iPad (top bar or sidebar) or the closed Duo (side strip).
+    @State private var tabsAtBottom = false
+    /// The Scratchpad's system keyboard is up: its controls step aside.
+    @State private var scratchpadKeyboard = false
     @Environment(\.scenePhase) private var scenePhase
     /// Drives the unified first-launch sheet over the whole TabView.
     @AppStorage(DictatorIOSSettings.onboardingCompletedKey) private var onboardingCompleted = false
@@ -56,9 +61,41 @@ struct ContentView: View {
         if let showcase = KeyboardShowcase.requested {
             return AnyView(KeyboardShowcase(state: showcase))
         }
-        // No tab bar accessory: each tab's record control sits at the
-        // bottom of its own content, the same place on all three tabs.
+        if #available(iOS 26.1, *) {
+            // With a bottom tab bar, the Scratchpad's and Journal's controls
+            // are its accessory, which moves inline beside the tab button
+            // when the bar minimises on scroll. Only enabled on those tabs:
+            // an accessory with nothing in it still draws an empty glass bar.
+            return AnyView(tabs.tabViewBottomAccessory(isEnabled: accessoryShown) {
+                accessory
+            })
+        }
         return AnyView(tabs)
+    }
+
+    /// Controls live in the tab bar's accessory rather than the tab's
+    /// content. Needs `tabViewBottomAccessory(isEnabled:)` (iOS 26.1).
+    private var controlsInAccessory: Bool {
+        guard #available(iOS 26.1, *) else { return false }
+        return tabsAtBottom
+    }
+
+    private var accessoryShown: Bool {
+        guard controlsInAccessory else { return false }
+        switch selectedTab {
+        case .scratchpad: return !scratchpadKeyboard
+        case .journal: return true
+        case .dictate: return false
+        }
+    }
+
+    @ViewBuilder
+    private var accessory: some View {
+        switch selectedTab {
+        case .scratchpad: ScratchpadControls(viewModel: viewModel, inAccessory: true)
+        case .journal: JournalMicControls(viewModel: viewModel, compact: true)
+        case .dictate: EmptyView()
+        }
     }
 
     private var tabs: some View {
@@ -81,18 +118,29 @@ struct ContentView: View {
             }
             Tab("Scratchpad", systemImage: "note.text", value: AppTab.scratchpad) {
                 AdaptiveColumns {
-                    ScratchpadView(viewModel: viewModel) { showingSettings = true }
+                    ScratchpadView(
+                        viewModel: viewModel,
+                        onOpenSettings: { showingSettings = true },
+                        keyboardEnabled: $scratchpadKeyboard,
+                        controlsInAccessory: controlsInAccessory
+                    )
                 }
+                .onTabBarPlacement { tabsAtBottom = $0 }
             }
             Tab("Journal", systemImage: "book.closed", value: AppTab.journal) {
-                JournalView(viewModel: viewModel) { showingSettings = true }
+                JournalView(
+                    viewModel: viewModel,
+                    onOpenSettings: { showingSettings = true },
+                    controlsInAccessory: controlsInAccessory
+                )
+                .onTabBarPlacement { tabsAtBottom = $0 }
             }
         }
         // A tab bar on a phone-width screen, a sidebar on a wide one —
         // which is what the iPhone Duo's inner display is (regular width).
         .tabViewStyle(.sidebarAdaptable)
-        // Liquid Glass tab bar recedes while scrolling a list or the
-        // Journal page.
+        // Liquid Glass tab bar recedes while scrolling a list, the
+        // Scratchpad note or the Journal page; the accessory goes inline.
         .tabBarMinimizeBehavior(.onScrollDown)
         .overlay(alignment: .top) {
             if viewModel.isKeyboardHandoff {
@@ -1331,5 +1379,34 @@ struct SettingsToolbarButton: View {
             Image(systemName: "gearshape")
         }
         .accessibilityLabel("Settings")
+    }
+}
+
+/// Reports whether the tabs are a bottom bar, which only a tab's content
+/// can read. `tabBarPlacement` alone isn't enough: the closed iPhone Duo
+/// reports `.bottomBar` while its tabs sit in the system strip on one side,
+/// which shows up only as a one-sided horizontal safe-area inset (84pt).
+/// A phone in landscape has equal insets on both sides, so it still counts.
+private struct TabBarPlacementReader: ViewModifier {
+    let onChange: (Bool) -> Void
+    @Environment(\.tabBarPlacement) private var placement
+    @State private var hasSideStrip = false
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: Bool.self) { proxy in
+                abs(proxy.safeAreaInsets.trailing - proxy.safeAreaInsets.leading) > 40
+            } action: {
+                hasSideStrip = $0
+            }
+            .onChange(of: placement == .bottomBar && !hasSideStrip, initial: true) { _, atBottom in
+                onChange(atBottom)
+            }
+    }
+}
+
+private extension View {
+    func onTabBarPlacement(_ action: @escaping (_ atBottom: Bool) -> Void) -> some View {
+        modifier(TabBarPlacementReader(onChange: action))
     }
 }

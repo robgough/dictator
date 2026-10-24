@@ -31,9 +31,15 @@ struct MorphRecordButton: View {
     /// Fill the row and centre the cluster. Off when the caller lays
     /// something beside it (the Scratchpad's keys).
     var fillsWidth = true
+    /// Sized for the tab bar's bottom accessory, which is already a glass
+    /// capsule: smaller pieces, and the ones beside the mic drop their own
+    /// glass. Tighter again when the accessory sits inline beside the
+    /// minimised tab bar.
+    var compact = false
 
     @Namespace private var glass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.tabViewBottomAccessoryPlacement) private var accessoryPlacement
     @State private var isPressed = false
     /// This press started the recording: on release it's either a hold
     /// (send) or a tap (keep recording).
@@ -51,6 +57,13 @@ struct MorphRecordButton: View {
     private static let holdThreshold: TimeInterval = 0.35
     static let primarySize: CGFloat = 64
     private static let secondarySize: CGFloat = 50
+    /// Both sizes in the accessory: a 40pt target fits its bar.
+    static let compactSize: CGFloat = 40
+
+    private var isInline: Bool { compact && accessoryPlacement == .inline }
+    private var primarySize: CGFloat { compact ? Self.compactSize : Self.primarySize }
+    private var secondarySize: CGFloat { compact ? Self.compactSize : Self.secondarySize }
+    private var secondaryFont: CGFloat { compact ? 17 : 19 }
 
     enum Phase: Equatable { case idle, recording, working }
 
@@ -90,7 +103,7 @@ struct MorphRecordButton: View {
 
     var body: some View {
         GlassEffectContainer(spacing: 14) {
-            HStack(spacing: 12) {
+            HStack(spacing: isInline ? 4 : compact ? 8 : 12) {
                 if phase != .idle {
                     cancelButton
                         .transition(pieceTransition)
@@ -130,44 +143,41 @@ struct MorphRecordButton: View {
     private var cancelButton: some View {
         Button(action: cancel) {
             Image(systemName: "xmark")
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: compact ? 15 : 17, weight: .bold))
                 .foregroundStyle(.primary)
-                .frame(width: Self.secondarySize, height: Self.secondarySize)
+                .frame(width: secondarySize, height: secondarySize)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .glassEffectID("cancel", in: glass)
+        .modifier(PieceGlass(id: "cancel", namespace: glass, enabled: !compact))
         .accessibilityLabel(phase == .working ? "Cancel processing" : "Cancel recording")
     }
 
     private var copyButton: some View {
         Button(action: copy) {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: secondaryFont, weight: .semibold))
                 .foregroundStyle(copied ? Color.green : Color.primary)
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: Self.secondarySize, height: Self.secondarySize)
+                .frame(width: secondarySize, height: secondarySize)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .glassEffectID("copy", in: glass)
+        .modifier(PieceGlass(id: "copy", namespace: glass, enabled: !compact))
         .accessibilityLabel("Copy")
     }
 
     private func extraButton(_ extra: Extra) -> some View {
         Button(action: extra.action) {
             Image(systemName: extra.systemImage)
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: secondaryFont, weight: .semibold))
                 .foregroundStyle(Color.primary.opacity(extra.isEnabled && !busyElsewhere ? 1 : 0.3))
-                .frame(width: Self.secondarySize, height: Self.secondarySize)
+                .frame(width: secondarySize, height: secondarySize)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
         .disabled(!extra.isEnabled || busyElsewhere)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .glassEffectID("extra-\(extra.id)", in: glass)
+        .modifier(PieceGlass(id: "extra-\(extra.id)", namespace: glass, enabled: !compact))
         .accessibilityLabel(extra.label)
     }
 
@@ -177,14 +187,13 @@ struct MorphRecordButton: View {
         } label: {
             AssistGlyph()
                 .fill(Color.dictatorAssist.opacity(assistEnabled ? 1 : 0.3))
-                .frame(width: 23, height: 23)
-                .frame(width: Self.secondarySize, height: Self.secondarySize)
+                .frame(width: compact ? 20 : 23, height: compact ? 20 : 23)
+                .frame(width: secondarySize, height: secondarySize)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
         .disabled(!assistEnabled)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .glassEffectID("assist", in: glass)
+        .modifier(PieceGlass(id: "assist", namespace: glass, enabled: !compact))
         .accessibilityLabel(route.assistLabel)
     }
 
@@ -195,41 +204,40 @@ struct MorphRecordButton: View {
             switch phase {
             case .idle:
                 Image(systemName: micIcon)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.system(size: compact ? 18 : 26, weight: .semibold))
                     .contentTransition(.symbolEffect(.replace))
                     .opacity(busyElsewhere || blocked ? 0.45 : 1)
                     .transition(.opacity)
             case .recording:
-                Waveform(level: level, tint: .white, barCount: 14, height: 24)
-                    .frame(width: 84)
+                Waveform(level: level, tint: .white, barCount: compact ? 9 : 14, height: compact ? 18 : 24)
+                    .frame(width: isInline ? 44 : compact ? 60 : 84)
                     .id(viewModel.recordingStartCount)
                     .transition(listeningTransition)
                 TimelineView(.periodic(from: recordingStartedAt, by: 1)) { context in
                     Text(Self.clock(context.date.timeIntervalSince(recordingStartedAt)))
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: compact ? 14 : 16, weight: .semibold))
                         .monospacedDigit()
                 }
                 .transition(listeningTransition)
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: compact ? 16 : 20, weight: .bold))
                     .transition(.opacity)
             case .working:
                 ProgressView()
                     .tint(.white)
                     .transition(.opacity)
                 Text(workingLabel)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: compact ? 14 : 16, weight: .semibold))
                     .lineLimit(1)
                     .transition(.opacity)
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, phase == .idle ? 0 : 22)
-        .frame(minWidth: Self.primarySize)
-        .frame(height: Self.primarySize)
+        .padding(.horizontal, phase == .idle ? 0 : isInline ? 12 : compact ? 16 : 22)
+        .frame(minWidth: primarySize)
+        .frame(height: primarySize)
         .contentShape(.capsule)
-        .glassEffect(.regular.tint(primaryTint).interactive(), in: .capsule)
-        .glassEffectID("primary", in: glass)
+        .modifier(PrimaryGlass(tint: primaryTint, namespace: glass, compact: compact))
         .scaleEffect(isPressed ? 0.95 : 1)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
@@ -372,6 +380,44 @@ struct MorphRecordButton: View {
     }
 }
 
+// MARK: - Glass
+
+/// A piece's glass circle, morphing in and out of the mic. Off in the
+/// accessory, whose own glass the pieces sit on.
+private struct PieceGlass: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .glassEffect(.regular.interactive(), in: .circle)
+                .glassEffectID(id, in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
+/// The mic and pill: tinted glass, or in the accessory a solid capsule of
+/// the same colour, so it doesn't stack glass on the accessory's glass.
+private struct PrimaryGlass: ViewModifier {
+    let tint: Color
+    let namespace: Namespace.ID
+    let compact: Bool
+
+    func body(content: Content) -> some View {
+        if compact {
+            content.background(tint, in: .capsule)
+        } else {
+            content
+                .glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+                .glassEffectID("primary", in: namespace)
+        }
+    }
+}
+
 // MARK: - Routes
 
 extension MorphRecordButton {
@@ -381,11 +427,12 @@ extension MorphRecordButton {
         micIcon: String,
         route: Route,
         extras: [Extra] = [],
-        fillsWidth: Bool = true
+        fillsWidth: Bool = true,
+        compact: Bool = false
     ) {
         self.init(
             viewModel: viewModel, micIcon: micIcon, onCopy: {},
-            route: route, extras: extras, fillsWidth: fillsWidth
+            route: route, extras: extras, fillsWidth: fillsWidth, compact: compact
         )
     }
 

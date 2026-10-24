@@ -36,7 +36,10 @@ struct ScratchpadView: View {
     /// `EditableTranscript`. Off by default: tapping the editor positions the
     /// cursor / selects without raising the keyboard. The keyboard button
     /// flips it on; the editor's "Done" accessory flips it back off.
-    @State private var keyboardEnabled = false
+    @Binding var keyboardEnabled: Bool
+    /// The controls are in the tab bar's bottom accessory (an iPhone's
+    /// bottom tab bar), so the note's own bar holds nothing.
+    var controlsInAccessory = false
     /// First-responder mirror from the editor (unused for focus styling here,
     /// but `EditableTranscript` requires the binding).
     @State private var editorFocused = false
@@ -64,12 +67,30 @@ struct ScratchpadView: View {
                 // scroll up clear of them.
                 editor
                     .ignoresSafeArea(.container, edges: .bottom)
+                // With the controls in the tab bar's accessory, the same
+                // fade the bar below draws, behind the accessory and tab
+                // bar, so their glass doesn't sit on busy text. Never
+                // hit-tested, so the note keeps every tap.
+                if controlsInAccessory && !keyboardEnabled {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        LinearGradient(
+                            colors: [Color(.systemBackground).opacity(0), Color(.systemBackground).opacity(0.92)],
+                            startPoint: .top,
+                            endPoint: UnitPoint(x: 0.5, y: 0.35)
+                        )
+                        .frame(height: footInset + 48)
+                    }
+                    .ignoresSafeArea(.container, edges: .bottom)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
             }
             .frame(maxHeight: .infinity)
                 .safeAreaBar(edge: .bottom) {
                     // Typing has the system keyboard, so the row steps aside
                     // (as the Dictate screen's controls do).
-                    if !keyboardEnabled {
+                    if !keyboardEnabled && !controlsInAccessory {
                         ScratchpadControls(viewModel: viewModel)
                             .padding(.horizontal, 20)
                             .padding(.top, 8)
@@ -80,11 +101,7 @@ struct ScratchpadView: View {
                             // blur; this fade stands in for it so the glass
                             // buttons don't sit on busy text. Never hit-tested.
                             .background {
-                                LinearGradient(
-                                    colors: [Color(.systemBackground).opacity(0), Color(.systemBackground).opacity(0.92)],
-                                    startPoint: .top,
-                                    endPoint: UnitPoint(x: 0.5, y: 0.6)
-                                )
+                                footFade
                                 .ignoresSafeArea(edges: .bottom)
                                 .allowsHitTesting(false)
                             }
@@ -144,6 +161,16 @@ struct ScratchpadView: View {
                 if recording { keyboardEnabled = false }
             }
         }
+    }
+
+    /// Clear to near-opaque background, standing in for the scroll-edge
+    /// blur the full-height note misses under the controls.
+    private var footFade: some View {
+        LinearGradient(
+            colors: [Color(.systemBackground).opacity(0), Color(.systemBackground).opacity(0.92)],
+            startPoint: .top,
+            endPoint: UnitPoint(x: 0.5, y: 0.6)
+        )
     }
 
     // MARK: - Editor
@@ -267,8 +294,15 @@ struct ScratchpadView: View {
 /// and the mic stretches into the send pill with cancel beside it.
 struct ScratchpadControls: View {
     @Bindable var viewModel: RecordingViewModel
+    /// In the tab bar's bottom accessory (iPhone): no glass of its own,
+    /// since the accessory is a glass capsule, and tighter when the tab bar
+    /// minimises and the accessory moves inline beside it.
+    var inAccessory = false
     @State private var model = ScratchpadModel.shared
     @State private var blocker: MicBlocker?
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+
+    private var isInline: Bool { inAccessory && placement == .inline }
 
     private var recordingInProgress: Bool {
         guard viewModel.recordingMode == .scratchpad || viewModel.recordingMode == .scratchpadAssist
@@ -288,19 +322,23 @@ struct ScratchpadControls: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: isInline ? 4 : inAccessory ? 8 : 12) {
             if !recordingInProgress {
-                keys
-                    .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
+                Group {
+                    if inAccessory { accessoryKeys } else { keys }
+                }
+                .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
             }
             MorphRecordButton(
                 viewModel: viewModel,
                 micIcon: micIcon,
                 route: route,
-                fillsWidth: false
+                fillsWidth: false,
+                compact: inAccessory
             )
         }
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, inAccessory ? (isInline ? 4 : 6) : 0)
+        .frame(maxWidth: .infinity, maxHeight: inAccessory ? .infinity : nil)
         .animation(.bouncy(duration: 0.45, extraBounce: 0.06), value: recordingInProgress)
         .micBlockerAlert($blocker, viewModel: viewModel)
     }
@@ -341,6 +379,53 @@ struct ScratchpadControls: View {
         .frame(height: 50)
         .frame(maxWidth: .infinity)
         .glassEffect(.regular, in: .capsule)
+    }
+
+    /// The keys on the accessory's own glass: a lightly filled space bar
+    /// that gives up its width first, then return and delete as plain
+    /// icons. Inline, the space bar shows the space symbol instead of
+    /// its name.
+    private var accessoryKeys: some View {
+        HStack(spacing: isInline ? 0 : 2) {
+            Button { edit { $0.insertText(" ") } } label: {
+                Group {
+                    if isInline {
+                        Image(systemName: "space")
+                            .font(.system(size: 15, weight: .medium))
+                    } else {
+                        Text("space")
+                            .font(.callout)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(minWidth: 44, maxWidth: .infinity)
+                .frame(height: MorphRecordButton.compactSize - (isInline ? 4 : 0))
+                .background(Color.primary.opacity(0.08), in: .capsule)
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Space")
+
+            Button { edit { $0.insertText("\n") } } label: {
+                Image(systemName: "return")
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: isInline ? 36 : 42, height: MorphRecordButton.compactSize)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Return")
+
+            Button { edit { $0.deleteBackward() } } label: {
+                Image(systemName: "delete.left")
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: isInline ? 36 : 42, height: MorphRecordButton.compactSize)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete backward")
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
     }
 
     private var route: MorphRecordButton.Route {

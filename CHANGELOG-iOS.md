@@ -22,6 +22,7 @@ listing — keep entries as plain bullet lines.
 - On a wide screen, like iPad or the open iPhone Duo, History sits in a column beside Dictate and the Journal's calendar and search sit beside the day you're reading; a partly folded Duo keeps everything clear of the fold.
 - The Dictate screen has one record button: tap or hold the mic to talk, and while recording it becomes a pill you tap to send, with a cancel button beside it. With text on screen, Copy and Assist sit right next to the mic, and Assist has a new icon.
 - Scratchpad and Journal now use the same record button as Dictate, so the mic looks and works the same on every tab, and the model's status is a small dot at the top of Dictate, leaving more room for your text.
+- On iPhone, the Scratchpad and Journal controls sit just above the tab bar, and when you scroll they shrink to fit on one row beside the tab button, leaving more of the screen for your note.
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions, plus a matching launch screen.
 - The keyboard now fits dictated text to what's already in the field: a space where it would run into the previous word, a lower-case start mid-sentence, and a full stop on the previous dictation when a new sentence follows it.
 - When the keyboard has to open Dictator to start a recording, Dictator now shows how to get back to the app you were in, where you can keep talking and tap Stop.
