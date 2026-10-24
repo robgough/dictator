@@ -15,6 +15,7 @@ keep entries as plain bullet lines.
 ## Unreleased
 
 - A new app icon in the same family as Dictator's, built for the Liquid Glass look, with light, dark, tinted and clear versions.
+- The menu bar shows a matching Dictator Meetings mark when no meeting is recording.
 - With Apple Intelligence writing the notes, meetings that touch on sensitive-sounding subjects are refused far less often.
 - A model download's progress bar no longer freezes when its state is refreshed mid-download.
 - You can now choose NVIDIA's Nemotron 3 Diarization for telling speakers apart, in Settings → Models → Speaker separation. It is more accurate than the built-in engine, especially with several people on a call or people talking over each other, and tells apart up to eight voices on each side of the call. It is a 220 MB download. People Dictator Meetings already recognises by voice are still recognised after you switch.

@@ -284,15 +284,9 @@ private struct WelcomeStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.18))
-                        .frame(width: 64, height: 64)
-                    Image(systemName: "waveform")
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(Color.accentColor)
-                        .font(.system(size: 30, weight: .semibold))
-                }
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 72, height: 72)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Welcome to Dictator")
                         .font(.system(size: 22, weight: .semibold, design: .rounded))

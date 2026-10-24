@@ -89,15 +89,9 @@ private struct AboutHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-                    .frame(width: 56, height: 56)
-                Image(systemName: "waveform")
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.accentColor)
-                    .font(.system(size: 26, weight: .semibold))
-            }
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Dictator")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))

@@ -208,10 +208,9 @@ struct MenuBarContent: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "waveform")
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.accentColor)
-                .font(.system(size: 22, weight: .semibold))
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Dictator")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))

@@ -108,8 +108,8 @@ struct DictatorMeetingsApp: App {
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.red, .red)
             } else {
-                Image(systemName: "person.2.wave.2")
-                    .symbolRenderingMode(.hierarchical)
+                // The app icon's two discs and type block, as a template glyph.
+                Image("MenuBarGlyph")
             }
         }
         .menuBarExtraStyle(.menu)
