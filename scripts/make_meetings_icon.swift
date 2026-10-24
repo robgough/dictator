@@ -2,7 +2,7 @@
 // Renders the Dictator Meetings app icon at every size macOS asks for.
 // Run from the repo root: `swift scripts/make_meetings_icon.swift`
 //
-// Same family as Dictator's icon (scripts/make_icon.swift) — pale gradient
+// Originally the same family as Dictator's old icon — pale gradient
 // squircle, the same blue gradient — but the glyph is the SF Symbol the
 // app already uses in its menu-bar item, `person.2.wave.2` (two people and
 // a voice), rendered through the gradient. Same colour, different picture:

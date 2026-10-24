@@ -133,6 +133,11 @@ targets:
       - path: Sources/DictatorMac
       # Shared with the iOS target too.
       - path: Sources/DictatorCore
+      # App icon: an Icon Composer bundle, shared with the iOS app. actool
+      # compiles it into Assets.car (plus the flattened legacy renditions).
+      - path: Icons/AppIcon.icon
+        type: file
+        buildPhase: resources
     postBuildScripts:
       - script: |
           # Install a stable copy of the built .app at ~/Applications. macOS TCC
@@ -521,6 +526,10 @@ targets:
     sources:
       - path: Sources/DictatorIOS
       - path: Sources/DictatorCore
+      # Same Icon Composer bundle as the Mac app.
+      - path: Icons/AppIcon.icon
+        type: file
+        buildPhase: resources
     info:
       path: Sources/DictatorIOS/Info.plist
       properties:
@@ -602,11 +611,9 @@ targets:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         DEAD_CODE_STRIPPING: YES
-        # Asset catalog names — Xcode picks up the matching asset
-        # catalog entries at build time. The 1024×1024 source in
-        # AppIcon.appiconset is enough for iOS to derive every
-        # required size; AccentColor mirrors the macOS tint so the
-        # iOS UI uses the same purple-ish accent.
+        # AppIcon is Icons/AppIcon.icon (Icon Composer), not an asset
+        # catalog entry; AccentColor mirrors the macOS tint so the iOS
+        # UI uses the same purple-ish accent.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Private Cloud Compute for the Apple Intelligence passes

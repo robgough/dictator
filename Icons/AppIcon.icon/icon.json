@@ -1,0 +1,104 @@
+{
+  "groups": [
+    {
+      "layers": [
+        {
+          "name": "caret",
+          "image-name-specializations": [
+            {
+              "value": "caret.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "caret-mono.svg"
+            }
+          ]
+        }
+      ],
+      "name": "Caret",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "lines.svg",
+          "name": "lines"
+        }
+      ],
+      "name": "Set lines",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.4
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "block.svg",
+          "name": "block"
+        }
+      ],
+      "name": "Type block",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    },
+    {
+      "layers": [
+        {
+          "name": "disc",
+          "image-name-specializations": [
+            {
+              "value": "disc.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "disc-mono.svg"
+            }
+          ]
+        }
+      ],
+      "name": "Speech disc",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  },
+  "fill-specializations": [
+    {
+      "value": {
+        "automatic-gradient": "srgb:0.82353,0.78824,0.96078,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.07843,0.07059,0.12157,1.00000"
+      }
+    }
+  ]
+}
