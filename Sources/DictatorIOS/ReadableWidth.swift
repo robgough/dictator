@@ -4,30 +4,24 @@ import SwiftUI
 ///
 /// The app runs on iPhone, the iPhone Duo (regular width when open) and
 /// iPad, in any orientation, including iPad split view, Slide Over and
-/// floating windows. On a regular-width window a transcript card and two
-/// record buttons would otherwise spread across the whole screen, so the
-/// content is held to a readable column and centred; on compact width
-/// (iPhone in portrait, the Duo's outer display, a narrow iPad window) this
-/// does nothing.
+/// floating windows. On a wide window a transcript card and two record
+/// buttons would otherwise spread across the whole screen, so the content is
+/// held to a readable column and centred. Narrower than `maxWidth` it does
+/// nothing.
 ///
-/// Keyed on the size class rather than the device, deliberately: idiom,
-/// orientation and `UIScreen.main` checks are all wrong for a window that
-/// can be resized or folded, and the horizontal size class is the signal
-/// that tracks the window's actual width live.
+/// Keyed on the width actually available rather than the device or the size
+/// class: idiom, orientation and `UIScreen.main` checks are all wrong for a
+/// window that can be resized or folded, and a regular size class can still
+/// be a narrow column (see `AdaptiveColumns`).
 private struct ReadableWidth: ViewModifier {
     let maxWidth: CGFloat
     let background: Color?
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     func body(content: Content) -> some View {
-        if sizeClass == .regular {
-            content
-                .frame(maxWidth: maxWidth)
-                .frame(maxWidth: .infinity)
-                .background(background ?? .clear)
-        } else {
-            content
-        }
+        content
+            .frame(maxWidth: maxWidth)
+            .frame(maxWidth: .infinity)
+            .background(background ?? .clear)
     }
 }
 

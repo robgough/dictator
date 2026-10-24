@@ -52,6 +52,8 @@ struct ScratchpadView: View {
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 17)
                         .padding(.top, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .readableWidth(680)
                         .allowsHitTesting(false)
                 }
             }
@@ -133,7 +135,7 @@ struct ScratchpadView: View {
             bottomTextInset: 220
         )
         .padding(.horizontal, 8)
-        .readableWidth(760)
+        .readableWidth(680)
         // Extend the editor under the bottom controls / tab bar so its content
         // scrolls under them (Liquid Glass), rather than the frame stopping at a
         // hard edge above the bar.
@@ -203,6 +205,7 @@ struct ScratchpadView: View {
             .glassEffect(.regular, in: .rect(cornerRadius: 14))
             .padding(.horizontal, 16)
             .padding(.top, 6)
+            .readableWidth(680)
         }
     }
 

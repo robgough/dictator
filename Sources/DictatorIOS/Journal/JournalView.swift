@@ -19,6 +19,8 @@ struct JournalView: View {
     @State private var choosingDay = false
     @State private var query = ""
     @State private var searching = false
+    /// The calendar column's own search field.
+    @FocusState private var columnSearchFocused: Bool
     @State private var hits: [JournalModel.SearchHit] = []
     @State private var capturing = false
     @State private var capturedPhoto: CapturedPhoto?
@@ -28,28 +30,106 @@ struct JournalView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        // The day page is the main content. On a wide window the calendar
+        // and search sit in a column beside it; narrower, the calendar is a
+        // sheet from the top bar and search is the page's own search field.
+        AdaptiveColumns(onCompanionChange: { shown in
+            if shown { choosingDay = false }
+        }) { finderShown in
+            pageStack(finderShown: finderShown)
+        } companion: {
+            finderColumn
+        }
+        .task(id: query) {
+            // A short pause so a word being typed isn't searched
+            // a letter at a time.
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            hits = await model.search(query)
+        }
+    }
+
+    /// The calendar and search, as a column beside the page: the search
+    /// field pinned at the top, the months scrolling under it, and the
+    /// results in their place while a search is typed.
+    ///
+    /// No NavigationStack: on the open Duo every navigation stack holds back
+    /// room for the system strip on the trailing edge (84pt), even one that
+    /// doesn't touch it, which squeezed this column's content. The title and
+    /// search field are drawn here instead.
+    private var finderColumn: some View {
+        Group {
+            if isSearching {
+                searchResults
+            } else {
+                JournalMonthColumn(model: model) { key in
+                    model.select(key: key)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+        .safeAreaBar(edge: .top) {
+            VStack(spacing: 10) {
+                Text("Journal")
+                    .font(.headline)
+                    .frame(height: 44)
+                columnSearchField
+                if !isSearching {
+                    JournalWeekdayRow()
+                        .padding(.horizontal, 12)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private var columnSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search journal", text: $query)
+                .focused($columnSearchFocused)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    private var searchResults: some View {
+        JournalSearchResults(query: query, hits: hits) { hit in
+            model.select(key: hit.dayKey)
+            query = ""
+            searching = false
+            columnSearchFocused = false
+        }
+    }
+
+    private func pageStack(finderShown: Bool) -> some View {
         NavigationStack {
             Group {
-                if isSearching {
-                    JournalSearchResults(query: query, hits: hits) { hit in
-                        model.select(key: hit.dayKey)
-                        query = ""
-                        searching = false
-                    }
+                if isSearching && !finderShown {
+                    searchResults
                 } else {
                     page
                 }
             }
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $query, isPresented: $searching, prompt: "Search journal")
-                .task(id: query) {
-                    // A short pause so a word being typed isn't searched
-                    // a letter at a time.
-                    try? await Task.sleep(for: .milliseconds(180))
-                    guard !Task.isCancelled else { return }
-                    hits = await model.search(query)
-                }
-                .toolbar { toolbar }
+                .modifier(PageSearchField(enabled: !finderShown, query: $query, searching: $searching))
+                .toolbar { toolbar(finderShown: finderShown) }
                 .safeAreaBar(edge: .bottom) { bottomBar }
                 .onAppear { model.refresh() }
                 .onChange(of: scenePhase) { _, phase in
@@ -320,7 +400,7 @@ struct JournalView: View {
     // MARK: - Chrome
 
     @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
+    private func toolbar(finderShown: Bool) -> some ToolbarContent {
         ToolbarItemGroup(placement: .topBarLeading) {
             Button {
                 if let key = model.previousKey { model.select(key: key) }
@@ -343,12 +423,15 @@ struct JournalView: View {
             if !model.isShowingToday {
                 Button("Today") { model.select(key: model.todayKey) }
             }
-            Button {
-                choosingDay = true
-            } label: {
-                Image(systemName: "calendar")
+            // The calendar column replaces this on a wide window.
+            if !finderShown {
+                Button {
+                    choosingDay = true
+                } label: {
+                    Image(systemName: "calendar")
+                }
+                .accessibilityLabel("Choose a day")
             }
-            .accessibilityLabel("Choose a day")
         }
         ToolbarSpacer(.fixed, placement: .topBarTrailing)
         ToolbarItem(placement: .topBarTrailing) {
@@ -444,7 +527,7 @@ struct JournalView: View {
     private var eyebrow: String {
         guard let date = selectedDate else { return "" }
         let weekday = date.formatted(.dateTime.weekday(.wide)).uppercased()
-        if let relative = JournalCalendarSheet.relativeLabel(model.selectedKey) {
+        if let relative = JournalCalendarList.relativeLabel(model.selectedKey) {
             return "\(relative.uppercased()) · \(weekday)"
         }
         return weekday
@@ -575,7 +658,7 @@ private struct JournalSearchResults: View {
 
     private func title(for key: String) -> String {
         guard let date = JournalModel.date(for: key) else { return key }
-        if let relative = JournalCalendarSheet.relativeLabel(key) {
+        if let relative = JournalCalendarList.relativeLabel(key) {
             return "\(relative) · \(date.formatted(.dateTime.day().month(.wide)))"
         }
         return date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).year())
@@ -922,47 +1005,57 @@ private struct JournalEntrySheet: View {
     }
 }
 
+/// The calendar as a sheet, for a window too narrow for the calendar column.
+struct JournalCalendarSheet: View {
+    let model: JournalModel
+    let onPick: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            JournalCalendarList(model: model, onPick: onPick)
+                .navigationTitle("Journal")
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
 /// Pick a day, the way the Mac's journal sidebar does: a month calendar
 /// with a dot under every day that has something in it, the month name as
-/// a menu of the months that do, and the most recent days below.
-struct JournalCalendarSheet: View {
+/// a menu of the months that do, and the most recent days below. The sheet's
+/// month-at-a-time calendar; the wide layout's column is `JournalMonthColumn`.
+struct JournalCalendarList: View {
     let model: JournalModel
     let onPick: (String) -> Void
 
     @State private var visibleMonth = Date()
 
     private var calendar: Calendar { Calendar.current }
-    private var populatedKeys: Set<String> { Set(model.days.map(\.key)) }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(spacing: 6) {
-                        monthHeader
-                        weekdayRow
-                        monthGrid
-                    }
-                    .padding(.vertical, 4)
+        List {
+            Section {
+                VStack(spacing: 6) {
+                    monthHeader
+                    JournalWeekdayRow()
+                    JournalMonthGrid(month: visibleMonth, model: model, onPick: onPick)
                 }
-                if !model.days.isEmpty {
-                    Section("Recent") {
-                        ForEach(model.days.prefix(12)) { day in
-                            recentRow(day)
-                        }
+                .padding(.vertical, 4)
+            }
+            if !model.days.isEmpty {
+                Section("Recent") {
+                    ForEach(model.days.prefix(12)) { day in
+                        recentRow(day)
                     }
                 }
             }
-            .navigationTitle("Journal")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Today") { onPick(model.todayKey) }
-                }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Today") { onPick(model.todayKey) }
             }
-            .onAppear {
-                if let date = JournalModel.date(for: model.selectedKey) { visibleMonth = date }
-            }
+        }
+        .onAppear {
+            if let date = JournalModel.date(for: model.selectedKey) { visibleMonth = date }
         }
     }
 
@@ -979,6 +1072,7 @@ struct JournalCalendarSheet: View {
                     Text(visibleMonth.formatted(.dateTime.month(.wide).year()))
                         .font(.system(.headline, design: .rounded))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
                     if !monthsWithEntries.isEmpty {
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
@@ -1000,68 +1094,6 @@ struct JournalCalendarSheet: View {
             .accessibilityLabel("Next month")
         }
         .buttonStyle(.borderless)
-    }
-
-    private var weekdayRow: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(orderedWeekdaySymbols.enumerated()), id: \.offset) { _, symbol in
-                Text(symbol)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-    }
-
-    private var monthGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 4) {
-            ForEach(Array(gridDates.enumerated()), id: \.offset) { _, date in
-                if let date {
-                    dayCell(date)
-                } else {
-                    Color.clear.frame(height: 40)
-                }
-            }
-        }
-    }
-
-    private func dayCell(_ date: Date) -> some View {
-        let key = JournalModel.key(for: date)
-        let isSelected = key == model.selectedKey
-        let isToday = calendar.isDateInToday(date)
-        let hasEntries = populatedKeys.contains(key)
-        let isFuture = date > Date() && !isToday
-        return Button {
-            onPick(key)
-        } label: {
-            VStack(spacing: 2) {
-                Text("\(calendar.component(.day, from: date))")
-                    .font(.system(size: 16, weight: isToday || isSelected ? .semibold : .regular).monospacedDigit())
-                    .foregroundStyle(numberStyle(isSelected: isSelected, isToday: isToday, isFuture: isFuture))
-                Circle()
-                    .fill(isSelected ? AnyShapeStyle(.white.opacity(0.9)) : AnyShapeStyle(Color.journalAccent))
-                    .frame(width: 5, height: 5)
-                    .opacity(hasEntries ? 1 : 0)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
-            .background {
-                if isSelected {
-                    Circle().fill(Color.journalAccent).frame(width: 38, height: 38)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(isFuture)
-        .accessibilityLabel(date.formatted(date: .complete, time: .omitted) + (hasEntries ? ", has entries" : ""))
-    }
-
-    private func numberStyle(isSelected: Bool, isToday: Bool, isFuture: Bool) -> AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(.white) }
-        if isToday { return AnyShapeStyle(Color.journalAccent) }
-        if isFuture { return AnyShapeStyle(.quaternary) }
-        return AnyShapeStyle(.primary)
     }
 
     // MARK: - Recent
@@ -1108,9 +1140,177 @@ struct JournalCalendarSheet: View {
         return months
     }
 
-    /// The visible month, padded so the 1st lands under the right weekday.
-    private var gridDates: [Date?] {
-        guard let interval = calendar.dateInterval(of: .month, for: visibleMonth) else { return [] }
+    /// "Today" / "Yesterday", or nothing.
+    static func relativeLabel(_ key: String) -> String? {
+        guard let date = JournalModel.date(for: key) else { return nil }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return nil
+    }
+}
+
+/// The wide layout's calendar column: months scrolling vertically, the
+/// current month at the bottom and earlier ones above it, back a year or to
+/// the first entry, whichever is older. Never a future month. Follows the
+/// page to whichever month the selected day is in.
+struct JournalMonthColumn: View {
+    let model: JournalModel
+    let onPick: (String) -> Void
+
+    private var calendar: Calendar { Calendar.current }
+
+    var body: some View {
+        ScrollViewReader { reader in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    ForEach(months, id: \.self) { month in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(month.formatted(.dateTime.month(.wide).year()))
+                                .font(.system(.headline, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .padding(.leading, 6)
+                            JournalMonthGrid(month: month, model: model, onPick: onPick)
+                        }
+                        .id(Self.monthID(month))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 16)
+            }
+            .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.immediately)
+            .onAppear {
+                reader.scrollTo(selectedMonthID, anchor: .bottom)
+            }
+            .onChange(of: model.selectedKey) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    reader.scrollTo(selectedMonthID, anchor: .center)
+                }
+            }
+        }
+    }
+
+    private var selectedMonthID: String {
+        String(model.selectedKey.prefix(7))
+    }
+
+    private static func monthID(_ month: Date) -> String {
+        String(JournalModel.key(for: month).prefix(7))
+    }
+
+    /// Oldest first, ending with the current month.
+    private var months: [Date] {
+        let now = Date()
+        guard let current = calendar.dateInterval(of: .month, for: now)?.start,
+              let yearAgo = calendar.date(byAdding: .month, value: -12, to: current) else { return [] }
+        var start = yearAgo
+        if let earliest = model.days.compactMap({ JournalModel.date(for: $0.key) }).min(),
+           let earliestMonth = calendar.dateInterval(of: .month, for: earliest)?.start,
+           earliestMonth < start {
+            start = earliestMonth
+        }
+        var result: [Date] = []
+        var month = start
+        while month <= current {
+            result.append(month)
+            guard let next = calendar.date(byAdding: .month, value: 1, to: month) else { break }
+            month = next
+        }
+        return result
+    }
+}
+
+/// One-letter weekday initials, in the locale's week order.
+struct JournalWeekdayRow: View {
+    var body: some View {
+        let calendar = Calendar.current
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let start = calendar.firstWeekday - 1
+        HStack(spacing: 0) {
+            ForEach(0..<7, id: \.self) { index in
+                Text(symbols[(start + index) % 7])
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+/// A month's days as a seven-column grid that fills its width: a dot under
+/// every day with entries, today in the journal's accent, the selected day
+/// filled. Shared by the sheet and the column.
+struct JournalMonthGrid: View {
+    let month: Date
+    let model: JournalModel
+    let onPick: (String) -> Void
+
+    private var calendar: Calendar { Calendar.current }
+
+    var body: some View {
+        let populated = Set(model.days.map(\.key))
+        Grid(horizontalSpacing: 0, verticalSpacing: 4) {
+            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                GridRow {
+                    ForEach(Array(week.enumerated()), id: \.offset) { _, date in
+                        if let date {
+                            dayCell(date, populated: populated)
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity).frame(height: 40)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func dayCell(_ date: Date, populated: Set<String>) -> some View {
+        let key = JournalModel.key(for: date)
+        let isSelected = key == model.selectedKey
+        let isToday = calendar.isDateInToday(date)
+        let hasEntries = populated.contains(key)
+        let isFuture = date > Date() && !isToday
+        return Button {
+            onPick(key)
+        } label: {
+            VStack(spacing: 2) {
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.system(size: 16, weight: isToday || isSelected ? .semibold : .regular).monospacedDigit())
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(numberStyle(isSelected: isSelected, isToday: isToday, isFuture: isFuture))
+                Circle()
+                    .fill(isSelected ? AnyShapeStyle(.white.opacity(0.9)) : AnyShapeStyle(Color.journalAccent))
+                    .frame(width: 5, height: 5)
+                    .opacity(hasEntries ? 1 : 0)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+            .background {
+                if isSelected {
+                    Circle().fill(Color.journalAccent)
+                        .aspectRatio(1, contentMode: .fit)
+                        .frame(maxWidth: 38, maxHeight: 38)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isFuture)
+        .accessibilityLabel(date.formatted(date: .complete, time: .omitted) + (hasEntries ? ", has entries" : ""))
+    }
+
+    private func numberStyle(isSelected: Bool, isToday: Bool, isFuture: Bool) -> AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(.white) }
+        if isToday { return AnyShapeStyle(Color.journalAccent) }
+        if isFuture { return AnyShapeStyle(.quaternary) }
+        return AnyShapeStyle(.primary)
+    }
+
+    /// The month in weeks, padded so the 1st lands under the right weekday.
+    private var weeks: [[Date?]] {
+        guard let interval = calendar.dateInterval(of: .month, for: month) else { return [] }
         let first = interval.start
         let count = calendar.range(of: .day, in: .month, for: first)?.count ?? 0
         let weekday = calendar.component(.weekday, from: first)
@@ -1120,21 +1320,22 @@ struct JournalCalendarSheet: View {
             cells.append(calendar.date(byAdding: .day, value: offset, to: first))
         }
         while cells.count % 7 != 0 { cells.append(nil) }
-        return cells
+        return stride(from: 0, to: cells.count, by: 7).map { Array(cells[$0..<$0 + 7]) }
     }
+}
 
-    private var orderedWeekdaySymbols: [String] {
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
-        let start = calendar.firstWeekday - 1
-        return (0..<7).map { symbols[(start + $0) % 7] }
-    }
+/// The page's own search field, on a window too narrow for the calendar
+/// column (which carries the search field when it shows).
+private struct PageSearchField: ViewModifier {
+    let enabled: Bool
+    @Binding var query: String
+    @Binding var searching: Bool
 
-    /// "Today" / "Yesterday", or nothing.
-    static func relativeLabel(_ key: String) -> String? {
-        guard let date = JournalModel.date(for: key) else { return nil }
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return nil
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $query, isPresented: $searching, prompt: "Search journal")
+        } else {
+            content
+        }
     }
 }

@@ -7,6 +7,9 @@ import UIKit
 /// everything after a confirmation.
 struct HistoryView: View {
     @Bindable var store: DictationHistoryStore = .shared
+    /// True in the column beside Dictate, which has no navigation bar: the
+    /// title and Clear are drawn at the top of the list instead.
+    var drawsOwnHeader = false
     @State private var confirmClear = false
     @State private var copiedID: UUID?
     @State private var copiedRawID: UUID?
@@ -31,6 +34,10 @@ struct HistoryView: View {
                             justCopiedRaw: copiedRawID == entry.id
                         )
                         .contentShape(Rectangle())
+                        // In the column the list's own margins can't be
+                        // relied on (none at all on the open Duo), so the
+                        // rows carry their own.
+                        .listRowInsets(drawsOwnHeader ? EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16) : nil)
                         .onTapGesture {
                             copy(entry)
                         }
@@ -77,10 +84,25 @@ struct HistoryView: View {
         .navigationTitle("History")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !store.entries.isEmpty {
+            if !store.entries.isEmpty && !drawsOwnHeader {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Clear") { confirmClear = true }
                 }
+            }
+        }
+        .safeAreaBar(edge: .top) {
+            if drawsOwnHeader {
+                ZStack {
+                    Text("History")
+                        .font(.headline)
+                    if !store.entries.isEmpty {
+                        Button("Clear") { confirmClear = true }
+                            .buttonStyle(.glass)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                }
+                .frame(height: 44)
+                .padding(.horizontal, 12)
             }
         }
         .confirmationDialog(
@@ -175,6 +197,7 @@ private struct HistoryRow: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.tertiary)
                             .labelStyle(.titleAndIcon)
+                            .lineLimit(1)
                     }
                     Spacer()
                     if justCopiedRaw {

@@ -74,14 +74,25 @@ struct ContentView: View {
     private var tabs: some View {
         TabView(selection: $selectedTab) {
             Tab("Dictate", systemImage: "mic.fill", value: AppTab.dictate) {
-                DictationTabView(
-                    viewModel: viewModel,
-                    onShowHistory: { showingHistory = true },
-                    onOpenSettings: { showingSettings = true }
-                )
+                // History is a sheet on a narrow window and a live column
+                // beside the transcript on a wide one; the toolbar button
+                // only shows when the column doesn't.
+                AdaptiveColumns(onCompanionChange: { shown in
+                    if shown { showingHistory = false }
+                }) { historyShown in
+                    DictationTabView(
+                        viewModel: viewModel,
+                        onShowHistory: historyShown ? nil : { showingHistory = true },
+                        onOpenSettings: { showingSettings = true }
+                    )
+                } companion: {
+                    HistoryView(drawsOwnHeader: true)
+                }
             }
             Tab("Scratchpad", systemImage: "note.text", value: AppTab.scratchpad) {
-                ScratchpadView(viewModel: viewModel) { showingSettings = true }
+                AdaptiveColumns {
+                    ScratchpadView(viewModel: viewModel) { showingSettings = true }
+                }
             }
             Tab("Journal", systemImage: "book.closed", value: AppTab.journal) {
                 JournalView(viewModel: viewModel) { showingSettings = true }
@@ -195,8 +206,9 @@ struct ContentView: View {
 /// stay usable before the model is downloaded or if the mic is denied.
 struct DictationTabView: View {
     @Bindable var viewModel: RecordingViewModel
-    /// Presents History (a sheet owned by `ContentView`).
-    var onShowHistory: () -> Void = {}
+    /// Presents History (a sheet owned by `ContentView`). Nil when History
+    /// is already showing as a column beside this one.
+    var onShowHistory: (() -> Void)? = {}
     /// Presents Settings (a sheet owned by `ContentView`).
     var onOpenSettings: () -> Void = {}
     /// True while the transcript editor holds focus. A plain `@State Bool`
@@ -234,11 +246,13 @@ struct DictationTabView: View {
             .navigationTitle("Dictator")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onShowHistory) {
-                        Image(systemName: "clock.arrow.circlepath")
+                if let onShowHistory {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: onShowHistory) {
+                            Image(systemName: "clock.arrow.circlepath")
+                        }
+                        .accessibilityLabel("History")
                     }
-                    .accessibilityLabel("History")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     SettingsToolbarButton(action: onOpenSettings)
