@@ -1,0 +1,104 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "automatic-gradient": "srgb:0.81176,0.87843,1.00000,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.07843,0.07059,0.12157,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "name": "lines",
+          "image-name": "lines.svg"
+        }
+      ],
+      "name": "lines",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "layers": [
+        {
+          "name": "block",
+          "image-name": "block.svg"
+        }
+      ],
+      "name": "block",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    },
+    {
+      "layers": [
+        {
+          "name": "them",
+          "image-name-specializations": [
+            {
+              "value": "them.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "them-mono.svg"
+            }
+          ]
+        }
+      ],
+      "name": "them",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    },
+    {
+      "layers": [
+        {
+          "name": "you",
+          "image-name-specializations": [
+            {
+              "value": "you.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "you-mono.svg"
+            }
+          ]
+        }
+      ],
+      "name": "you",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

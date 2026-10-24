@@ -358,6 +358,10 @@ targets:
       - path: Sources/DictatorMeetings
       - path: Sources/DictatorMac
       - path: Sources/DictatorCore
+      # Its own Icon Composer icon, in the same family as Dictator's.
+      - path: Icons/MeetingsAppIcon.icon
+        type: file
+        buildPhase: resources
     postBuildScripts:
       - script: |
           # Install a stable copy of the built .app at ~/Applications. macOS TCC
@@ -480,6 +484,7 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: ""
         GENERATE_INFOPLIST_FILE: NO
         DEAD_CODE_STRIPPING: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: MeetingsAppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # The "Install to ~/Applications" post-build phase reads
         # BUILT_PRODUCTS_DIR and writes to ~/Applications; Xcode 15+ sandboxes
