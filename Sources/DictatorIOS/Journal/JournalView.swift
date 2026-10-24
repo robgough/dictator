@@ -742,7 +742,7 @@ private struct JournalEntrySheet: View {
                 if showReword {
                     ScratchpadRecordButton(
                         tint: .purple,
-                        restingIcon: "wand.and.stars",
+                        restingIcon: AssistGlyph.name,
                         status: viewModel.status,
                         isMyTurn: viewModel.recordingMode == .entryAssist,
                         recordingStartCount: viewModel.recordingStartCount,

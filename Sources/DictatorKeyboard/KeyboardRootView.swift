@@ -166,8 +166,7 @@ struct KeyboardRootView: View {
 
             Button(action: onStop) {
                 HStack(spacing: 12) {
-                    Image(systemName: isAssist ? "sparkles" : "mic.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                    RecordGlyph(name: isAssist ? AssistGlyph.name : "mic.fill", size: 16)
                     LevelHistory(levels: levels)
                         .frame(maxWidth: .infinity)
                     HStack(spacing: 6) {
@@ -289,8 +288,7 @@ struct KeyboardRootView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: canAssist ? "wand.and.stars" : "character.cursor.ibeam")
-                            .font(.system(size: 18, weight: .semibold))
+                        RecordGlyph(name: canAssist ? AssistGlyph.name : "character.cursor.ibeam", size: 18)
                             .foregroundStyle(.white)
                         Text(canAssist ? "Assist" : "Select text")
                             .font(.callout.weight(.semibold))

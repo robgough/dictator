@@ -37,7 +37,7 @@ struct StatsView: View {
                 .listRowSeparator(.hidden)
                 StatsCard(
                     title: "Assistant",
-                    systemImage: "wand.and.stars",
+                    systemImage: AssistGlyph.name,
                     tint: .purple,
                     primaryValue: stats.assistantCount,
                     primaryLabel: stats.assistantCount == 1 ? "turn" : "turns",
@@ -115,8 +115,7 @@ private struct StatsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
+                RecordGlyph(name: systemImage, size: 11)
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .textCase(.uppercase)

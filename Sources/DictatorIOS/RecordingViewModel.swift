@@ -314,7 +314,43 @@ final class RecordingViewModel {
             transcript = "Picking up bread, milk, and a couple of those nice apples from the new place on the corner."
             status = .ready
         }
+
+        #if DEBUG
+        applyMorphPreviewIfRequested()
+        #endif
     }
+
+    #if DEBUG
+    /// Set by `-DictatorMorphPreview <state>`; keeps the downloader from
+    /// replacing the faked model state.
+    private var isMorphPreview = false
+
+    /// `-DictatorMorphPreview empty|text|recording|assist|working` (launch
+    /// arguments land in UserDefaults) fakes a Dictate-screen state so the
+    /// morph button can be seen in a simulator with no model installed. No
+    /// mic or model is touched.
+    private func applyMorphPreviewIfRequested() {
+        guard let state = UserDefaults.standard.string(forKey: "DictatorMorphPreview") else { return }
+        isMorphPreview = true
+        permission = .granted
+        modelDiskStatus = .downloaded
+        let sample = "Can we move Thursday's review to Friday morning? I'd like one more day with the new builds before we show anyone."
+        transcript = state == "empty" ? "" : sample
+        switch state {
+        case "recording":
+            recordingMode = .dictation
+            status = .recording(level: 0.55)
+        case "assist":
+            recordingMode = .assist
+            status = .recording(level: 0.55)
+        case "working":
+            recordingMode = .dictation
+            status = .transcribing
+        default:
+            status = .idle
+        }
+    }
+    #endif
 
     private static func currentPermission() -> Permission {
         switch IOSAudioRecorder.recordPermission {
@@ -665,6 +701,9 @@ final class RecordingViewModel {
     /// shape. `.completed` triggers a one-time bridge re-publish so the
     /// keyboard's readiness chip updates immediately.
     private func applyDownloaderState(_ state: BackgroundModelDownloader.State) {
+        #if DEBUG
+        if isMorphPreview { return }
+        #endif
         switch state {
         case .idle:
             // Re-check disk status — the downloader may have been

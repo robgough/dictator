@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A mic or Assist control that sits inside a bar: the Dictation tab's
-/// Dictate / Assist halves and the Scratchpad's accessory row. Idle, a
+/// A mic or Assist control that sits inside a bar: the Scratchpad's
+/// accessory row (the Dictate screen uses `MorphRecordButton`). Idle, a
 /// tinted icon (with a title when there's room); while it's the active
 /// recorder it widens to fill the bar with listening bars and a hint, and
 /// while its words are being worked on, a tap cancels.
@@ -89,8 +89,7 @@ struct RecordKey: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
-                Image(systemName: icon)
-                    .font(.system(size: roomy ? 22 : 20, weight: .semibold))
+                RecordGlyph(name: icon, size: roomy ? 22 : 20)
                     .foregroundStyle(tint.opacity(dimmed ? 0.3 : 1))
                     .contentTransition(.symbolEffect(.replace))
                 if let title {

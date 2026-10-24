@@ -151,10 +151,10 @@ private struct HistoryRow: View {
             // glyphs from the main screen so it's immediately obvious
             // which entry point produced each entry. Sized to align
             // with the first line of text without crowding it.
-            Image(systemName: modeIcon)
-                .font(.system(size: 18, weight: .semibold))
+            RecordGlyph(name: modeIcon, size: 18)
                 .foregroundStyle(modeTint)
                 .frame(width: 22, alignment: .center)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(modeAccessibilityLabel)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -199,7 +199,7 @@ private struct HistoryRow: View {
     private var modeIcon: String {
         switch entry.resolvedMode {
         case .dictation: "mic.fill"
-        case .assist: "wand.and.stars"
+        case .assist: AssistGlyph.name
         }
     }
 

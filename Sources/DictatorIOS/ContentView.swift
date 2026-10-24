@@ -233,26 +233,12 @@ struct DictationTabView: View {
             .background(Color(.systemBackground))
             .navigationTitle("Dictator")
             .navigationBarTitleDisplayMode(.inline)
-            // Copy is a top-bar action, per the Liquid Glass layout: the
-            // bottom of the screen is for talking.
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: onShowHistory) {
                         Image(systemName: "clock.arrow.circlepath")
                     }
                     .accessibilityLabel("History")
-                }
-                if viewModel.permission == .granted, case .downloaded = viewModel.modelDiskStatus {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            viewModel.copyTranscriptToClipboard()
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                        }
-                        .accessibilityLabel("Copy to Clipboard")
-                        .disabled(viewModel.transcript.isEmpty)
-                    }
-                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     SettingsToolbarButton(action: onOpenSettings)
@@ -634,16 +620,13 @@ struct DictationTabView: View {
     /// controls.
     private var recordingArea: some View {
         VStack(spacing: 16) {
-            // Status row hidden in keyboard-edit mode — the user is
-            // focused on typing and the chip + pill aren't actionable
-            // here. Reclaiming the strip gives the transcript card
-            // another ~38pt of vertical breathing room above the
-            // system keyboard.
+            // Model chip hidden in keyboard-edit mode — the user is
+            // focused on typing and it isn't actionable there.
+            // Recording and transcribing show in the morph pill below.
             if !transcriptKeyboardEnabled {
                 HStack {
                     modelStatusChip
                     Spacer()
-                    statusPill
                 }
             }
 
@@ -786,79 +769,23 @@ struct DictationTabView: View {
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
-    /// Default layout: red mic + purple assist button (when AI is
-    /// available) side by side, Copy as a wide bar above, status label
-    /// + health warning underneath. The Copy button is identical in
-    /// keyboard mode and in-app mode — every successful transcription
-    /// auto-copies to the clipboard anyway, so Copy is just a manual
-    /// re-sync for "I edited this and want the new version on the
-    /// clipboard now."
-    /// Dictate and Assist share one bar, half each, like the Journal's —
-    /// big enough to find without looking, without the two 84pt circles
-    /// that used to take a third of the screen. Whichever is recording
-    /// takes the whole bar for its listening bars; while its words are
-    /// being worked on, a tap on the bar cancels.
+    /// The morph control under the card: the mic alone on an empty
+    /// transcript, Copy · Assist · Mic once there's text, and the send /
+    /// cancel pill while recording or working.
     private var fullControls: some View {
         VStack(spacing: 12) {
             // Error caption only — on a failure a red line surfaces
-            // above the bar where the user's eye is drawn. The standing
-            // "can make mistakes" disclaimer lives in the empty
-            // transcript card (see TranscriptCard).
+            // above the control where the user's eye is drawn.
             errorCaption
 
-            let assistShown = AppleFoundationAssist.isAvailable
-                && !(dictationBusy && viewModel.recordingMode == .dictation)
-            let dictateShown = !(dictationBusy && viewModel.recordingMode == .assist)
-            HStack(spacing: 0) {
-                if dictateShown {
-                    RecordKey(
-                        tint: .red,
-                        icon: micRestingIcon,
-                        title: "Dictate",
-                        label: "Dictate",
-                        mode: .dictation,
-                        viewModel: viewModel,
-                        height: 60,
-                        autoStarted: viewModel.autoStartedRecordingActive,
-                        enabled: !otherButtonBusy(for: .dictation),
-                        onPress: { viewModel.startRecording() },
-                        onRelease: { Task { await viewModel.stopRecording() } }
-                    )
-                }
-                if dictateShown && assistShown {
-                    Divider().frame(height: 28)
-                }
-                if assistShown {
-                    RecordKey(
-                        tint: .purple,
-                        icon: "wand.and.stars",
-                        title: "Assist",
-                        label: "Assist",
-                        mode: .assist,
-                        viewModel: viewModel,
-                        height: 60,
-                        busyLabel: "Applying…",
-                        autoStarted: viewModel.autoStartedRecordingActive,
-                        enabled: !assistDisabled,
-                        onPress: { viewModel.startAssistRecording() },
-                        onRelease: { Task { await viewModel.stopAssistRecording() } }
-                    )
-                }
-            }
-            .glassEffect(.regular.interactive(), in: .capsule)
-            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: dictationBusy)
+            MorphRecordButton(
+                viewModel: viewModel,
+                micIcon: micRestingIcon,
+                onCopy: { viewModel.copyTranscriptToClipboard() }
+            )
         }
         // Pure crossfade with the keyboard-edit layout.
         .transition(.opacity)
-    }
-
-    /// A Dictation-tab capture is recording or being transcribed — the
-    /// stretch where only its own half of the bar shows.
-    private var dictationBusy: Bool {
-        guard viewModel.recordingMode == .dictation || viewModel.recordingMode == .assist else { return false }
-        if viewModel.status.isCapturing { return true }
-        if case .transcribing = viewModel.status { return true }
-        return false
     }
 
     /// Error surface above the action buttons. Renders the failure
@@ -879,131 +806,6 @@ struct DictationTabView: View {
         }
     }
 
-    /// True while the pill should render its bars panel rather than a
-    /// text label. Warm-up shows zero-level bars (no samples yet) so
-    /// the meter starts at rest and animates up as soon as the first
-    /// buffer lands.
-    private var showsRecordingWaveform: Bool {
-        switch viewModel.status {
-        case .warmingUp, .recording: true
-        default: false
-        }
-    }
-
-    /// Current RMS level fed into the waveform. Zero outside the
-    /// `.recording(level:)` case.
-    private var currentLevel: Float {
-        if case let .recording(level) = viewModel.status { return level }
-        return 0
-    }
-
-    /// Status pill sitting opposite the model-status chip. Mirrors the
-    /// existing chip's secondarySystemBackground capsule so the two
-    /// read as a matched pair, and morphs between three states:
-    ///   - `.idle` / `.ready` / `.error` → small "Idle" label.
-    ///   - `.warmingUp` / `.recording`   → live waveform.
-    ///   - `.transcribing`               → "Transcribing" / "Applying"
-    ///     with a small spinner.
-    /// Fixed width (150pt) so the morph stays visually stable — a
-    /// content-sized capsule would jump width between the short label
-    /// states and the much-wider waveform state and shift the chip
-    /// across the row by a few pixels each time. Error detail still
-    /// lives in the StatusLabel below the buttons; the pill only
-    /// shows the coarse state.
-    private var statusPill: some View {
-        ZStack {
-            // Resting label — visible when neither waveform nor
-            // transcribing slots are showing. Stacked rather than
-            // branched so the pill's intrinsic size doesn't bounce
-            // when SwiftUI's transition crossfades the states.
-            // Appends the most recent transcription's duration when
-            // we have one ("Idle · 1.2s") so the user can see how
-            // snappy the round-trip was without digging into stats.
-            Text(idlePillLabel)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
-                .opacity(isIdleStatus ? 1 : 0)
-
-            // Live "we're listening" meter. `.id(...)` on the
-            // recording counter forces a fresh component on each new
-            // press — without it the Waveform's internal @State
-            // carries the prior run's bars over, and the leftover
-            // bars flash visible the instant the new recording
-            // starts. Hit-testing off so the invisible-state meter
-            // can't intercept taps in the gap.
-            Waveform(
-                level: currentLevel,
-                tint: viewModel.recordingMode == .assist ? .purple : .red,
-                height: 22
-            )
-            .id(viewModel.recordingStartCount)
-            .padding(.horizontal, 6)
-            .opacity(showsRecordingWaveform ? 1 : 0)
-            .allowsHitTesting(false)
-
-            // Transcribing / applying / waiting state. Spinner + a
-            // short label that explains *what* we're waiting on:
-            //   - Model still loading → "Waiting" (so the user knows
-            //     the first-run lag isn't actual inference time)
-            //   - Assist transform     → "Applying"
-            //   - Normal transcription → "Transcribing"
-            HStack(spacing: 6) {
-                ProgressView()
-                    .scaleEffect(0.6)
-                    .frame(width: 12, height: 12)
-                Text(transcribingPillLabel)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            .opacity(isTranscribingStatus ? 1 : 0)
-        }
-        .frame(width: 150, height: 30)
-        .glassEffect(.regular, in: .capsule)
-        .animation(.easeInOut(duration: 0.18), value: showsRecordingWaveform)
-        .animation(.easeInOut(duration: 0.18), value: isTranscribingStatus)
-        .animation(.easeInOut(duration: 0.18), value: isIdleStatus)
-    }
-
-    /// Idle pill text. "Idle" alone until the first successful
-    /// transcription lands, then "Idle · 1.2s" so the user can see the
-    /// round-trip time. Resets back to bare "Idle" on clear() or on a
-    /// failed run.
-    private var idlePillLabel: String {
-        if let duration = viewModel.lastTranscriptionDuration {
-            return "Idle · \(formatPillDuration(duration))"
-        }
-        return "Idle"
-    }
-
-    /// "Waiting" while the model is still being loaded into memory —
-    /// the wait there isn't inference time, it's the first-press model
-    /// load, and labelling it "Transcribing" would mis-sell the speed.
-    /// Otherwise mode-appropriate ("Applying" for assist, plain
-    /// "Transcribing" for dictation).
-    private var transcribingPillLabel: String {
-        if viewModel.isModelLoading { return "Waiting" }
-        return viewModel.recordingMode == .assist ? "Applying" : "Transcribing"
-    }
-
-    private func formatPillDuration(_ seconds: TimeInterval) -> String {
-        if seconds < 10 {
-            return String(format: "%.1fs", seconds)
-        }
-        return String(format: "%.0fs", seconds)
-    }
-
-    private var isIdleStatus: Bool {
-        switch viewModel.status {
-        case .idle, .ready, .error: true
-        default: false
-        }
-    }
-
-    private var isTranscribingStatus: Bool {
-        if case .transcribing = viewModel.status { return true }
-        return false
-    }
-
     /// Icon shown on the red mic when it isn't actively recording.
     /// Three states hint at what the next press will actually do:
     ///   - empty transcript                → plain mic (fresh capture)
@@ -1017,25 +819,6 @@ struct DictationTabView: View {
             return "microphone.badge.ellipsis.fill"
         }
         return "microphone.badge.plus.fill"
-    }
-
-    /// True when the assist (purple) button should be disabled —
-    /// either Apple Intelligence isn't on, there's no transcript to
-    /// transform, or the dictation flow is currently busy.
-    private var assistDisabled: Bool {
-        !AppleFoundationAssist.isAvailable
-            || viewModel.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || otherButtonBusy(for: .assist)
-    }
-
-    /// `true` when the OTHER recording mode is currently in flight, so
-    /// this button shouldn't accept a press. Prevents starting an
-    /// assist while a dictation is mid-transcribe and vice versa.
-    private func otherButtonBusy(for mine: RecordingViewModel.RecordingMode) -> Bool {
-        guard viewModel.status.isCapturing
-                || { if case .transcribing = viewModel.status { return true } else { return false } }()
-        else { return false }
-        return viewModel.recordingMode != mine
     }
 }
 

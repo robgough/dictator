@@ -293,7 +293,7 @@ struct ScratchpadControlsAccessory: View {
             }
             if assistShown {
                 RecordKey(
-                    tint: .purple, icon: "wand.and.stars", label: "Reword note",
+                    tint: .purple, icon: AssistGlyph.name, label: "Reword note",
                     mode: .scratchpadAssist, viewModel: viewModel, height: keyHeight,
                     busyLabel: "Rewording…",
                     enabled: !noteIsEmpty,
@@ -423,8 +423,7 @@ struct ScratchpadRecordButton: View {
             } else if isTranscribing {
                 ProgressView().tint(tint)
             } else {
-                Image(systemName: restingIcon)
-                    .font(.system(size: 26, weight: .semibold))
+                RecordGlyph(name: restingIcon, size: 26)
                     .foregroundStyle(tint.opacity(isEnabled && !blocked ? 1 : 0.3))
                     .transition(.opacity)
             }
@@ -478,7 +477,7 @@ struct ScratchpadRecordButton: View {
             // Clear a stale latch if the recorder finished for any other reason.
             if !status.isCapturing, !isTranscribingAny { isLatched = false }
         }
-        .accessibilityLabel(restingIcon == "wand.and.stars" ? "Reword note" : "Dictate into note")
+        .accessibilityLabel(restingIcon == AssistGlyph.name ? "Reword note" : "Dictate into note")
     }
 
     private var isTranscribingAny: Bool {

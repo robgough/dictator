@@ -58,7 +58,7 @@ struct KeyboardShowcase: View {
             // its idle row).
             HStack(spacing: 24) {
                 primary(tint: .red, icon: "mic.fill", label: "Dictate")
-                primary(tint: .purple, icon: "wand.and.stars", label: "Assist")
+                primary(tint: .purple, icon: AssistGlyph.name, label: "Assist")
             }
 
             // Secondary row — no extra horizontal padding here so it
@@ -129,8 +129,7 @@ struct KeyboardShowcase: View {
     /// fill with a white glyph.
     private func primary(tint: Color, icon: String, label: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold))
+            RecordGlyph(name: icon, size: 18)
             Text(label)
                 .font(.callout.weight(.semibold))
         }
