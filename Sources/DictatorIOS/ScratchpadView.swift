@@ -40,28 +40,58 @@ struct ScratchpadView: View {
     /// First-responder mirror from the editor (unused for focus styling here,
     /// but `EditableTranscript` requires the binding).
     @State private var editorFocused = false
+    /// Height of the bottom bar, tab bar and home indicator over the note's
+    /// foot; the editor pads its end by this so nothing hides under them.
+    @State private var footInset: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
-            // The controls sit below the note, as on the Dictate screen,
-            // rather than floating over it: interactive glass over the
-            // UITextView loses its taps.
-            VStack(spacing: 0) {
+            // The controls float at the bottom with the note scrolling under
+            // them. A safe-area bar, not an overlay: an overlay's glass over
+            // the UITextView loses its taps, while the bar keeps them, adds
+            // the scroll-edge blur, and reserves its height so the note's
+            // last line can always scroll clear of the buttons.
+            ZStack {
+                // Measures how much of the foot the bar (plus tab bar and
+                // home indicator) covers, from inside the safe area.
+                Color.clear
+                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: {
+                        footInset = $0
+                    }
+                // The note itself runs the full height, under the controls,
+                // and ends with that much padding so its last line can always
+                // scroll up clear of them.
                 editor
-                    .frame(maxHeight: .infinity)
-                // Typing has the system keyboard, so the row steps aside
-                // (as the Dictate screen's controls do).
-                if !keyboardEnabled {
-                    ScratchpadControls(viewModel: viewModel)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 8)
-                        .padding(.bottom, 12)
-                        .readableWidth(680)
-                        .transition(.opacity)
-                }
+                    .ignoresSafeArea(.container, edges: .bottom)
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.82), value: keyboardEnabled)
+            .frame(maxHeight: .infinity)
+                .safeAreaBar(edge: .bottom) {
+                    // Typing has the system keyboard, so the row steps aside
+                    // (as the Dictate screen's controls do).
+                    if !keyboardEnabled {
+                        ScratchpadControls(viewModel: viewModel)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
+                            .padding(.bottom, 12)
+                            .readableWidth(680)
+                            // The note runs under the bar outside its safe
+                            // area, so it misses the system's scroll-edge
+                            // blur; this fade stands in for it so the glass
+                            // buttons don't sit on busy text. Never hit-tested.
+                            .background {
+                                LinearGradient(
+                                    colors: [Color(.systemBackground).opacity(0), Color(.systemBackground).opacity(0.92)],
+                                    startPoint: .top,
+                                    endPoint: UnitPoint(x: 0.5, y: 0.6)
+                                )
+                                .ignoresSafeArea(edges: .bottom)
+                                .allowsHitTesting(false)
+                            }
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.spring(response: 0.35, dampingFraction: 0.82), value: keyboardEnabled)
             .navigationTitle("Scratchpad")
             .navigationBarTitleDisplayMode(.inline)
             // Only the hold-to-talk buttons float at the bottom; everything
@@ -130,7 +160,7 @@ struct ScratchpadView: View {
             isFocused: $editorFocused,
             keyboardEnabled: $keyboardEnabled,
             caretVisibleWithoutKeyboard: true,
-            bottomTextInset: 24
+            bottomTextInset: footInset + 24
         )
         .padding(.horizontal, 8)
         .readableWidth(680)

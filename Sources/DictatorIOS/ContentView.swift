@@ -1003,6 +1003,12 @@ struct EditableTranscript: UIViewRepresentable {
         context.coordinator.suppressDelegateMirror = true
         defer { context.coordinator.suppressDelegateMirror = false }
 
+        // The Scratchpad sizes this to the controls floating over its foot,
+        // which change height (keyboard up, rotation), so keep it live.
+        if uiView.textContainerInset.bottom != bottomTextInset {
+            uiView.textContainerInset.bottom = bottomTextInset
+        }
+
         let textChanged = uiView.text != text
         // For the Scratchpad, a programmatic text change (dictation merge /
         // undo) must NOT lurch the scroll: setting `.text` resets the offset to
