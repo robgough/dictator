@@ -1,13 +1,29 @@
 import SwiftUI
 
-/// The keyboard's SwiftUI layout. Two big buttons (red mic, purple
-/// assist) plus a tiny secondary row with Undo / Return / Backspace.
+/// The keyboard's SwiftUI layout: two short rows on every device.
 ///
-/// While Dictator holds a warm mic in the background (`session` is
-/// non-nil), Dictate and Assist record in place: the buttons give way to a
-/// level meter with Stop, then a transcribing row, and the text is inserted
-/// straight into the field. Without a session they open Dictator, as they
-/// always have; the result still comes back here when the user returns.
+/// - Top row: Undo · Paste · Assist · Mic.
+/// - Bottom row: (globe) · space · return · ⌫.
+///
+/// While a recording is in flight the top row becomes the app's ✕ and pill
+/// (red for dictation, violet for Assist), the mic stretching across the
+/// room Undo, Paste and Assist give up, with the live meter inside it. Tap
+/// the pill (↑) to send; the text lands at the cursor. The bottom row stays
+/// live throughout. Same morph as the Dictate screen's `MorphRecordButton`,
+/// at the keyboard's height.
+///
+/// With a warm mic in the background (`session` is non-nil) Dictate and
+/// Assist record in place; the mic carries a small dot while it's warm.
+/// Without one they open Dictator, as they always have, and the result
+/// comes back here when the user returns.
+///
+/// On wide screens (iPad, the open iPhone Duo) the rows stay a centred band
+/// rather than stretching. A partly folded Duo splits them around the
+/// crease: Undo and Paste on the left half, the rest on the right. Pinched
+/// into the iPad's floating keyboard, Paste shortens to its label.
+///
+/// No status or hint lines: every state is carried by a control (the dot,
+/// the pill, a greyed key), per the app's no-helper-text rule.
 struct KeyboardRootView: View {
     let onMicPress: () -> Void
     let onAssistPress: () -> Void
@@ -15,10 +31,12 @@ struct KeyboardRootView: View {
     let session: KeyboardBridge.SessionState?
     /// Recent mic levels, oldest first, while a recording is in flight.
     var levels: [Float] = []
-    /// Why the last request produced no text, briefly.
+    /// Why the last request produced no text, briefly. Shown in the Paste
+    /// chip's place for a few seconds.
     let notice: String?
     let onStop: () -> Void
     let onCancel: () -> Void
+    /// Release the warm mic now (the mic's context menu).
     let onEndSession: () -> Void
     let onUndo: () -> Void
     let onSpace: () -> Void
@@ -30,10 +48,9 @@ struct KeyboardRootView: View {
     /// worse than hiding it. The Settings screen in the host app
     /// explains why.
     let assistSupported: Bool
-    /// True when there's text before the cursor for assist to
-    /// transform. When false the Assist button greys out — tapping
-    /// it with an empty field would launch the host with nothing to
-    /// act on, which silently does nothing and looks broken.
+    /// True when there's a selection, or freshly copied text, for Assist
+    /// to rewrite. When false the Assist key greys out and a tap shakes it
+    /// rather than launching the host with nothing to act on.
     let canAssist: Bool
     /// Backspace uses press / release callbacks rather than a single
     /// tap action so the controller can run a hold-to-repeat timer
@@ -43,437 +60,419 @@ struct KeyboardRootView: View {
     let onBackspaceRelease: () -> Void
     let canUndo: Bool
     /// True when the system clipboard has a string to paste. Drives
-    /// the always-on Paste pill's enabled state.
+    /// the Paste chip's enabled state.
     let canPaste: Bool
-    /// Text the keyboard renders in the preview pill alongside
-    /// Paste. Sourced from the host's last-dictation snapshot via
-    /// the App Group; `nil` when the system clipboard has been
-    /// overwritten by another app since the host wrote (or the host
-    /// hasn't transcribed yet on this device). We never read
-    /// `UIPasteboard.general.string` for this — that would trip
-    /// iOS's "Pasted from X" toast / permission prompt.
+    /// Text the keyboard renders in the Paste chip. Sourced from the
+    /// host's last-dictation snapshot via the App Group; `nil` when the
+    /// system clipboard has been overwritten by another app since the
+    /// host wrote (or the host hasn't transcribed yet on this device).
+    /// We never read `UIPasteboard.general.string` for this — that would
+    /// trip iOS's "Pasted from X" toast / permission prompt.
     let pastePreview: String?
-    /// Tap action for the always-on Paste pill. Reads from
-    /// `UIPasteboard.general` and inserts via the text document
-    /// proxy — see `KeyboardViewController.pasteFromClipboard`.
+    /// Tap action for the Paste chip. Reads from `UIPasteboard.general`
+    /// and inserts via the text document proxy — see
+    /// `KeyboardViewController.pasteFromClipboard`.
     let onPaste: () -> Void
+    /// Show the globe key. Apple requires it whenever
+    /// `needsInputModeSwitchKey` is true (devices without the system's own
+    /// keyboard switcher under the keyboard).
+    var showsNextKeyboard: Bool = false
+    var onNextKeyboard: () -> Void = {}
 
-    /// True while the "select text first" hint is on screen. Set when
-    /// the user taps a greyed-out Assist button; auto-clears after a
-    /// few seconds via `hintHideTask`, and also clears the moment
-    /// `canAssist` flips true (a fresh copy made the prompt moot).
-    @State private var showAssistHint = false
-    @State private var hintHideTask: Task<Void, Never>?
+    /// The keyboard's height, set by the controller. Two rows plus a
+    /// little padding.
+    static let height: CGFloat = 116
+    /// The widest the rows get on a big screen, as a centred band.
+    static let bandWidth: CGFloat = 640
+
+    @Namespace private var glass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Bumped when a greyed Assist key is tapped, to shake it.
+    @State private var assistShakes = 0
+
+    private enum Phase: Equatable { case idle, recording, working }
+
+    private var phase: Phase {
+        switch session?.phase {
+        case .recording: .recording
+        case .transcribing: .working
+        default: .idle
+        }
+    }
+    private var isAssist: Bool { phase != .idle && session?.mode == .assist }
+    private var tint: Color { isAssist ? .dictatorAssist : .dictatorSpeak }
+    private var micWarm: Bool { session?.phase == .ready }
+
+    /// Sizes that change between the docked keyboard and the iPad's small
+    /// floating one.
+    private struct Metrics {
+        var key: CGFloat
+        var micWidth: CGFloat
+        var returnWidth: CGFloat
+        var deleteWidth: CGFloat
+        var compactPaste: Bool
+    }
 
     var body: some View {
-        VStack(spacing: 12) {
-            // Always-on Paste pill above whatever primary content is
-            // showing. Enabled only when the system clipboard has a
-            // string; tap reads it and inserts via the text document
-            // proxy.
-            pasteChip
-
-            if let notice {
-                noticeBanner(notice)
-            } else if session?.phase == .recording {
-                recordingRow
-            } else if session?.phase == .transcribing {
-                transcribingRow
-            } else if showAssistHint && !canAssist && assistSupported {
-                // Hint takes over the same slot as Dictate / Assist —
-                // a clean swap at matched height rather than pushing
-                // the secondary row off the bottom of the keyboard.
-                // Auto-reverts after the hide task fires. We never
-                // surface the hint when assist isn't supported — the
-                // Assist button itself is hidden in that case so
-                // there's no greyed control for the user to prod.
-                assistHintBanner
-            } else {
-                idleContent
-            }
-
-            if session?.phase == .ready {
-                sessionLine
-            }
-
-            secondaryRow
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        // On a wide keyboard (the iPhone Duo's inner display) a 56pt-tall
-        // button the full width of the screen stops reading as a button.
-        // Phones are all narrower than this, so it only bites there.
-        .frame(maxWidth: 640)
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground))
-        .animation(.easeInOut(duration: 0.2), value: showAssistHint)
-        // Once the user copies something the gate opens and the
-        // hint becomes redundant — clear it (and cancel any pending
-        // auto-hide) so it doesn't linger while Assist is live.
-        .onChange(of: canAssist) { _, newValue in
-            if newValue {
-                hintHideTask?.cancel()
-                hintHideTask = nil
-                showAssistHint = false
-            }
-        }
-    }
-
-    /// Replacement for the Dictate / Assist row while the user has
-    /// tapped the disabled "Select text" button. Same height (56pt)
-    /// as the buttons it replaces so the rest of the keyboard layout
-    /// doesn't reflow.
-    private var assistHintBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "character.cursor.ibeam")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.purple)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Select text first")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text("Highlight what to rewrite (or copy it), then tap Assist.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 56)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.tertiarySystemBackground))
-        )
-        .transition(.opacity)
-    }
-
-    // MARK: - In flight (background session)
-
-    private var recordingRow: some View {
-        HStack(spacing: 10) {
-            Button(action: onCancel) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 56, height: 56)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Cancel dictation")
-
-            Button(action: onStop) {
-                HStack(spacing: 12) {
-                    RecordGlyph(name: isAssist ? AssistGlyph.name : "mic.fill", size: 16)
-                    LevelHistory(levels: levels)
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            // The iPad's floating keyboard is about 320pt wide; every
+            // supported iPhone is 375pt or wider.
+            let floating = width < 360
+            let metrics = floating
+                ? Metrics(key: 40, micWidth: 48, returnWidth: 64, deleteWidth: 44, compactPaste: true)
+                : Metrics(key: 44, micWidth: width >= 600 ? 72 : 52, returnWidth: width >= 600 ? 96 : 84,
+                          deleteWidth: width >= 600 ? 56 : 52, compactPaste: false)
+            Group {
+                if let fold = FoldGeometry.verticalFold(in: proxy),
+                   fold.lowerBound >= 220, width - fold.upperBound >= 260 {
+                    split(width: width, fold: fold, metrics: metrics)
+                } else {
+                    band(metrics: metrics)
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: Self.bandWidth)
                         .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(width: width, height: proxy.size.height)
+        }
+        .background(Color(.secondarySystemBackground))
+        .animation(motion, value: phase)
+        .animation(motion, value: isAssist)
+    }
+
+    // MARK: - Layouts
+
+    /// One band: both rows, the full width (capped by the caller).
+    private func band(metrics: Metrics) -> some View {
+        VStack(spacing: 8) {
+            GlassEffectContainer(spacing: 3) {
+                HStack(spacing: 6) {
+                    if phase == .idle {
+                        undoKey(metrics)
+                            .transition(pieceTransition)
+                        pasteChip(metrics)
+                            .transition(pieceTransition)
+                        if assistSupported {
+                            assistKey(metrics)
+                                .transition(pieceTransition)
+                        }
+                    } else {
+                        cancelKey(metrics)
+                            .transition(pieceTransition)
+                    }
+                    micOrPill(metrics, idleWidth: metrics.micWidth)
+                }
+            }
+            bottomRow(metrics, globe: true, returnAndDelete: true)
+        }
+    }
+
+    /// A partly folded Duo: nothing on the crease. Undo and Paste under the
+    /// left thumb, Assist and the (wider) mic under the right, with space on
+    /// both halves.
+    private func split(width: CGFloat, fold: ClosedRange<CGFloat>, metrics: Metrics) -> some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    undoKey(metrics)
+                    pasteChip(metrics)
+                }
+                bottomRow(metrics, globe: true, returnAndDelete: false)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 12)
+            .frame(width: fold.lowerBound)
+
+            Color.clear.frame(width: fold.upperBound - fold.lowerBound)
+
+            VStack(spacing: 8) {
+                GlassEffectContainer(spacing: 3) {
                     HStack(spacing: 6) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Stop")
-                            .font(.callout.weight(.semibold))
+                        Spacer(minLength: 0)
+                        if phase == .idle {
+                            if assistSupported {
+                                assistKey(metrics)
+                                    .transition(pieceTransition)
+                            }
+                        } else {
+                            cancelKey(metrics)
+                                .transition(pieceTransition)
+                        }
+                        micOrPill(metrics, idleWidth: 120)
                     }
                 }
-                .foregroundStyle(recordingTint)
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity)
-                .frame(height: 56)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                bottomRow(metrics, globe: false, returnAndDelete: true)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isAssist ? "Stop and apply" : "Stop and insert")
+            .padding(.leading, 12)
+            .padding(.trailing, 16)
+            .frame(width: width - fold.upperBound)
         }
     }
 
-    private var isAssist: Bool { session?.mode == .assist }
-    private var recordingTint: Color { isAssist ? .purple : .red }
-
-    /// Tap to give up on it — nothing is inserted.
-    private var transcribingRow: some View {
-        Button(action: onCancel) {
-            HStack(spacing: 10) {
-                ProgressView()
-                Text(session?.mode == .assist ? "Applying…" : "Transcribing…")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("Tap to cancel")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+    private func bottomRow(_ m: Metrics, globe: Bool, returnAndDelete: Bool) -> some View {
+        HStack(spacing: 6) {
+            if globe && showsNextKeyboard {
+                iconKey("globe", label: "Next keyboard", width: m.key, height: m.key, action: onNextKeyboard)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 56)
-            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            spaceKey(m)
+            if returnAndDelete {
+                returnKey(m)
+                backspaceKey(m)
+            }
+        }
+    }
+
+    // MARK: - Top row pieces
+
+    private func undoKey(_ m: Metrics) -> some View {
+        iconKey("arrow.uturn.backward", label: "Undo", width: m.key, height: m.key, enabled: canUndo, action: onUndo)
+            .glassEffectID("undo", in: glass)
+    }
+
+    /// The clipboard: a snippet of what Paste would insert when we know
+    /// (Dictator wrote it), else just "Paste". Greyed when the clipboard is
+    /// empty. Briefly shows why the last request produced no text instead.
+    private func pasteChip(_ m: Metrics) -> some View {
+        Button(action: onPaste) {
+            HStack(spacing: 7) {
+                if let notice, !m.compactPaste {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                } else {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(m.compactPaste ? "Paste" : pasteLabel)
+                        .font(.footnote.weight(pastePreview == nil || m.compactPaste ? .semibold : .regular))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            // Fade the content, not the glass (`.opacity` doesn't reach a
+            // glassEffect) to show there's nothing to paste.
+            .foregroundStyle(canPaste ? Color.primary : Color.secondary.opacity(0.6))
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: m.compactPaste ? .center : .leading)
+            .frame(height: m.key)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Cancel")
+        .disabled(!canPaste)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
+        .glassEffectID("paste", in: glass)
+        .accessibilityLabel(pasteAccessibilityLabel)
     }
 
-    private func noticeBanner(_ text: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.circle")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.orange)
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 56)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.tertiarySystemBackground))
-        )
-    }
-
-    /// "The mic is on" — it is, the indicator says so, and this is the off
-    /// switch closest to hand.
-    private var sessionLine: some View {
-        HStack(spacing: 6) {
-            Circle().fill(.orange).frame(width: 6, height: 6)
-            if let expiresAt = session?.expiresAt {
-                Text("Mic ready · off at \(expiresAt, style: .time)")
-            } else {
-                Text("Mic ready")
-            }
-            Spacer(minLength: 0)
-            Button("Turn off", action: onEndSession)
-                .font(.caption2.weight(.semibold))
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .frame(height: 16)
-    }
-
-    // MARK: - Idle (no in-flight session)
-
-    @ViewBuilder
-    private var idleContent: some View {
-        HStack(spacing: 24) {
-            primaryButton(
-                tint: .red,
-                icon: "mic.fill",
-                label: "Dictate",
-                action: onMicPress,
-                enabled: true
-            )
-            if assistSupported {
-                // Assist rewrites the highlighted text, or failing that
-                // what's freshly on the clipboard (see
-                // KeyboardViewController). When there's nothing to act
-                // on, the button looks disabled (greyed, "Select text"
-                // label) but stays tappable so we
-                // can pop a hint explaining what to do — a true
-                // SwiftUI .disabled() button can't fire any action,
-                // which leaves the user prodding a dead control.
-                Button {
-                    if canAssist {
-                        onAssistPress()
-                    } else {
-                        showAssistHint = true
-                        hintHideTask?.cancel()
-                        hintHideTask = Task {
-                            try? await Task.sleep(for: .seconds(3))
-                            guard !Task.isCancelled else { return }
-                            showAssistHint = false
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        RecordGlyph(name: canAssist ? AssistGlyph.name : "character.cursor.ibeam", size: 18)
-                            .foregroundStyle(.white)
-                        Text(canAssist ? "Assist" : "Select text")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.purple)
-                    )
-                    .opacity(canAssist ? 1 : 0.4)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // MARK: - Paste row (always-on shortcut for the system clipboard)
-
-    /// Paste button on the left + preview pill on the right.
-    /// Reads `UIPasteboard.general.string` and inserts via the text
-    /// document proxy on tap; greys out when the clipboard is empty.
-    /// The preview only shows when we can verify the clipboard still
-    /// holds the host's last-dictation snapshot (we compare
-    /// changeCount through the App Group) — that way "Hello world"
-    /// doesn't keep advertising itself after the user has copied
-    /// something unrelated from another app.
-    @ViewBuilder
-    private var pasteChip: some View {
-        // Both halves share a fixed height (36pt) and cornerRadius 10
-        // so they read as the same shape family as the secondary-row
-        // tiles (Undo / Space / Return / Backspace are also 10pt
-        // radius). The previous cornerRadius 14 looked pill-shaped on
-        // such a short element — 14 reads as "rounded rectangle" on
-        // the 56pt-tall Dictate / Assist tiles, but on a 24pt-tall
-        // chip the corners are nearly half the height and the whole
-        // thing collapses to a capsule.
-        let chipHeight: CGFloat = 36
-        let chipCornerRadius: CGFloat = 10
-        HStack(spacing: 8) {
-            Button(action: onPaste) {
-                HStack(spacing: 6) {
-                    Image(systemName: "doc.on.clipboard.fill")
-                        .font(.caption.weight(.semibold))
-                    Text(canPaste ? "Paste" : "Nothing to paste")
-                        .font(.footnote.weight(.semibold))
-                }
-                .foregroundStyle(canPaste ? Color.accentColor : .secondary)
-                .padding(.horizontal, 12)
-                .frame(height: chipHeight)
-                .glassEffect(.regular, in: .rect(cornerRadius: chipCornerRadius))
-            }
-            .buttonStyle(.plain)
-            .disabled(!canPaste)
-
-            // Always render the preview pill so the row has a stable
-            // shape — an empty trailing Spacer made the right half of
-            // the keyboard look broken when the user hadn't copied
-            // anything yet, or after another app had overwritten the
-            // clipboard. Three states for the copy: the preview
-            // itself if we have it; an honest "from another app"
-            // when there's something pasteable but no snippet (we
-            // can't peek into the clipboard string without triggering
-            // iOS's "Pasted from X" toast, so we only get a snippet
-            // when Dictator was the one who wrote); and "nothing on
-            // the clipboard" when there's nothing to paste at all.
-            previewPill(height: chipHeight, cornerRadius: chipCornerRadius)
-        }
-    }
-
-    @ViewBuilder
-    private func previewPill(height: CGFloat, cornerRadius: CGFloat) -> some View {
-        // Three flavours of pill content, kept terse and parallel so
-        // the row reads cleanly at a glance. We deliberately don't say
-        // "from another app" for the no-snippet case — it framed the
-        // message from Dictator's perspective ("not us") and confused
-        // users who'd just copied something in the host app; the
-        // shorter "Ready" sidesteps the framing entirely. "Empty" is
-        // similarly the shortest honest answer when there's nothing to
-        // paste at all.
-        HStack(spacing: 6) {
-            if let preview = pastePreview {
-                Text(previewSnippet(preview))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text("· \(wordCount(preview)) words")
-                    .foregroundStyle(.tertiary)
-            } else if canPaste {
-                Image(systemName: "doc.on.clipboard")
-                    .font(.caption2)
-                Text("Ready")
-                    .lineLimit(1)
-            } else {
-                Image(systemName: "tray")
-                    .font(.caption2)
-                Text("Empty")
-                    .lineLimit(1)
-            }
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: height)
-        .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-    }
-
-    /// Single-line snippet for the preview pill — collapses
-    /// whitespace and trims so a multi-paragraph transcript still
-    /// reads cleanly at one line width.
-    private func previewSnippet(_ text: String) -> String {
-        text
+    private var pasteLabel: String {
+        guard let pastePreview else { return "Paste" }
+        let snippet = pastePreview
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        return snippet.isEmpty ? "Paste" : snippet
     }
 
-    private func wordCount(_ text: String) -> Int {
-        text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    private var pasteAccessibilityLabel: String {
+        if let notice { return notice }
+        if let pastePreview { return "Paste: \(pastePreview)" }
+        return "Paste"
     }
 
-    // MARK: - Secondary row
+    /// Assist rewrites the highlighted text, or failing that what's freshly
+    /// on the clipboard. With nothing to act on it greys out but stays
+    /// tappable, and a tap shakes it — a true `.disabled()` button would
+    /// leave the user prodding a dead control.
+    private func assistKey(_ m: Metrics) -> some View {
+        Button {
+            if canAssist {
+                onAssistPress()
+            } else {
+                assistShakes += 1
+            }
+        } label: {
+            AssistGlyph()
+                .fill(Color.dictatorAssist.opacity(canAssist ? 1 : 0.3))
+                .frame(width: m.key * 0.43, height: m.key * 0.43)
+                .frame(width: m.key, height: m.key)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .keyframeAnimator(initialValue: CGFloat(0), trigger: assistShakes) { content, x in
+            content.offset(x: x)
+        } keyframes: { _ in
+            KeyframeTrack {
+                LinearKeyframe(-5, duration: 0.05)
+                LinearKeyframe(5, duration: 0.08)
+                LinearKeyframe(-3, duration: 0.07)
+                LinearKeyframe(0, duration: 0.06)
+            }
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .glassEffectID("assist", in: glass)
+        .accessibilityLabel("Assist")
+        .accessibilityHint(canAssist ? "" : "Highlight or copy some text first")
+    }
 
-    @ViewBuilder
-    private var secondaryRow: some View {
-        // No internal horizontal padding — the parent VStack already
-        // applies 16pt, and stacking a second pass made this row sit
-        // visibly more inset than the paste / idle / in-flight rows
-        // above it.
-        HStack(spacing: 10) {
-            secondaryButton(
-                icon: "arrow.uturn.backward",
-                label: "Undo",
-                action: onUndo,
-                enabled: canUndo
-            )
-            spaceBarButton
-            secondaryButton(
-                icon: "return",
-                label: "Return",
-                action: onReturn,
-                enabled: true
-            )
-            backspaceButton
+    private func cancelKey(_ m: Metrics) -> some View {
+        Button(action: onCancel) {
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.primary)
+                .frame(width: m.key, height: m.key)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .glassEffectID("cancel", in: glass)
+        .accessibilityLabel(phase == .working ? "Cancel processing" : "Cancel recording")
+    }
+
+    /// The mic, stretched into the pill while recording or working. One
+    /// glass piece throughout, so it morphs rather than swaps.
+    private func micOrPill(_ m: Metrics, idleWidth: CGFloat) -> some View {
+        Button(action: primaryAction) {
+            HStack(spacing: 10) {
+                switch phase {
+                case .idle:
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: m.key * 0.41, weight: .semibold))
+                        .transition(.opacity)
+                case .recording:
+                    if isAssist {
+                        AssistGlyph()
+                            .frame(width: 18, height: 18)
+                            .transition(.opacity)
+                    }
+                    LevelHistory(levels: levels, height: m.key * 0.5)
+                        .frame(maxWidth: .infinity)
+                        .transition(listeningTransition)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 18, weight: .bold))
+                        .transition(.opacity)
+                case .working:
+                    ProgressView()
+                        .tint(.white)
+                        .transition(.opacity)
+                    Text(isAssist ? "Applying" : "Transcribing")
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, phase == .idle ? 0 : 16)
+            .frame(width: phase == .idle ? idleWidth : nil)
+            .frame(maxWidth: phase == .idle ? nil : .infinity)
+            .frame(height: m.key)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(primaryTint).interactive(), in: .capsule)
+        .glassEffectID("primary", in: glass)
+        // The warm-mic dot: the mic is open in the background and Dictate
+        // records in place. Orange, like the system's own mic indicator.
+        .overlay(alignment: .topTrailing) {
+            if phase == .idle && micWarm {
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 9, height: 9)
+                    .overlay(Circle().stroke(Color(.secondarySystemBackground), lineWidth: 2))
+                    .offset(x: 2, y: -2)
+                    .transition(.scale.combined(with: .opacity))
+                    .accessibilityHidden(true)
+            }
+        }
+        .contextMenu {
+            if phase == .idle && micWarm {
+                Button("Turn Off Mic", systemImage: "mic.slash", action: onEndSession)
+            }
+        }
+        .accessibilityLabel(primaryLabel)
+        .accessibilityActions {
+            if phase == .idle && micWarm {
+                Button("Turn off mic", action: onEndSession)
+            }
         }
     }
 
-    /// Wide space-bar tile that fills the gap between Undo and
-    /// Return. Width-flex via `maxWidth: .infinity` so the fixed
-    /// 60 pt tiles on either side stay put and the spacebar
-    /// absorbs the remaining row.
-    private var spaceBarButton: some View {
+    private var primaryTint: Color {
+        switch phase {
+        case .idle: .dictatorSpeak
+        case .recording: tint
+        case .working: tint.opacity(0.6)
+        }
+    }
+
+    private var primaryLabel: String {
+        switch phase {
+        case .idle:
+            if micWarm, let expiresAt = session?.expiresAt {
+                return "Dictate. Mic ready until \(expiresAt.formatted(date: .omitted, time: .shortened))"
+            }
+            return micWarm ? "Dictate. Mic ready" : "Dictate"
+        case .recording: return isAssist ? "Send and apply" : "Send"
+        case .working: return isAssist ? "Applying" : "Transcribing"
+        }
+    }
+
+    private func primaryAction() {
+        switch phase {
+        case .idle: onMicPress()
+        case .recording: onStop()
+        case .working: break
+        }
+    }
+
+    // MARK: - Bottom row pieces
+
+    private func spaceKey(_ m: Metrics) -> some View {
         Button(action: onSpace) {
             Text("space")
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .glassEffect(.regular, in: .rect(cornerRadius: 10))
+                .frame(height: m.key)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
         .accessibilityLabel("Space")
     }
 
-    // MARK: - Backspace (tap = one char, hold = repeat)
+    private func returnKey(_ m: Metrics) -> some View {
+        Button(action: onReturn) {
+            Text("return")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: m.returnWidth, height: m.key)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(.accentColor).interactive(), in: .rect(cornerRadius: 10))
+        .accessibilityLabel("Return")
+    }
 
-    /// Press-and-hold backspace. Same visual shape as the other
-    /// secondary tiles but driven by a long-press gesture so the
-    /// controller can repeat-delete while the user holds. Tap-only
-    /// users get a single delete on press-then-quick-release because
-    /// the controller fires `deleteBackward()` immediately on press.
+    /// Press-and-hold backspace: driven by a zero-duration long press so
+    /// the controller can repeat-delete while the user holds. A tap still
+    /// deletes one character, because the controller deletes on press.
     @State private var backspacePressed = false
 
-    private var backspaceButton: some View {
+    private func backspaceKey(_ m: Metrics) -> some View {
         Image(systemName: "delete.left")
-            .font(.system(size: 20, weight: .medium))
+            .font(.system(size: 18, weight: .medium))
             .foregroundStyle(.primary)
-            .frame(width: 60, height: 44)
+            .frame(width: m.deleteWidth, height: m.key)
             .glassEffect(.regular, in: .rect(cornerRadius: 10))
-            .scaleEffect(backspacePressed ? 0.95 : 1)
+            .scaleEffect(backspacePressed ? 0.94 : 1)
             .animation(.spring(response: 0.15, dampingFraction: 0.7), value: backspacePressed)
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity) {
-                // Tap-completion handler; press / release fire via
-                // onPressingChanged so the repeat timer can engage.
+                // Tap completion is a no-op; the press edge already deleted.
             } onPressingChanged: { pressing in
                 if pressing, !backspacePressed {
                     backspacePressed = true
@@ -483,62 +482,52 @@ struct KeyboardRootView: View {
                     onBackspaceRelease()
                 }
             }
+            .accessibilityElement()
             .accessibilityLabel("Backspace")
-    }
-
-    // MARK: - Building blocks
-
-    private func primaryButton(
-        tint: Color,
-        icon: String,
-        label: String,
-        action: @escaping () -> Void,
-        enabled: Bool
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
-                Text(label)
-                    .font(.callout.weight(.semibold))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                onBackspacePress()
+                onBackspaceRelease()
             }
-            // Glass face with a tinted label/icon (matches the app's record
-            // buttons). `.opacity` can't fade glass, so the tint carries the
-            // disabled state.
-            .foregroundStyle(tint.opacity(enabled ? 1 : 0.4))
-            .frame(maxWidth: .infinity)
-            .frame(height: 56)
-            .glassEffect(.regular, in: .rect(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
     }
 
-    /// Icon-only tile. The previous label-and-text layout was
-    /// wrapping "Backspace" mid-word on narrower iPhones; this
-    /// version drops the text (still readable from the icon) and
-    /// bumps the vertical size to a comfortable tap target. The
-    /// `label` parameter is retained for VoiceOver via
-    /// `accessibilityLabel` so screen-reader users get the same
-    /// affordance.
-    private func secondaryButton(
-        icon: String,
+    /// A square glass key with a symbol. Disabled keys fade their symbol,
+    /// not the glass (`.opacity` doesn't affect a glassEffect).
+    private func iconKey(
+        _ symbol: String,
         label: String,
-        action: @escaping () -> Void,
-        enabled: Bool
+        width: CGFloat,
+        height: CGFloat,
+        enabled: Bool = true,
+        action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .medium))
-                // Fade the icon (not the glass — `.opacity` doesn't affect a
-                // glassEffect) to signal the disabled state.
-                .foregroundStyle(.primary.opacity(enabled ? 1 : 0.35))
-                .frame(width: 60, height: 44)
-                .glassEffect(.regular, in: .rect(cornerRadius: 10))
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.primary.opacity(enabled ? 1 : 0.3))
+                .frame(width: width, height: height)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
         .accessibilityLabel(label)
+    }
+
+    // MARK: - Motion
+
+    /// The same soft spring as the Dictate screen's morph; with Reduce
+    /// Motion the pieces simply cross-fade.
+    private var motion: Animation {
+        reduceMotion ? .easeInOut(duration: 0.18) : .bouncy(duration: 0.45, extraBounce: 0.06)
+    }
+
+    private var pieceTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.3, anchor: .trailing).combined(with: .opacity)
+    }
+
+    private var listeningTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.4, anchor: .trailing).combined(with: .opacity)
     }
 }
 
@@ -547,20 +536,27 @@ struct KeyboardRootView: View {
 /// sight. Plain shapes driven by the controller's history rather than the
 /// app's `Waveform`, whose canvas drew nothing inside the keyboard. Boosted
 /// like `Waveform`: flat bars while someone is talking read worse than the
-/// odd loud syllable touching the top.
+/// odd loud syllable touching the top. Bars are dropped from the left to fit
+/// the width it's given.
 private struct LevelHistory: View {
     let levels: [Float]
-    static let count = 28
+    var height: CGFloat = 22
+    static let maxCount = 64
 
     var body: some View {
-        let padded = Array(repeating: Float(0), count: max(0, Self.count - levels.count)) + levels.suffix(Self.count)
-        HStack(spacing: 3) {
-            ForEach(0..<Self.count, id: \.self) { index in
-                Capsule()
-                    .frame(width: 3, height: max(3, 26 * min(1, CGFloat(padded[index]) * 1.7)))
+        GeometryReader { proxy in
+            let count = max(4, min(Self.maxCount, Int((proxy.size.width + 2.5) / 5.5)))
+            let recent = Array(levels.suffix(count))
+            let padded = Array(repeating: Float(0), count: max(0, count - recent.count)) + recent
+            HStack(spacing: 2.5) {
+                ForEach(0..<count, id: \.self) { index in
+                    Capsule()
+                        .frame(width: 3, height: max(3, height * min(1, CGFloat(padded[index]) * 1.7)))
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .trailing)
         }
-        .frame(height: 26)
+        .frame(height: height)
         .animation(.easeOut(duration: 0.08), value: levels)
     }
 }

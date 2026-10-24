@@ -531,6 +531,9 @@ targets:
     sources:
       - path: Sources/DictatorIOS
       - path: Sources/DictatorCore
+      # The keyboard's real layout, so the screenshot showcase
+      # (KeyboardShowcase) renders the keyboard itself, not a copy of it.
+      - path: Sources/DictatorKeyboard/KeyboardRootView.swift
       # Same Icon Composer bundle as the Mac app.
       - path: Icons/AppIcon.icon
         type: file
@@ -680,8 +683,8 @@ targets:
     dependencies:
       - target: DictatorIOS
 
-  # Custom keyboard extension. Renders two large hold-to-talk buttons
-  # (mic + assist) that launch the host app via custom URL scheme;
+  # Custom keyboard extension. Two compact rows (Undo, Paste, Assist, mic;
+  # space, return, delete) whose mic and Assist launch the host app via custom URL scheme;
   # the host records / transforms and stages the result in the App
   # Group container for the keyboard to insert when the user returns
   # to the original text field. Keyboards CAN'T access the mic
@@ -699,6 +702,10 @@ targets:
       # The Assist mark, drawn as a Shape so both targets share it (the
       # keyboard has no asset catalog).
       - path: Sources/DictatorIOS/AssistGlyph.swift
+      # The record colours and the Duo fold reader, shared with the app so
+      # the keyboard's pill and band match the Dictate screen.
+      - path: Sources/DictatorIOS/DictatorColors.swift
+      - path: Sources/DictatorIOS/FoldGeometry.swift
       # Spacing and capitals around an inserted dictation, shared with
       # the Mac's paste path.
       - path: Sources/DictatorCore/Pipeline/InsertionJoiner.swift

@@ -27,6 +27,7 @@ struct JournalView: View {
     @State private var choosingPhotos = false
     @State private var libraryItems: [PhotosPickerItem] = []
     @State private var viewingPhoto: URL?
+    @State private var micBlocker: MicBlocker?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -369,11 +370,6 @@ struct JournalView: View {
             Text(model.isShowingToday ? "Nothing yet today." : "Nothing on this day.")
                 .font(.body)
                 .foregroundStyle(.secondary)
-            if model.days.isEmpty {
-                Text("Hold the mic to say what's on your mind, or write an entry. Each day gets its own Markdown file, the same one your Mac's journal uses.")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-            }
         }
     }
 
@@ -465,11 +461,12 @@ struct JournalView: View {
         }
     }
 
-    /// Only Undo lives down here now; the mic is the tab bar's accessory
-    /// (`JournalMicAccessory`) and everything else is in the top bar.
+    /// The bottom of the page: the same `MorphRecordButton` as the Dictate
+    /// and Scratchpad tabs, with the camera beside the mic where Dictate has
+    /// Copy, and Undo above it when there's something to undo. A safe-area
+    /// bar over the page's ScrollView (no text view under the glass).
     private var bottomBar: some View {
-        HStack {
-            Spacer(minLength: 0)
+        VStack(alignment: .trailing, spacing: 10) {
             if let pending = model.pendingUndo, !journalBusy {
                 Button {
                     Task {
@@ -487,11 +484,46 @@ struct JournalView: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
                 .transition(.opacity)
             }
+            MorphRecordButton(
+                viewModel: viewModel,
+                micIcon: "microphone.fill",
+                route: micRoute,
+                extras: [cameraExtra]
+            )
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: model.pendingUndo != nil)
         .padding(.horizontal, 20)
-        .padding(.bottom, 6)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
         .readableWidth()
+        .micBlockerAlert($micBlocker, viewModel: viewModel)
+    }
+
+    /// An entry always goes to today; the page turns to it as it starts.
+    private var micRoute: MorphRecordButton.Route {
+        let blocker = $micBlocker
+        return MorphRecordButton.Route(
+            owns: { $0 == .journal },
+            start: { viewModel in
+                JournalModel.shared.select(key: JournalModel.shared.todayKey)
+                viewModel.startJournalRecording()
+            },
+            send: { await $0.stopJournalRecording() },
+            isBlocked: { MicBlocker.current($0) != nil },
+            onBlocked: { handleBlockedMic($0, showing: blocker) },
+            idleLabel: { _ in "Dictate a journal entry" }
+        )
+    }
+
+    private var cameraExtra: MorphRecordButton.Extra {
+        MorphRecordButton.Extra(
+            id: "camera",
+            systemImage: "camera",
+            label: JournalCamera.isAvailable ? "Take a photo" : "Add a photo"
+        ) {
+            model.select(key: model.todayKey)
+            model.requestPhoto()
+        }
     }
 
     private func add(_ text: String, photos: [JournalModel.PendingPhoto]) {

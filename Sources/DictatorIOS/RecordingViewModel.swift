@@ -326,9 +326,10 @@ final class RecordingViewModel {
     private var isMorphPreview = false
 
     /// `-DictatorMorphPreview empty|text|recording|assist|working` (launch
-    /// arguments land in UserDefaults) fakes a Dictate-screen state so the
-    /// morph button can be seen in a simulator with no model installed. No
-    /// mic or model is touched.
+    /// arguments land in UserDefaults) fakes a recording state so the morph
+    /// button can be seen in a simulator with no model installed. No mic or
+    /// model is touched. With `-DictatorInitialTab scratchpad` or `journal`
+    /// the recording belongs to that tab instead of Dictate.
     private func applyMorphPreviewIfRequested() {
         guard let state = UserDefaults.standard.string(forKey: "DictatorMorphPreview") else { return }
         isMorphPreview = true
@@ -336,15 +337,22 @@ final class RecordingViewModel {
         modelDiskStatus = .downloaded
         let sample = "Can we move Thursday's review to Friday morning? I'd like one more day with the new builds before we show anyone."
         transcript = state == "empty" ? "" : sample
+        let tab = UserDefaults.standard.string(forKey: "DictatorInitialTab")
+        let speak: RecordingMode = switch tab {
+        case "scratchpad": .scratchpad
+        case "journal": .journal
+        default: .dictation
+        }
+        let assist: RecordingMode = tab == "scratchpad" ? .scratchpadAssist : .assist
         switch state {
         case "recording":
-            recordingMode = .dictation
+            recordingMode = speak
             status = .recording(level: 0.55)
         case "assist":
-            recordingMode = .assist
+            recordingMode = assist
             status = .recording(level: 0.55)
         case "working":
-            recordingMode = .dictation
+            recordingMode = speak
             status = .transcribing
         default:
             status = .idle

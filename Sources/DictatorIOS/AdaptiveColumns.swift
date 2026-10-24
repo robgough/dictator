@@ -125,7 +125,7 @@ struct AdaptiveColumns<Main: View, Companion: View>: View {
         GeometryReader { proxy in
             let plan = ColumnPlan.make(
                 width: proxy.size.width,
-                fold: Self.verticalFold(in: proxy),
+                fold: FoldGeometry.verticalFold(in: proxy),
                 wantsCompanion: wantsCompanion,
                 companionRange: companionRange
             )
@@ -159,27 +159,6 @@ struct AdaptiveColumns<Main: View, Companion: View>: View {
                 onCompanionChange(shown)
             }
         }
-    }
-
-    /// The horizontal span of an active vertical fold, if the device is
-    /// partly folded. `.division` regions are only active then (flat, the
-    /// list is empty); `.occlusion` is the camera and is the safe area's job.
-    private static func verticalFold(in proxy: GeometryProxy) -> ClosedRange<CGFloat>? {
-        if #available(iOS 27.1, *) {
-            let bounds = CGRect(origin: .zero, size: proxy.size)
-            for region in proxy.reservedRegions(kind: .division) where region.isActive {
-                let frame = region.frame.intersection(bounds)
-                guard !frame.isNull, frame.height > frame.width else { continue }
-                return frame.minX...frame.maxX
-            }
-            // TODO(fold): a horizontal fold (the device turned so the crease
-            // runs across the screen) isn't stepped around yet: the columns
-            // run top to bottom across it. ArrangementView with
-            // `.arrangementViewStyle(.split.axes(.vertical))` looks like the
-            // route, but it can't be exercised partly folded in the
-            // simulator, so it's left until it can be checked on a device.
-        }
-        return nil
     }
 }
 

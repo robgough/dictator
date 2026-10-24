@@ -17,10 +17,9 @@ final class KeyboardViewController: UIInputViewController {
     /// no host handoff), so the typing fallback is what keeps the extension
     /// useful — and satisfies App Review guideline 4.4.1.
     private var lastHadFullAccess: Bool?
-    /// Explicit height constraint, active only in typing mode — the QWERTY
-    /// layout is taller than iOS' default keyboard height, which would clip
-    /// the bottom row otherwise. The dictation pad fits the default height, so
-    /// we leave it unconstrained there.
+    /// Explicit height constraint: taller than iOS' default for the QWERTY
+    /// typing fallback (which would clip its bottom row otherwise), and much
+    /// shorter for the dictation pad's two compact rows.
     private var keyboardHeightConstraint: NSLayoutConstraint?
     /// The most recent text the keyboard has fed into the field via
     /// `insertText`. Undo button delete-backwards by this many
@@ -82,7 +81,7 @@ final class KeyboardViewController: UIInputViewController {
     /// Recent levels for the recording meter, oldest first.
     private var levelHistory: [Float] = []
     /// A message about the last request that didn't produce text, shown in
-    /// place of the buttons for a few seconds.
+    /// the Paste chip's place for a few seconds.
     private var notice: String?
     private var noticeHideTimer: Timer?
 
@@ -240,6 +239,9 @@ final class KeyboardViewController: UIInputViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         Self.current = self
+        // `needsInputModeSwitchKey` is only reliable once the keyboard is on
+        // screen; re-render so the globe key appears when it's required.
+        refreshRootView()
     }
 
     override func textDidChange(_ textInput: (any UITextInput)?) {
@@ -310,7 +312,7 @@ final class KeyboardViewController: UIInputViewController {
         if let nextSession, nextSession.phase == .recording {
             if sessionState?.phase != .recording { levelHistory = [] }
             levelHistory.append(nextSession.level)
-            if levelHistory.count > 40 { levelHistory.removeFirst(levelHistory.count - 40) }
+            if levelHistory.count > 64 { levelHistory.removeFirst(levelHistory.count - 64) }
             if nextSession == sessionState { refreshRootView() }
         }
         if nextSession != sessionState {
@@ -685,7 +687,9 @@ final class KeyboardViewController: UIInputViewController {
             canUndo: lastInsertedText != nil,
             canPaste: canPaste,
             pastePreview: pastePreview,
-            onPaste: { [weak self] in self?.pasteFromClipboard() }
+            onPaste: { [weak self] in self?.pasteFromClipboard() },
+            showsNextKeyboard: needsInputModeSwitchKey,
+            onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
         )
     }
 
@@ -700,16 +704,16 @@ final class KeyboardViewController: UIInputViewController {
         )
     }
 
-    /// In typing mode the QWERTY layout is taller than iOS' default keyboard
-    /// height; pin an explicit height so the bottom row isn't clipped. The
-    /// dictation pad fits the default height, so we leave it unconstrained.
+    /// Pin the keyboard's height: the QWERTY typing fallback is taller than
+    /// iOS' default keyboard height (its bottom row would be clipped), and the
+    /// dictation pad is two short rows, far shorter than the default.
     /// Priority just below required so we never fight the system's own
     /// input-view constraints.
     private func applyKeyboardHeight(typing: Bool) {
         keyboardHeightConstraint?.isActive = false
         keyboardHeightConstraint = nil
-        guard typing else { return }
-        let constraint = view.heightAnchor.constraint(equalToConstant: 250)
+        let height: CGFloat = typing ? 250 : KeyboardRootView.height
+        let constraint = view.heightAnchor.constraint(equalToConstant: height)
         constraint.priority = UILayoutPriority(999)
         constraint.isActive = true
         keyboardHeightConstraint = constraint

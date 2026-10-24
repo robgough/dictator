@@ -1,24 +1,41 @@
 import SwiftUI
 
-/// Standalone keyboard mockup used only for App Store screenshots.
+/// Keyboard mockup used only for App Store screenshots.
 ///
 /// The real Dictator keyboard is an app-extension binary that only
 /// shows up inside other apps after the user enables it in Settings →
 /// Keyboards. We can't drive that automatically in the iOS Simulator
 /// without a long setup dance (provision the extension, switch into
-/// Notes, switch keyboards). For the App Store screenshot, the next
-/// best thing is a faithful pixel-accurate mockup of how the keyboard
-/// looks in-context — a faux compose surface up top, the keyboard
-/// down below.
+/// Notes, switch keyboards). So this puts a faux compose surface up top
+/// and the keyboard's real layout, `KeyboardRootView` (compiled into the
+/// app for this, see project.yml), at its real height below — the
+/// screenshot can't drift from the keyboard because it is the keyboard.
 ///
-/// Mirrors `KeyboardRootView`'s Liquid Glass styling: every tile is a
-/// `.glassEffect` rounded rect with a tinted glyph, not a solid colour
-/// fill. Keep the two in sync — when the real keyboard's look changes,
-/// this mockup has to follow or the screenshot drifts out of date.
-///
-/// Gated behind the `DICTATOR_SCREENSHOT_STATE=keyboard` env var so
-/// only the UI test ever surfaces it.
+/// Gated behind `DICTATOR_SCREENSHOT_STATE` (or the matching
+/// `-DictatorScreenshotState_…` launch argument) so only the screenshot
+/// harness ever surfaces it:
+/// - `keyboard`: idle, with a Dictator transcript on the clipboard.
+/// - `keyboard-recording`: a dictation in progress (the red pill).
+/// - `keyboard-assist`: an Assist instruction in progress (the violet pill).
 struct KeyboardShowcase: View {
+    enum State: String, CaseIterable {
+        case idle = "keyboard"
+        case recording = "keyboard-recording"
+        case assist = "keyboard-assist"
+    }
+
+    /// The showcase state the harness asked for, or nil to run the app.
+    static var requested: State? {
+        if let value = ProcessInfo.processInfo.environment["DICTATOR_SCREENSHOT_STATE"],
+           let state = State(rawValue: value) {
+            return state
+        }
+        let arguments = CommandLine.arguments
+        return State.allCases.first { arguments.contains("-DictatorScreenshotState_\($0.rawValue)") }
+    }
+
+    var state: State = .idle
+
     var body: some View {
         VStack(spacing: 0) {
             // Faux "Notes" compose area to convey context — the
@@ -39,114 +56,56 @@ struct KeyboardShowcase: View {
             .padding(.horizontal, 20)
             .padding(.top, 24)
             Spacer()
-            keyboardMockup
+            keyboard
+                .frame(height: KeyboardRootView.height)
+                .background(Color(.secondarySystemBackground).ignoresSafeArea(edges: .bottom))
         }
         .background(Color(.systemBackground).ignoresSafeArea())
     }
 
-    private var keyboardMockup: some View {
-        VStack(spacing: 12) {
-            // Always-on Paste pill — Paste button on the left, preview
-            // of what's on the clipboard on the right (Dictator puts a
-            // snapshot in the App Group whenever it auto-copies, so
-            // the keyboard can preview without ever reading the
-            // pasteboard string itself).
-            pasteRow
-
-            // Primary action tiles — glass faces with tinted glyphs,
-            // matching `KeyboardRootView.primaryButton` (24pt gap, as in
-            // its idle row).
-            HStack(spacing: 24) {
-                primary(tint: .red, icon: "mic.fill", label: "Dictate")
-                primary(tint: .purple, icon: AssistGlyph.name, label: "Assist")
-            }
-
-            // Secondary row — no extra horizontal padding here so it
-            // aligns with the buttons above.
-            HStack(spacing: 10) {
-                secondary(icon: "arrow.uturn.backward", label: "Undo")
-                Text("space")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 10))
-                secondary(icon: "return", label: "Return")
-                secondary(icon: "delete.left", label: "Backspace")
-            }
-
-            // "Globe" hint mimicking the system keyboard-switcher row.
-            HStack {
-                Image(systemName: "globe")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.top, 2)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground))
+    private var keyboard: some View {
+        KeyboardRootView(
+            onMicPress: {},
+            onAssistPress: {},
+            session: session,
+            levels: Self.levels,
+            notice: nil,
+            onStop: {},
+            onCancel: {},
+            onEndSession: {},
+            onUndo: {},
+            onSpace: {},
+            onReturn: {},
+            assistSupported: true,
+            canAssist: true,
+            onBackspacePress: {},
+            onBackspaceRelease: {},
+            canUndo: false,
+            canPaste: true,
+            pastePreview: "Pick up flowers on the way home, will swing by the place on Elm.",
+            onPaste: {}
+        )
     }
 
-    /// Paste button + preview pill, matching `KeyboardRootView.pasteChip`.
-    /// Both render as glass at cornerRadius 10 + fixed 36pt height so they
-    /// share the shape family of the secondary-row tiles below. The Paste
-    /// glyph carries the accent tint (its enabled state) rather than a
-    /// solid accent fill.
-    private var pasteRow: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "doc.on.clipboard.fill")
-                    .font(.caption.weight(.semibold))
-                Text("Paste")
-                    .font(.footnote.weight(.semibold))
-            }
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 12)
-            .frame(height: 36)
-            .glassEffect(.regular, in: .rect(cornerRadius: 10))
-
-            HStack(spacing: 6) {
-                Text("Pick up flowers on the way home, will swing by the place on Elm.")
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text("· 14 words")
-                    .foregroundStyle(.tertiary)
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 36)
-            .glassEffect(.regular, in: .rect(cornerRadius: 10))
+    private var session: KeyboardBridge.SessionState? {
+        switch state {
+        case .idle:
+            return nil
+        case .recording, .assist:
+            return KeyboardBridge.SessionState(
+                phase: .recording,
+                mode: state == .assist ? .assist : .record,
+                serving: nil,
+                level: 0.5,
+                expiresAt: nil,
+                updatedAt: Date()
+            )
         }
     }
 
-    /// Compact tile matching `KeyboardRootView.primaryButton`: a glass
-    /// face with a tinted icon + label, 56pt tall — not a solid colour
-    /// fill with a white glyph.
-    private func primary(tint: Color, icon: String, label: String) -> some View {
-        HStack(spacing: 8) {
-            RecordGlyph(name: icon, size: 18)
-            Text(label)
-                .font(.callout.weight(.semibold))
-        }
-        .foregroundStyle(tint)
-        .frame(maxWidth: .infinity)
-        .frame(height: 56)
-        .glassEffect(.regular, in: .rect(cornerRadius: 14))
-    }
-
-    /// Icon-only glass tile matching `KeyboardRootView.secondaryButton`
-    /// and `backspaceButton` — 60×44, cornerRadius 10.
-    private func secondary(icon: String, label: String) -> some View {
-        Image(systemName: icon)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(.primary)
-            .frame(width: 60, height: 44)
-            .glassEffect(.regular, in: .rect(cornerRadius: 10))
-            .accessibilityLabel(label)
+    /// A plausible stretch of speech for the meter.
+    private static let levels: [Float] = (0..<64).map { i in
+        let x = Double(i)
+        return Float(0.18 + 0.32 * abs(sin(x * 0.7)) * (0.6 + 0.4 * abs(cos(x * 0.23))))
     }
 }

@@ -53,21 +53,11 @@ struct ContentView: View {
         // the real Dictator keyboard is an app extension that only
         // shows in a host app after Settings setup, which we can't
         // drive automatically in the simulator.
-        if ProcessInfo.processInfo.environment["DICTATOR_SCREENSHOT_STATE"] == "keyboard"
-            || CommandLine.arguments.contains("-DictatorScreenshotState_keyboard") {
-            return AnyView(KeyboardShowcase())
+        if let showcase = KeyboardShowcase.requested {
+            return AnyView(KeyboardShowcase(state: showcase))
         }
-        // The bottom accessory is only applied on tabs that use it — an
-        // always-applied `tabViewBottomAccessory` renders its glass bar on
-        // every tab even when its content is empty (the stray empty row).
-        if selectedTab == .scratchpad {
-            return AnyView(tabs.tabViewBottomAccessory { ScratchpadControlsAccessory(viewModel: viewModel) })
-        }
-        // The Journal's mic lives in the accessory so it tucks in beside the
-        // tab icon when the bar shrinks, rather than floating over the page.
-        if selectedTab == .journal {
-            return AnyView(tabs.tabViewBottomAccessory { JournalMicAccessory(viewModel: viewModel) })
-        }
+        // No tab bar accessory: each tab's record control sits at the
+        // bottom of its own content, the same place on all three tabs.
         return AnyView(tabs)
     }
 
@@ -101,10 +91,8 @@ struct ContentView: View {
         // A tab bar on a phone-width screen, a sidebar on a wide one —
         // which is what the iPhone Duo's inner display is (regular width).
         .tabViewStyle(.sidebarAdaptable)
-        // Liquid Glass tab bar recedes while scrolling a list or
-        // editing the Scratchpad note. The Scratchpad quick-keys accessory is
-        // attached in `body` (only on that tab) so it doesn't leave an empty
-        // glass bar on the others.
+        // Liquid Glass tab bar recedes while scrolling a list or the
+        // Journal page.
         .tabBarMinimizeBehavior(.onScrollDown)
         .overlay(alignment: .top) {
             if viewModel.isKeyboardHandoff {
@@ -239,7 +227,7 @@ struct DictationTabView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
-            .padding(.bottom, 32)
+            .padding(.bottom, 12)
             .readableWidth(640)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
@@ -253,6 +241,14 @@ struct DictationTabView: View {
                         }
                         .accessibilityLabel("History")
                     }
+                }
+                // The model's state as a dot, beside Settings: icon-only, so
+                // it also fits the closed Duo's side strip.
+                if showsModelStatus {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        modelStatusButton
+                    }
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     SettingsToolbarButton(action: onOpenSettings)
@@ -278,49 +274,37 @@ struct DictationTabView: View {
         }
     }
 
-    /// Persistent model-status pill at the top of the granted-content
-    /// view. Visible whenever the model files are on disk — even when
-    /// the model isn't loaded into memory. Three visual states:
-    ///   - Loading (prewarm in flight) → spinner + "Loading model…"
-    ///   - Loaded                     → green dot + "Model loaded"
-    ///   - Ready (on disk, not loaded) → grey dot + "Model ready"
-    /// Tapping opens the model sheet (status + unload action).
-    private var modelStatusChip: some View {
+    /// The model status lives in the top bar once the model is on disk.
+    private var showsModelStatus: Bool {
+        viewModel.permission == .granted && viewModel.modelDiskStatus == .downloaded
+    }
+
+    /// Model status as a toolbar dot that opens the model sheet (status,
+    /// unload). Green when loaded; orange when on disk but not loaded,
+    /// because the first press still has to warm it up; a spinner while it
+    /// loads. The same three colours as the keyboard.
+    private var modelStatusButton: some View {
         Button {
             showingModelSheet = true
         } label: {
-            HStack(spacing: 6) {
+            Group {
                 if viewModel.isModelLoading {
-                    ProgressView().scaleEffect(0.6)
-                    Text("Loading model…")
-                } else if viewModel.isModelLoaded {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 7, height: 7)
-                    Text("Model loaded")
+                    ProgressView()
+                        .controlSize(.small)
                 } else {
-                    // Orange "unloaded" rather than green "ready" —
-                    // the model is on disk but a first press has to
-                    // warm it up, so calling it "ready" mis-sells the
-                    // user on instant response. Three distinct
-                    // colours map to three distinct states across the
-                    // app and the keyboard.
                     Circle()
-                        .fill(.orange)
-                        .frame(width: 7, height: 7)
-                    Text("Model unloaded")
+                        .fill(viewModel.isModelLoaded ? Color.green : Color.orange)
+                        .frame(width: 10, height: 10)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .glassEffect(.regular, in: .capsule)
+            .frame(width: 24, height: 24)
         }
-        .buttonStyle(.plain)
+        .accessibilityLabel(modelStatusLabel)
+    }
+
+    private var modelStatusLabel: String {
+        if viewModel.isModelLoading { return "Loading model" }
+        return viewModel.isModelLoaded ? "Model loaded" : "Model unloaded"
     }
 
     /// First-launch / post-removal call-to-action. Replaces the entire
@@ -629,21 +613,11 @@ struct DictationTabView: View {
         }
     }
 
-    /// The "model is on disk, you can record" layout. Status chip
-    /// pinned at the top, then transcript card, then the (focus-aware)
-    /// controls.
+    /// The "model is on disk, you can record" layout: the transcript
+    /// card, then the (focus-aware) controls. Model status is in the top
+    /// bar.
     private var recordingArea: some View {
         VStack(spacing: 16) {
-            // Model chip hidden in keyboard-edit mode — the user is
-            // focused on typing and it isn't actionable there.
-            // Recording and transcribing show in the morph pill below.
-            if !transcriptKeyboardEnabled {
-                HStack {
-                    modelStatusChip
-                    Spacer()
-                }
-            }
-
             if !keyboardOnboardingDismissed && !transcriptKeyboardEnabled {
                 keyboardOnboardingCard
             }
@@ -913,7 +887,7 @@ private struct TranscriptCard: View {
         switch status {
         case .transcribing: "Working on it…"
         case .error(let message): message
-        default: "Hold the mic button and start talking. Release to transcribe."
+        default: ""
         }
     }
 

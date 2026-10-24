@@ -17,9 +17,11 @@ listing — keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The Dictator keyboard is now two short rows that leave far more of the screen to your app: Undo, Paste, Assist and the mic on top, space, return and delete below. While you talk the mic becomes the same red or violet pill as the app, a small dot shows when the mic is ready, and on iPad or the open iPhone Duo it sits as a centred band.
 - Dictator now runs on iPad, including split view, Slide Over and floating windows, and works in any orientation on iPhone and iPad. Dictate, Scratchpad and Journal are the three tabs, with History a button on Dictate and Settings a gear at the top of every tab.
 - On a wide screen, like iPad or the open iPhone Duo, History sits in a column beside Dictate and the Journal's calendar and search sit beside the day you're reading; a partly folded Duo keeps everything clear of the fold.
 - The Dictate screen has one record button: tap or hold the mic to talk, and while recording it becomes a pill you tap to send, with a cancel button beside it. With text on screen, Copy and Assist sit right next to the mic, and Assist has a new icon.
+- Scratchpad and Journal now use the same record button as Dictate, so the mic looks and works the same on every tab, and the model's status is a small dot at the top of Dictate, leaving more room for your text.
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions, plus a matching launch screen.
 - The keyboard now fits dictated text to what's already in the field: a space where it would run into the previous word, a lower-case start mid-sentence, and a full stop on the previous dictation when a new sentence follows it.
 - When the keyboard has to open Dictator to start a recording, Dictator now shows how to get back to the app you were in, where you can keep talking and tap Stop.

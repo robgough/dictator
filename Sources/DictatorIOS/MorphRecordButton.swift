@@ -1,14 +1,9 @@
 import SwiftUI
 import UIKit
 
-extension Color {
-    /// Speaking: the mic and a dictation in progress.
-    static let dictatorSpeak = Color(red: 0xE5 / 255, green: 0x38 / 255, blue: 0x3B / 255)
-    /// Assist: a spoken instruction in progress.
-    static let dictatorAssist = Color(red: 0x6A / 255, green: 0x4B / 255, blue: 0xE0 / 255)
-}
-
-/// The Dictate screen's one control, which changes with what you're doing.
+/// The record control on every tab, which changes with what you're doing.
+/// Shown here as on the Dictate screen; the Scratchpad and Journal pass a
+/// `Route` (where the words go) and their own pieces beside the mic.
 ///
 /// - Idle, empty transcript: one large mic.
 /// - Idle with text: Copy · Assist · Mic, under the thumb.
@@ -26,6 +21,16 @@ struct MorphRecordButton: View {
     /// The mic's resting symbol (plain, append or replace badge).
     let micIcon: String
     let onCopy: () -> Void
+    /// Which recordings this control owns and how it starts and sends
+    /// them. The Dictate screen's by default; the Scratchpad and Journal
+    /// pass their own, so all three tabs share one control.
+    var route: Route = .dictate
+    /// Extra glass circles beside the mic (the Journal's camera). Shown
+    /// at rest, tucked into the mic while recording, like Copy and Assist.
+    var extras: [Extra] = []
+    /// Fill the row and centre the cluster. Off when the caller lays
+    /// something beside it (the Scratchpad's keys).
+    var fillsWidth = true
 
     @Namespace private var glass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -49,9 +54,7 @@ struct MorphRecordButton: View {
 
     enum Phase: Equatable { case idle, recording, working }
 
-    private var isMine: Bool {
-        viewModel.recordingMode == .dictation || viewModel.recordingMode == .assist
-    }
+    private var isMine: Bool { route.owns(viewModel.recordingMode) }
     private var isTranscribingStatus: Bool {
         if case .transcribing = viewModel.status { return true }
         return false
@@ -66,14 +69,20 @@ struct MorphRecordButton: View {
     private var busyElsewhere: Bool {
         !isMine && (viewModel.status.isCapturing || isTranscribingStatus)
     }
-    private var isAssist: Bool { phase != .idle && viewModel.recordingMode == .assist }
-    private var tint: Color { isAssist ? .dictatorAssist : .dictatorSpeak }
-    private var hasText: Bool { !viewModel.transcript.isEmpty }
-    private var showsCluster: Bool { phase == .idle && hasText }
-    private var assistShown: Bool { showsCluster && AppleFoundationAssist.isAvailable }
-    private var assistEnabled: Bool {
-        !viewModel.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !busyElsewhere
+    private var isAssist: Bool {
+        phase != .idle && route.assistMode != nil && viewModel.recordingMode == route.assistMode
     }
+    private var tint: Color { isAssist ? .dictatorAssist : .dictatorSpeak }
+    private var hasText: Bool { route.hasText(viewModel) }
+    private var showsCluster: Bool { phase == .idle && hasText }
+    private var copyShown: Bool { showsCluster && route.showsCopy }
+    private var assistShown: Bool {
+        phase == .idle && route.startAssist != nil && AppleFoundationAssist.isAvailable
+            && (hasText || !route.assistNeedsText)
+    }
+    private var extrasShown: Bool { phase == .idle && !extras.isEmpty }
+    private var assistEnabled: Bool { route.canAssist(viewModel) && !busyElsewhere }
+    private var blocked: Bool { route.isBlocked(viewModel) }
     private var level: Float {
         if phase == .recording, case let .recording(l) = viewModel.status { return l }
         return 0
@@ -86,7 +95,13 @@ struct MorphRecordButton: View {
                     cancelButton
                         .transition(pieceTransition)
                 }
-                if showsCluster {
+                if extrasShown {
+                    ForEach(extras) { extra in
+                        extraButton(extra)
+                            .transition(pieceTransition)
+                    }
+                }
+                if copyShown {
                     copyButton
                         .transition(pieceTransition)
                 }
@@ -97,9 +112,10 @@ struct MorphRecordButton: View {
                 primary
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: fillsWidth ? .infinity : nil)
         .animation(motion, value: phase)
         .animation(motion, value: showsCluster)
+        .animation(motion, value: assistShown)
         .animation(motion, value: isAssist)
         .onChange(of: viewModel.recordingStartCount, initial: true) { _, _ in
             recordingStartedAt = Date()
@@ -140,9 +156,24 @@ struct MorphRecordButton: View {
         .accessibilityLabel("Copy")
     }
 
+    private func extraButton(_ extra: Extra) -> some View {
+        Button(action: extra.action) {
+            Image(systemName: extra.systemImage)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(extra.isEnabled && !busyElsewhere ? 1 : 0.3))
+                .frame(width: Self.secondarySize, height: Self.secondarySize)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .disabled(!extra.isEnabled || busyElsewhere)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .glassEffectID("extra-\(extra.id)", in: glass)
+        .accessibilityLabel(extra.label)
+    }
+
     private var assistButton: some View {
         Button {
-            viewModel.startAssistRecording()
+            route.startAssist?(viewModel)
         } label: {
             AssistGlyph()
                 .fill(Color.dictatorAssist.opacity(assistEnabled ? 1 : 0.3))
@@ -154,7 +185,7 @@ struct MorphRecordButton: View {
         .disabled(!assistEnabled)
         .glassEffect(.regular.interactive(), in: .circle)
         .glassEffectID("assist", in: glass)
-        .accessibilityLabel("Assist")
+        .accessibilityLabel(route.assistLabel)
     }
 
     /// The mic, stretched into the pill while recording or working. One view
@@ -166,7 +197,7 @@ struct MorphRecordButton: View {
                 Image(systemName: micIcon)
                     .font(.system(size: 26, weight: .semibold))
                     .contentTransition(.symbolEffect(.replace))
-                    .opacity(busyElsewhere ? 0.45 : 1)
+                    .opacity(busyElsewhere || blocked ? 0.45 : 1)
                     .transition(.opacity)
             case .recording:
                 Waveform(level: level, tint: .white, barCount: 14, height: 24)
@@ -221,7 +252,7 @@ struct MorphRecordButton: View {
 
     private var primaryLabel: String {
         switch phase {
-        case .idle: hasText ? "Dictate more" : "Dictate"
+        case .idle: route.idleLabel(viewModel)
         case .recording: "Send"
         case .working: workingLabel
         }
@@ -229,7 +260,7 @@ struct MorphRecordButton: View {
 
     private var workingLabel: String {
         if viewModel.isModelLoading { return "Waiting" }
-        return isAssist ? "Applying" : "Transcribing"
+        return isAssist ? route.assistWorkingLabel : "Transcribing"
     }
 
     private static func clock(_ seconds: TimeInterval) -> String {
@@ -263,9 +294,13 @@ struct MorphRecordButton: View {
                 return
             case .idle:
                 guard !busyElsewhere else { return }
+                if blocked {
+                    route.onBlocked(viewModel)
+                    return
+                }
                 isPressed = true
                 pressStartedAt = Date()
-                viewModel.startRecording()
+                route.start(viewModel)
                 pressStartedRecording = viewModel.status.isCapturing
                 pressRecording = viewModel.recordingStartCount
             case .recording:
@@ -294,7 +329,11 @@ struct MorphRecordButton: View {
         switch phase {
         case .idle:
             guard !busyElsewhere else { return }
-            viewModel.startRecording()
+            if blocked {
+                route.onBlocked(viewModel)
+                return
+            }
+            route.start(viewModel)
         case .recording:
             pressRecording = viewModel.recordingStartCount
             send()
@@ -305,11 +344,9 @@ struct MorphRecordButton: View {
 
     private func send() {
         guard phase == .recording, viewModel.recordingStartCount == pressRecording else { return }
-        if viewModel.recordingMode == .assist {
-            Task { await viewModel.stopAssistRecording() }
-        } else {
-            Task { await viewModel.stopRecording() }
-        }
+        let route = route
+        let viewModel = viewModel
+        Task { await route.send(viewModel) }
     }
 
     private func cancel() {
@@ -331,6 +368,82 @@ struct MorphRecordButton: View {
             try? await Task.sleep(for: .seconds(1.2))
             guard !Task.isCancelled else { return }
             copied = false
+        }
+    }
+}
+
+// MARK: - Routes
+
+extension MorphRecordButton {
+    /// For a tab with no Copy: the Scratchpad and the Journal.
+    init(
+        viewModel: RecordingViewModel,
+        micIcon: String,
+        route: Route,
+        extras: [Extra] = [],
+        fillsWidth: Bool = true
+    ) {
+        self.init(
+            viewModel: viewModel, micIcon: micIcon, onCopy: {},
+            route: route, extras: extras, fillsWidth: fillsWidth
+        )
+    }
+
+    /// A glass circle beside the mic that isn't Copy or Assist.
+    struct Extra: Identifiable {
+        let id: String
+        let systemImage: String
+        let label: String
+        var isEnabled = true
+        let action: () -> Void
+    }
+
+    /// Where one tab's recordings go. The look and the press rules (tap to
+    /// start and tap the pill to send, or hold past 0.35s and let go to
+    /// send) are the button's; only the destination changes per tab.
+    struct Route {
+        /// The recording modes this control lights up for.
+        var owns: (RecordingViewModel.RecordingMode) -> Bool
+        /// The mode an Assist recording runs in; it makes the pill violet.
+        var assistMode: RecordingViewModel.RecordingMode?
+        var start: @MainActor (RecordingViewModel) -> Void
+        /// Stops whichever of this tab's recordings is running and uses it.
+        var send: @MainActor (RecordingViewModel) async -> Void
+        /// Starts an Assist recording. Nil means no Assist piece.
+        var startAssist: (@MainActor (RecordingViewModel) -> Void)?
+        var assistLabel = "Assist"
+        var assistWorkingLabel = "Applying"
+        /// Assist (and Copy) only show once there's text to act on.
+        var assistNeedsText = true
+        var showsCopy = false
+        /// There's something to copy or act on.
+        var hasText: @MainActor (RecordingViewModel) -> Bool = { _ in false }
+        var canAssist: @MainActor (RecordingViewModel) -> Bool = { _ in false }
+        /// Can't record yet (no permission or model): a press calls
+        /// `onBlocked` instead, so it can explain why.
+        var isBlocked: @MainActor (RecordingViewModel) -> Bool = { _ in false }
+        var onBlocked: @MainActor (RecordingViewModel) -> Void = { _ in }
+        var idleLabel: @MainActor (RecordingViewModel) -> String = { _ in "Dictate" }
+
+        /// The Dictate screen: the transcript, Copy and Assist.
+        static var dictate: Route {
+            Route(
+                owns: { $0 == .dictation || $0 == .assist },
+                assistMode: .assist,
+                start: { $0.startRecording() },
+                send: { viewModel in
+                    if viewModel.recordingMode == .assist {
+                        await viewModel.stopAssistRecording()
+                    } else {
+                        await viewModel.stopRecording()
+                    }
+                },
+                startAssist: { $0.startAssistRecording() },
+                showsCopy: true,
+                hasText: { !$0.transcript.isEmpty },
+                canAssist: { !$0.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                idleLabel: { $0.transcript.isEmpty ? "Dictate" : "Dictate more" }
+            )
         }
     }
 }
