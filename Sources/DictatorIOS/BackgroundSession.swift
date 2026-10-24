@@ -74,10 +74,9 @@ final class BackgroundSession {
             }
             return
         }
-        // `status` changes on every mic buffer while recording (it carries
-        // the level), so most calls here change nothing. Republishing them
-        // would overwrite `updateLevel`'s write with a zero and leave the
-        // keyboard's meter flat.
+        // Calls that change nothing are dropped: republishing would
+        // overwrite `updateLevel`'s write with a zero and leave the
+        // keyboard's meter flat for a tick.
         let nextExpiry = warm ? expiresAt : nil
         if live, phase == state.phase, mode == state.mode, serving == state.serving, nextExpiry == state.expiresAt {
             return
@@ -93,7 +92,9 @@ final class BackgroundSession {
         }
     }
 
-    /// Live mic level, throttled — the keyboard draws its meter from it.
+    /// Live mic level, throttled to 20 Hz — the keyboard draws its meter
+    /// from it. The App Group write itself happens off the main actor (see
+    /// `KeyboardBridge.writeSessionState`).
     func updateLevel(_ level: Float) {
         guard live, state.phase == .recording else { return }
         let now = Date()
@@ -132,8 +133,7 @@ final class BackgroundSession {
         let phaseChanged = next.phase != state.phase || next.serving != state.serving || !live
         state = next
         live = true
-        KeyboardBridge.writeSessionState(state)
-        if phaseChanged { KeyboardBridge.postDarwin(KeyboardBridge.sessionNotification) }
+        KeyboardBridge.writeSessionState(state, notify: phaseChanged)
         startHeartbeatIfNeeded()
         // Keep the screen awake while the user is talking to it. iOS only
         // honours this in the foreground, and nothing can stop the side

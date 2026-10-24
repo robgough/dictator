@@ -252,7 +252,7 @@ struct DictationTabView: View {
     /// focus changes through the bridged binding.
     @State private var transcriptFocused: Bool = false
     /// True when the user has explicitly requested the system keyboard via
-    /// the bottom-center toggle on the transcript card.
+    /// the keyboard button in the top bar.
     @State private var transcriptKeyboardEnabled: Bool = false
     /// Shows the model-info sheet (status, unload).
     @State private var showingModelSheet = false
@@ -290,6 +290,27 @@ struct DictationTabView: View {
                         .accessibilityLabel("History")
                     }
                 }
+                // The keyboard toggle, as on the Scratchpad. By default the
+                // editor takes selection and cursor gestures without
+                // summoning the system keyboard (which would otherwise be
+                // Dictator's own keyboard, inside Dictator); this opts in
+                // to typing. Only once there's text to edit.
+                if showsKeyboardToggle {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            // Explicit so the control-layout swap
+                            // crossfades on the same spring as the
+                            // parent's `.animation(value:)`.
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                transcriptKeyboardEnabled.toggle()
+                            }
+                        } label: {
+                            Image(systemName: transcriptKeyboardEnabled ? "keyboard.chevron.compact.down" : "keyboard")
+                        }
+                        .accessibilityLabel(transcriptKeyboardEnabled ? "Hide keyboard" : "Show keyboard")
+                    }
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
                 // The model's state as a dot, beside Settings: icon-only, so
                 // it also fits the closed Duo's side strip.
                 if showsModelStatus {
@@ -320,6 +341,12 @@ struct DictationTabView: View {
         default:
             ""
         }
+    }
+
+    /// The keyboard toggle shows with the transcript card, once there's
+    /// text (and stays while the keyboard is up, so it can be put away).
+    private var showsKeyboardToggle: Bool {
+        showsModelStatus && (!viewModel.transcript.isEmpty || transcriptKeyboardEnabled)
     }
 
     /// The model status lives in the top bar once the model is on disk.
@@ -706,33 +733,6 @@ struct DictationTabView: View {
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             }
-            // Floating keyboard toggle (bottom-center) — by default the
-            // editor accepts selection / cursor gestures without
-            // summoning the system keyboard (which would otherwise
-            // pop up Dictator's own keyboard inside Dictator, since
-            // it's the user's default). Tap to opt in to typing.
-            // Hidden in read-only keyboard-extension mode where
-            // tapping anything in the transcript would derail the
-            // recording flow, and also hidden when there's no text
-            // yet — nothing to edit means no need for the button or
-            // the gesture surface it gates.
-            .overlay(alignment: .bottom) {
-                if !viewModel.transcript.isEmpty {
-                    KeyboardToggleButton(enabled: transcriptKeyboardEnabled) {
-                        // Explicit withAnimation so the control-layout
-                        // swap below crossfades cleanly. The
-                        // `.animation(value:)` modifier on the parent
-                        // catches state changes that come back through
-                        // the delegate (swipe-dismiss), but the toggle
-                        // itself benefits from an explicit context so
-                        // the springs all fire from the same source.
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                            transcriptKeyboardEnabled.toggle()
-                        }
-                    }
-                    .padding(.bottom, 6)
-                }
-            }
             .animation(.spring(response: 0.28, dampingFraction: 0.78), value: viewModel.canUndo)
             .animation(.spring(response: 0.28, dampingFraction: 0.78), value: viewModel.canClear)
 
@@ -874,8 +874,8 @@ private struct TranscriptCard: View {
     /// True when the system keyboard should actually appear. When
     /// false the editor stays selectable and cursor-positionable but
     /// the keyboard never appears (driven entirely by `isEditable`
-    /// on the underlying UITextView). Drives the keyboard-icon
-    /// overlay's on/off visual.
+    /// on the underlying UITextView). Mirrors the top-bar keyboard
+    /// button's on/off state.
     @Binding var keyboardEnabled: Bool
 
     var body: some View {
@@ -993,7 +993,7 @@ struct EditableTranscript: UIViewRepresentable {
     /// visible and taps reposition it — but suppress the system keyboard (via a
     /// dummy `inputView`) until `keyboardEnabled` is set, so the user can see /
     /// place the cursor for dictation without the keyboard in the way. Off for
-    /// the Dictation page, which stays selection-only until its card toggle.
+    /// the Dictation page, which stays selection-only until its keyboard button.
     var caretVisibleWithoutKeyboard: Bool = false
     /// Bottom padding inside the text container. The Dictation card reserves
     /// 50pt for its floating buttons; the Scratchpad lets content scroll under
@@ -1018,8 +1018,8 @@ struct EditableTranscript: UIViewRepresentable {
         // Match the visual padding the old TextEditor had — the parent
         // ZStack already provides the card chrome, so we just need
         // breathing room inside the text view.
-        // Bottom inset reserves a strip the floating clear /
-        // keyboard / undo buttons can sit on without overlapping the
+        // Bottom inset reserves a strip the floating clear and
+        // undo buttons can sit on without overlapping the
         // last lines of text. 50pt = 36pt button + 6pt overlay
         // padding + a small breathing gap.
         view.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: bottomTextInset, right: 8)
@@ -1156,7 +1156,7 @@ struct EditableTranscript: UIViewRepresentable {
             }
         } else {
             // Dictation: `isEditable` IS the keyboard toggle — selection-only
-            // until the card toggle flips it. The old `&& !text.isEmpty` guard
+            // until the keyboard button flips it. The old `&& !text.isEmpty` guard
             // is implicit here since that toggle only appears with text.
             uiView.isEditable = keyboardEnabled
             // Drive focus from the toggle, but ONLY on actual transitions of
@@ -1296,44 +1296,6 @@ private struct ClearButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Clear transcript")
-    }
-}
-
-/// Bottom-center toggle for opting in / out of the system keyboard.
-/// Default state is "off" (no keyboard) so the editor handles cursor
-/// + selection gestures without iOS summoning the user's default
-/// keyboard — which on a Dictator user's device is Dictator's own
-/// keyboard, and rendering it inside Dictator was the "inception-y"
-/// experience the user wanted to avoid. Tap to bring up the keyboard
-/// for typing; tap again (or swipe down on the keyboard) to put it
-/// away again.
-struct KeyboardToggleButton: View {
-    let enabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            // `keyboard.chevron.compact.down` is iOS's standard
-            // "dismiss the keyboard" glyph — same one Notes, Mail,
-            // and Messages put in their toolbars. Reuse it when the
-            // toggle is on so the affordance reads as "tap to put the
-            // keyboard away" rather than "this is the keyboard
-            // button" (which is what the plain icon suggests).
-            Image(systemName: enabled ? "keyboard.chevron.compact.down" : "keyboard")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(enabled ? Color.accentColor : .secondary)
-                .frame(width: 36, height: 36)
-                // Material, not glassEffect: this floats over the UITextView
-                // and a glassEffect over a representable eats its own taps —
-                // that's what broke this button. Keep material here.
-                .background(.thinMaterial, in: Circle())
-                .overlay(
-                    Circle()
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(enabled ? "Hide keyboard" : "Show keyboard")
     }
 }
 

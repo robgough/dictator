@@ -7,7 +7,12 @@ import SwiftUI
 /// to the controller, which knows how to launch the host app and
 /// later consume the result via `KeyboardBridge`.
 final class KeyboardViewController: UIInputViewController {
-    private var hostingController: UIHostingController<AnyView>?
+    private var hostingController: UIHostingController<KeyboardHostView>?
+    /// What the SwiftUI keyboard shows. Set as the root once; afterwards
+    /// only the properties that changed are written, so a 20 Hz meter
+    /// update while recording redraws the meter rather than rebuilding the
+    /// whole keyboard.
+    private let viewState = KeyboardViewState()
     /// Last-applied Full Access state. Drives a rebuild + height change when
     /// the user toggles "Allow Full Access" in Settings and returns. `nil`
     /// until the first `viewWillAppear`, so the first appearance always
@@ -313,7 +318,7 @@ final class KeyboardViewController: UIInputViewController {
             if sessionState?.phase != .recording { levelHistory = [] }
             levelHistory.append(nextSession.level)
             if levelHistory.count > 64 { levelHistory.removeFirst(levelHistory.count - 64) }
-            if nextSession == sessionState { refreshRootView() }
+            viewState.levels.values = levelHistory
         }
         if nextSession != sessionState {
             let pollFaster = nextSession?.phase == .recording
@@ -415,8 +420,8 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func installSwiftUI() {
-        let view = makeRootView()
-        let controller = UIHostingController(rootView: view)
+        syncViewState()
+        let controller = UIHostingController(rootView: KeyboardHostView(state: viewState, actions: makeActions()))
         controller.view.backgroundColor = .clear
         addChild(controller)
         view: do {
@@ -653,54 +658,50 @@ final class KeyboardViewController: UIInputViewController {
         refreshRootView()
     }
 
-    /// Re-render the SwiftUI keyboard so `canUndo`, the Paste pill,
-    /// etc. reflect the current state. UIHostingController is happy to
-    /// have its rootView swapped at any time.
+    /// Bring the SwiftUI keyboard up to date with `canUndo`, the Paste
+    /// pill, the session, etc. Only what changed is written, so this is
+    /// cheap to call from every poll.
     private func refreshRootView() {
-        hostingController?.rootView = makeRootView()
+        syncViewState()
     }
 
-    /// The keyboard's content depends on Full Access: the dictation pad needs
-    /// the App Group + clipboard (both Full-Access-only), so without it we fall
-    /// back to a basic typing keyboard that drives only the text document proxy.
-    private func makeRootView() -> AnyView {
-        hasFullAccess ? AnyView(makeDictationView()) : AnyView(makeTypingView())
+    private func syncViewState() {
+        assign(\.hasFullAccess, hasFullAccess)
+        // The level and heartbeat time change on every poll; the keyboard's
+        // layout only cares about phase, mode and expiry. Levels go to the
+        // meter separately.
+        assign(\.session, sessionState.map {
+            var shown = $0
+            shown.level = 0
+            shown.updatedAt = .distantPast
+            return shown
+        })
+        assign(\.notice, notice)
+        assign(\.assistSupported, assistSupported)
+        assign(\.canAssist, lastCanAssist)
+        assign(\.canUndo, lastInsertedText != nil)
+        assign(\.canPaste, canPaste)
+        assign(\.pastePreview, pastePreview)
+        assign(\.showsNextKeyboard, needsInputModeSwitchKey)
     }
 
-    private func makeDictationView() -> KeyboardRootView {
-        KeyboardRootView(
+    private func assign<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<KeyboardViewState, Value>, _ value: Value) {
+        if viewState[keyPath: keyPath] != value { viewState[keyPath: keyPath] = value }
+    }
+
+    private func makeActions() -> KeyboardHostView.Actions {
+        KeyboardHostView.Actions(
             onMicPress: { [weak self] in self?.requestDictation(mode: .record) },
             onAssistPress: { [weak self] in self?.requestDictation(mode: .assist) },
-            session: sessionState,
-            levels: levelHistory,
-            notice: notice,
             onStop: { [weak self] in self?.sendSessionCommand(.stop) },
             onCancel: { [weak self] in self?.sendSessionCommand(.cancel) },
             onEndSession: { [weak self] in self?.sendSessionCommand(.end) },
             onUndo: { [weak self] in self?.undoLastInsertion() },
-            onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
-            onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
-            assistSupported: assistSupported,
-            canAssist: lastCanAssist,
+            onInsert: { [weak self] text in self?.textDocumentProxy.insertText(text) },
             onBackspacePress: { [weak self] in self?.startBackspaceHold() },
             onBackspaceRelease: { [weak self] in self?.endBackspaceHold() },
-            canUndo: lastInsertedText != nil,
-            canPaste: canPaste,
-            pastePreview: pastePreview,
             onPaste: { [weak self] in self?.pasteFromClipboard() },
-            showsNextKeyboard: needsInputModeSwitchKey,
             onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
-        )
-    }
-
-    private func makeTypingView() -> KeyboardTypingView {
-        KeyboardTypingView(
-            onInsert: { [weak self] text in self?.textDocumentProxy.insertText(text) },
-            onDeletePress: { [weak self] in self?.startBackspaceHold() },
-            onDeleteRelease: { [weak self] in self?.endBackspaceHold() },
-            onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
-            onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() },
-            showsNextKeyboard: needsInputModeSwitchKey
         )
     }
 
@@ -792,5 +793,80 @@ final class KeyboardViewController: UIInputViewController {
         backspaceHoldTimer?.invalidate()
         backspaceHoldTimer = nil
         backspaceHoldStartedAt = nil
+    }
+}
+
+/// Everything the SwiftUI keyboard displays, owned by the controller.
+@MainActor
+@Observable
+final class KeyboardViewState {
+    var hasFullAccess = false
+    var session: KeyboardBridge.SessionState?
+    var notice: String?
+    var assistSupported = false
+    var canAssist = false
+    var canUndo = false
+    var canPaste = false
+    var pastePreview: String?
+    var showsNextKeyboard = false
+    let levels = KeyboardLevels()
+}
+
+/// The hosting controller's root, set once. The dictation pad with Full
+/// Access (it needs the App Group and clipboard); without it a basic typing
+/// keyboard that drives only the text document proxy.
+struct KeyboardHostView: View {
+    let state: KeyboardViewState
+    let actions: Actions
+
+    struct Actions {
+        let onMicPress: () -> Void
+        let onAssistPress: () -> Void
+        let onStop: () -> Void
+        let onCancel: () -> Void
+        let onEndSession: () -> Void
+        let onUndo: () -> Void
+        let onInsert: (String) -> Void
+        let onBackspacePress: () -> Void
+        let onBackspaceRelease: () -> Void
+        let onPaste: () -> Void
+        let onNextKeyboard: () -> Void
+    }
+
+    var body: some View {
+        if state.hasFullAccess {
+            KeyboardRootView(
+                onMicPress: actions.onMicPress,
+                onAssistPress: actions.onAssistPress,
+                session: state.session,
+                levels: state.levels,
+                notice: state.notice,
+                onStop: actions.onStop,
+                onCancel: actions.onCancel,
+                onEndSession: actions.onEndSession,
+                onUndo: actions.onUndo,
+                onSpace: { actions.onInsert(" ") },
+                onReturn: { actions.onInsert("\n") },
+                assistSupported: state.assistSupported,
+                canAssist: state.canAssist,
+                onBackspacePress: actions.onBackspacePress,
+                onBackspaceRelease: actions.onBackspaceRelease,
+                canUndo: state.canUndo,
+                canPaste: state.canPaste,
+                pastePreview: state.pastePreview,
+                onPaste: actions.onPaste,
+                showsNextKeyboard: state.showsNextKeyboard,
+                onNextKeyboard: actions.onNextKeyboard
+            )
+        } else {
+            KeyboardTypingView(
+                onInsert: actions.onInsert,
+                onDeletePress: actions.onBackspacePress,
+                onDeleteRelease: actions.onBackspaceRelease,
+                onReturn: { actions.onInsert("\n") },
+                onNextKeyboard: actions.onNextKeyboard,
+                showsNextKeyboard: state.showsNextKeyboard
+            )
+        }
     }
 }

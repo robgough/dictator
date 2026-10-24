@@ -490,6 +490,8 @@ struct ScratchpadRecordButton: View {
     let status: RecordingViewModel.Status
     let isMyTurn: Bool
     let recordingStartCount: Int
+    /// The live level, read only by the listening bars.
+    let meter: LevelMeter
     let onPress: () -> Void
     let onRelease: () -> Void
     /// Can't record yet (no permission, no model). The button stays live so
@@ -519,16 +521,12 @@ struct ScratchpadRecordButton: View {
         if isMyTurn, case .transcribing = status { return true }
         return false
     }
-    private var level: Float {
-        if isMyTurn, case let .recording(l) = status { return l }
-        return 0
-    }
 
     var body: some View {
         ZStack {
             if isCapturing {
                 HStack(spacing: 10) {
-                    Waveform(level: level, tint: tint, height: 22)
+                    Waveform(meter: meter, tint: tint, height: 22)
                         .id(recordingStartCount)
                     Image(systemName: "stop.fill")
                         .font(.system(size: 15, weight: .bold))
@@ -601,8 +599,7 @@ struct ScratchpadRecordButton: View {
         return false
     }
 
-    /// Coarse status identifier so `.onChange` fires on phase changes, not on
-    /// every level update inside `.recording(level:)`.
+    /// Coarse status identifier for `.onChange` (the error message aside).
     private var statusKey: String {
         switch status {
         case .idle: "idle"

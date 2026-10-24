@@ -148,11 +148,20 @@ final class DictationHistoryStore {
         entries = (try? decoder.decode([DictationHistoryEntry].self, from: data)) ?? []
     }
 
+    /// Saves happen in order, one at a time, off the main actor: encoding
+    /// up to 500 entries and an atomic write land right as the record
+    /// button morphs back to rest, and cost frames there.
+    private static let writes = DispatchQueue(label: "net.robgough.DictatorIOS.history", qos: .utility)
+
     private func persist() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(entries) else { return }
-        try? data.write(to: Self.storeURL, options: .atomic)
+        let snapshot = entries
+        let url = Self.storeURL
+        Self.writes.async {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(snapshot) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 }

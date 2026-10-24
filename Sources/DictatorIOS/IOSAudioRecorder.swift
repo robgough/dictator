@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
+import os
 
 /// iOS microphone capture. Stripped-down counterpart to the macOS
 /// `AudioRecorder`:
@@ -19,8 +20,11 @@ import Accelerate
 @MainActor
 final class IOSAudioRecorder {
     private let targetSampleRate: Double = 16_000
-    private var rawBuffer: [Float] = []
-    private var nativeSampleRate: Double = 0
+    /// Where the audio thread puts samples. Never via the main actor: a
+    /// per-buffer hop to the main actor queues behind whatever the UI is
+    /// drawing, and loses the end of a recording when `stop()` runs ahead
+    /// of the hops still waiting.
+    private let store = CaptureStore()
     /// True while samples are being kept — between `start()` and `stop()`.
     private var capturing = false
 
@@ -40,7 +44,8 @@ final class IOSAudioRecorder {
     /// True while the engine is running, whether or not samples are kept.
     var isArmed: Bool { engine != nil }
 
-    /// 0...1 RMS reported on the main actor, only while capturing.
+    /// 0...1 RMS reported on the main actor, only while capturing, at most
+    /// about 30 times a second (it only drives meters).
     var onLevel: (@MainActor (Float) -> Void)?
 
     /// Fired once capture is live.
@@ -101,36 +106,35 @@ final class IOSAudioRecorder {
                 return
             }
         }
-        rawBuffer.removeAll(keepingCapacity: true)
-        nativeSampleRate = 0
+        store.open()
         capturing = true
         onReady?()
     }
 
-    /// Stop keeping samples and return them as 16 kHz mono Float32. Tears
-    /// the engine down unless `keepWarm` is set. Safe to call repeatedly;
-    /// later calls return [].
-    func stop() -> [Float] {
+    /// Stop keeping samples and hand back everything captured, at the
+    /// device's rate — `CapturedAudio.resampled()` converts it to 16 kHz off
+    /// the main actor. The gate closes and any buffer the audio thread is
+    /// part-way through is waited for, so nothing already heard is lost.
+    /// Tears the engine down unless `keepWarm` is set. Safe to call
+    /// repeatedly; later calls return nothing.
+    func stop() -> CapturedAudio {
         guard capturing else {
             if !keepWarm { shutdown() }
-            return []
+            return CapturedAudio(samples: [], sampleRate: 0, targetSampleRate: targetSampleRate)
         }
         capturing = false
+        let taken = store.closeAndDrain()
         if !keepWarm { shutdown() }
-
-        let samples = rawBuffer
-        let rate = nativeSampleRate
-        rawBuffer.removeAll(keepingCapacity: false)
-
-        guard rate > 0 else { return samples }
-        return Self.resample(monoSamples: samples, fromSampleRate: rate, toSampleRate: targetSampleRate)
-            ?? samples
+        return CapturedAudio(samples: taken.samples, sampleRate: taken.sampleRate, targetSampleRate: targetSampleRate)
     }
 
     /// Stop the engine and release the mic (the indicator goes out). Any
     /// capture in progress is discarded — call `stop()` first to keep it.
     func shutdown() {
-        capturing = false
+        if capturing {
+            capturing = false
+            _ = store.closeAndDrain()
+        }
         guard let engine else { return }
         self.engine = nil
         if let configObserver {
@@ -181,15 +185,17 @@ final class IOSAudioRecorder {
         // `format: nil` lets the engine pull whatever format the input
         // node is actually running at. Hardcoding a format and then
         // hitting a sample-rate mismatch silently drops the tap.
+        //
+        // The block runs on the engine's tap thread: it appends straight
+        // into the lock-protected store and only sends the main actor the
+        // level, throttled, for the meters.
+        let store = store
         newEngine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable [weak self] buffer, _ in
-            guard let processed = Self.processBuffer(buffer) else { return }
-            Task { @MainActor [weak self, processed] in
-                guard let self, self.capturing else { return }
-                self.appendSamples(
-                    mono: processed.mono,
-                    level: processed.level,
-                    sampleRate: processed.sampleRate
-                )
+            guard store.enter() else { return }
+            let processed = Self.processBuffer(buffer)
+            guard let level = store.finish(processed) else { return }
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { self?.deliverLevel(level) }
             }
         }
 
@@ -243,16 +249,14 @@ final class IOSAudioRecorder {
         onInterrupted?()
     }
 
-    private func appendSamples(mono: [Float], level: Float, sampleRate: Double) {
+    private func deliverLevel(_ level: Float) {
         guard capturing else { return }
-        rawBuffer.append(contentsOf: mono)
-        nativeSampleRate = sampleRate
         onLevel?(level)
     }
 
     // MARK: - Static helpers (nonisolated; run on the audio-render thread)
 
-    private struct ProcessedBuffer: Sendable {
+    fileprivate struct ProcessedBuffer: Sendable {
         let mono: [Float]
         let level: Float
         let sampleRate: Double
@@ -298,7 +302,7 @@ final class IOSAudioRecorder {
         return ProcessedBuffer(mono: mono, level: level, sampleRate: sampleRate)
     }
 
-    private nonisolated static func resample(
+    fileprivate nonisolated static func resample(
         monoSamples: [Float],
         fromSampleRate: Double,
         toSampleRate: Double
@@ -343,4 +347,95 @@ final class IOSAudioRecorder {
 
 private final class MutableFlag: @unchecked Sendable {
     var value: Bool = false
+}
+
+/// What `IOSAudioRecorder.stop()` captured, still at the device's rate.
+struct CapturedAudio: Sendable {
+    let samples: [Float]
+    let sampleRate: Double
+    let targetSampleRate: Double
+
+    var isEmpty: Bool { samples.isEmpty }
+
+    /// The samples as 16 kHz mono Float32, the format Parakeet expects.
+    /// Converted on a background thread: AVAudioConverter over a long
+    /// recording is enough work to drop frames if it runs on the main actor
+    /// while the record button is morphing.
+    func resampled() async -> [Float] {
+        let samples = samples
+        let rate = sampleRate
+        let target = targetSampleRate
+        guard rate > 0, !samples.isEmpty else { return samples }
+        return await Task.detached(priority: .userInitiated) {
+            IOSAudioRecorder.resample(monoSamples: samples, fromSampleRate: rate, toSampleRate: target) ?? samples
+        }.value
+    }
+}
+
+/// The capture buffer, shared between the tap thread (which appends) and the
+/// main actor (which opens, closes and takes it). One unfair lock guards it;
+/// every critical section is a few assignments or an append.
+private final class CaptureStore: Sendable {
+    private struct State: Sendable {
+        var capturing = false
+        /// Tap callbacks that passed the gate and haven't appended yet.
+        var inFlight = 0
+        var samples: [Float] = []
+        var sampleRate: Double = 0
+        var lastLevelPost: UInt64 = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    /// Meters don't need more than this; the main actor shouldn't get more.
+    private static let levelInterval: UInt64 = 33_000_000
+
+    func open() {
+        state.withLock {
+            $0.capturing = true
+            $0.samples.removeAll(keepingCapacity: true)
+            $0.sampleRate = 0
+            $0.lastLevelPost = 0
+        }
+    }
+
+    /// Tap thread: claim a slot if samples are being kept.
+    func enter() -> Bool {
+        state.withLock {
+            guard $0.capturing else { return false }
+            $0.inFlight += 1
+            return true
+        }
+    }
+
+    /// Tap thread: append a claimed buffer (even if the gate closed since —
+    /// `closeAndDrain` is waiting for it) and return a level to show, if
+    /// one is due.
+    func finish(_ processed: IOSAudioRecorder.ProcessedBuffer?) -> Float? {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return state.withLock {
+            $0.inFlight -= 1
+            guard let processed else { return nil }
+            $0.samples.append(contentsOf: processed.mono)
+            $0.sampleRate = processed.sampleRate
+            guard $0.capturing, now &- $0.lastLevelPost >= Self.levelInterval else { return nil }
+            $0.lastLevelPost = now
+            return processed.level
+        }
+    }
+
+    /// Main actor: stop keeping samples, wait for a callback caught mid-way
+    /// (microseconds — it's only converting one buffer), and take the lot.
+    func closeAndDrain() -> (samples: [Float], sampleRate: Double) {
+        state.withLock { $0.capturing = false }
+        let deadline = DispatchTime.now().uptimeNanoseconds + 100_000_000
+        while state.withLock({ $0.inFlight > 0 }), DispatchTime.now().uptimeNanoseconds < deadline {
+            usleep(50)
+        }
+        return state.withLock {
+            let taken = ($0.samples, $0.sampleRate)
+            $0.samples = []
+            $0.sampleRate = 0
+            return taken
+        }
+    }
 }

@@ -556,6 +556,10 @@ targets:
         # iOS-provided crypto; no additional paperwork is needed.
         ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
+        # Let animations run at 120 Hz on ProMotion iPhones (the Duo
+        # included). Without it iOS caps third-party CADisplayLink- and
+        # SwiftUI-driven animation at 60 Hz on iPhone.
+        CADisableMinimumFrameDuration: true
         UILaunchScreen:
           UIColorName: LaunchBackground
           UIImageName: LaunchGlyph

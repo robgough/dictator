@@ -21,7 +21,10 @@ final class RecordingViewModel {
         case idle
         /// Engine.start() returned but hasn't produced samples yet.
         case warmingUp
-        case recording(level: Float)
+        /// Capturing. Deliberately carries no level: `status` should change
+        /// only when the phase does, because every view that reads it
+        /// re-renders when it changes. The level is `levelMeter`'s.
+        case recording
         case transcribing
         case ready
         case error(String)
@@ -94,8 +97,17 @@ final class RecordingViewModel {
     }
 
     private(set) var status: Status = .idle {
-        didSet { syncBackgroundSession() }
+        didSet {
+            syncBackgroundSession()
+            if !status.isCapturing, levelMeter.level != 0 { levelMeter.level = 0 }
+        }
     }
+    /// The live mic level, apart from `status` so a level update only
+    /// redraws the meters that read it.
+    let levelMeter = LevelMeter()
+    /// True between `recorder.stop()` and its samples being ready, so a
+    /// second stop (a tap landing as a hold ends) can't race the first.
+    @ObservationIgnored private var isDrainingCapture = false
     private(set) var modelDiskStatus: ModelDiskStatus = .checking
     /// Which button is driving the current capture. Defaults to
     /// dictation; set by `startRecording` / `startAssistRecording` at
@@ -244,16 +256,17 @@ final class RecordingViewModel {
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
             self.session.updateLevel(level)
+            if case .warmingUp = self.status {
+                self.status = .recording
+            }
             if case .recording = self.status {
-                self.status = .recording(level: level)
-            } else if case .warmingUp = self.status {
-                self.status = .recording(level: level)
+                self.levelMeter.level = level
             }
         }
         recorder.onReady = { [weak self] in
             guard let self else { return }
             if case .warmingUp = self.status {
-                self.status = .recording(level: 0)
+                self.status = .recording
             }
         }
         recorder.onStartFailed = { [weak self] error in
@@ -347,10 +360,12 @@ final class RecordingViewModel {
         switch state {
         case "recording":
             recordingMode = speak
-            status = .recording(level: 0.55)
+            status = .recording
+            levelMeter.level = 0.55
         case "assist":
             recordingMode = assist
-            status = .recording(level: 0.55)
+            status = .recording
+            levelMeter.level = 0.55
         case "working":
             recordingMode = speak
             status = .transcribing
@@ -463,9 +478,9 @@ final class RecordingViewModel {
     }
 
     private func stopAssistRecordingWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             deliverKeyboardResult(text: nil, error: nil)
@@ -908,12 +923,12 @@ final class RecordingViewModel {
     }
 
     private func stopEntryCaptureWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
         let isAssist = recordingMode == .entryAssist
         let deliver = entryCompletion
         entryCompletion = nil
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
@@ -1020,9 +1035,9 @@ final class RecordingViewModel {
     }
 
     private func stopScratchpadRecordingWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
@@ -1095,9 +1110,9 @@ final class RecordingViewModel {
     }
 
     private func stopJournalRecordingWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
@@ -1180,9 +1195,9 @@ final class RecordingViewModel {
     }
 
     private func stopScratchpadAssistWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             status = .idle
@@ -1260,9 +1275,9 @@ final class RecordingViewModel {
     }
 
     private func stopRecordingWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         if isKeyboardCapture { return await stopKeyboardCapture() }
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         pressFeedback.impactOccurred()
         guard !samples.isEmpty else {
             deliverKeyboardResult(text: nil, error: nil)
@@ -1493,6 +1508,17 @@ final class RecordingViewModel {
 
     // MARK: - Background session and keyboard commands
 
+    /// Stop the recorder and wait for its samples at 16 kHz; the resample
+    /// runs off the main actor so the morph back to rest doesn't stall.
+    /// Nil if the recording was cancelled while that ran.
+    private func drainRecorder() async -> [Float]? {
+        isDrainingCapture = true
+        defer { isDrainingCapture = false }
+        let samples = await recorder.stop().resampled()
+        guard status.isCapturing else { return nil }
+        return samples
+    }
+
     /// Every capture starts here, so the warm-or-not decision is made before
     /// the engine is armed: the audio-session category differs (a warm mic
     /// mixes with other audio instead of ducking it for minutes on end), and
@@ -1648,9 +1674,9 @@ final class RecordingViewModel {
     }
 
     private func stopKeyboardCaptureWork() async {
-        guard status.isCapturing else { return }
+        guard status.isCapturing, !isDrainingCapture else { return }
         let assist = recordingMode == .keyboardAssist
-        let samples = recorder.stop()
+        guard let samples = await drainRecorder() else { return }
         guard !samples.isEmpty else {
             deliverKeyboardResult(text: nil, error: nil)
             status = .idle

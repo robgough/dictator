@@ -96,10 +96,6 @@ struct MorphRecordButton: View {
     private var extrasShown: Bool { phase == .idle && !extras.isEmpty }
     private var assistEnabled: Bool { route.canAssist(viewModel) && !busyElsewhere }
     private var blocked: Bool { route.isBlocked(viewModel) }
-    private var level: Float {
-        if phase == .recording, case let .recording(l) = viewModel.status { return l }
-        return 0
-    }
 
     var body: some View {
         GlassEffectContainer(spacing: 14) {
@@ -209,7 +205,9 @@ struct MorphRecordButton: View {
                     .opacity(busyElsewhere || blocked ? 0.45 : 1)
                     .transition(.opacity)
             case .recording:
-                Waveform(level: level, tint: .white, barCount: compact ? 9 : 14, height: compact ? 18 : 24)
+                // The meter reads the level itself, so a level update
+                // redraws the bars and nothing else here.
+                Waveform(meter: viewModel.levelMeter, tint: .white, barCount: compact ? 9 : 14, height: compact ? 18 : 24)
                     .frame(width: isInline ? 44 : compact ? 60 : 84)
                     .id(viewModel.recordingStartCount)
                     .transition(listeningTransition)

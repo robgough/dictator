@@ -30,7 +30,9 @@ struct KeyboardRootView: View {
     /// The host's background-session heartbeat; nil when there isn't one.
     let session: KeyboardBridge.SessionState?
     /// Recent mic levels, oldest first, while a recording is in flight.
-    var levels: [Float] = []
+    /// Observed by the meter alone, so the 20 Hz updates redraw the bars
+    /// and nothing else.
+    var levels = KeyboardLevels()
     /// Why the last request produced no text, briefly. Shown in the Paste
     /// chip's place for a few seconds.
     let notice: String?
@@ -174,9 +176,11 @@ struct KeyboardRootView: View {
     private func split(width: CGFloat, fold: ClosedRange<CGFloat>, metrics: Metrics) -> some View {
         HStack(spacing: 0) {
             VStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    undoKey(metrics)
-                    pasteChip(metrics)
+                GlassEffectContainer(spacing: 3) {
+                    HStack(spacing: 6) {
+                        undoKey(metrics)
+                        pasteChip(metrics)
+                    }
                 }
                 bottomRow(metrics, globe: true, returnAndDelete: false)
             }
@@ -211,14 +215,18 @@ struct KeyboardRootView: View {
     }
 
     private func bottomRow(_ m: Metrics, globe: Bool, returnAndDelete: Bool) -> some View {
-        HStack(spacing: 6) {
-            if globe && showsNextKeyboard {
-                iconKey("globe", label: "Next keyboard", width: m.key, height: m.key, action: onNextKeyboard)
-            }
-            spaceKey(m)
-            if returnAndDelete {
-                returnKey(m)
-                backspaceKey(m)
+        // One container so the keys share a glass pass. Its spacing is
+        // under the keys' gap, so they never blend into each other.
+        GlassEffectContainer(spacing: 3) {
+            HStack(spacing: 6) {
+                if globe && showsNextKeyboard {
+                    iconKey("globe", label: "Next keyboard", width: m.key, height: m.key, action: onNextKeyboard)
+                }
+                spaceKey(m)
+                if returnAndDelete {
+                    returnKey(m)
+                    backspaceKey(m)
+                }
             }
         }
     }
@@ -539,14 +547,14 @@ struct KeyboardRootView: View {
 /// odd loud syllable touching the top. Bars are dropped from the left to fit
 /// the width it's given.
 private struct LevelHistory: View {
-    let levels: [Float]
+    let levels: KeyboardLevels
     var height: CGFloat = 22
     static let maxCount = 64
 
     var body: some View {
         GeometryReader { proxy in
             let count = max(4, min(Self.maxCount, Int((proxy.size.width + 2.5) / 5.5)))
-            let recent = Array(levels.suffix(count))
+            let recent = Array(levels.values.suffix(count))
             let padded = Array(repeating: Float(0), count: max(0, count - recent.count)) + recent
             HStack(spacing: 2.5) {
                 ForEach(0..<count, id: \.self) { index in
@@ -557,6 +565,19 @@ private struct LevelHistory: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .trailing)
         }
         .frame(height: height)
-        .animation(.easeOut(duration: 0.08), value: levels)
+        .animation(.easeOut(duration: 0.08), value: levels.values)
+    }
+}
+
+/// The keyboard meter's recent levels, oldest first. A reference the
+/// controller updates in place while recording, read only by
+/// `LevelHistory`.
+@MainActor
+@Observable
+final class KeyboardLevels {
+    var values: [Float]
+
+    init(_ values: [Float] = []) {
+        self.values = values
     }
 }

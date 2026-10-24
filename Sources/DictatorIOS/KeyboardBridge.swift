@@ -361,14 +361,29 @@ enum KeyboardBridge {
     /// stops writing, and this is what stops the keyboard trusting it.
     static let sessionFreshness: TimeInterval = 4
 
-    static func writeSessionState(_ state: SessionState) {
-        guard let defaults, let data = try? JSONEncoder().encode(state) else { return }
-        defaults.set(data, forKey: sessionStateKey)
+    /// Session writes and clears, in the order they were made. The host
+    /// writes the level 20 times a second while recording; encoding it and
+    /// writing the App Group on the main actor cost frames, so it happens
+    /// here. Serial, so a late level write can't land after a clear and
+    /// bring a finished session back.
+    private static let sessionWrites = DispatchQueue(label: "net.robgough.DictatorIOS.session-state", qos: .userInitiated)
+
+    /// Publish the host's session state. `notify` posts the session Darwin
+    /// notification once the write has landed, so the keyboard reads the
+    /// new state rather than the one before it.
+    static func writeSessionState(_ state: SessionState, notify: Bool = false) {
+        sessionWrites.async {
+            guard let defaults, let data = try? JSONEncoder().encode(state) else { return }
+            defaults.set(data, forKey: sessionStateKey)
+            if notify { postDarwin(sessionNotification) }
+        }
     }
 
     static func clearSessionState() {
-        defaults?.removeObject(forKey: sessionStateKey)
-        postDarwin(sessionNotification)
+        sessionWrites.async {
+            defaults?.removeObject(forKey: sessionStateKey)
+            postDarwin(sessionNotification)
+        }
     }
 
     /// The host's session heartbeat, or nil if there's no live session.

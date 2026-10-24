@@ -104,8 +104,8 @@ struct KeyboardShowcase: View {
     }
 
     /// A plausible stretch of speech for the meter.
-    private static let levels: [Float] = (0..<64).map { i in
+    private static let levels = KeyboardLevels((0..<64).map { i in
         let x = Double(i)
         return Float(0.18 + 0.32 * abs(sin(x * 0.7)) * (0.6 + 0.4 * abs(cos(x * 0.23))))
-    }
+    })
 }

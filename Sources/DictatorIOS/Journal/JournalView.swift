@@ -740,7 +740,6 @@ private struct JournalIncomingEntry: View {
     let isTranscribing: Bool
     /// While it's being written down, a tap drops it.
     var onCancel: () -> Void
-    @State private var pulse = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -749,10 +748,17 @@ private struct JournalIncomingEntry: View {
                 .foregroundStyle(Color.journalAccent)
                 .frame(width: 40, alignment: .leading)
             HStack(spacing: 8) {
-                Circle()
-                    .fill(isTranscribing ? Color.journalAccent : .red)
-                    .frame(width: 7, height: 7)
-                    .opacity(pulse ? 0.35 : 1)
+                // The dot breathes. Driven by a TimelineView at 30 fps, which
+                // pauses off screen, rather than a repeatForever animation,
+                // which keeps the render loop busy and can leak into the
+                // transitions around it.
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                    let phase = context.date.timeIntervalSinceReferenceDate * .pi / 0.8
+                    Circle()
+                        .fill(isTranscribing ? Color.journalAccent : .red)
+                        .frame(width: 7, height: 7)
+                        .opacity(0.675 + 0.325 * cos(phase))
+                }
                 Text(isTranscribing ? "Writing it down…" : "Listening…")
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -762,9 +768,6 @@ private struct JournalIncomingEntry: View {
                         .tint(Color.journalAccent)
                 }
             }
-        }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.8).repeatForever()) { pulse = true }
         }
     }
 }
@@ -869,6 +872,7 @@ private struct JournalEntrySheet: View {
                         status: viewModel.status,
                         isMyTurn: viewModel.recordingMode == .entry,
                         recordingStartCount: viewModel.recordingStartCount,
+                        meter: viewModel.levelMeter,
                         onPress: { startDictation() },
                         onRelease: { Task { await viewModel.stopEntryCapture() } },
                         blocked: MicBlocker.current(viewModel) != nil,
@@ -884,6 +888,7 @@ private struct JournalEntrySheet: View {
                         status: viewModel.status,
                         isMyTurn: viewModel.recordingMode == .entryAssist,
                         recordingStartCount: viewModel.recordingStartCount,
+                        meter: viewModel.levelMeter,
                         onPress: { startReword() },
                         onRelease: { Task { await viewModel.stopEntryCapture() } },
                         blocked: MicBlocker.current(viewModel) != nil,
@@ -1216,6 +1221,8 @@ struct JournalMonthColumn: View {
     private var calendar: Calendar { Calendar.current }
 
     var body: some View {
+        // Worked out once for the column, not once per month grid.
+        let populated = Set(model.days.map(\.key))
         ScrollViewReader { reader in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
@@ -1225,7 +1232,7 @@ struct JournalMonthColumn: View {
                                 .font(.system(.headline, design: .rounded))
                                 .foregroundStyle(.primary)
                                 .padding(.leading, 6)
-                            JournalMonthGrid(month: month, model: model, onPick: onPick)
+                            JournalMonthGrid(month: month, model: model, populated: populated, onPick: onPick)
                         }
                         .id(Self.monthID(month))
                     }
@@ -1299,12 +1306,14 @@ struct JournalWeekdayRow: View {
 struct JournalMonthGrid: View {
     let month: Date
     let model: JournalModel
+    /// Keys of days with entries, when the caller already has them.
+    var populated: Set<String>? = nil
     let onPick: (String) -> Void
 
     private var calendar: Calendar { Calendar.current }
 
     var body: some View {
-        let populated = Set(model.days.map(\.key))
+        let populated = populated ?? Set(model.days.map(\.key))
         Grid(horizontalSpacing: 0, verticalSpacing: 4) {
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
                 GridRow {
