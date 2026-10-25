@@ -23,7 +23,7 @@ listing — keep entries as plain bullet lines.
 - The Dictate screen has one record button: tap or hold the mic to talk, and while recording it becomes a pill you tap to send, with a cancel button beside it. With text on screen, Copy and Assist sit right next to the mic, and Assist has a new icon.
 - Scratchpad and Journal now use the same record button as Dictate, so the mic looks and works the same on every tab, and the model's status is a small dot at the top of Dictate, leaving more room for your text.
 - On iPhone, the Scratchpad and Journal controls sit just above the tab bar, and when you scroll they shrink to fit on one row beside the tab button, leaving more of the screen for your note.
-- Recording, the record button's changes and the level meter are smoother, up to 120 frames a second on ProMotion screens, and unfolding the iPhone Duo or turning an iPad now slides the side column in and out smoothly instead of jumping.
+- Recording, the record button's changes and the level meter are smoother, up to 120 frames a second on ProMotion screens, and unfolding the iPhone Duo or turning an iPad now slides the side column in and out smoothly instead of jumping. Folding the Duo part way, or opening it flat again, now moves the columns smoothly around the fold too.
 - The Dictate screen's keyboard button has moved to the top bar, where it sits on the Scratchpad too.
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions, plus a matching launch screen.
 - The keyboard now fits dictated text to what's already in the field: a space where it would run into the previous word, a lower-case start mid-sentence, and a full stop on the previous dictation when a new sentence follows it.

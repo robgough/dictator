@@ -102,12 +102,17 @@ struct ColumnPlan: Equatable {
 /// Unfolding the Duo or turning an iPad changes the width, and often whether
 /// the companion shows. The transition is built to stay at display rate:
 ///
-/// - Every column is laid out at its **final** width straight away, once.
-///   Nothing is proposed an in-between width, so the transcript's text view
-///   wraps its text once rather than on every frame of the spring.
-/// - What animates is position: `ColumnsLayout` animates only `reveal`, and
-///   uses it to slide the main column across while the companion slides in
-///   (or out) from the leading edge beside it, fading as it goes.
+/// - The companion coming or going (an unfold, an iPad turning) happens as
+///   the window itself resizes, so the columns are laid out at their
+///   **final** widths straight away and only slide: the main column across,
+///   the companion in (or out) from the leading edge beside it, fading.
+/// - A fold arriving, moving as the hinge closes, or going flat happens in
+///   a window that keeps its size, so the column edges move with it: the
+///   fold opens between the columns and they narrow to make room, the way
+///   an iPad split resizes, rather than jumping to their new widths.
+/// - Every change rides the same spring, and a spring retargets with the
+///   velocity it already has, so a hinge moving through several fold
+///   positions in a row reads as one continuous movement.
 /// - No GeometryReader. The width class and fold are read with
 ///   `onGeometryChange`, which only fires when they change, and each column
 ///   is evaluated in its own view, so a change one column reads doesn't
@@ -126,6 +131,11 @@ struct AdaptiveColumns<Main: View, Companion: View>: View {
     @State private var measured: ColumnMeasurement?
     /// 0 with the companion hidden, 1 with it shown; animated between.
     @State private var reveal: CGFloat = 0
+    /// 0 flat, 1 partly folded; animated between.
+    @State private var folded: CGFloat = 0
+    /// Where the fold is (or last was, while it animates away); animated
+    /// as it moves.
+    @State private var foldSpan = FoldSpan(lower: 0, upper: 0)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// - Parameters:
@@ -154,19 +164,20 @@ struct AdaptiveColumns<Main: View, Companion: View>: View {
             fold: measured?.fold,
             wantsCompanion: wantsCompanion,
             companionRange: companionRange,
-            reveal: reveal
+            reveal: reveal,
+            folded: folded,
+            foldSpan: foldSpan
         ) {
             if shown {
                 ColumnContent { companion() }
                     .overlay(alignment: .trailing) {
                         // A hairline where the columns meet; on a fold
-                        // the gap does that job.
-                        if measured?.gap == 0 {
-                            Rectangle()
-                                .fill(Color(.separator))
-                                .frame(width: 0.5)
-                                .ignoresSafeArea()
-                        }
+                        // the gap does that job, so it fades as one opens.
+                        Rectangle()
+                            .fill(Color(.separator))
+                            .frame(width: 0.5)
+                            .ignoresSafeArea()
+                            .opacity(1 - folded)
                     }
                     .layoutValue(key: ColumnRoleKey.self, value: .companion)
                     // The layout slides it; the transition only fades it.
@@ -197,17 +208,17 @@ struct AdaptiveColumns<Main: View, Companion: View>: View {
     private func apply(_ next: ColumnMeasurement) {
         let previous = measured
         let changed = previous?.showsCompanion != next.showsCompanion
-        if previous == nil {
-            // First layout: start where we are, no slide on launch.
+        // Every change animates, not only the companion coming and going: a
+        // fold arriving, moving or going flat would otherwise jump the
+        // columns. A first layout starts where it is, with no slide on launch.
+        withAnimation(previous == nil ? nil : motion) {
             measured = next
             reveal = next.showsCompanion ? 1 : 0
-        } else {
-            // Only the companion arriving or leaving is animated, and with
-            // an explicit animation scoped to it — nothing broader that
-            // could fight the system's own sidebar animation.
-            withAnimation(changed ? motion : nil) {
-                measured = next
-                reveal = next.showsCompanion ? 1 : 0
+            folded = next.fold == nil ? 0 : 1
+            // A fold going flat keeps its last span, so the columns slide
+            // away from where it was rather than from the leading edge.
+            if let fold = next.fold {
+                foldSpan = FoldSpan(lower: fold.lowerBound, upper: fold.upperBound)
             }
         }
         if changed { onCompanionChange(next.showsCompanion) }
@@ -251,29 +262,44 @@ private struct ColumnRoleKey: LayoutValueKey {
     static let defaultValue: ColumnRole = .main
 }
 
-/// Places the columns. Sizes come from the container's current width (via
-/// `ColumnPlan`) and are never animated, so a column is only ever laid out
-/// at its final width. Only `reveal` animates, and it only moves things:
-/// the main column slides between its companion-hidden and companion-shown
-/// positions, and the companion rides along just before it, so it slides in
-/// from (or out to) the leading edge.
+/// A fold's horizontal span, animatable.
+private struct FoldSpan: Equatable {
+    var lower: CGFloat
+    var upper: CGFloat
+
+    var range: ClosedRange<CGFloat> { lower...max(lower, upper) }
+}
+
+/// Places the columns, from two animated inputs:
+///
+/// - `reveal` slides the main column between its companion-hidden and
+///   companion-shown positions at its final width, and the companion rides
+///   along just before it, so it slides in from (or out to) the leading edge.
+/// - `folded` and `foldSpan` blend every frame (widths too) between the flat
+///   plan and the plan around the fold, so the fold opening, moving or
+///   closing moves the column edges continuously.
 private struct ColumnsLayout: Layout {
     var fold: ClosedRange<CGFloat>?
     var wantsCompanion: Bool
     var companionRange: ClosedRange<CGFloat>
     var reveal: CGFloat
+    var folded: CGFloat
+    var foldSpan: FoldSpan
 
-    var animatableData: CGFloat {
-        get { reveal }
-        set { reveal = newValue }
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(AnimatablePair(reveal, folded), AnimatablePair(foldSpan.lower, foldSpan.upper)) }
+        set {
+            reveal = newValue.first.first
+            folded = newValue.first.second
+            foldSpan = FoldSpan(lower: newValue.second.first, upper: newValue.second.second)
+        }
     }
 
-    /// The companion's last width and gap, kept so a companion that's
-    /// leaving (the window has already narrowed) can slide out at the size
-    /// it had.
+    /// The companion's last width, kept so a companion that's leaving (the
+    /// window has already narrowed, or the fold has gone) can slide out at
+    /// the size it had.
     struct Cache {
         var companionWidth: CGFloat = 0
-        var gap: CGFloat = 0
     }
 
     func makeCache(subviews: Subviews) -> Cache { Cache() }
@@ -287,21 +313,73 @@ private struct ColumnsLayout: Layout {
         proposal.replacingUnspecifiedDimensions()
     }
 
+    /// Where the columns go under one plan, given the companion's width.
+    private struct Frames {
+        var companionWidth: CGFloat
+        var gap: CGFloat
+        var mainLeading: CGFloat
+        var mainWidth: CGFloat
+
+        func blended(to other: Frames, by amount: CGFloat) -> Frames {
+            func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * amount }
+            return Frames(
+                companionWidth: mix(companionWidth, other.companionWidth),
+                gap: mix(gap, other.gap),
+                mainLeading: mix(mainLeading, other.mainLeading),
+                mainWidth: mix(mainWidth, other.mainWidth)
+            )
+        }
+    }
+
+    private func frames(_ plan: ColumnPlan, companionWidth: CGFloat) -> Frames {
+        Frames(
+            companionWidth: plan.companionWidth ?? companionWidth,
+            gap: plan.gap,
+            mainLeading: plan.mainLeading,
+            mainWidth: plan.mainWidth
+        )
+    }
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        let plan = ColumnPlan.make(
+        // The plan for where things are going.
+        let target = ColumnPlan.make(
             width: bounds.width,
             fold: fold,
             wantsCompanion: wantsCompanion,
             companionRange: companionRange
         )
-        if let width = plan.companionWidth {
+        if let width = target.companionWidth {
             cache.companionWidth = width
-            cache.gap = plan.gap
         }
-        let hiddenX = plan.mainLeading
-        let shownX = cache.companionWidth + cache.gap
+        // The flat plan and the plan around the (animated) fold, blended by
+        // how folded the layout currently is: the fold opens between the
+        // columns, and their edges move with it.
+        let flat = frames(
+            ColumnPlan.make(width: bounds.width, fold: nil, wantsCompanion: wantsCompanion, companionRange: companionRange),
+            companionWidth: cache.companionWidth
+        )
+        let amount = min(max(folded, 0), 1)
+        var place = flat
+        if amount > 0 {
+            let around = frames(
+                ColumnPlan.make(
+                    width: bounds.width,
+                    fold: foldSpan.range,
+                    wantsCompanion: wantsCompanion,
+                    companionRange: companionRange
+                ),
+                companionWidth: cache.companionWidth
+            )
+            place = flat.blended(to: around, by: amount)
+        }
+        // The companion coming or going: the main column slides at its final
+        // width (the window has just been resized anyway), the companion
+        // riding along before it.
         let progress = min(max(reveal, 0), 1.2)
-        let mainX = hiddenX + (shownX - hiddenX) * progress
+        let shownX = place.companionWidth + place.gap
+        let mainX = place.mainLeading + (shownX - place.mainLeading) * progress
+        let arriving = reveal > 0.001 && reveal < 0.999
+        let mainWidth = arriving ? target.mainWidth : place.mainWidth
 
         for subview in subviews {
             switch subview[ColumnRoleKey.self] {
@@ -309,13 +387,13 @@ private struct ColumnsLayout: Layout {
                 subview.place(
                     at: CGPoint(x: bounds.minX + mainX, y: bounds.minY),
                     anchor: .topLeading,
-                    proposal: ProposedViewSize(width: plan.mainWidth, height: bounds.height)
+                    proposal: ProposedViewSize(width: mainWidth, height: bounds.height)
                 )
             case .companion:
                 subview.place(
-                    at: CGPoint(x: bounds.minX + mainX - cache.gap - cache.companionWidth, y: bounds.minY),
+                    at: CGPoint(x: bounds.minX + mainX - place.gap - place.companionWidth, y: bounds.minY),
                     anchor: .topLeading,
-                    proposal: ProposedViewSize(width: cache.companionWidth, height: bounds.height)
+                    proposal: ProposedViewSize(width: place.companionWidth, height: bounds.height)
                 )
             }
         }
