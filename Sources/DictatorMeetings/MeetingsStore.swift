@@ -17,12 +17,17 @@ final class MeetingsStore {
     private(set) var metas: [MeetingMeta] = []
 
     private init() {
-        refresh()
+        refreshInBackground()
     }
 
-    /// Re-scan the meetings root and replace the in-memory list. Cheap
-    /// enough to run on every `MeetingsWindow.appear` — one JSON read per
-    /// folder.
+    /// Re-scan the meetings root and replace the in-memory list, inline.
+    /// Only for the screenshot runner, which needs the list in place before
+    /// it picks a meeting. Everything else uses `refreshInBackground`: one
+    /// JSON read per folder is cheap on a local disk, but the synced folder
+    /// is usually iCloud Drive, where Optimise Mac Storage evicts files and
+    /// reading one waits for it to download. Fifty-odd evicted `meta.json`s
+    /// held the main thread for 35 seconds when Record Meeting opened the
+    /// window.
     func refresh() {
         let loaded = MeetingStorage.loadAllMetas()
         NSLog("[DictatorMeetings] Scanned %d meetings at %@", loaded.count, MeetingStorage.meetingsRoot().path)
@@ -36,11 +41,11 @@ final class MeetingsStore {
         MeetingAudioCompactor.shared.sweepOnce()
     }
 
-    /// `refresh`, with the disk scan off the main thread — for the window
-    /// coming to the front, which happens on the click that brought it
-    /// there. Scanning every meeting's folder inline held that click up,
-    /// and replacing the list even when nothing had changed redrew
-    /// everything that reads it; this only replaces it when something has.
+    /// `refresh`, with the disk scan off the main thread — at launch, when
+    /// the window appears, and when it comes to the front. Scanning every
+    /// meeting's folder inline held those up (see `refresh`), and replacing
+    /// the list even when nothing had changed redrew everything that reads
+    /// it; this only replaces it when something has.
     @ObservationIgnored private var backgroundRefreshInFlight = false
 
     func refreshInBackground() {
@@ -54,6 +59,8 @@ final class MeetingsStore {
                 self.metas = loaded
                 self.applyAutoDeleteIfConfigured()
                 self.applyAudioRetentionIfConfigured()
+                // Once per launch; free on every later call.
+                MeetingAudioCompactor.shared.sweepOnce()
             }
         }
     }

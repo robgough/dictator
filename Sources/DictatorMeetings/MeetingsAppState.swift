@@ -124,7 +124,12 @@ final class MeetingsAppState {
         // the stale live-mirror files.
         MeetingRecovery.recoverInterrupted(settings: settings)
         // Backfill notes.md / transcript.md for meetings recorded before them.
-        MeetingStorage.backfillDerivedMarkdown()
+        // Reads every meeting's meta and transcript, which on an iCloud Drive
+        // folder with evicted files means waiting on downloads, so it runs
+        // off the main thread; nothing waits on it.
+        Task.detached(priority: .utility) {
+            MeetingStorage.backfillDerivedMarkdown()
+        }
     }
 
     func bootstrap() {

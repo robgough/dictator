@@ -137,7 +137,9 @@ struct MeetingsRootView: View {
             // Screenshot mode picks the meeting (or installs a fabricated live
             // session) the capture is meant to show. Inert otherwise.
             MeetingsScreenshotRunner.configure(selection: $selectedID, liveSession: $liveSession, scope: $scope)
-            store.refresh()
+            // Off the main thread: the synced folder can be iCloud Drive
+            // with evicted files, and Record Meeting opens this window.
+            store.refreshInBackground()
             consumePendingRecordingRequest()
             consumePendingStopRequest()
             consumePendingShowLive()
