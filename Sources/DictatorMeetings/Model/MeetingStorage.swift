@@ -412,17 +412,82 @@ enum MeetingStorage {
     /// Enumerate every synced meeting folder and return its meta. Folders
     /// without a parseable `meta.json` are silently skipped — they may be
     /// in-flight captures that crashed before the meta got written.
+    ///
+    /// Reads go through `MetaCache`: a meta is only read from the synced
+    /// folder when its file's modification date or size has changed since
+    /// the last scan. Both come from the directory entry, which an iCloud
+    /// Drive placeholder still has, so an evicted `meta.json` that hasn't
+    /// changed is never downloaded just to list it.
     static func loadAllMetas() -> [MeetingMeta] {
         let root = meetingsRoot()
-        guard let entries = try? FileManager.default.contentsOfDirectory(
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
-        return entries.compactMap { url -> MeetingMeta? in
-            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { return nil }
-            return readMeta(at: url.appendingPathComponent(metaFilename))
+        return MetaCache.scan { cached in
+            entries.compactMap { url -> (String, MetaCache.Entry)? in
+                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                guard isDir else { return nil }
+                let metaURL = url.appendingPathComponent(metaFilename)
+                let values = try? metaURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                // As a raw interval: the cache's ISO 8601 dates would drop the
+                // fractional seconds and never match again.
+                guard let modified = values?.contentModificationDate?.timeIntervalSinceReferenceDate else { return nil }
+                let size = values?.fileSize ?? -1
+                if let hit = cached[metaURL.path], hit.modified == modified, hit.size == size {
+                    return (metaURL.path, hit)
+                }
+                guard let meta = readMeta(at: metaURL) else { return nil }
+                return (metaURL.path, MetaCache.Entry(modified: modified, size: size, meta: meta))
+            }
+        }
+    }
+
+    /// Per-Mac record of the metas last read from the synced folder, keyed
+    /// by `meta.json` path, so `loadAllMetas` only reads files that changed.
+    /// Lives in Application Support, never the synced folder: it describes
+    /// this Mac's copy of the files.
+    enum MetaCache {
+        struct Entry: Codable {
+            var modified: TimeInterval
+            var size: Int
+            var meta: MeetingMeta
+        }
+
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var entries: [String: Entry]?
+
+        private static var url: URL {
+            AppSupportPaths.dictator.appendingPathComponent("meetings-meta-cache.json")
+        }
+
+        /// Runs one scan against the cache and stores what it returns as the
+        /// new cache (dropping folders that have gone). Serialised, so a
+        /// launch scan and a window-focus scan can't interleave their writes.
+        static func scan(_ body: ([String: Entry]) -> [(String, Entry)]) -> [MeetingMeta] {
+            lock.lock()
+            defer { lock.unlock() }
+            let cached = entries ?? load()
+            let fresh = Dictionary(body(cached), uniquingKeysWith: { first, _ in first })
+            entries = fresh
+            if fresh.count != cached.count || fresh.contains(where: { cached[$0.key]?.modified != $0.value.modified }) {
+                save(fresh)
+            }
+            return fresh.values.map(\.meta)
+        }
+
+        private static func load() -> [String: Entry] {
+            guard let data = try? Data(contentsOf: url),
+                  let decoded = try? jsonDecoder.decode([String: Entry].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+
+        private static func save(_ value: [String: Entry]) {
+            guard let data = try? jsonEncoder.encode(value) else { return }
+            try? data.write(to: url, options: .atomic)
         }
     }
 
