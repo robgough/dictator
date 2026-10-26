@@ -101,6 +101,13 @@ struct MeetingsRootView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 280, max: 320)
         } detail: {
             detail
+                // Report no minimum to the split view. When the detail's
+                // content came out wider than the space beside the sidebar,
+                // the split view grew past the window and the whole window
+                // was drawn centred and clipped at both edges, sidebar
+                // included. Now anything too wide can only overflow this
+                // column's trailing edge.
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .navigationTitle("Meetings")
         // Two glass clusters on macOS 26: the mic + record/stop capture

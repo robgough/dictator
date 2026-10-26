@@ -126,7 +126,8 @@ struct MeetingDetailView: View {
     /// inspector can't appear and squeeze the live two-column layout.
     private var canShowInspector: Bool {
         switch session.state {
-        case .ready, .idle, .summarising: return true
+        // Not `.idle`: only a recording that's about to start is idle.
+        case .ready, .summarising: return true
         default: return false
         }
     }
@@ -459,10 +460,20 @@ struct LiveRecordingView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let coach = session.coachEngine {
-                stripDivider
-                // First to give way when the window is narrow.
-                CoachMetricsStrip(engine: coach)
-                    .layoutPriority(-1)
+                // First to give way when the window is narrow, and it goes
+                // entirely: a low layout priority alone still left its bar and
+                // labels insisting on their width, and at the window's minimum
+                // the strip came out ~50pt wider than the column. The column
+                // then grew to fit and pushed Stop and the transcript off the
+                // window's trailing edge.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 18) {
+                        stripDivider
+                        CoachMetricsStrip(engine: coach)
+                    }
+                    Color.clear.frame(width: 0, height: 0)
+                }
+                .layoutPriority(-1)
             }
             Spacer(minLength: 8)
             if state.companionDismissed, state.settings.meetingCompanionEnabled {

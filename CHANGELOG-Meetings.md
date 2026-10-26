@@ -14,6 +14,7 @@ keep entries as plain bullet lines.
 
 ## Unreleased
 
+- The recording screen no longer runs off the edges of a narrower window, cutting off the sidebar, the Stop button and the transcript. The talk-share figures step aside when there isn't room.
 - Record Meeting no longer freezes the app for up to a minute when your synced folder is in iCloud Drive with Optimise Mac Storage on. The meetings list loads in the background, and only meetings that have changed are read again, so files iCloud has offloaded aren't downloaded every time the app opens.
 - A new app icon in the same family as Dictator's, built for the Liquid Glass look, with light, dark, tinted and clear versions.
 - The menu bar shows a matching Dictator Meetings mark when no meeting is recording.
