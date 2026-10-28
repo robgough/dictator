@@ -348,6 +348,7 @@ final class RecordingViewModel {
         isMorphPreview = true
         permission = .granted
         modelDiskStatus = .downloaded
+        isModelLoaded = true
         let sample = "Can we move Thursday's review to Friday morning? I'd like one more day with the new builds before we show anyone."
         transcript = state == "empty" ? "" : sample
         let tab = UserDefaults.standard.string(forKey: "DictatorInitialTab")

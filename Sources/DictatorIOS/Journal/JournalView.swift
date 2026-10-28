@@ -308,11 +308,21 @@ struct JournalView: View {
         }
     }
 
+    /// `-DictatorHideSyncNote YES` hides the not-syncing note, for App Store
+    /// screenshots taken in a simulator with no shared folder.
+    private static var hidesSyncNote: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "DictatorHideSyncNote")
+        #else
+        false
+        #endif
+    }
+
     /// Sync and error notes, inline on the page rather than floating over it.
     @ViewBuilder
     private var notes: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !model.isShared {
+            if !model.isShared && !Self.hidesSyncNote {
                 Button(action: onOpenSettings) {
                     HStack(spacing: 6) {
                         Image(systemName: "icloud.slash")
