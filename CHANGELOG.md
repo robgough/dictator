@@ -13,6 +13,10 @@ entries as plain bullet lines.
 
 ## Unreleased
 
+_No changes yet._
+
+## v2026.10.0 — 2026-10-28
+
 - A new app icon, built for the Liquid Glass look, with light, dark, tinted and clear versions.
 - The menu bar shows the new Dictator mark while Dictator is idle, and switches to a symbol for what it is doing while it records and processes.
 - The About pane, the welcome screen and the menu bar panel show the new app icon.
