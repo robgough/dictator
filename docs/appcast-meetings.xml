@@ -46,6 +46,52 @@
                 type="application/octet-stream"
                 sparkle:edSignature="4kuxb5dXDz8CTnGvxD25sCw7FBnAdVT9KFNSjDm4s64gCBWYOLEG/eA5sp8odrb/M7fl8grLX20LDGzH7mWtCg==" />
         </item>
+        <item>
+            <title>Version 2026.10.0</title>
+            <pubDate>Wed, 28 Oct 2026 16:45:31 +0000</pubDate>
+            <sparkle:version>41</sparkle:version>
+            <sparkle:shortVersionString>2026.10.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+  <li>The recording screen no longer runs off the edges of a narrower window, cutting off the sidebar, the Stop button and the transcript. The talk-share figures step aside when there isn&#x27;t room.</li>
+  <li>Record Meeting no longer freezes the app for up to a minute when your synced folder is in iCloud Drive with Optimise Mac Storage on. The meetings list loads in the background, and only meetings that have changed are read again, so files iCloud has offloaded aren&#x27;t downloaded every time the app opens.</li>
+  <li>A new app icon in the same family as Dictator&#x27;s, built for the Liquid Glass look, with light, dark, tinted and clear versions.</li>
+  <li>The menu bar shows a matching Dictator Meetings mark when no meeting is recording.</li>
+  <li>With Apple Intelligence writing the notes, meetings that touch on sensitive-sounding subjects are refused far less often.</li>
+  <li>A model download&#x27;s progress bar no longer freezes when its state is refreshed mid-download.</li>
+  <li>You can now choose NVIDIA&#x27;s Nemotron 3 Diarization for telling speakers apart, in Settings → Models → Speaker separation. It is more accurate than the built-in engine, especially with several people on a call or people talking over each other, and tells apart up to eight voices on each side of the call. It is a 220 MB download. People Dictator Meetings already recognises by voice are still recognised after you switch.</li>
+  <li>Parakeet Ultra is available as a transcription model and is the default for new installs: a more accurate retrain of Parakeet v3 with the same 25 languages and the same speed. It is a slightly larger download (615 MB rather than 475 MB) and needs no more memory than v3. If you already use Parakeet, your current model stays selected until you switch in Settings → Models.</li>
+  <li>Transcription picks up the latest fixes to the Parakeet speech engine, including words that could be dropped or doubled where a long recording is stitched together from shorter pieces.</li>
+  <li>You can choose which calendars Dictator Meetings reads. Settings → Meetings → Choose calendars lists each of your calendars by name; switch off any you don&#x27;t want, and it&#x27;s left out of Today&#x27;s up next and never used to name a recording.</li>
+  <li>Connect Calendar on the Today screen now works. The app was missing the permission it needs to ask for calendar access, so clicking it did nothing; it now shows the macOS prompt, and if access is off it offers a button straight to the right place in System Settings.</li>
+  <li>The companion panel always opens where you can see it. It could reappear partly off the top of a screen, out of reach, after the displays changed or it grew; it&#x27;s now kept inside the screen it&#x27;s on, and comes back if a display is unplugged mid-call.</li>
+  <li>Dictator Meetings no longer crashes a few minutes into a recording. The companion panel resized itself in a way that could send the window&#x27;s layout round in circles until the app gave up; it now resizes calmly as its contents change.</li>
+  <li>Dictator Meetings responds straight away when you click. Opening a meeting no longer loads its whole transcript and both audio recordings before the window can react — the audio opens when you first press play — and switching back to the window no longer re-reads every meeting before your click lands.</li>
+  <li>Writing notes with a cloud model can no longer sit on &quot;Rewriting notes…&quot; indefinitely. A request that couldn&#x27;t reach the service used to wait silently for up to 20 minutes; it now fails straight away and is retried. While notes are being written you can see which model is writing them and for how long, and Cancel stops it.</li>
+  <li>Very long meetings get complete notes. The notes for each part of a long meeting were merged in one step, which could overflow a smaller model and cut the result short; they&#x27;re now merged in stages when they don&#x27;t fit, and the final merge has room to write notes for the whole meeting.</li>
+  <li>Cloud models that think before they answer — GLM, Claude and OpenAI&#x27;s reasoning models among them — can write meeting notes. A reply was capped at 4,096 tokens, their thinking counts against that, and they could run out before writing a word. Cloud replies now get 16,000 tokens, one that still runs out is retried with twice the room, and a model chosen from the list uses the limits the service reports for it.</li>
+  <li>The meeting assistant is now a conversation. Ask in the Ask panel beside the notes and follow up without repeating yourself; answers come from the notes, your pad and the transcript, with times you can click to jump to that moment. Ask it to change the notes and it shows the change for you to apply. The conversation is saved with the meeting, and ⌘⌥A still asks by voice.</li>
+  <li>API keys for cloud providers save again with &quot;Sync keys with iCloud Keychain&quot; switched on. That sync isn&#x27;t available to this build, and every save was silently failing; keys are now kept in this Mac&#x27;s Keychain, the setting says why it&#x27;s unavailable, and the key field tells you it was saved.</li>
+  <li>Choosing a model for OpenRouter, OpenAI or another compatible service no longer means typing its id: Choose… lists every model the service offers, searchable, with its context size and price.</li>
+  <li>A companion panel floats beside the call while you record: the time and Stop, whether both sides are being heard, how the talking is split, your key points, the last few things the notes caught, and a field to jot something into your pad. Drag it wherever suits; turn it off in Settings.</li>
+  <li>New Today screen: your next meeting from the calendar, with a button to record it the moment it starts, the meetings still waiting for notes, and the action items from all your notes, yours first. Ticking one off ticks it in that meeting&#x27;s notes.</li>
+  <li>The sidebar is now a library: All meetings, Needs notes (with a count), each kind of meeting, and the people you meet with. Choosing one lists those meetings beside the meeting you&#x27;re reading, each marked with whether its notes are written.</li>
+  <li>After a call, the Notes tab walks you through it: first who spoke, with the longest thing each person said and a button to hear it, then writing the notes, then sending them.</li>
+  <li>The recording screen has been rearranged. The time, both audio levels, your share of the talking, the notes style and Stop now sit in one strip across the top, and the right-hand side shows one thing at a time — key points, the live transcript or the shared screen — at full height, instead of four cramped cards and a transcript that cut off mid-line.</li>
+  <li>The audio meters while recording are the same live waveform Dictator uses when you dictate, instead of flat bars. Each side stays grey until it&#x27;s actually heard, and quiet rooms now read as quiet rather than filling half the meter.</li>
+  <li>The Notes tab now only ever holds the final notes. Until they&#x27;re written it opens with a Write notes button at the top of the page, rather than a draft with the button somewhere below it. The rough notes from the call always have their own Live notes tab, and the Details panel just shows whether the notes have been written.</li>
+  <li>Meeting recordings no longer lose their last moments. Audio was written to disk through the same queue that draws the window, and stopping a meeting deliberately discarded whatever was still waiting there — usually the end, which is where the decisions tend to be. Audio is now written the moment it arrives, and stopping waits for the last of it to land before closing the file.</li>
+  <li>Two more models can write meeting notes: Qwen 3.5 9B and Gemma 4 12B. Gemma 4 E4B is still the recommended one — it remains the model the notes are tuned against.</li>
+  <li>New language models to choose from for the on-device provider: Qwen 3.5 in 2B, 4B and 9B sizes, and Gemma 4 12B. Older models (Llama 3.2 and Qwen 2.5) are no longer offered, but one you&#x27;re already using stays selected and stays listed.</li>
+  <li>New Demo mode in Settings swaps your meetings, notes, transcripts and people for fictional stand-ins while you record a video or take a screenshot; it switches off when Dictator Meetings quits.</li>
+</ul>]]></description>
+            <enclosure
+                url="https://github.com/robgough/dictator/releases/download/meetings-v2026.10.0/Dictator-Meetings.dmg"
+                length="25184166"
+                type="application/octet-stream"
+                sparkle:edSignature="wD9q8O+WKqIBEDOcWr3WiixEX4T9D2zHb/rOr24xffSevNeVGtUB+2LmmWs27700av8CzsUxWIl8AaUXT66wCQ==" />
+        </item>
+    
     
     
     </channel>
