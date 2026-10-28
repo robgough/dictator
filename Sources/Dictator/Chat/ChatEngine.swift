@@ -742,8 +742,8 @@ final class ChatEngine {
         // Asks whether *Apple* can take an image, not whether anything on this
         // Mac can. `WindowVisionContext.canReadImages` is true when Apple can
         // see **or** a vision-capable MLX model happens to be resident, and that
-        // conflation is a real bug on a release build: CI builds against the
-        // macOS 26 SDK, so `FOUNDATION_MODELS_VISION` is off and this engine
+        // conflation is a real bug on any build against the macOS 26 SDK:
+        // there `FOUNDATION_MODELS_VISION` is off and this engine
         // silently renders images as text — while a Qwen 9B left loaded from
         // earlier would have said "yes, four images", and the prompt would
         // announce pictures the model never receives.

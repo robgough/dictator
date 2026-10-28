@@ -134,7 +134,7 @@ entries as plain bullet lines.
 - Setup now offers screen reading if the model you picked can do it, and the model chooser marks which models can — it's a real reason to pick a bigger one, and not something you'd stumble on later.
 - Letting Dictator see your screen is now one switch in General, on by default, instead of two switches that were off by default — a per-mode one for dictation and a separate one for the assistant. It only ever does anything on a model that can read images, and it tells you in Settings when something's missing rather than sitting there pretending to be on.
 - The assistant can look at your screen and answer from it. Ask it to describe what you're looking at, or to draft a reply to the email in front of you, without selecting or copying anything. When your model can read images it now reads the window itself rather than working from a written description of it, so replies quote the real wording and arrive about three times faster.
-- Window vision works again, and now works without Apple Intelligence. If your language model is one that can read images — Qwen 3.5 9B or Gemma 4 12B — Dictator can glance at the window you're dictating into and pick up the names and spellings on screen. Models that can read a screen are marked with an eye in Settings, Models. Apple's vision model is still used in preference when macOS offers it, which it currently doesn't.
+- Window vision works again, and now works without Apple Intelligence. If your language model is one that can read images — Qwen 3.5 9B or Gemma 4 12B — Dictator can glance at the window you're dictating into and pick up the names and spellings on screen. Models that can read a screen are marked with an eye in Settings, Models. On macOS 27, Apple's on-device model is used in preference.
 - New language models to choose from in Settings: Qwen 3.5 in 2B, 4B and 9B sizes, and Gemma 4 12B. Qwen 3.5 replaces Llama 3.2 as the default for new installs — it's two model generations newer and handles long dictations more cheaply. Macs with 32 GB or more now get Qwen 3.5 9B by default, which formats best and can read your screen.
 - Older models (Llama 3.2 and Qwen 2.5) are no longer offered to new installs, but nothing changes if you're using one: it stays selected, stays on disk and still appears in the Models list, now marked with what replaced it. Switching is a single click whenever you want to.
 - Dictionary rules can now match by sound, and every rule does this by default — including the ones you already have. One Gough rule catches Goff, Gough and whatever else the model invents next, instead of needing a rule per misspelling. Sounds-like still matches the exact text too, so an upgraded rule can only ever catch more of what you wrote it for, never less. Rules where you deliberately switched on case-sensitivity, or asked to match inside words, stay exact — sounds-like can't express either of those. Any rule can be set back to Exact on its row.
@@ -455,16 +455,6 @@ Entries below are for work that's been built but is gated behind a compile-time
 flag (`MEETINGS_ENABLED`) and not exposed in shipping Sparkle releases. Kept here
 so the design / commit context isn't lost; will move up to a real `## Unreleased`
 section if and when the feature is judged ready to ship.
-
-### Window vision (macOS 27 beta)
-
-Gated behind the `FOUNDATION_MODELS_VISION` compile flag, which is defined only
-when building against the macOS 27 SDK. macOS 27 is still beta, and releases build
-on the macOS 26 SDK, so this is compiled out of shipping builds.
-
-- New per-Mode option under Context awareness: read the focused window with vision. When a dictation starts it takes one on-device snapshot of just the focused window and reads the names, places, and technical terms visible in it, so they're spelled the way they appear on screen — even when they sit outside the text field or the app doesn't expose its text. Uses Apple's on-device model; the picture never leaves your Mac and is never stored. Off by default; needs Screen Recording permission and a macOS 27 build whose on-device model can read images — the option only appears when your Mac actually supports it.
-- Fixed the assistant's window vision reading nothing on follow-up turns: once the result window was open it was looking at Dictator's own window instead of the app behind it. It now always reads the window you're actually looking at.
-- Assistant Mode can now see the focused window (new option in Settings → Assistant). When you trigger the assistant it takes one on-device snapshot of just the focused window and has Apple's on-device vision model describe what's in it, then hands that to your assistant — so you can ask it to describe what you're looking at, ask about an error or a chart, reply to a message that's on screen, or just have names spelled the way they appear, even in apps that don't expose their text. Off by default; needs macOS 27 and Screen Recording permission; the picture never leaves your Mac and is never stored.
 
 ### Meetings (macOS)
 
